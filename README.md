@@ -27,7 +27,9 @@ Because Ori strictly manages its own source code and pushes structural changes b
 By pulling down your own fork, you ensure the central `misunders2d/ori` template (the foundational "egg") remains perfectly intact, while providing your newly hatched Ori a unique codebase sandbox to write to and evolve independently!
 
 ### 1. Incubation Setup
-Create a `./data/.env` file to provide the initial nutrients:
+*(Optional - the startup script will automatically bootstrap this for you if missing!)* 
+
+Create a `./data/.env` file to manually provide the initial nutrients:
 ```env
 GOOGLE_API_KEY=your_key
 ADMIN_PASSCODE=secret_bootstrap_code
