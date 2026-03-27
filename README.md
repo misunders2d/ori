@@ -58,16 +58,25 @@ GITHUB_TOKEN=for_self_evolution
 
 ### 2. Birth the Daemon
 Run the automation launcher to spin up the container and the Host Supervisor:
+
+**Linux / macOS:**
 ```bash
+chmod +x start.sh deploy.sh rollback.sh
 ./start.sh
 ```
-Use `./start.sh --no-sync` if running locally without a GitHub remote (offline / headless-only mode).
+Use `./start.sh --no-sync` to skip the remote git sync (offline / headless-only mode).
+
+**Windows (CMD or PowerShell):**
+```cmd
+start.bat
+```
+Use `start.bat --no-sync` for offline mode. Requires Docker Desktop, Git for Windows, and Python on PATH.
 
 ### 3. First Contact
 Once the bot is running, send `/init <your_admin_passcode>` in Telegram to claim admin privileges. From there, you can start talking to Ori and teaching it new tricks.
 
 ### 4. Watching it Grow
-When the `DeveloperAgent` triggers an evolution, a `.update_trigger` is injected into `/data/`. The `deploy.sh` script—acting as the "Host Supervisor"—intercepts this, safely shuts down the SQLite buffers, rebuilds the image, and notifies you via messenger that Ori has successfully evolved.
+When the `DeveloperAgent` triggers an evolution, a `.update_trigger` is injected into `/data/`. The deploy watcher script (`deploy.sh` on Linux/macOS, `deploy.bat` on Windows)—acting as the "Host Supervisor"—intercepts this, safely shuts down the SQLite buffers, rebuilds the image, and notifies you via messenger that Ori has successfully evolved.
 
 ## 📄 License
 
