@@ -236,8 +236,20 @@ async def extract_agent_response(
                             })
 
                 if getattr(event, "actions", None) and getattr(event.actions, "requested_tool_confirmations", None):
+                    # The ADK replaces FunctionCall with a FunctionResponse on confirmation events.
+                    # Extract tool names from function_response parts on this event.
+                    fr_names = {}
+                    if event.content and event.content.parts:
+                        for part in event.content.parts:
+                            if hasattr(part, "function_response") and part.function_response:
+                                fr = part.function_response
+                                if fr.id and fr.name:
+                                    fr_names[fr.id] = fr.name
+
                     for call_id, confirmation in event.actions.requested_tool_confirmations.items():
-                        tool_name = seen_function_calls.get(call_id, "an action")
+                        # Primary: from the FunctionResponse on this event
+                        # Fallback: from FunctionCalls seen earlier in the stream
+                        tool_name = fr_names.get(call_id) or seen_function_calls.get(call_id) or "an action"
 
                         # Include the hint from ToolConfirmation if available
                         hint_text = getattr(confirmation, "hint", "") or ""
