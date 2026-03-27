@@ -227,25 +227,24 @@ async def extract_agent_response(
                             })
 
                 if getattr(event, "actions", None) and getattr(event.actions, "requested_tool_confirmations", None):
+                    # Build a lookup of call_id -> tool_name from the FunctionCall parts on this event
+                    fc_names = {}
+                    for fc in (event.get_function_calls() if hasattr(event, "get_function_calls") else []):
+                        if fc.id and fc.name:
+                            fc_names[fc.id] = fc.name
+
                     for call_id, confirmation in event.actions.requested_tool_confirmations.items():
-                        tool_name = "an action"
-                        
-                        # Defensively extract the tool name from the ADK Confirmation object or dict
-                        if hasattr(confirmation, "function_call") and hasattr(confirmation.function_call, "name"):
-                            tool_name = confirmation.function_call.name
-                        elif hasattr(confirmation, "name"):
-                            tool_name = confirmation.name
-                        elif isinstance(confirmation, dict):
-                            if "function_call" in confirmation and isinstance(confirmation["function_call"], dict):
-                                tool_name = confirmation["function_call"].get("name", tool_name)
-                            elif "name" in confirmation:
-                                tool_name = confirmation["name"]
-                        
-                        parts.append(
-                            f"⚠️ **Action Requires Confirmation**\n\n"
-                            f"The agent wants to execute `{tool_name}`.\n"
-                            f"Please approve or deny by explicitly responding 'yes' or 'no'."
-                        )
+                        tool_name = fc_names.get(call_id, "an action")
+
+                        # Include the hint from ToolConfirmation if available
+                        hint_text = getattr(confirmation, "hint", "") or ""
+
+                        msg = f"⚠️ **Action Requires Confirmation**\n\nThe agent wants to execute `{tool_name}`."
+                        if hint_text:
+                            msg += f"\n📋 Reason: {hint_text}"
+                        msg += "\nPlease approve or deny by explicitly responding 'yes' or 'no'."
+
+                        parts.append(msg)
 
             break  # success
         except Exception as exc:
