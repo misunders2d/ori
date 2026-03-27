@@ -227,9 +227,20 @@ async def extract_agent_response(
                             })
 
                 if getattr(event, "actions", None) and getattr(event.actions, "requested_tool_confirmations", None):
+                    # DEBUG: Dump the full event structure to understand where tool names live
+                    logger.info("=== CONFIRMATION EVENT DEBUG ===")
+                    logger.info("Event content: %s", event.content)
+                    logger.info("Event content parts: %s", event.content.parts if event.content else "None")
+                    fcs = event.get_function_calls() if hasattr(event, "get_function_calls") else []
+                    logger.info("FunctionCalls on event: %s", [(fc.name, fc.id) for fc in fcs])
+                    logger.info("Confirmation keys: %s", list(event.actions.requested_tool_confirmations.keys()))
+                    for cid, conf in event.actions.requested_tool_confirmations.items():
+                        logger.info("Confirmation %s: type=%s, attrs=%s", cid, type(conf).__name__, dir(conf))
+                    logger.info("=== END DEBUG ===")
+
                     # Build a lookup of call_id -> tool_name from the FunctionCall parts on this event
                     fc_names = {}
-                    for fc in (event.get_function_calls() if hasattr(event, "get_function_calls") else []):
+                    for fc in fcs:
                         if fc.id and fc.name:
                             fc_names[fc.id] = fc.name
 
