@@ -156,6 +156,18 @@ async def extract_agent_response(
                     for part in event.content.parts:
                         if hasattr(part, "text") and part.text:
                             parts.append(part.text)
+
+                if getattr(event, "actions", None) and getattr(event.actions, "requested_tool_confirmations", None):
+                    for call_id, confirmation in event.actions.requested_tool_confirmations.items():
+                        tool_name = "an action"
+                        if hasattr(confirmation, "function_call") and hasattr(confirmation.function_call, "name"):
+                            tool_name = confirmation.function_call.name
+                        parts.append(
+                            f"⚠️ **Action Requires Confirmation**\n\n"
+                            f"The agent wants to execute `{tool_name}`.\n"
+                            f"Please approve or deny by explicitly responding 'yes' or 'no'."
+                        )
+
             break  # success
         except Exception as exc:
             error_msg = str(exc).split("\n")[0] if str(exc) else type(exc).__name__
