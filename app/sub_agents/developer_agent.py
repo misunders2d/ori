@@ -25,6 +25,7 @@ google_adk_skill = load_skill_from_dir(base_dir / "google-adk-skill")
 skill_creator_skill = load_skill_from_dir(base_dir / "skill-creator-skill")
 log_maintenance_skill = load_skill_from_dir(base_dir / "log-maintenance-skill")
 system_management_skill = load_skill_from_dir(base_dir / "system-management-skill")
+external_research_skill = load_skill_from_dir(base_dir / "external-research-skill")
 
 model_config = Gemini(
     model="gemini-3-flash-preview",
@@ -61,7 +62,7 @@ developer_agent = Agent(
         "5. STOP AND ASK: If the human's request is ever ambiguous, if you do not understand the terminology, or if you feel you need more user input before proceeding, STOP and ASK them for clarification immediately instead of making assumptions."
     ),
     tools=[
-        skill_toolset.SkillToolset(skills=[google_adk_skill, skill_creator_skill, log_maintenance_skill, system_management_skill]),
+        skill_toolset.SkillToolset(skills=[google_adk_skill, skill_creator_skill, log_maintenance_skill, system_management_skill, external_research_skill]),
         evolution_read_file,
         evolution_stage_change,
         evolution_verify_sandbox,
