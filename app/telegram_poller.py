@@ -495,82 +495,10 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                             _pending_session_reset.pop(session_id, None)
                         continue
 
-                    # Handle /rollback command
-                    if text.strip() == "/rollback":
-                        trigger_file = os.path.abspath("./data/.rollback_trigger")
-                        import json
-
-                        with open(trigger_file, "w") as f:
-                            json.dump(
-                                {"notify": {"type": "telegram", "chat_id": chat_id}}, f
-                            )
-                        await send_message(
-                            client,
-                            token,
-                            chat_id,
-                            "🔄 **Rollback Triggered**\n\n"
-                            "I'm resetting to the previous commit and restarting. "
-                            "This will take about a minute. I'll notify you when I'm back online.",
-                        )
-                        continue
-
-                    # Handle /reset command
-                    if text.strip() == "/reset":
-                        runner = get_runner_fn()
-                        if runner:
-                            result = await _perform_session_refresh(
-                                runner, session_user_id, session_id, "fresh"
-                            )
-                            await send_message(
-                                client,
-                                token,
-                                chat_id,
-                                f"🧹 **Session Reset**\n{result}",
-                            )
-                        else:
-                            await send_message(
-                                client, token, chat_id, "Error: Runner not available."
-                            )
-                        continue
-
                     # Handle /init command
                     if text.strip().startswith("/init"):
                         result = process_init_fn(text)
                         await send_message(client, token, chat_id, result)
-                        continue
-                        
-                    if text.lower().strip() == "/think on":
-                        await update_session_state(
-                            runner=runner,
-                            session_id=session_id,
-                            user_id=session_user_id,
-                            state_delta={"use_planner": True},
-                        )
-                        await send_message(
-                            client, token, chat_id, "🧠 Planner/Thinking mode enabled."
-                        )
-                        continue
-
-                    if text.lower().strip() == "/think off":
-                        await update_session_state(
-                            runner=runner,
-                            session_id=session_id,
-                            user_id=session_user_id,
-                            state_delta={"use_planner": False},
-                        )
-                        await send_message(
-                            client, token, chat_id, "⚡ Planner/Thinking mode disabled."
-                        )
-                        continue
-
-                    # Handle /start command
-                    if text.strip() == "/start":
-                        await send_message(
-                            client,
-                            token,
-                            chat_id,
-                            "Welcome to the Amazon Manager Bot! Send me a message to get started.",
-                        )
                         continue
 
                     runner = get_runner_fn()

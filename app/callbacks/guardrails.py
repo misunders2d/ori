@@ -100,7 +100,7 @@ def prompt_injection_guardrail(
     Dynamically tracks Prompt Injection across any language using Semantic Cosine Similarity dot products against known anchor spaces (vector clusters).
     Dynamically strips the BuiltInPlanner's thinking_config from the payload if use_planner was explicitly set to False in the DB session.
     """
-    use_planner = callback_context.state.to_dict().get("use_planner", True)
+    use_planner = callback_context.state.to_dict().get("use_planner", False)
     if not use_planner and getattr(llm_request, "config", None):
         if hasattr(llm_request.config, "thinking_config"):
             llm_request.config.thinking_config = None
