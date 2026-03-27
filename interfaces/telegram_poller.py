@@ -148,6 +148,31 @@ async def poll_telegram(get_runner_fn, process_init_fn):
         adapter = TelegramAdapter(client, token)
         register_adapter(adapter)
 
+        _active_tasks = {}
+
+        async def _process_and_send(_runner, _session_user_id, _session_id, _message_content, _user_id, _chat_id):
+            async def keep_typing(__chat_id=_chat_id):
+                while True:
+                    await adapter.send_typing(__chat_id)
+                    await asyncio.sleep(4)
+            
+            typing_task = asyncio.create_task(keep_typing())
+            try:
+                response = await extract_agent_response(
+                    _runner, _session_user_id, _session_id, _message_content, _user_id
+                )
+                await adapter.send_message(_chat_id, response)
+            except asyncio.CancelledError:
+                pass
+            finally:
+                typing_task.cancel()
+                try:
+                    await typing_task
+                except asyncio.CancelledError:
+                    pass
+                if _session_id in _active_tasks and _active_tasks[_session_id] == asyncio.current_task():
+                    del _active_tasks[_session_id]
+
         while True:
             try:
                 url = TELEGRAM_API.format(token=token, method="getUpdates")
@@ -254,25 +279,20 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                         asyncio.create_task(process_message_for_context(runner, session_user_id, session_id, message_content))
                         continue
 
-                    # Show typing indicator while the agent processes
-                    async def keep_typing(_chat_id=chat_id):
-                        while True:
-                            await adapter.send_typing(_chat_id)
-                            await asyncio.sleep(4)
+                    # Mid-flight Cancellation Logic
+                    if session_id in _active_tasks and not _active_tasks[session_id].done():
+                        _active_tasks[session_id].cancel()
+                        if text.strip().lower() in ["cancel", "stop", "abort", "nevermind"]:
+                            await adapter.send_message(chat_id, "Aborted previous request seamlessly.")
+                            continue
+                        else:
+                            await adapter.send_message(chat_id, "Aborting previous task to prioritize new input...")
 
-                    typing_task = asyncio.create_task(keep_typing())
-                    try:
-                        response = await extract_agent_response(
-                            runner, session_user_id, session_id, message_content, user_id
-                        )
-                    finally:
-                        typing_task.cancel()
-                        try:
-                            await typing_task
-                        except asyncio.CancelledError:
-                            pass
-
-                    await adapter.send_message(chat_id, response)
+                    # Launch the agent response dynamically in the background mapping to the session
+                    task = asyncio.create_task(
+                        _process_and_send(runner, session_user_id, session_id, message_content, user_id, chat_id)
+                    )
+                    _active_tasks[session_id] = task
 
             except httpx.ReadTimeout:
                 continue
