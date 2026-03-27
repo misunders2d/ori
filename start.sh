@@ -46,6 +46,24 @@ chmod +x "$SCRIPT_DIR/start.sh" "$SCRIPT_DIR/deploy.sh" "$SCRIPT_DIR/rollback.sh
 mkdir -p "$SCRIPT_DIR/data"
 chmod -R 777 "$SCRIPT_DIR/data" # Ensure non-root container user can write state
 
+# --- First-Time Configuration Wizard ---
+ENV_FILE="$SCRIPT_DIR/data/.env"
+if [ ! -f "$ENV_FILE" ]; then
+    echo "=========================================="
+    echo "  First-Time Setup Wizard"
+    echo "=========================================="
+    echo "Let's configure your environment keys. Press Enter to skip if adding manually later."
+    read -p "Enter GOOGLE_API_KEY: " google_key
+    read -p "Enter TELEGRAM_BOT_TOKEN: " tg_key
+    read -p "Enter ADMIN_PASSCODE: " admin_pass
+    
+    echo "GOOGLE_API_KEY=\"$google_key\"" > "$ENV_FILE"
+    echo "TELEGRAM_BOT_TOKEN=\"$tg_key\"" >> "$ENV_FILE"
+    echo "ADMIN_PASSCODE=\"$admin_pass\"" >> "$ENV_FILE"
+    echo "  [+] $ENV_FILE generated securely."
+    echo ""
+fi
+
 # --- Migrate legacy single-database if needed ---
 if [ -f "$SCRIPT_DIR/data/ori.db" ] && [ ! -f "$SCRIPT_DIR/data/ori-sessions.db" ]; then
     echo "  [+] Migrating ori.db into separate session/scheduler databases..."
