@@ -55,7 +55,10 @@ if [ ! -f "$ENV_FILE" ]; then
     echo "Let's configure your environment keys. Press Enter to skip if adding manually later."
     read -p "Enter GOOGLE_API_KEY: " google_key
     read -p "Enter TELEGRAM_BOT_TOKEN: " tg_key
-    read -p "Enter ADMIN_PASSCODE: " admin_pass
+    
+    # Auto-generate a secure 16-character alphanumeric passcode
+    admin_pass=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16 || echo "$RANDOM$RANDOM")
+    echo "  [+] Auto-generated SECURE ADMIN_PASSCODE: $admin_pass"
     
     echo "GOOGLE_API_KEY=\"$google_key\"" > "$ENV_FILE"
     echo "TELEGRAM_BOT_TOKEN=\"$tg_key\"" >> "$ENV_FILE"
@@ -97,6 +100,9 @@ echo $! > "$DEPLOY_PID_FILE"
 nohup "$SCRIPT_DIR/rollback.sh" >> "$SCRIPT_DIR/data/rollback.log" 2>&1 &
 echo $! > "$ROLLBACK_PID_FILE"
 
+# Retrieve the synced passcode to display dynamically to the user safely
+ENV_PASSCODE=$(grep "^ADMIN_PASSCODE=" "$SCRIPT_DIR/data/.env" 2>/dev/null | cut -d'"' -f2 || echo "UNKNOWN")
+
 echo ""
 echo "=========================================="
 echo "  Ori is Active & Isolated"
@@ -105,5 +111,12 @@ echo "  Logs:        docker logs -f ori-agent-daemon"
 echo "  Deploy:      tail -f data/deploy.log"
 echo "  Rollback:    tail -f data/rollback.log"
 echo "  Stop Core:   docker compose down"
+echo "=========================================="
+echo "  [ACTION REQUIRED] ADMIN AUTHENTICATION"
+echo "  The system requires your Admin ID. Open Telegram,"
+echo "  chat with your bot, and send the following exact message"
+echo "  to securely register your account natively:"
+echo ""
+echo "  /init ${ENV_PASSCODE} ADMIN_USER_IDS=tg_<your_id>"
 echo "=========================================="
 echo ""
