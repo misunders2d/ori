@@ -59,6 +59,7 @@ if [ ! -f "$ENV_FILE" ]; then
     # Auto-generate a secure 16-character alphanumeric passcode
     admin_pass=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16 || echo "$RANDOM$RANDOM")
     echo "  [+] Auto-generated SECURE ADMIN_PASSCODE: $admin_pass"
+    echo "  [!] SAVE THIS PASSCODE SECURELY. IT WILL NOT BE DISPLAYED AGAIN."
     
     echo "GOOGLE_API_KEY=\"$google_key\"" > "$ENV_FILE"
     echo "TELEGRAM_BOT_TOKEN=\"$tg_key\"" >> "$ENV_FILE"
@@ -100,9 +101,6 @@ echo $! > "$DEPLOY_PID_FILE"
 nohup "$SCRIPT_DIR/rollback.sh" >> "$SCRIPT_DIR/data/rollback.log" 2>&1 &
 echo $! > "$ROLLBACK_PID_FILE"
 
-# Retrieve the synced passcode to display dynamically to the user safely
-ENV_PASSCODE=$(grep "^ADMIN_PASSCODE=" "$SCRIPT_DIR/data/.env" 2>/dev/null | cut -d'"' -f2 || echo "UNKNOWN")
-
 echo ""
 echo "=========================================="
 echo "  Ori is Active & Isolated"
@@ -118,6 +116,8 @@ echo "  1. Send any message to the bot on Telegram."
 echo "  2. It will reject you and print: \"Here it is: tg_12345678\""
 echo "  3. Copy that EXACT string and send this command to register:"
 echo ""
-echo "  /init \"${ENV_PASSCODE}\" ADMIN_USER_IDS=<THE_EXACT_STRING_THE_BOT_GAVE_YOU>"
+echo "  /init \"<YOUR_ADMIN_PASSCODE>\" ADMIN_USER_IDS=<THE_EXACT_STRING_THE_BOT_GAVE_YOU>"
+echo ""
+echo "  (If you forgot your generated passcode, check data/.env securely)"
 echo "=========================================="
 echo ""
