@@ -145,26 +145,27 @@ async def extract_agent_response(
         # Intercept tool confirmation "yes" / "no" and map to ADK FunctionResponse
         text_lower = message.strip().lower()
         if text_lower in ("yes", "y", "no", "n") and session and getattr(session, "events", None):
-            pending_call_id = None
+            pending_call_ids = []
             for i in range(len(session.events)-1, -1, -1):
                 ev = session.events[i]
                 if ev.author == 'user':
                     break  # Reached the last user message; stop looking
                 if getattr(ev, "actions", None) and getattr(ev.actions, "requested_tool_confirmations", None):
-                    for call_id in ev.actions.requested_tool_confirmations.keys():
-                        pending_call_id = call_id
-                        break
-                    if pending_call_id:
-                        break
+                    # Gather ALL pending confirmation IDs requested by the agent
+                    pending_call_ids = list(ev.actions.requested_tool_confirmations.keys())
+                    break
             
-            if pending_call_id:
+            if pending_call_ids:
                 is_confirmed = text_lower in ("yes", "y")
-                fr = types.FunctionResponse(
-                    id=pending_call_id, 
-                    name="adk_request_confirmation", 
-                    response={"hint": "", "confirmed": is_confirmed, "payload": None}
-                )
-                message_arg = types.Content(role="user", parts=[types.Part(function_response=fr)])
+                func_parts = []
+                for pc_id in pending_call_ids:
+                    fr = types.FunctionResponse(
+                        id=pc_id, 
+                        name="adk_request_confirmation", 
+                        response={"hint": "", "confirmed": is_confirmed, "payload": None}
+                    )
+                    func_parts.append(types.Part(function_response=fr))
+                message_arg = types.Content(role="user", parts=func_parts)
 
     else:
         message_arg = message
