@@ -199,14 +199,9 @@ async def extract_agent_response(
                 new_message=message_arg,
             ):
                 if event.content and event.content.parts:
-                    import re
                     for part in event.content.parts:
                         if hasattr(part, "text") and part.text:
-                            text_body = part.text
-                            # Strip out internal <think> blocks so they don't pollute the UX
-                            text_body = re.sub(r'<think>.*?</think>', '', text_body, flags=re.DOTALL).strip()
-                            if text_body:
-                                parts.append(text_body)
+                            parts.append(part.text)
 
                 if getattr(event, "actions", None) and getattr(event.actions, "requested_tool_confirmations", None):
                     for call_id, confirmation in event.actions.requested_tool_confirmations.items():
