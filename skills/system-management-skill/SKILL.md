@@ -1,5 +1,5 @@
 ---
-name: System Management Constraint
+name: system-management-skill
 description: Critical execution rules for the Core Lifecycle Tools that govern the Daemon.
 ---
 
