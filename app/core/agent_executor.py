@@ -150,9 +150,14 @@ async def extract_agent_response(
                 ev = session.events[i]
                 if ev.author == 'user':
                     break  # Reached the last user message; stop looking
-                if getattr(ev, "actions", None) and getattr(ev.actions, "requested_tool_confirmations", None):
-                    # Gather ALL pending confirmation IDs requested by the agent
-                    pending_call_ids = list(ev.actions.requested_tool_confirmations.keys())
+                
+                # Check for actual 'adk_request_confirmation' tool calls in the event
+                fcs = ev.get_function_calls() if hasattr(ev, "get_function_calls") else []
+                for fc in fcs:
+                    if fc.name == "adk_request_confirmation" and fc.id:
+                        pending_call_ids.append(fc.id)
+                
+                if pending_call_ids:
                     break
             
             if pending_call_ids:
