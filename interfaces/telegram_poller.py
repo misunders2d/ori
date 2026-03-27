@@ -2,6 +2,7 @@ import asyncio
 import logging
 import mimetypes
 import os
+import re
 from typing import Optional
 
 import httpx
@@ -15,6 +16,34 @@ from app.core.agent_executor import (
 from app.core.transport import TransportAdapter, register_adapter
 
 logger = logging.getLogger(__name__)
+
+# Keys whose env values are sensitive secrets (not public identifiers like GITHUB_REPO)
+_SECRET_ENV_KEYS = {"GOOGLE_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "GITHUB_TOKEN"}
+
+# Common token patterns as a fallback (catches secrets the env doesn't know about yet)
+_TOKEN_PATTERNS = re.compile(
+    r"(?:github_pat_[A-Za-z0-9_]{20,})"
+    r"|(?:ghp_[A-Za-z0-9]{36,})"
+    r"|(?:gho_[A-Za-z0-9]{36,})"
+    r"|(?:ghu_[A-Za-z0-9]{36,})"
+    r"|(?:ghs_[A-Za-z0-9]{36,})"
+    r"|(?:sk-[A-Za-z0-9]{20,})"
+    r"|(?:AIzaSy[A-Za-z0-9_-]{33})"
+)
+
+
+def _scrub_secrets(text: str) -> str:
+    """Redact known secret values and common token patterns from outgoing text."""
+    # Layer 1: Redact actual configured secret values from env
+    for key in _SECRET_ENV_KEYS:
+        val = os.environ.get(key, "")
+        if val and len(val) > 8 and val in text:
+            text = text.replace(val, f"[REDACTED]")
+
+    # Layer 2: Regex fallback for common token formats
+    text = _TOKEN_PATTERNS.sub("[REDACTED]", text)
+
+    return text
 
 TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
 TELEGRAM_FILE_API = "https://api.telegram.org/file/bot{token}/{path}"
@@ -47,6 +76,9 @@ class TelegramAdapter(TransportAdapter):
 
     async def send_message(self, chat_id: str | int, text: str) -> None:
         url = TELEGRAM_API.format(token=self._token, method="sendMessage")
+
+        # SECURITY: Scrub any leaked secrets before they reach the user
+        text = _scrub_secrets(text)
         
         # Safe chunking to handle the 4096 character limit
         limit = 4000
@@ -336,8 +368,9 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                             await adapter.send_message(chat_id, result["message"])
                         continue
 
-                    # Handle /init command
+                    # Handle /init command — delete the message since it may contain inline credentials
                     if text.strip().startswith("/init"):
+                        await adapter.delete_message(chat_id, message_id)
                         result = process_init_fn(text)
                         await adapter.send_message(chat_id, result)
                         continue

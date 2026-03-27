@@ -202,10 +202,16 @@ def evolution_commit_and_push(commit_message: str, tool_context: ToolContext) ->
     github_token = os.environ.get("GITHUB_TOKEN", "")
     github_repo = os.environ.get("GITHUB_REPO", "")
     if not github_token or not github_repo:
+        missing = []
+        if not github_token:
+            missing.append("GITHUB_TOKEN")
+        if not github_repo:
+            missing.append("GITHUB_REPO")
         return {
             "status": "auth_required",
-            "message": "GITHUB_TOKEN and GITHUB_REPO must be configured for self-evolution. "
-                       "Use `/init GITHUB_TOKEN=<token> GITHUB_REPO=owner/repo` to set them.",
+            "message": f"Missing credentials: {', '.join(missing)}. "
+                       f"Report this to the user and use `configure_integration` to collect each key securely. "
+                       f"Do NOT ask the user to paste credentials directly in chat.",
         }
 
     # Collect sandbox files to copy
