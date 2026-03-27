@@ -11,7 +11,7 @@ from google.adk.auth.auth_tool import AuthConfig
 from google.adk.tools.tool_context import ToolContext
 
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 def _safe_resolve_path(file_path: str, base_dir: str) -> str | None:
     """Resolve file_path relative to base_dir and ensure it stays within it."""
@@ -134,6 +134,27 @@ def evolution_verify_sandbox(
             )
 
         elif check == "pytest":
+            # Auto-bootstrap: symlink project config and backfill existing tests
+            # so the sandbox can resolve dependencies and run the full test suite.
+            for config_file in ("pyproject.toml", "uv.lock"):
+                src = os.path.join(PROJECT_ROOT, config_file)
+                dst = os.path.join(sandbox_dir, config_file)
+                if os.path.exists(src) and not os.path.exists(dst):
+                    os.symlink(src, dst)
+
+            # Backfill existing test files that weren't staged (e.g. conftest.py)
+            live_tests = os.path.join(PROJECT_ROOT, "tests")
+            sandbox_tests = os.path.join(sandbox_dir, "tests")
+            if os.path.isdir(live_tests):
+                os.makedirs(sandbox_tests, exist_ok=True)
+                for fname in os.listdir(live_tests):
+                    if fname.startswith("__"):
+                        continue
+                    src = os.path.join(live_tests, fname)
+                    dst = os.path.join(sandbox_tests, fname)
+                    if os.path.isfile(src) and not os.path.exists(dst):
+                        os.symlink(src, dst)
+
             result = subprocess.run(
                 ["uv", "run", "pytest", "tests"],
                 cwd=sandbox_dir,
@@ -218,11 +239,6 @@ def evolution_commit_and_push(commit_message: str, tool_context: ToolContext) ->
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy2(src, dst)
 
-            # Also update the LIVE file so it takes effect immediately in the current instance
-            live_dst = os.path.join(PROJECT_ROOT, rel)
-            os.makedirs(os.path.dirname(live_dst), exist_ok=True)
-            shutil.copy2(src, live_dst)
-
         # 3. Commit and Push from the temporary clone
         subprocess.run(["git", "config", "user.email", "agent@evolution.local"], cwd=tmp_repo_dir, check=True)
         subprocess.run(["git", "config", "user.name", "Agent Evolution"], cwd=tmp_repo_dir, check=True)
@@ -239,6 +255,12 @@ def evolution_commit_and_push(commit_message: str, tool_context: ToolContext) ->
         if result.returncode != 0:
             err_msg = (result.stderr or result.stdout)[-500:].replace(github_token, "***")
             return {"status": "error", "message": f"git push failed: {err_msg}"}
+
+        # 4. Push succeeded — now apply changes to live code for partial instant effect
+        for src, rel in staged_files:
+            live_dst = os.path.join(PROJECT_ROOT, rel)
+            os.makedirs(os.path.dirname(live_dst), exist_ok=True)
+            shutil.copy2(src, live_dst)
 
     except subprocess.CalledProcessError as e:
         err_msg = (e.stderr or e.stdout or str(e))[-500:].replace(github_token, "***")
