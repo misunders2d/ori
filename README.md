@@ -30,6 +30,7 @@ ADMIN_PASSCODE=secret_bootstrap_code
 TELEGRAM_BOT_TOKEN=your_token
 GITHUB_TOKEN=for_self_evolution
 ```
+*(Note: The `GOOGLE_API_KEY` is exclusively required to power the semantic anti-prompt-injection guardrail. The main autonomous agent itself is entirely model/provider-agnostic — simply ask Ori to switch to OpenAI, Anthropic, or any other provider you prefer!)*
 
 ### 2. Birth the Daemon
 Run the automation launcher to spin up the container and the Host Supervisor:
