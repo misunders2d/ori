@@ -206,8 +206,18 @@ async def extract_agent_response(
                 if getattr(event, "actions", None) and getattr(event.actions, "requested_tool_confirmations", None):
                     for call_id, confirmation in event.actions.requested_tool_confirmations.items():
                         tool_name = "an action"
+                        
+                        # Defensively extract the tool name from the ADK Confirmation object or dict
                         if hasattr(confirmation, "function_call") and hasattr(confirmation.function_call, "name"):
                             tool_name = confirmation.function_call.name
+                        elif hasattr(confirmation, "name"):
+                            tool_name = confirmation.name
+                        elif isinstance(confirmation, dict):
+                            if "function_call" in confirmation and isinstance(confirmation["function_call"], dict):
+                                tool_name = confirmation["function_call"].get("name", tool_name)
+                            elif "name" in confirmation:
+                                tool_name = confirmation["name"]
+                        
                         parts.append(
                             f"⚠️ **Action Requires Confirmation**\n\n"
                             f"The agent wants to execute `{tool_name}`.\n"

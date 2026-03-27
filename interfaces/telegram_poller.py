@@ -47,17 +47,33 @@ class TelegramAdapter(TransportAdapter):
 
     async def send_message(self, chat_id: str | int, text: str) -> None:
         url = TELEGRAM_API.format(token=self._token, method="sendMessage")
-        try:
-            resp = await self._client.post(
-                url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
-            )
-            if resp.status_code != 200:
-                # Markdown was rejected — retry without it
-                resp = await self._client.post(url, json={"chat_id": chat_id, "text": text})
+        
+        # Safe chunking to handle the 4096 character limit
+        limit = 4000
+        chunks = []
+        remaining = text
+        while len(remaining) > limit:
+            split_at = remaining.rfind('\n', 0, limit)
+            if split_at == -1:
+                split_at = limit
+            chunks.append(remaining[:split_at])
+            remaining = remaining[split_at:].lstrip('\n')
+        if remaining:
+            chunks.append(remaining)
+
+        for chunk in chunks:
+            if not chunk.strip(): continue
+            try:
+                resp = await self._client.post(
+                    url, json={"chat_id": chat_id, "text": chunk, "parse_mode": "Markdown"}
+                )
                 if resp.status_code != 200:
-                    logger.error("Telegram sendMessage failed: %s", resp.text)
-        except Exception:
-            logger.exception("Failed to send Telegram message to chat %s", chat_id)
+                    # Markdown was rejected — retry without it
+                    resp = await self._client.post(url, json={"chat_id": chat_id, "text": chunk})
+                    if resp.status_code != 200:
+                        logger.error("Telegram sendMessage failed: %s", resp.text)
+            except Exception:
+                logger.exception("Failed to send Telegram message to chat %s", chat_id)
 
     async def send_typing(self, chat_id: str | int) -> None:
         url = TELEGRAM_API.format(token=self._token, method="sendChatAction")
@@ -301,6 +317,16 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                             "Bot is not fully configured yet. Please visit the /setup page.",
                         )
                         continue
+
+                    # Upstream Access Control 
+                    allowed_users_str = os.environ.get("ALLOWED_USER_IDS", "")
+                    allowed_users = [u.strip() for u in allowed_users_str.split(",") if u.strip()]
+                    
+                    if allowed_users and user_id not in allowed_users:
+                        logger.warning("Unauthorized access attempt by %s in chat %s", user_id, chat_id)
+                        await adapter.send_message(chat_id, "⛔ You are not authorized to interact with this agent.")
+                        continue
+
 
                     is_group = chat_type in ["group", "supergroup", "channel"]
                     is_mentioned = bot_username and (f"@{bot_username}" in text)
