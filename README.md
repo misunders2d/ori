@@ -7,7 +7,9 @@
 Ori is designed to be raised. Out of the box, it is a capable assistant, but its true form is determined by how you interact with it and the "skills" you allow it to develop.
 
 *   **Vibe Coding as Evolution:** Instead of manual refactoring, you "vibe" with Ori. Describe a capability or a fix in natural language, and Ori's `DeveloperAgent` will stage, test, and commit the code to its own repository.
+*   **Plug-and-Play Integration:** Want to add a new tool or feature? Just share a GitHub link to the library or project you want integrated. Ori will read the source, study the API, and do its best to wire it into its own codebase seamlessly.
 *   **Self-Genetic Engineering:** Through the `app/sub_agents/developer_agent.py`, Ori researches API documentation and deploys code changes to itself using strict System Management limits.
+*   **Living Knowledge:** Ori maintains its own `skills/` directory — structured instruction sets that guide its behavior. When it discovers that existing skill documentation has become outdated or incomplete, it can rewrite and update its own skills to stay current.
 *   **Trust & Training:** As you configure more integrations, Ori's "worldview" expands. It tracks your preferences and decisions to build a persistent personality within its `ori-sessions.db`.
 
 ## 🧠 Anatomy of an Autonomous Being
