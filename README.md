@@ -1,58 +1,44 @@
-# Ori Daemon
+# 🧬 Ori: The Self-Evolving Digital Organism
 
-**Ori** is a headless, messenger-agnostic autonomous worker daemon built on the `google.adk`. It serves as a persistent, localized background process that securely handles API integrations, cron-based scheduling, and self-evolving architectural tasks entirely via natural language interactions.
+**Ori** is not just a background process—it is a headless, messenger-agnostic autonomous worker built to grow, learn, and evolve. Think of it as a "digital pet" for developers. It lives in your infrastructure, handles your chores, and most importantly, **it writes its own DNA.**
 
-## Architecture & Tenets
+## 🎮 The "Grow Your Own Pet" Experience
 
-*   **Headless Polling Core**: Ori natively bypasses traditional REST/FastAPI scaffolding. It relies on a hardened, asynchronous infinite polling loop to interface with the human operator natively.
-*   **Total Messenger Independence**: No slash commands (`/think`, `/reset`, `/start`) are hardcoded. The daemon uses a generic `TransportAdapter` ABC, allowing it to natively scale across Telegram, Slack, WhatsApp, or local CLI seamlessly using a dynamically registered endpoint block.
-*   **Database Concurrency**: The application formally isolates state buffers. `ori-sessions.db` tracks the human conversation layout, while `ori-scheduler.db` manages the heavy `APScheduler` cron workloads. This natively avoids concurrency locking. Both SQLite blocks feature a rolling 12-hour `.backup()` routine.
-*   **Zero-Trust Guardrail Security**:
-    *   **User Input Guardrail**: Incoming texts pass through a semantic vector check (`gemini-embedding-001`). If a prompt injection attempt matches the multidimensional anchor space, the LLM request is aborted.
-    *   **Indirect Execution Guardrail**: The daemon also intercepts responses *after* a tool has been executed but before it hits the model context, completely neutralizing indirect prompt injections hidden inside external websites or web payloads.
-*   **Self-Evolution**: Ori manages its own codebase (`app/sub_agents/developer_agent.py`). It reads, stages, tests (via local pytest sandboxing), and researches official API documentation logic securely using web search tools before deploying code changes to itself using strict `System Management` limits.
+Ori is designed to be raised. Out of the box, it is a capable assistant, but its true form is determined by how you interact with it and the "skills" you allow it to develop.
 
-## Project Structure
+*   **Vibe Coding as Evolution:** Instead of manual refactoring, you "vibe" with Ori. Describe a capability or a fix in natural language, and Ori's `DeveloperAgent` will stage, test, and commit the code to its own repository.
+*   **Self-Genetic Engineering:** Through the `app/sub_agents/developer_agent.py`, Ori researches API documentation and deploys code changes to itself using strict System Management limits.
+*   **Trust & Training:** As you configure more integrations, Ori's "worldview" expands. It tracks your preferences and decisions to build a persistent personality within its `ori-sessions.db`.
 
-```
-ori/
-├── app/                  # Core autonomous brain
-│   ├── core/             # Central logical abstractions (Transport ABC, Agent Executors, Automated Backups)
-│   ├── sub_agents/       # Granular specialized agents (Coordinator, Developer)
-│   ├── app_utils/        # App utilities and configuration helpers
-│   ├── callbacks/        # Runtime interceptors (Prompt Injection, Output Guardrails, Admin Auth)
-│   ├── tools/            # Native ADK python tool definitions
-│   └── scheduler_instance.py # APScheduler local jobstore map
-├── interfaces/           # Messenger boundary implementations (e.g. telegram_poller)
-├── scripts/              # Independent toolkits (Semantic Anchor Vectorizer, DB migrators)
-├── skills/               # Developer instruction boundary specifications
-├── data/                 # Ignored local environment configs and SQLite DB instances
-├── deploy.sh             # Host-Level Update Supervisor
-├── rollback.sh           # Host-Level Reversion Mechanism
-├── docker-compose.yml    # Non-root daemon configuration 
-└── run_bot.py            # Master Daemon Entrypoint
-```
+## 🧠 Anatomy of an Autonomous Being
 
-## Setup & Container Deployment
+*   **The Brain (Headless Core):** Ori operates via a hardened, asynchronous infinite polling loop, bypassing traditional REST scaffolds to interface with you natively where you already hang out (Telegram, Slack, etc.).
+*   **The Immune System (Zero-Trust Guardrails):**
+    *   **Semantic Defense:** Every input is checked against a multidimensional vector space (`gemini-embedding-001`) to neutralize "brainwashing" (prompt injection) attempts.
+    *   **Output Interception:** Ori inspects data from the web *before* it hits its own context, ensuring it doesn't "catch a virus" from malicious external payloads.
+*   **Metabolism (Scheduling):** Using `APScheduler`, Ori manages its own workloads and background tasks, with a rolling 12-hour `.backup()` routine to ensure its state is never lost.
 
-Ori utilizes a hardened Docker deployment bound to a standalone internal User `agentuser` to completely mitigate escape permissions.
+## 🛠 Hatching Your Ori
 
-### 1. Environment & Setup
-Create a `./data/.env` file and define the following variables:
+Ori utilizes a hardened Docker deployment bound to a standalone internal user to keep it safely contained.
+
+### 1. Incubation Setup
+Create a `./data/.env` file to provide the initial nutrients:
 ```env
 GOOGLE_API_KEY=your_key
 ADMIN_PASSCODE=secret_bootstrap_code
 TELEGRAM_BOT_TOKEN=your_token
+GITHUB_TOKEN=for_self_evolution
 ```
 
-### 2. Standalone Automation Launcher
-To cleanly mount volumes, configure prerequisites, fetch origin states, and spin up both the container and the asynchronous Host Supervisor bash scripts:
+### 2. Birth the Daemon
+Run the automation launcher to spin up the container and the Host Supervisor:
 ```bash
 ./start.sh
 ```
-*(Use `./start.sh --no-sync` if testing entirely offline without a Github Remote)*.
 
-### 3. Asymmetric Self-Updates
-Because the Daemon operates headlessly, it does not use a `/health` endpoint container. When the `DeveloperAgent` naturally triggers the `evolution_commit_and_push` tools, a `.update_trigger` payload is injected into `/data/`. 
+### 3. Watching it Grow
+When the `DeveloperAgent` triggers an evolution, a `.update_trigger` is injected into `/data/`. The `deploy.sh` script—acting as the "Host Supervisor"—intercepts this, safely shuts down the SQLite buffers, rebuilds the image, and notifies you via messenger that Ori has successfully evolved.
 
-The `deploy.sh` script, running detached on the Host Linux Instance, intercepts this trigger, kills the Docker sequence safely allowing SQLite to shut down, checks out the most recent tested `origin shadow`, rebuilds the `ori-agent-daemon` image, confirms run states natively via `docker inspect`, automatically deletes dangling image chunks, and explicitly notifies the linked messenger transport asynchronously payloading the results!
+---
+_"Don't just code your tools. Raise them."_
