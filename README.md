@@ -22,6 +22,10 @@ Ori is designed to be raised. Out of the box, it is a capable assistant, but its
 
 Ori utilizes a hardened Docker deployment bound to a standalone internal user to keep it safely contained.
 
+### 0. Claiming an Egg (Forking)
+Because Ori strictly manages its own source code and pushes structural changes back to the origin, you must **Fork** this repository before deploying your own agent. 
+By pulling down your own fork, you ensure the central `misunders2d/ori` template (the foundational "egg") remains perfectly intact, while providing your newly hatched Ori a unique codebase sandbox to write to and evolve independently!
+
 ### 1. Incubation Setup
 Create a `./data/.env` file to provide the initial nutrients:
 ```env
