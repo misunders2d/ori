@@ -139,41 +139,56 @@ async def extract_agent_response(
 
     MAX_RETRIES = 2
 
+    import re
+    message_str = ""
     if isinstance(message, str):
-        message_arg = types.Content(role="user", parts=[types.Part.from_text(text=message)])
+        message_str = message
+    else:
+        # Extract text from types.Content
+        parts = []
+        for p in (getattr(message, "parts", []) or []):
+            if hasattr(p, "text") and p.text:
+                parts.append(p.text)
+        message_str = " ".join(parts)
+
+    match = re.search(r'(?i)(?::\s*)(yes|y|no|n)\s*$', message_str.strip())
+    text_lower = match.group(1).lower() if match else message_str.strip().lower()
+
+    if text_lower in ("yes", "y", "no", "n") and session and getattr(session, "events", None):
+        pending_call_ids = []
         
-        # Intercept tool confirmation "yes" / "no" and map to ADK FunctionResponse
-        text_lower = message.strip().lower()
-        if text_lower in ("yes", "y", "no", "n") and session and getattr(session, "events", None):
-            pending_call_ids = []
+        # Scan the last 15 events maximum backwards to find the most recent confirmation request
+        for i in range(len(session.events)-1, max(-1, len(session.events)-15), -1):
+            ev = session.events[i]
             
-            # Scan the last 15 events maximum backwards to find the most recent confirmation request
-            for i in range(len(session.events)-1, max(-1, len(session.events)-15), -1):
-                ev = session.events[i]
-                
-                # Check for actual 'adk_request_confirmation' tool calls in the event
-                fcs = ev.get_function_calls() if hasattr(ev, "get_function_calls") else []
-                for fc in fcs:
-                    if fc.name == "adk_request_confirmation" and fc.id:
-                        pending_call_ids.append(fc.id)
-                
-                if pending_call_ids:
-                    break
+            # Check for actual 'adk_request_confirmation' tool calls in the event
+            fcs = ev.get_function_calls() if hasattr(ev, "get_function_calls") else []
+            for fc in fcs:
+                if fc.name == "adk_request_confirmation" and fc.id:
+                    pending_call_ids.append(fc.id)
             
             if pending_call_ids:
-                is_confirmed = text_lower in ("yes", "y")
-                func_parts = []
-                for pc_id in pending_call_ids:
-                    fr = types.FunctionResponse(
-                        id=pc_id, 
-                        name="adk_request_confirmation", 
-                        response={"hint": "", "confirmed": is_confirmed, "payload": None}
-                    )
-                    func_parts.append(types.Part(function_response=fr))
-                message_arg = types.Content(role="user", parts=func_parts)
-
+                break
+        
+        if pending_call_ids:
+            is_confirmed = text_lower in ("yes", "y")
+            func_parts = []
+            for pc_id in pending_call_ids:
+                fr = types.FunctionResponse(
+                    id=pc_id, 
+                    name="adk_request_confirmation", 
+                    response={"hint": "", "confirmed": is_confirmed, "payload": None}
+                )
+                func_parts.append(types.Part(function_response=fr))
+            # Critical: return a Content object with ONLY the FunctionResponse to unblock the agent
+            message_arg = types.Content(role="user", parts=func_parts)
+        else:
+            # Not confirmed, or no pending call found
+            message_arg = message if isinstance(message, types.Content) else types.Content(role="user", parts=[types.Part.from_text(text=message)])
     else:
-        message_arg = message
+        # Standard chat message
+        message_arg = message if isinstance(message, types.Content) else types.Content(role="user", parts=[types.Part.from_text(text=message)])
+    
 
     parts = []
     for attempt in range(1 + MAX_RETRIES):
