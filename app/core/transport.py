@@ -46,6 +46,19 @@ class TransportAdapter(ABC):
         """Delete a specific message (best-effort)."""
 
     @abstractmethod
+    async def send_media(
+        self, target_id: str | int, data: bytes, mime_type: str, caption: str = ""
+    ) -> None:
+        """Send a media file (image, audio, video, document) to the given chat/channel.
+
+        Args:
+            target_id: The chat/channel to send to.
+            data: Raw file bytes.
+            mime_type: MIME type (e.g. 'image/png', 'audio/mpeg', 'video/mp4').
+            caption: Optional text caption to accompany the media.
+        """
+
+    @abstractmethod
     async def download_file(self, file_id: str) -> Optional[tuple[bytes, str, str]]:
         """Download a file attachment. Returns (bytes, mime_type, filename) or None."""
 

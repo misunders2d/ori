@@ -3,11 +3,27 @@
 import logging
 import time
 import uuid
+from dataclasses import dataclass, field
 
 from google import genai
 from google.genai import types
 
 from app.session_signals import get_pending_refresh
+
+
+@dataclass
+class AgentResponse:
+    """Structured response from the agent containing text and optional media."""
+    text: str = ""
+    media_items: list[dict] = field(default_factory=list)
+
+    def __str__(self) -> str:
+        """Backward-compatible string representation for callers that just need text."""
+        return self.text
+
+    def __contains__(self, item: str) -> bool:
+        """Allow 'x in response' checks to work against the text body."""
+        return item in self.text
 
 logger = logging.getLogger(__name__)
 
@@ -106,8 +122,8 @@ async def update_session_state(runner, user_id: str, session_id: str, state_delt
 
 async def extract_agent_response(
     runner, user_id: str, session_id: str, message: str | types.Content, actual_caller_id: str = None
-) -> str:
-    """Run the ADK runner and yield agent responses."""
+) -> AgentResponse:
+    """Run the ADK runner and yield agent responses with optional media attachments."""
     try:
         from google.adk.events.event import Event, EventActions
     except ImportError:
@@ -191,6 +207,7 @@ async def extract_agent_response(
     
 
     parts = []
+    media_items = []
     for attempt in range(1 + MAX_RETRIES):
         try:
             async for event in runner.run_async(
@@ -202,6 +219,12 @@ async def extract_agent_response(
                     for part in event.content.parts:
                         if hasattr(part, "text") and part.text:
                             parts.append(part.text)
+                        # Capture inline binary data (images, audio, etc.)
+                        elif hasattr(part, "inline_data") and part.inline_data:
+                            media_items.append({
+                                "data": part.inline_data.data,
+                                "mime_type": part.inline_data.mime_type or "application/octet-stream",
+                            })
 
                 if getattr(event, "actions", None) and getattr(event.actions, "requested_tool_confirmations", None):
                     for call_id, confirmation in event.actions.requested_tool_confirmations.items():
@@ -241,8 +264,8 @@ async def extract_agent_response(
                 or "RESOURCE_EXHAUSTED" in error_msg
                 or "QuotaExceeded" in error_msg
             ):
-                return (
-                    "⚠️ **Rate Limit Exceeded**\n\n"
+                return AgentResponse(
+                    text="⚠️ **Rate Limit Exceeded**\n\n"
                     "You've hit the API quota limit. Please wait a bit before trying again. "
                     "If this persists, check your billing details or rate limits."
                 )
@@ -252,8 +275,8 @@ async def extract_agent_response(
                 logger.error(
                     "Context limit reached for session %s: %s", session_id, error_msg
                 )
-                return (
-                    "⚠️ **Context Limit Reached**\n\n"
+                return AgentResponse(
+                    text="⚠️ **Context Limit Reached**\n\n"
                     "The conversation has become too large for me to process. "
                     "Please use the **/reset** command to start a fresh session or wait a few minutes."
                     f"Error: {error_msg}"
@@ -274,11 +297,11 @@ async def extract_agent_response(
                     ],
                 )
                 continue
-            return (
-                f"Agent error after {1 + MAX_RETRIES} attempts. Last error: {error_msg}"
+            return AgentResponse(
+                text=f"Agent error after {1 + MAX_RETRIES} attempts. Last error: {error_msg}"
             )
 
-    final_response = (
+    final_text = (
         "\n".join(parts)
         if parts
         else "I processed your request but have no response to show."
@@ -293,9 +316,9 @@ async def extract_agent_response(
         refresh_msg = await _perform_session_refresh(
             runner, user_id, session_id, refresh_mode
         )
-        final_response += f"\n\n--- SESSION REFRESHED ---\n{refresh_msg}"
+        final_text += f"\n\n--- SESSION REFRESHED ---\n{refresh_msg}"
 
-    return final_response
+    return AgentResponse(text=final_text, media_items=media_items)
 
 
 async def process_message_for_context(runner, user_id: str, session_id: str, message: str | types.Content):

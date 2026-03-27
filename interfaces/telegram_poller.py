@@ -89,6 +89,37 @@ class TelegramAdapter(TransportAdapter):
         except Exception:
             pass  # May fail if bot lacks permissions, non-critical
 
+    async def send_media(
+        self, chat_id: str | int, data: bytes, mime_type: str, caption: str = ""
+    ) -> None:
+        # Map MIME type to the appropriate Telegram method and form field
+        mime_prefix = mime_type.split("/")[0] if mime_type else ""
+        if mime_prefix == "image":
+            method, field = "sendPhoto", "photo"
+        elif mime_prefix == "audio":
+            method, field = "sendAudio", "audio"
+        elif mime_prefix == "video":
+            method, field = "sendVideo", "video"
+        else:
+            method, field = "sendDocument", "document"
+
+        # Derive a sensible filename from the MIME type
+        ext = mimetypes.guess_extension(mime_type) or ""
+        filename = f"file{ext}"
+
+        url = TELEGRAM_API.format(token=self._token, method=method)
+        form_data = {"chat_id": str(chat_id)}
+        if caption:
+            form_data["caption"] = caption
+
+        try:
+            files = {field: (filename, data, mime_type)}
+            resp = await self._client.post(url, data=form_data, files=files)
+            if resp.status_code != 200:
+                logger.error("Telegram %s failed: %s", method, resp.text)
+        except Exception:
+            logger.exception("Failed to send media to chat %s via %s", chat_id, method)
+
     async def download_file(self, file_id: str) -> Optional[tuple[bytes, str, str]]:
         try:
             url = TELEGRAM_API.format(token=self._token, method="getFile")
@@ -179,7 +210,16 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                 response = await extract_agent_response(
                     _runner, _session_user_id, _session_id, _message_content, _user_id
                 )
-                await adapter.send_message(_chat_id, response)
+                # Send text response
+                if response.text:
+                    await adapter.send_message(_chat_id, response.text)
+                # Send any media attachments the agent produced
+                for media_item in response.media_items:
+                    await adapter.send_media(
+                        _chat_id,
+                        media_item["data"],
+                        media_item["mime_type"],
+                    )
             except asyncio.CancelledError:
                 pass
             finally:
