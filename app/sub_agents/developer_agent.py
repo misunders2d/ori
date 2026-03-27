@@ -20,6 +20,7 @@ base_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 google_adk_skill = load_skill_from_dir(base_dir / "google-adk-skill")
 skill_creator_skill = load_skill_from_dir(base_dir / "skill-creator-skill")
 log_maintenance_skill = load_skill_from_dir(base_dir / "log-maintenance-skill")
+system_management_skill = load_skill_from_dir(base_dir / "system-management-skill")
 
 model_config = Gemini(
     model="gemini-3-flash-preview",
@@ -38,10 +39,11 @@ developer_agent = Agent(
         "If you are adding a completely new domain, capability, or API integration, you MUST use the `skill-creator-skill`. "
         "The `skill-creator-skill` defines a strict evaluation and progressive disclosure methodology to test and document your logic.\n\n"
         "FRAMEWORK NOTE: To understand how to define LLM Wrappers, memory states, structured JSON returns, or agents inside the layout, consult the `google-adk-skill`.\n\n"
+        "SYSTEM MANAGEMENT CONSTRAINT: The `ori` daemon operates persistently. Read the `system-management-skill` to understand the structural boundaries for `update_self`, `session_refresh`, `trigger_rollback`, and `set_planner_mode`. You MUST strictly respect these logic paths and their `require_confirmation=True` wrappers. Do NOT alter the `run_bot.py` daemon lifecycle natively unless the user explicitly orders a structural overhaul.\n\n"
         "CREDENTIAL NOTE: Under NO circumstances should you read or overwrite the live `.env` file directly. "
-        "If an integration you are programming requires new API keys, extend the `configure_integration` patterns inside `app/tools/integrations.py` and `app/app_utils/config.py` so the human can enter them securely.\n\n"
+        "If an integration you are programming requires new API keys, extend the tools inside `app/tools/system.py` so the human can enter them securely.\n\n"
         "COMMUNICATION CHANNEL MANDATE: The application relies on a strict session state injection mechanism to secure Admin Guardrails. "
-        "Any new communication interface you build (Slack, Google Chat, Discord, etc.) MUST natively isolate true caller IDs from group/channel IDs. "
+        "Any new communication interface you build MUST natively isolate true caller IDs from group/channel IDs. "
         "You MUST read `skills/google-adk-skill/examples/communication_channel.md` to see the exact code pattern required to inject the `user_id` state delta before routing the LLM request. Failure to do so will break group-chat security.\n\n"
         "EXPERIENCE NOTE: Before proposing or making any changes, ensure you are working with the absolute latest code via `evolution_read_file`.\n\n"
         "Your workflow:\n"
@@ -52,7 +54,7 @@ developer_agent = Agent(
         "5. STOP AND ASK: If the human's request is ever ambiguous, if you do not understand the terminology, or if you feel you need more user input before proceeding, STOP and ASK them for clarification immediately instead of making assumptions."
     ),
     tools=[
-        skill_toolset.SkillToolset(skills=[google_adk_skill, skill_creator_skill, log_maintenance_skill]),
+        skill_toolset.SkillToolset(skills=[google_adk_skill, skill_creator_skill, log_maintenance_skill, system_management_skill]),
         evolution_read_file,
         evolution_stage_change,
         evolution_verify_sandbox,
