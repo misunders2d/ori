@@ -55,6 +55,79 @@ async def run_scheduled_task(task_prompt: str, notify: dict, is_actionable: bool
     await _deliver_message(notify, response)
 
 
+async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, silent: bool = False):
+    """
+    Executed by APScheduler for admin-only system maintenance tasks.
+    Runs the agent with full privileges in an isolated session, then cleans up.
+
+    Unlike run_scheduled_task, this:
+      - Creates a fresh session per execution (no cross-task contamination)
+      - Injects the admin's identity so guardrails pass
+      - Supports silent mode (only notifies on failure/warnings)
+      - Always runs the agent (no plain-text reminder path)
+    """
+    import uuid
+
+    from app.core.agent_executor import extract_agent_response, update_session_state
+    from run_bot import get_runner
+
+    runner = get_runner()
+    if not runner:
+        logger.error("System task failed: runner not available. Task: %s", task_prompt)
+        await _deliver_message(notify, f"System Task Failed: Runner not available.\nTask: {task_prompt}")
+        return
+
+    # Isolated session — created fresh, deleted after execution
+    session_id = f"sys_task_{uuid.uuid4().hex[:8]}"
+    user_id = "system_admin"
+
+    query = (
+        f"System Maintenance Task: {task_prompt}\n"
+        "(This is an automated system task running with admin privileges. "
+        "Execute the task fully. Report results clearly. "
+        "Do not ask for missing credentials; stop gracefully if something is missing.)"
+    )
+
+    try:
+        # Create the ephemeral session
+        await runner.session_service.create_session(
+            app_name=runner.app_name, user_id=user_id, session_id=session_id
+        )
+
+        # Inject admin identity so guardrails recognize this as an admin execution
+        await update_session_state(
+            runner=runner,
+            user_id=user_id,
+            session_id=session_id,
+            state_delta={"user_id": admin_user_id},
+        )
+
+        response = await extract_agent_response(runner, user_id, session_id, query)
+
+        is_failure = any(
+            indicator in response
+            for indicator in ["error", "Error", "failed", "Failed", "Guardrail Intervention:", "not available"]
+        )
+
+        if silent and not is_failure:
+            logger.info("System task completed silently: %s", task_prompt)
+        else:
+            prefix = "System Task Report" if not is_failure else "System Task Warning"
+            await _deliver_message(notify, f"{prefix}:\n{response}")
+
+    except Exception:
+        logger.exception("System task execution failed: %s", task_prompt)
+        await _deliver_message(notify, f"System Task Failed:\nTask: {task_prompt}\nCheck logs for details.")
+    finally:
+        # Clean up the ephemeral session
+        try:
+            await runner.session_service.delete_session(
+                app_name=runner.app_name, user_id=user_id, session_id=session_id
+            )
+        except Exception:
+            pass
+
+
 async def _deliver_message(notify: dict, message: str):
     """Send a message to the user via their original channel using the adapter registry."""
     from app.core.transport import get_adapter

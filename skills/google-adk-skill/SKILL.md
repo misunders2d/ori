@@ -26,6 +26,16 @@ If you need the exact syntax for setting up loop agents, attaching callbacks, fo
 
 Only read the full cheatsheet if you are confused about the syntax or need exactly the right parameter string for an `Agent(...)` class invocation.
 
+## Transport Adapter Pattern
+
+The application supports multiple messaging platforms via the `TransportAdapter` ABC in `app/core/transport.py`. When adding a new platform (Discord, Slack, etc.), you implement this interface and register it — scheduled tasks, notifications, and key capture route automatically.
+
+**You must read the full implementation guide at**:
+`examples/transport_adapter.md`
+
+For the security-critical group chat identity isolation pattern, see:
+`examples/communication_channel.md`
+
 ## System Critical Tools & Guardrails
 
 The ADK framework natively offloads system-level mutations to standard Tool definitions rather than relying on clunky hardcoded Python intercepts.

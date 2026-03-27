@@ -183,7 +183,12 @@ def list_scheduled_tasks(tool_context: ToolContext) -> dict:
             "job_id": job.id,
             "task": job.args[0] if job.args else "Unknown",
             "next_run": str(job.next_run_time) if job.next_run_time else "N/A",
-            "type": "recurring" if job.id.startswith("cron_") else "one-off",
+            "type": (
+                "system (recurring)" if job.id.startswith("sys_cron_")
+                else "system (one-off)" if job.id.startswith("sys_oneoff_")
+                else "recurring" if job.id.startswith("cron_")
+                else "one-off"
+            ),
         }
         tasks.append(task_info)
 
@@ -271,4 +276,150 @@ def edit_scheduled_task(
     }
 
 
+def _require_admin(tool_context: ToolContext) -> str | None:
+    """Check if the current user is an admin. Returns the admin user_id if authorized, None otherwise."""
+    session = getattr(tool_context, "session", None)
+    if not session:
+        return None
+    state = session.state if hasattr(session, "state") else {}
+    if isinstance(state, dict):
+        user_id = state.get("user_id", "")
+    else:
+        user_id = getattr(state, "get", lambda k, d: d)("user_id", "")
+
+    admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
+    admin_users = [u.strip() for u in admin_users_str.split(",") if u.strip()]
+
+    if admin_users and user_id in admin_users:
+        return user_id
+    return None
+
+
+def schedule_system_task(
+    task_prompt: str, run_at_iso_datetime: str, timezone: str, tool_context: ToolContext, silent: bool = False
+) -> dict:
+    """Schedules a one-off system maintenance task that runs with admin privileges.
+
+    Use this for admin-only system chores: security audits, backup verification, cleanup, health checks.
+    These tasks run in an isolated session with full agent access (including DeveloperAgent delegation).
+    IMPORTANT: Always call get_current_time first to know the current time before scheduling.
+
+    Args:
+        task_prompt (str): The exact system task instruction (e.g. 'Run a security audit on current .env permissions and report findings').
+        run_at_iso_datetime (str): When to run, in ISO 8601 format (e.g., '2026-03-28T03:00:00').
+        timezone (str): IANA timezone for the scheduled time (e.g., 'Europe/Kyiv', 'UTC').
+        silent (bool): If True, only notify the admin on failure/warnings. Successes are logged silently. Default: False.
+
+    Returns:
+        dict: Status of the scheduling operation.
+    """
+    from zoneinfo import ZoneInfo
+
+    from app.scheduler_instance import scheduler
+    from app.tasks import run_system_task
+
+    # Admin-only enforcement
+    admin_user_id = _require_admin(tool_context)
+    if not admin_user_id:
+        return {"status": "error", "message": "Only admin users can schedule system tasks."}
+
+    job_id = f"sys_oneoff_{uuid.uuid4().hex[:8]}"
+
+    try:
+        tz = ZoneInfo(timezone)
+    except (KeyError, Exception):
+        return {"status": "error", "message": f"Unknown timezone: '{timezone}'."}
+
+    try:
+        naive_dt = datetime.fromisoformat(run_at_iso_datetime.replace("Z", ""))
+        run_date = naive_dt.replace(tzinfo=tz)
+    except ValueError:
+        return {"status": "error", "message": "Invalid datetime format. Must be ISO 8601."}
+
+    if run_date <= datetime.now(tz):
+        return {"status": "error", "message": "Scheduled time is in the past."}
+
+    notify = _get_session_notify_info(tool_context)
+
+    scheduler.add_job(
+        run_system_task,
+        "date",
+        run_date=run_date,
+        kwargs={
+            "task_prompt": task_prompt,
+            "notify": notify,
+            "admin_user_id": admin_user_id,
+            "silent": silent,
+        },
+        id=job_id,
+    )
+
+    mode = "silent (notify on failure only)" if silent else "verbose (always notify)"
+    return {
+        "status": "success",
+        "message": f"System task scheduled: '{task_prompt}' for {run_date.strftime('%Y-%m-%d %H:%M')} ({timezone}). Mode: {mode}. Job ID: {job_id}",
+    }
+
+
+def schedule_recurring_system_task(
+    task_prompt: str, cron_expression: str, timezone: str, tool_context: ToolContext, silent: bool = False
+) -> dict:
+    """Schedules a recurring system maintenance task that runs with admin privileges on a cron schedule.
+
+    Use this for periodic admin-only chores: nightly security scans, daily backup verification,
+    weekly log rotation, periodic health checks.
+    IMPORTANT: Always call get_current_time first to confirm the user's timezone.
+
+    Args:
+        task_prompt (str): The exact system task instruction (e.g. 'Verify database backup integrity and report any corruption').
+        cron_expression (str): A standard 5-part cron expression (e.g., '0 3 * * *' for every day at 3 AM).
+        timezone (str): IANA timezone for the cron schedule (e.g., 'Europe/Kyiv', 'UTC').
+        silent (bool): If True, only notify the admin on failure/warnings. Successes are logged silently. Default: False.
+
+    Returns:
+        dict: Status of the scheduling operation.
+    """
+    from zoneinfo import ZoneInfo
+
+    from apscheduler.triggers.cron import CronTrigger
+
+    from app.scheduler_instance import scheduler
+    from app.tasks import run_system_task
+
+    # Admin-only enforcement
+    admin_user_id = _require_admin(tool_context)
+    if not admin_user_id:
+        return {"status": "error", "message": "Only admin users can schedule system tasks."}
+
+    job_id = f"sys_cron_{uuid.uuid4().hex[:8]}"
+
+    try:
+        tz = ZoneInfo(timezone)
+    except (KeyError, Exception):
+        return {"status": "error", "message": f"Unknown timezone: '{timezone}'."}
+
+    try:
+        trigger = CronTrigger.from_crontab(cron_expression, timezone=tz)
+    except ValueError:
+        return {"status": "error", "message": "Invalid cron expression."}
+
+    notify = _get_session_notify_info(tool_context)
+
+    scheduler.add_job(
+        run_system_task,
+        trigger=trigger,
+        kwargs={
+            "task_prompt": task_prompt,
+            "notify": notify,
+            "admin_user_id": admin_user_id,
+            "silent": silent,
+        },
+        id=job_id,
+    )
+
+    mode = "silent (notify on failure only)" if silent else "verbose (always notify)"
+    return {
+        "status": "success",
+        "message": f"Recurring system task scheduled: '{task_prompt}' with cron '{cron_expression}' ({timezone}). Mode: {mode}. Job ID: {job_id}",
+    }
 

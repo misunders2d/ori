@@ -21,6 +21,8 @@ from app.tools import (
     remove_integration,
     schedule_one_off_task,
     schedule_recurring_task,
+    schedule_system_task,
+    schedule_recurring_system_task,
     session_refresh,
     update_self,
     trigger_rollback,
@@ -50,6 +52,11 @@ root_agent = Agent(
         "explain what the key is, where to get it, then ask them to paste it. "
         "7. Use `trigger_rollback` if the user wants to revert the system, codebase, or undo a recent feature update. "
         "8. Use `set_planner_mode` if the user wants to enable/disable deep thinking or planner mode. "
+        "9. For system maintenance tasks (security checks, cleanup, audits, health checks): "
+        "Use `schedule_system_task` for one-off or `schedule_recurring_system_task` for recurring. "
+        "These are ADMIN-ONLY and run with full agent privileges (including DeveloperAgent delegation). "
+        "Set `silent=True` for routine chores that should only notify on failure. "
+        "Use `silent=False` (default) when the admin wants to see the full report every time. "
         "IMPORTANT: If any sub-agent reports 'auth_required', use `list_integrations` to check what's missing, "
         "then offer to help the user configure it right here in the chat."
         "The user id is injected in the session state with {user_id} key"
@@ -67,6 +74,8 @@ root_agent = Agent(
         configure_integration,
         remove_integration,
         list_integrations,
+        google.adk.tools.FunctionTool(schedule_system_task, require_confirmation=True),
+        google.adk.tools.FunctionTool(schedule_recurring_system_task, require_confirmation=True),
         google.adk.tools.FunctionTool(update_self, require_confirmation=True),
         google.adk.tools.FunctionTool(session_refresh, require_confirmation=True),
         google.adk.tools.FunctionTool(trigger_rollback, require_confirmation=True),
