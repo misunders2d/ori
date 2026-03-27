@@ -117,6 +117,8 @@ while true; do
         if wait_for_healthy; then
             echo "$(date): Evolution sequence closed successfully."
             send_notification "$TRIGGER_CONTENT" "💠 Self-Evolution Successful. Daemon rebuilt and actively polling."
+            echo "  [+] Cleaning up dangling Docker build caches..."
+            docker image prune -f --filter "dangling=true" > /dev/null 2>&1
         else
             echo "$(date): Core loop rejection on start! Rolling back mutations."
             send_notification "$TRIGGER_CONTENT" "🚨 CRITICAL: The newly compiled code immediately crashed the daemon container upon boot. Triggering structural rollback..."

@@ -71,6 +71,8 @@ while true; do
         if wait_for_healthy; then
             echo "$(date): Rollback Sequence completed."
             send_notification "$TRIGGER_CONTENT" "✅ Rollback Sequence Complete. Daemon stabilized onto previous Git signature."
+            echo "  [+] Cleaning up dangling Docker build caches..."
+            docker image prune -f --filter "dangling=true" > /dev/null 2>&1
         else
             echo "$(date): Rollback structure failed. Re-initiating container cycle..."
             send_notification "$TRIGGER_CONTENT" "🚨 FATAL: The previous stable code also crashed on boot. You must manually unbrick via SSH!"
