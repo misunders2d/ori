@@ -59,3 +59,9 @@ tools=[
 ]
 ```
 Using `require_confirmation=True` guarantees that the ADK execution graph naturally halts and invokes Human-in-the-Loop interaction before the tool is ever allowed to run, completely neutralizing accidental framework wipes without requiring any custom manual prompt parsing.
+
+**HEADLESS CONFIRMATION ARCHITECTURE:**
+Because the daemon interacts with users over headless environments (e.g. Telegram) rather than a dynamic web UI, it cannot rely on the user clicking a physical "Approve" button widget that the ADK `Runner` normally expects. 
+Instead, `app/core/agent_executor.py` natively intercepts user plaintext responses (`"yes"` or `"no"`), retroactively matches them to ANY pending `requested_tool_confirmations` in the `session.events`, and dynamically binds them securely to an internal `adk_request_confirmation` ADK `FunctionResponse`.
+
+If an LLM agent incorrectly hallucinates and tells a user to "click the Approve button in the chat prompt", it is because the foundational ADK system prompt internally injected that wording. The LLM does not natively know about the headless interceptor. If necessary, you may inject system instructions overriding this behavior, but the underlying execution framework will handle textual "yes/no" inputs natively for ALL tools with `require_confirmation=True`.
