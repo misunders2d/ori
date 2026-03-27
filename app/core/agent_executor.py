@@ -146,10 +146,10 @@ async def extract_agent_response(
         text_lower = message.strip().lower()
         if text_lower in ("yes", "y", "no", "n") and session and getattr(session, "events", None):
             pending_call_ids = []
-            for i in range(len(session.events)-1, -1, -1):
+            
+            # Scan the last 15 events maximum backwards to find the most recent confirmation request
+            for i in range(len(session.events)-1, max(-1, len(session.events)-15), -1):
                 ev = session.events[i]
-                if ev.author == 'user':
-                    break  # Reached the last user message; stop looking
                 
                 # Check for actual 'adk_request_confirmation' tool calls in the event
                 fcs = ev.get_function_calls() if hasattr(ev, "get_function_calls") else []
