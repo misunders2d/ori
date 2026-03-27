@@ -57,6 +57,10 @@ class DiscordAdapter(TransportAdapter):
     async def delete_message(self, target_id, message_id):
         ...
 
+    async def send_media(self, target_id, data, mime_type, caption=""):
+        # Platform-specific media upload logic
+        ...
+
     async def download_file(self, file_id):
         ...
 ```
@@ -87,13 +91,20 @@ from app.core.agent_executor import (
 session_id = adapter.make_session_id(channel_id)
 user_id = adapter.make_user_id(sender_id)
 
-# Run the agent
+# Run the agent — returns an AgentResponse with .text and .media_items
 response = await extract_agent_response(
     runner, session_id, session_id, message_content, user_id
 )
 
-# Send the response via the adapter
-await adapter.send_message(channel_id, response)
+# Send the text response
+if response.text:
+    await adapter.send_message(channel_id, response.text)
+
+# Send any media the agent produced (images, audio, files, etc.)
+for media_item in response.media_items:
+    await adapter.send_media(
+        channel_id, media_item["data"], media_item["mime_type"]
+    )
 ```
 
 ### 4. Handle secure key capture
