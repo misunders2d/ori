@@ -46,6 +46,12 @@ chmod +x "$SCRIPT_DIR/start.sh" "$SCRIPT_DIR/deploy.sh" "$SCRIPT_DIR/rollback.sh
 mkdir -p "$SCRIPT_DIR/data"
 chmod -R 777 "$SCRIPT_DIR/data" # Ensure non-root container user can write state
 
+# --- Migrate legacy single-database if needed ---
+if [ -f "$SCRIPT_DIR/data/ori.db" ] && [ ! -f "$SCRIPT_DIR/data/ori-sessions.db" ]; then
+    echo "  [+] Migrating ori.db into separate session/scheduler databases..."
+    python3 "$SCRIPT_DIR/scripts/migrate_split_db.py"
+fi
+
 # --- Launch Container Stack ---
 echo "  [+] Tearing down old instances and rebuilding..."
 docker compose down

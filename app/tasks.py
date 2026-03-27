@@ -1,8 +1,6 @@
 import logging
 import os
 
-import httpx
-
 logger = logging.getLogger(__name__)
 
 
@@ -12,7 +10,7 @@ async def run_scheduled_task(task_prompt: str, notify: dict, is_actionable: bool
     Runs the agent with the task prompt and delivers the response
     to the user via their original messaging channel.
     """
-    from interfaces.telegram_poller import extract_agent_response
+    from app.core.agent_executor import extract_agent_response
     from run_bot import get_runner
 
     runner = get_runner()
@@ -58,34 +56,17 @@ async def run_scheduled_task(task_prompt: str, notify: dict, is_actionable: bool
 
 
 async def _deliver_message(notify: dict, message: str):
-    """Send a message to the user via their original channel."""
+    """Send a message to the user via their original channel using the adapter registry."""
+    from app.core.transport import get_adapter
+
     if not notify:
         logger.warning("Scheduled task fired but no notification channel configured")
         return
 
     channel_type = notify.get("type")
-
-    async with httpx.AsyncClient(timeout=15) as client:
-        if channel_type == "telegram":
-            chat_id = notify.get("chat_id")
-            token = os.environ.get("TELEGRAM_BOT_TOKEN")
-            if token and chat_id:
-                from interfaces.telegram_poller import send_message as tg_send
-                await tg_send(client, token, chat_id, message)
-            else:
-                logger.warning("Cannot deliver Telegram reminder: missing token or chat_id")
-
-        elif channel_type == "slack":
-            channel = notify.get("channel")
-            token = os.environ.get("SLACK_BOT_TOKEN")
-            if token and channel:
-                try:
-                    await client.post(
-                        "https://slack.com/api/chat.postMessage",
-                        headers={"Authorization": f"Bearer {token}"},
-                        json={"channel": channel, "text": message},
-                    )
-                except Exception:
-                    logger.exception("Failed to deliver Slack reminder")
-            else:
-                logger.warning("Cannot deliver Slack reminder: missing token or channel")
+    adapter = get_adapter(channel_type)
+    if adapter:
+        target = notify.get("chat_id") or notify.get("channel")
+        await adapter.send_message(target, message)
+    else:
+        logger.warning("No adapter registered for channel type: %s", channel_type)

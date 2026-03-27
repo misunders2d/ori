@@ -7,7 +7,11 @@ from google.adk.skills import load_skill_from_dir
 from google.adk.tools import skill_toolset
 
 from app.tools.google_search import google_search_agent_tool
-from app.callbacks.guardrails import prompt_injection_guardrail, admin_only_guardrail
+from app.callbacks.guardrails import (
+    admin_only_guardrail,
+    prompt_injection_guardrail,
+    tool_output_injection_guardrail,
+)
 from app.tools import (
     evolution_commit_and_push,
     evolution_read_file,
@@ -67,4 +71,5 @@ developer_agent = Agent(
     ],
     before_agent_callback=admin_only_guardrail,
     before_model_callback=prompt_injection_guardrail,
+    after_tool_callback=tool_output_injection_guardrail,
 )

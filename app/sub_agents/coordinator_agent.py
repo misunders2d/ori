@@ -4,7 +4,12 @@ from google.adk.models import Gemini
 from google.adk.planners import BuiltInPlanner
 from google.genai import types
 
-from app.callbacks.guardrails import prompt_injection_guardrail, state_setter, admin_tool_guardrail
+from app.callbacks.guardrails import (
+    admin_tool_guardrail,
+    prompt_injection_guardrail,
+    state_setter,
+    tool_output_injection_guardrail,
+)
 from app.tools.google_search import google_search_agent_tool
 from app.tools import (
     configure_integration,
@@ -28,9 +33,9 @@ from app.sub_agents.developer_agent import developer_agent
 root_agent = Agent(
     name="CoordinatorAgent",
     model=Gemini(model="gemini-3.1-pro-preview"),
-    description="The primary interface for the Amazon Manager. Receives ASINs and intent, and delegates to specialized sub-agents.",
+    description="The primary interface for the Ori Daemon. Receives intent and commands, and delegates to specialized sub-agents.",
     instruction=(
-        "You are the Lead Autonomous Amazon Manager. "
+        "You are the Lead Autonomous Ori Daemon. "
         "Your job is to orchestrate management, scheduling, and development. "
         "1. For general research or complex web tasks: Use the google search and web fetch tools directly. "
         "2. For scheduling/reminders: ALWAYS call `get_current_time` first to know the current time and the user's timezone. "
@@ -72,6 +77,7 @@ root_agent = Agent(
     before_agent_callback=[state_setter],
     before_model_callback=prompt_injection_guardrail,
     before_tool_callback=admin_tool_guardrail,
+    after_tool_callback=tool_output_injection_guardrail,
     planner=BuiltInPlanner(
         thinking_config=types.ThinkingConfig(
             include_thoughts=True, thinking_budget=-1

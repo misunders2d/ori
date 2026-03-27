@@ -46,7 +46,7 @@ def update_config(command_text: str, admin_passcode: str | None = None) -> str:
     os.makedirs(os.path.dirname(os.path.abspath(ENV_FILE_PATH)), exist_ok=True)
     if not os.path.exists(ENV_FILE_PATH):
         with open(ENV_FILE_PATH, "w") as f:
-            f.write("# Autonomous Amazon Manager Configuration\n")
+            f.write("# Autonomous Ori Daemon Configuration\n")
 
     updated_keys = []
     rejected_keys = []

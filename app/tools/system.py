@@ -27,17 +27,13 @@ def update_self(tool_context: ToolContext) -> dict:
     trigger_path = os.path.abspath("./data/.update_trigger")
 
     # Determine who to notify after rebuild
+    from app.core.transport import parse_notify_from_session_id
+
     notify = {}
     session = getattr(tool_context, "session", None)
     if session:
         sid = str(getattr(session, "id", ""))
-        if sid.startswith("tg_chat_"):
-            try:
-                notify = {"type": "telegram", "chat_id": int(sid.replace("tg_chat_", ""))}
-            except ValueError:
-                pass
-        elif sid.startswith("slack_channel_"):
-            notify = {"type": "slack", "channel": sid.replace("slack_channel_", "")}
+        notify = parse_notify_from_session_id(sid)
 
     try:
         with open(trigger_path, "w") as f:
@@ -102,17 +98,13 @@ def trigger_rollback(tool_context: ToolContext) -> dict:
     import json as _json
     trigger_path = os.path.abspath("./data/.rollback_trigger")
     
+    from app.core.transport import parse_notify_from_session_id
+
     notify = {}
     session = getattr(tool_context, "session", None)
     if session:
         sid = str(getattr(session, "id", ""))
-        if sid.startswith("tg_chat_"):
-            try:
-                notify = {"type": "telegram", "chat_id": int(sid.replace("tg_chat_", ""))}
-            except ValueError:
-                pass
-        elif sid.startswith("slack_channel_"):
-            notify = {"type": "slack", "channel": sid.replace("slack_channel_", "")}
+        notify = parse_notify_from_session_id(sid)
             
     try:
         with open(trigger_path, "w") as f:

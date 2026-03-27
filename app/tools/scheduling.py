@@ -43,19 +43,14 @@ def get_current_time(timezone: str, tool_context: ToolContext) -> dict:
 
 
 def _get_session_notify_info(tool_context: ToolContext) -> dict:
-    """Extract notification info (channel type + id) from the current session."""
+    """Extract notification info (channel type + id) from the current session via the adapter registry."""
+    from app.core.transport import parse_notify_from_session_id
+
     session = getattr(tool_context, "session", None)
     if not session:
         return {}
     sid = str(getattr(session, "id", ""))
-    if sid.startswith("tg_chat_"):
-        try:
-            return {"type": "telegram", "chat_id": int(sid.replace("tg_chat_", ""))}
-        except ValueError:
-            pass
-    elif sid.startswith("slack_channel_"):
-        return {"type": "slack", "channel": sid.replace("slack_channel_", "")}
-    return {}
+    return parse_notify_from_session_id(sid)
 
 
 

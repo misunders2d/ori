@@ -1,10 +1,14 @@
 import json
+import logging
 import math
+import re
 
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.genai import types
+
+logger = logging.getLogger(__name__)
 
 
 def intent_security_guardrail(*args, **kwargs) -> dict | None:
@@ -180,6 +184,102 @@ def admin_only_guardrail(
                 )
             ]
         )
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# After-tool guardrail: scan high-risk tool outputs for indirect injection
+# ---------------------------------------------------------------------------
+
+# Tools whose output may contain untrusted external content
+_HIGH_RISK_TOOLS = {"web_fetch", "evolution_read_file"}
+
+# Fast regex pre-filter — avoids an embedding API call on clean content
+_INJECTION_REGEX = re.compile(
+    r"(?i)"
+    r"(?:ignore|disregard|forget|override|bypass)\s+"
+    r"(?:all|any|your|previous|prior|above|the)\s+"
+    r"(?:instructions?|directives?|rules?|context|prompts?|guidelines?)"
+    r"|(?:you\s+are\s+now|new\s+system\s+prompt|act\s+as\s+if)"
+    r"|(?:print|reveal|show|output)\s+(?:your|the|system)\s+(?:prompt|instructions?|rules?)"
+    r"|<\s*(?:system|instruction|prompt)\s*>"
+    r"|\[INST\]|\[/INST\]|<<SYS>>|<\|im_start\|>"
+    r"|(?:important\s+message\s+from\s+the\s+developer)"
+    r"|(?:end\s+of\s+document\.?\s+new\s+system\s+message)"
+    r"|(?:begin\s+admin\s+override)"
+)
+
+_INDIRECT_THRESHOLD = 0.82
+
+
+def tool_output_injection_guardrail(tool, args, tool_context, tool_response):
+    """After-tool callback: scan high-risk tool outputs for prompt injection.
+
+    Uses a two-stage approach:
+      1. Fast regex pre-filter (zero latency on clean content)
+      2. Semantic embedding similarity check (only when regex flags something)
+    """
+    tool_name = getattr(tool, "name", "") or (tool.__name__ if callable(tool) else "")
+    if tool_name not in _HIGH_RISK_TOOLS:
+        return None  # pass through unmodified
+
+    # Extract text content from the tool response
+    content = ""
+    if isinstance(tool_response, dict):
+        content = tool_response.get("content", "")
+        if not content:
+            content = str(tool_response)
+    elif isinstance(tool_response, str):
+        content = tool_response
+
+    if not content or len(content) < 20:
+        return None
+
+    # Stage 1: Fast regex pre-filter
+    match = _INJECTION_REGEX.search(content)
+    if not match:
+        return None  # clean content — no embedding call needed
+
+    # Stage 2: Semantic similarity check on the suspicious fragment
+    vectors = _get_cached_vectors()
+    if not vectors:
+        return None
+
+    import os
+    from google.genai import Client
+
+    # Extract a ~300-char window around the match
+    start = max(0, match.start() - 100)
+    end = min(len(content), match.end() + 200)
+    fragment = content[start:end]
+
+    try:
+        client = Client(api_key=os.environ.get("GOOGLE_API_KEY"))
+        emb_response = client.models.embed_content(
+            model="gemini-embedding-001", contents=[fragment]
+        )
+        if not emb_response or not emb_response.embeddings:
+            return None
+        user_vector = emb_response.embeddings[0].values
+
+        for v in vectors:
+            sim = _cosine_similarity(user_vector, v)
+            if sim >= _INDIRECT_THRESHOLD:
+                logger.warning(
+                    "Indirect prompt injection blocked in %s output (similarity: %.2f)",
+                    tool_name, sim,
+                )
+                return {
+                    "status": "blocked",
+                    "message": (
+                        f"Content from this source was blocked: potential prompt injection "
+                        f"detected in external content (similarity: {sim:.2f}). "
+                        f"The fetched content has been discarded for safety."
+                    ),
+                }
+    except Exception:
+        logger.exception("Error in tool output injection check for %s", tool_name)
 
     return None
 

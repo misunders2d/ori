@@ -1,5 +1,5 @@
 [project]
-name = "amazon-manager"
+name = "ori"
 version = "0.1.0"
 description = ""
 authors = [
@@ -94,9 +94,10 @@ packages = ["app","frontend"]
 [tool.agent-starter-pack]
 # Generation metadata - enables CLI commands to understand project context
 # These fields allow any generated project to work as a remote template
-name = "amazon-manager"
+name = "ori"
+version = "0.1.0"
 description = ""
-base_template = "local_amazon_manager"
+base_template = "local_ori"
 agent_directory = "app"
 
 # Generation context

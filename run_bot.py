@@ -43,9 +43,8 @@ def get_runner():
         if not os.environ.get("GOOGLE_API_KEY"):
             return None
 
-        db_path = os.path.abspath("./data/ori.db")
+        db_path = os.path.abspath("./data/ori-sessions.db")
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
-        # SessionService async connection string
         database_url = f"sqlite+aiosqlite:///{db_path}"
 
         session_service = DatabaseSessionService(db_url=database_url)
@@ -91,7 +90,23 @@ async def main():
     logger.info("Starting APScheduler engine...")
     scheduler.start()
 
-    # 3. Collect and spin up all polling interfaces
+    # 3. Register periodic database backups (every 12 hours, keep last 3)
+    from app.core.backup import backup_database
+
+    sessions_db = os.path.abspath("./data/ori-sessions.db")
+    scheduler_db = os.path.abspath("./data/ori-scheduler.db")
+    scheduler.add_job(
+        backup_database, "interval", hours=12,
+        kwargs={"db_path": sessions_db, "label": "sessions"},
+        id="backup_sessions", replace_existing=True,
+    )
+    scheduler.add_job(
+        backup_database, "interval", hours=12,
+        kwargs={"db_path": scheduler_db, "label": "scheduler"},
+        id="backup_scheduler", replace_existing=True,
+    )
+
+    # 4. Collect and spin up all polling interfaces
     tasks = []
 
     # Telegram
