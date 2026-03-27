@@ -322,9 +322,15 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                     allowed_users_str = os.environ.get("ALLOWED_USER_IDS", "")
                     allowed_users = [u.strip() for u in allowed_users_str.split(",") if u.strip()]
                     
-                    if allowed_users and user_id not in allowed_users:
-                        logger.warning("Unauthorized access attempt by %s in chat %s", user_id, chat_id)
-                        await adapter.send_message(chat_id, "⛔ You are not authorized to interact with this agent.")
+                    if allowed_users and user_id not in allowed_users and session_id not in allowed_users:
+                        logger.warning("Unauthorized access attempt by %s in chat %s", user_id, session_id)
+                        await adapter.send_message(
+                            chat_id, 
+                            f"⛔ You are not authorized to interact with this agent.\n\n"
+                            f"To allow access, add your ID to the `ALLOWED_USER_IDS` environment variable.\n"
+                            f"Your User ID: `{user_id}`\n"
+                            f"This Chat ID: `{session_id}`"
+                            )
                         continue
 
 
