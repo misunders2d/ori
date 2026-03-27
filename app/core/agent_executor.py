@@ -208,6 +208,9 @@ async def extract_agent_response(
 
     parts = []
     media_items = []
+    # Running map of call_id -> tool_name accumulated across ALL events in the stream
+    seen_function_calls = {}
+
     for attempt in range(1 + MAX_RETRIES):
         try:
             async for event in runner.run_async(
@@ -215,6 +218,12 @@ async def extract_agent_response(
                 session_id=session_id,
                 new_message=message_arg,
             ):
+                # Track all function calls across the entire event stream
+                if hasattr(event, "get_function_calls"):
+                    for fc in event.get_function_calls():
+                        if fc.id and fc.name:
+                            seen_function_calls[fc.id] = fc.name
+
                 if event.content and event.content.parts:
                     for part in event.content.parts:
                         if hasattr(part, "text") and part.text:
@@ -227,25 +236,8 @@ async def extract_agent_response(
                             })
 
                 if getattr(event, "actions", None) and getattr(event.actions, "requested_tool_confirmations", None):
-                    # DEBUG: Dump the full event structure to understand where tool names live
-                    logger.info("=== CONFIRMATION EVENT DEBUG ===")
-                    logger.info("Event content: %s", event.content)
-                    logger.info("Event content parts: %s", event.content.parts if event.content else "None")
-                    fcs = event.get_function_calls() if hasattr(event, "get_function_calls") else []
-                    logger.info("FunctionCalls on event: %s", [(fc.name, fc.id) for fc in fcs])
-                    logger.info("Confirmation keys: %s", list(event.actions.requested_tool_confirmations.keys()))
-                    for cid, conf in event.actions.requested_tool_confirmations.items():
-                        logger.info("Confirmation %s: type=%s, attrs=%s", cid, type(conf).__name__, dir(conf))
-                    logger.info("=== END DEBUG ===")
-
-                    # Build a lookup of call_id -> tool_name from the FunctionCall parts on this event
-                    fc_names = {}
-                    for fc in fcs:
-                        if fc.id and fc.name:
-                            fc_names[fc.id] = fc.name
-
                     for call_id, confirmation in event.actions.requested_tool_confirmations.items():
-                        tool_name = fc_names.get(call_id, "an action")
+                        tool_name = seen_function_calls.get(call_id, "an action")
 
                         # Include the hint from ToolConfirmation if available
                         hint_text = getattr(confirmation, "hint", "") or ""
