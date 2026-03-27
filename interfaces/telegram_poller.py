@@ -149,6 +149,8 @@ async def poll_telegram(get_runner_fn, process_init_fn):
         register_adapter(adapter)
 
         _active_tasks = {}
+        _media_group_buffers = {}
+        _media_group_timers = {}
 
         async def _process_and_send(_runner, _session_user_id, _session_id, _message_content, _user_id, _chat_id):
             async def keep_typing(__chat_id=_chat_id):
@@ -172,6 +174,25 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                     pass
                 if _session_id in _active_tasks and _active_tasks[_session_id] == asyncio.current_task():
                     del _active_tasks[_session_id]
+
+        async def flush_media_group(mg_id, _runner, _session_user_id, _session_id, _user_id, _chat_id):
+            await asyncio.sleep(1.5)
+            if mg_id not in _media_group_buffers:
+                return
+            
+            combined_parts = _media_group_buffers.pop(mg_id)
+            _media_group_timers.pop(mg_id, None)
+            
+            combined_content = types.Content(role="user", parts=combined_parts)
+            
+            if _session_id in _active_tasks and not _active_tasks[_session_id].done():
+                _active_tasks[_session_id].cancel()
+                await adapter.send_message(_chat_id, "Aborting previous task to prioritize new grouped media...")
+                
+            task = asyncio.create_task(
+                _process_and_send(_runner, _session_user_id, _session_id, combined_content, _user_id, _chat_id)
+            )
+            _active_tasks[_session_id] = task
 
         while True:
             try:
@@ -225,13 +246,21 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                     elif "audio" in msg:
                         file_id = msg["audio"]["file_id"]
                         file_info_text = f"[Audio: {msg['audio'].get('title', 'unknown')}]"
-
+                    
+                    # Prevent empty messages without files
                     if not text and not file_id:
                         continue
 
-                    enriched_text = f"Message from {display_name} ({user_id}): {text} {file_info_text}".strip()
+                    # Suppress the redundant "[Photo]" tag for every single photo in a media group to prevent pollution
+                    mg_id = msg.get("media_group_id")
+                    if mg_id and not text:
+                        enriched_text = ""
+                    else:
+                        enriched_text = f"Message from {display_name} ({user_id}): {text} {file_info_text}".strip()
 
-                    message_content = types.Content(role="user", parts=[types.Part.from_text(text=enriched_text)])
+                    message_content = types.Content(role="user", parts=[])
+                    if enriched_text:
+                        message_content.parts.append(types.Part.from_text(text=enriched_text))
 
                     if file_id:
                         file_data = await adapter.download_file(file_id)
@@ -245,9 +274,10 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                     from app.secure_config import capture_key, check_pending
 
                     if check_pending(session_id):
-                        result = capture_key(session_id, text)
-                        await adapter.delete_message(chat_id, message_id)
-                        await adapter.send_message(chat_id, result["message"])
+                        if text:
+                            result = capture_key(session_id, text)
+                            await adapter.delete_message(chat_id, message_id)
+                            await adapter.send_message(chat_id, result["message"])
                         continue
 
                     # Handle /init command
@@ -277,6 +307,18 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                     if is_group and not is_mentioned:
                         logger.info("Silently adding group message for context to session %s", session_id)
                         asyncio.create_task(process_message_for_context(runner, session_user_id, session_id, message_content))
+                        continue
+                        
+                    if mg_id:
+                        if mg_id not in _media_group_buffers:
+                            _media_group_buffers[mg_id] = []
+                        _media_group_buffers[mg_id].extend(message_content.parts)
+                        
+                        if mg_id in _media_group_timers:
+                            _media_group_timers[mg_id].cancel()
+                        _media_group_timers[mg_id] = asyncio.create_task(
+                            flush_media_group(mg_id, runner, session_user_id, session_id, user_id, chat_id)
+                        )
                         continue
 
                     # Mid-flight Cancellation Logic
