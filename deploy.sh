@@ -81,22 +81,46 @@ while true; do
 
         PREVIOUS_COMMIT=$(git rev-parse HEAD)
         
-        # Pull strict upstream truth and clear out sandbox drift
-        echo "  [+] Fetching authoritative remote footprint..."
-        git fetch origin master 2>&1
-        GIT_OUTPUT=$(git reset --hard origin/master 2>&1)
-        GIT_STATUS=$?
+        echo "  [+] Analyzing Git topology and local filesystem integrity..."
+        
+        if ! git diff-index --quiet HEAD --; then
+            echo "  [!] WARNING: Uncommitted local changes detected in sequence!"
+            echo "  [.] Skipping remote sync to permanently protect dirty sandbox state."
+        else
+            git fetch origin master 2>/dev/null
+            FETCH_STATUS=$?
+            
+            if [ $FETCH_STATUS -ne 0 ]; then
+               echo "  [.] No upstream origin reachable. Pushing headless local evolution..."
+            else
+               LOCAL=$(git rev-parse HEAD 2>/dev/null || echo "LOCAL_ERR")
+               REMOTE=$(git rev-parse origin/master 2>/dev/null || echo "REMOTE_ERR")
+               BASE=$(git merge-base HEAD origin/master 2>/dev/null || echo "BASE_ERR")
+               
+               if [ "$LOCAL" = "$REMOTE" ]; then
+                   echo "  [.] Synchronized with origin/master."
+               elif [ "$LOCAL" = "$BASE" ]; then
+                   echo "  [+] Upstream mutations detected. Enforcing authoritative remote footprint..."
+                   git reset --hard origin/master 2>&1
+                   if [ $? -ne 0 ]; then
+                       echo "  [-] Signal failed: Hard remote reset crashed"
+                       send_notification "$TRIGGER_CONTENT" "⚠️ Update Loop Aborted: Remote sync hard-crashed. Check deploy.log."
+                       continue
+                   fi
+               elif [ "$REMOTE" = "$BASE" ]; then
+                   echo "  [.] Local evolution commits tracking ahead. Protecting unpushed local HEAD..."
+               else
+                   echo "  [-] Divergent reality! Commits exist independently on both local and remote."
+                   send_notification "$TRIGGER_CONTENT" "⚠️ Update Loop Aborted: Git timeline diverged (Conflict Risk). Please manually SSH and merge origin/master."
+                   continue
+               fi
+            fi
+        fi
         
         chmod +x "$SCRIPT_DIR/start.sh" "$SCRIPT_DIR/deploy.sh" "$SCRIPT_DIR/rollback.sh"
 
-        if [ $GIT_STATUS -ne 0 ]; then
-            echo "  [-] Signal failed: Hard remote reset crashed"
-            send_notification "$TRIGGER_CONTENT" "⚠️ Update Loop Aborted: Git sequence failed. Check deploy.log."
-            continue
-        fi
-
-        if [ "$PREVIOUS_COMMIT" = "$(git rev-parse HEAD)" ]; then
-            echo "  [.] Zero-delta signal. Agent architecture is unchanged."
+        if [ "$PREVIOUS_COMMIT" = "$(git rev-parse HEAD)" ] && git diff-index --quiet HEAD --; then
+            echo "  [.] Zero-delta signal. Agent architecture and local file state unchanged."
             continue
         fi
 
