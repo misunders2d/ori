@@ -18,8 +18,7 @@ This document serves as the long-term memory and tracked evolutionary state of O
 
 3. **ADK Abstraction Polish (`agent_executor.py`)**
    - **Dynamic Tool Surfaces:** Upgraded the extremely generic "The agent wants to execute *an action*" confirmation block. The pipeline now deeply parses the ADK dictionaries to explicitly print the raw function name (e.g., `system_update_self`).
-   - **Reasoning UI Pollution:** When the deep `BuiltInPlanner` triggers, `<think>` payloads generate massive XML logic trees. Implemented regex interceptors directly before Telegram dispatch to silently prune `<think>` blocks, keeping chat UI completely polished without degrading LLM problem-solving budget.
-
+  
 4. **"Grow Your Own Pet" Conceptual Pivot**
    - Completely restructured the `README.md` to establish Ori as an inherently self-evolving "Digital Organism."
    - Explicitly clarified how the `GOOGLE_API_KEY` (from Google AI Studio) isolates the zero-trust semantic prompt-injection layer, leaving the general codebase fully model-agnostic.
@@ -28,11 +27,14 @@ This document serves as the long-term memory and tracked evolutionary state of O
 
 ---
 
-## 🔮 Future Mutations (TODOs)
+## 🔮 Endless Potential Evolutions
 
-* [ ] **External Context Capabilities**
-      Implement explicit toolkits for the agent to pull massive data vectors during research (e.g., Pinecone integration or Keepa hooks).
-* [ ] **Advanced Multi-Modal Output**
-      Expand the transport adapter to gracefully process or return audio/image responses seamlessly back through the Telegram abstraction.
-* [ ] **Database Reflection Tooling**
-      Give the Developer Agent secure tools to introspect its own SQLite structures dynamically, allowing it to "remember" or debug past session states without needing to rip raw binaries.
+Every Ori instance is unique. The following are just a few directions your organism could grow, depending on what you teach it:
+
+- **External Context Capabilities** — Connect Ori to vector databases like Pinecone, product APIs like Keepa, or any domain-specific data source to give it specialized knowledge.
+- **Rich Media Responses** *(Evolved — March 27, 2026)* — The transport layer now natively supports sending images, audio, video, and documents back through any messenger adapter.
+- **Database Self-Reflection** — Give the Developer Agent tools to introspect its own SQLite session structures, allowing it to debug or recall past interactions autonomously.
+- **New Messenger Habitats** — Wire up Discord, Slack, WhatsApp, or a custom web UI. The `TransportAdapter` ABC makes this a single-file implementation.
+- **Specialized Sub-Agents** — Breed new sub-agents for finance, DevOps, content creation, or anything else. Ori's coordinator will learn to delegate.
+
+_The only limit is what you ask it to become._

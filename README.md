@@ -17,17 +17,24 @@ Ori is designed to be raised. Out of the box, it is a capable assistant, but its
     *   **Semantic Defense:** Every input is checked against a multidimensional vector space (`gemini-embedding-001`) to neutralize "brainwashing" (prompt injection) attempts.
     *   **Output Interception:** Ori inspects data from the web *before* it hits its own context, ensuring it doesn't "catch a virus" from malicious external payloads.
 *   **Metabolism (Scheduling):** Using `APScheduler`, Ori manages its own workloads and background tasks, with a rolling 12-hour `.backup()` routine to ensure its state is never lost.
+*   **Nervous System (Rich Media):** Ori can receive and send images, audio, video, and documents through any connected messenger — not just text.
+
+## 📋 Prerequisites
+
+Before hatching your Ori, ensure you have the following installed on your host machine:
+- **Docker** (with `docker compose` v2)
+- **Git**
+- **Python 3** (used by the startup script for bootstrapping)
 
 ## 🛠 Hatching Your Ori
 
 Ori utilizes a hardened Docker deployment bound to a standalone internal user to keep it safely contained.
 
 ### 0. Claiming an Egg (Forking)
-Because Ori strictly manages its own source code and pushes structural changes back to the origin, you must **Fork** this repository before deploying your own agent. 
-By pulling down your own fork, you ensure the central `misunders2d/ori` template (the foundational "egg") remains perfectly intact, while providing your newly hatched Ori a unique codebase sandbox to write to and evolve independently!
+Because Ori manages its own source code and pushes evolutionary changes back to the origin, you should **Fork** this repository before deploying your own instance. This keeps the foundational "egg" intact while giving your Ori a unique codebase to evolve independently.
 
 ### 1. Incubation Setup
-*(Optional - the startup script will automatically bootstrap this for you if missing!)* 
+*(Optional — the startup script will interactively walk you through this if absent!)*
 
 Create a `./data/.env` file to manually provide the initial nutrients:
 ```env
@@ -36,16 +43,33 @@ ADMIN_PASSCODE=secret_bootstrap_code
 TELEGRAM_BOT_TOKEN=your_token
 GITHUB_TOKEN=for_self_evolution
 ```
-*(Note: You can easily grab a free-tier `GOOGLE_API_KEY` by signing in to [Google AI Studio](https://aistudio.google.com/app/apikey). It is exclusively required to power the semantic anti-prompt-injection guardrail. The main autonomous agent itself is entirely model/provider-agnostic — simply ask Ori to switch to OpenAI, Anthropic, or any other provider you prefer!)*
+
+| Variable | Purpose |
+|---|---|
+| `GOOGLE_API_KEY` | Powers the semantic prompt-injection guardrail. Grab one for free at [Google AI Studio](https://aistudio.google.com/app/apikey). |
+| `ADMIN_PASSCODE` | A secret phrase you send via `/init <passcode>` on first contact to claim admin privileges over your Ori. |
+| `TELEGRAM_BOT_TOKEN` | Your Telegram bot token from [@BotFather](https://t.me/BotFather). Other messengers use their own env vars. |
+| `GITHUB_TOKEN` | *(Optional)* Enables Ori to push self-evolution commits back to your fork. Without it, changes stay local. |
+| `ALLOWED_USER_IDS` | *(Optional)* Comma-separated list of Telegram user or chat IDs allowed to interact. If empty, the bot is open to everyone. |
+
+> **Note:** The core agent is entirely model/provider-agnostic. The `GOOGLE_API_KEY` is only needed for the embedding-based security layer. Want to run on OpenAI or Anthropic? Just ask Ori to switch.
 
 ### 2. Birth the Daemon
 Run the automation launcher to spin up the container and the Host Supervisor:
 ```bash
 ./start.sh
 ```
+Use `./start.sh --no-sync` if running locally without a GitHub remote (offline / headless-only mode).
 
-### 3. Watching it Grow
+### 3. First Contact
+Once the bot is running, send `/init <your_admin_passcode>` in Telegram to claim admin privileges. From there, you can start talking to Ori and teaching it new tricks.
+
+### 4. Watching it Grow
 When the `DeveloperAgent` triggers an evolution, a `.update_trigger` is injected into `/data/`. The `deploy.sh` script—acting as the "Host Supervisor"—intercepts this, safely shuts down the SQLite buffers, rebuilds the image, and notifies you via messenger that Ori has successfully evolved.
+
+## 📄 License
+
+MIT — use it, fork it, evolve it, share it. See [LICENSE](LICENSE) for details.
 
 ---
 _"Don't just code your tools. Raise them."_
