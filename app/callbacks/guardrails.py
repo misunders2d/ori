@@ -303,4 +303,14 @@ async def state_setter(
     if "user_id" not in current_state:
         callback_context.state["user_id"] = current_user
 
+    # Load bot name from env (defaults to "Ori")
+    callback_context.state["bot_name"] = os.environ.get("BOT_NAME", "Ori")
+
+    # Load user preferences from disk into session state
+    from app.tools.preferences import load_user_preferences
+
+    effective_user = current_state.get("user_id", current_user)
+    prefs = load_user_preferences(effective_user)
+    callback_context.state["user_preferences"] = prefs
+
     return None

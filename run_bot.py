@@ -1,14 +1,23 @@
 import asyncio
 import logging
 import os
+import secrets
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key
 
 # Load env variables safely before starting Google API integrations
 ENV_FILE_PATH = os.environ.get("DOTENV_PATH", "./data/.env")
 os.makedirs(os.path.dirname(ENV_FILE_PATH), exist_ok=True)
-if os.path.exists(ENV_FILE_PATH):
-    load_dotenv(ENV_FILE_PATH, override=True)
+if not os.path.exists(ENV_FILE_PATH):
+    with open(ENV_FILE_PATH, "w") as f:
+        f.write("# Ori Daemon Configuration\n")
+load_dotenv(ENV_FILE_PATH, override=True)
+
+# Generate a random ADMIN_PASSCODE on first start if none exists
+if not os.environ.get("ADMIN_PASSCODE"):
+    _generated_passcode = secrets.token_urlsafe(16)
+    set_key(ENV_FILE_PATH, "ADMIN_PASSCODE", _generated_passcode)
+    os.environ["ADMIN_PASSCODE"] = _generated_passcode
 
 from logging.handlers import RotatingFileHandler
 import logging
@@ -84,7 +93,33 @@ async def main():
     # 1. Warm up the runner
     runner = get_runner()
     if not runner:
-        logger.warning("No GOOGLE_API_KEY detected. Agent operations will fail until configured.")
+        passcode = os.environ.get("ADMIN_PASSCODE", "SETUP")
+        bot_name = os.environ.get("BOT_NAME", "Ori")
+        logger.warning(
+            "\n"
+            "============================================================\n"
+            "  %s — FIRST-TIME SETUP REQUIRED\n"
+            "============================================================\n"
+            "  No GOOGLE_API_KEY detected. The bot is running but cannot\n"
+            "  process messages until you configure it.\n"
+            "\n"
+            "  Your admin passcode: %s\n"
+            "\n"
+            "  Open your Telegram bot and send:\n"
+            "    /init %s GOOGLE_API_KEY=your-key-here\n"
+            "\n"
+            "  You can also set multiple keys at once:\n"
+            "    /init %s GOOGLE_API_KEY=xxx GITHUB_TOKEN=yyy\n"
+            "\n"
+            "  Give your bot a custom name:\n"
+            "    /init %s BOT_NAME=MyBot\n"
+            "\n"
+            "  Your passcode is stored in: %s\n"
+            "  If you lose it, edit that file to reset ADMIN_PASSCODE.\n"
+            "============================================================",
+            bot_name, passcode, passcode, passcode, passcode,
+            os.path.abspath(ENV_FILE_PATH),
+        )
 
     # 2. Start the isolated APScheduler engine exactly once
     logger.info("Starting APScheduler engine...")

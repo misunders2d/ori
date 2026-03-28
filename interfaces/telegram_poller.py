@@ -376,18 +376,60 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                         continue
 
                     # Handle /start command
+                    bot_name = os.environ.get("BOT_NAME", "Ori")
                     if text.strip() == "/start":
-                        await adapter.send_message(
-                            chat_id,
-                            "Welcome to the Ori Daemon! Send me a message to get started.",
-                        )
+                        runner_check = get_runner_fn()
+                        if runner_check:
+                            await adapter.send_message(
+                                chat_id,
+                                f"{bot_name} is online and ready. Send me a message to get started.",
+                            )
+                        else:
+                            await adapter.send_message(
+                                chat_id,
+                                f"Welcome to {bot_name}!\n\n"
+                                "The bot needs a Google API key before it can respond.\n\n"
+                                "Send the following command to configure it:\n"
+                                "`/init YOUR_PASSCODE GOOGLE_API_KEY=your-key-here`\n\n"
+                                "You can also give me a custom name:\n"
+                                "`/init YOUR_PASSCODE BOT_NAME=MyBot`\n\n"
+                                "Your admin passcode was printed to the server console on first start. "
+                                "You can also find it in the `.env` file on the server.",
+                            )
+                        continue
+
+                    # Handle /reset command — bypass the agent entirely
+                    if text.strip() == "/reset":
+                        runner_check = get_runner_fn()
+                        if runner_check:
+                            from app.core.agent_executor import _perform_session_refresh
+
+                            # Cancel any in-flight task for this session
+                            if session_id in _active_tasks and not _active_tasks[session_id].done():
+                                _active_tasks[session_id].cancel()
+
+                            refresh_msg = await _perform_session_refresh(
+                                runner_check, session_user_id, session_id, "fresh"
+                            )
+                            await adapter.send_message(
+                                chat_id,
+                                f"Session reset. {bot_name} is ready for a fresh conversation.",
+                            )
+                        else:
+                            await adapter.send_message(
+                                chat_id,
+                                f"{bot_name} is not configured yet — nothing to reset.",
+                            )
                         continue
 
                     runner = get_runner_fn()
                     if not runner:
                         await adapter.send_message(
                             chat_id,
-                            "Bot is not fully configured yet. Please visit the /setup page.",
+                            f"{bot_name} is not configured yet.\n\n"
+                            "To set up, send:\n"
+                            "`/init YOUR_PASSCODE GOOGLE_API_KEY=your-key-here`\n\n"
+                            "Check the server console or `.env` file for your admin passcode.",
                         )
                         continue
 

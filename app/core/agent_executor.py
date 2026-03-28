@@ -292,8 +292,7 @@ async def extract_agent_response(
                 return AgentResponse(
                     text="⚠️ **Context Limit Reached**\n\n"
                     "The conversation has become too large for me to process. "
-                    "Please use the **/reset** command to start a fresh session or wait a few minutes."
-                    f"Error: {error_msg}"
+                    "Send /reset to start a fresh session."
                 )
 
             if attempt < MAX_RETRIES:

@@ -22,6 +22,43 @@ The `ori` daemon is a fully integrated, continuously polling worker node. It man
 
 Always test any changes that brush up against `system.py` logic thoroughly in your isolated sandbox verification pipeline (`evolution_stage_change` -> `evolution_verify_sandbox`).
 
+## First-Start Setup Flow
+
+On first start with no `ADMIN_PASSCODE` in `.env`, `run_bot.py` auto-generates a random passcode, writes it to `.env`, and prints a setup banner to the server console. This banner shows the passcode and the `/init` command syntax.
+
+**User-facing flow (Telegram):**
+1. User sends `/start` → bot explains that a `GOOGLE_API_KEY` is needed and shows the `/init` command format.
+2. User sends `/init <PASSCODE> GOOGLE_API_KEY=xxx` → bot authenticates via passcode, writes the key to `.env`, and reloads the runner.
+3. Any message sent before the API key is configured gets a clear "not configured yet" response with setup instructions.
+
+**Critical constraints:**
+1. **Never change the passcode generation logic** without explicit user permission. Users rely on finding it in the console output or `.env` file.
+2. **Never expose the passcode in Telegram messages.** The console and `.env` file are the only authorized locations.
+3. **The `/init` command deletes itself from chat** (line 373 in `telegram_poller.py`) since it may contain inline credentials. Do not remove this behavior.
+
+## Origins Protocol
+
+Every Ori instance is a fork of the original upstream repository: `https://github.com/misunders2d/ori`
+
+This daemon is designed to be copied, deployed independently, and evolved as a separate entity. However, each instance retains awareness of its origin and can selectively sync improvements from upstream.
+
+**Capabilities:**
+1. **Upstream check:** When the user asks to check for updates, improvements, or security fixes from the original project, use `web_fetch` to read the upstream repository (commits, specific files, or the full repo tree at `https://github.com/misunders2d/ori`). Compare upstream changes against the local codebase via `evolution_read_file`.
+2. **Selective adoption:** Present upstream changes to the user as proposals — never auto-merge. The user decides which changes to adopt. Apply accepted changes through the standard evolution pipeline (stage → verify → commit).
+3. **Divergence is expected.** Each Ori instance will evolve differently based on its user's needs. Upstream sync is advisory, not mandatory.
+
+**User communication:** If the user asks about updates, origins, or where this bot came from, explain that:
+- This bot is built on the Ori framework — a self-evolving autonomous agent originally from `https://github.com/misunders2d/ori`
+- It can check the original repo for the latest improvements, security patches, and new features
+- The user controls what gets adopted — nothing is applied without approval
+
+**Bot name:** The instance name is stored in `BOT_NAME` in `.env` (defaults to "Ori"). It is loaded into session state as `{bot_name}` and used throughout the agent instructions. Users can rename their bot via `/init <PASSCODE> BOT_NAME=NewName` or by asking the coordinator to update it. The name is cosmetic — it does not affect the internal `app_name` ("ori") used for sessions and databases.
+
+**Critical constraints:**
+1. **Never auto-sync from upstream.** All changes require user confirmation through the standard `require_confirmation` commit flow.
+2. **Never overwrite local customizations blindly.** When adopting upstream changes, reconcile them with local modifications — the user's evolution takes priority over upstream defaults.
+3. **Always verify upstream code in the sandbox** before committing, just like any other change.
+
 ## Sandbox Hygiene Rules
 
 The sandbox (`./data/sandbox/`) uses **symlinks** as bootstrap artifacts during `evolution_verify_sandbox` pytest runs. These symlinks point back to live project files (`pyproject.toml`, `uv.lock`, existing test files) so `uv run pytest` can resolve dependencies.

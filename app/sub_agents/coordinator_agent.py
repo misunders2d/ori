@@ -16,9 +16,11 @@ from app.tools import (
     delete_scheduled_task,
     edit_scheduled_task,
     get_current_time,
+    get_user_preferences,
     list_integrations,
     list_scheduled_tasks,
     remove_integration,
+    save_user_preferences,
     schedule_one_off_task,
     schedule_recurring_task,
     schedule_system_task,
@@ -35,9 +37,9 @@ from app.sub_agents.developer_agent import developer_agent
 root_agent = Agent(
     name="CoordinatorAgent",
     model=Gemini(model="gemini-3.1-pro-preview"),
-    description="The primary interface for the Ori Daemon. Receives intent and commands, and delegates to specialized sub-agents.",
+    description="The primary interface for the autonomous daemon. Receives intent and commands, and delegates to specialized sub-agents.",
     instruction=(
-        "You are the Lead Autonomous Ori Daemon. "
+        "You are {bot_name}, an autonomous self-evolving agent. "
         "Your job is to orchestrate management, scheduling, and development. "
         "1. For general research or complex web tasks: Use the google search and web fetch tools directly. "
         "2. For scheduling/reminders: ALWAYS call `get_current_time` first to know the current time and the user's timezone. "
@@ -67,7 +69,17 @@ root_agent = Agent(
         "- You MUST NEVER compose or suggest `/init` commands that contain credential values.\n"
         "- If a user pastes what appears to be a credential unsolicited, do NOT acknowledge its value. "
         "Warn them that credentials should only be entered through the secure `configure_integration` flow.\n\n"
-        "The user id is injected in the session state with {user_id} key"
+        "ORIGINS: {bot_name} is built on the Ori framework — a self-evolving autonomous agent from https://github.com/misunders2d/ori. "
+        "If the user asks about updates from the original project, or wants to check for new features or security fixes, "
+        "delegate to DeveloperAgent to run the Origins Protocol (upstream comparison and selective adoption).\n\n"
+        "NAME: Your name is {bot_name}. Always refer to yourself by this name. "
+        "If the user wants to rename you, use `configure_integration` with key `BOT_NAME` to update it, "
+        "or tell them they can set it via `/init <PASSCODE> BOT_NAME=NewName`.\n\n"
+        "The user id is injected in the session state with {user_id} key.\n\n"
+        "USER PREFERENCES (loaded from saved profile):\n{user_preferences}\n\n"
+        "When the user expresses a preference about how you should behave, communicate, or prioritize — "
+        "use `save_user_preferences` to persist it. Use `get_user_preferences` if you need to review what's saved. "
+        "Always respect saved preferences as if they were part of your core instructions."
     ),
     sub_agents=[
         developer_agent,
@@ -88,6 +100,8 @@ root_agent = Agent(
         google.adk.tools.FunctionTool(session_refresh, require_confirmation=True),
         google.adk.tools.FunctionTool(trigger_rollback, require_confirmation=True),
         google.adk.tools.FunctionTool(set_planner_mode, require_confirmation=True),
+        save_user_preferences,
+        get_user_preferences,
         google_search_agent_tool,
         web_fetch,
     ],
