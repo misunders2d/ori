@@ -68,6 +68,7 @@ This daemon is designed to be copied, deployed independently, and evolved as a s
 **Signature Mandate:** All git commits and `CHANGELOG.md` entries authored by the agent **MUST** be signed with the phrase "evolved by {bot_name}". 
 - The `evolution_commit_and_push` tool handles the git commit signature automatically.
 - The Developer Agent is responsible for manually appending "evolved by {bot_name}" to the end of each new entry in `CHANGELOG.md`.
+- **CRITICAL:** This signature MUST NOT be used in regular chat messages. It is strictly for technical version control and documentation history.
 
 **Critical constraints:**
 1. **Never auto-sync from upstream.** All changes require user confirmation through the standard `require_confirmation` commit flow.

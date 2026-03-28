@@ -3,6 +3,13 @@
 All notable changes to the Ori framework are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Version bumps follow [Semantic Versioning](https://semver.org/).
 
+## [0.5.4] - 2026-03-31
+
+### Changed
+- **Signature Boundary Enforcement** — Clarified the "Signature Mandate" in the `system-management-skill`. The "evolved by {bot_name}" signature is now strictly limited to git commits and `CHANGELOG.md` entries. It is explicitly prohibited from appearing in regular chat messages to maintain a clean user experience.
+
+evolved by Ori
+
 ## [0.5.3] - 2026-03-31
 
 ### Changed
