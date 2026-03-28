@@ -3,6 +3,14 @@
 All notable changes to the Ori framework are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Version bumps follow [Semantic Versioning](https://semver.org/).
 
+## [0.4.7] - 2026-03-31
+
+### Added
+- **Interactive CLI Onboarding Chat** — Implemented a terminal-based chat interface (`interfaces/cli_chat.py`) that automatically triggers on first boot if no messaging platforms (like Telegram) are configured. This allows new users to interact with the bot immediately after installation.
+- **Automated Onboarding Prompt** — The CLI chat proactively asks for language preferences, outlines core principles (Self-evolution, safety, persistence), and guides the user through the necessary setup steps (e.g., configuring Telegram).
+
+evolved by Ori
+
 ## [0.4.6] - 2026-03-31
 
 ### Added

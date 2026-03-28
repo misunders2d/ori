@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import secrets
+import sys
 
 from dotenv import load_dotenv, set_key
 
@@ -154,7 +155,13 @@ async def main():
     # Future: Slack/Discord/Webex pollers can be added here identically.
 
     if not tasks:
-        logger.warning("No communication pollers started. The bot has no way to receive inputs.")
+        # If no messengers are configured AND we are in an interactive terminal, start CLI onboarding
+        if sys.stdin.isatty():
+            from interfaces.cli_chat import start_cli_chat
+            logger.info("No communication pollers started. Launching interactive CLI onboarding...")
+            tasks.append(asyncio.create_task(start_cli_chat(get_runner)))
+        else:
+            logger.warning("No communication pollers started and no interactive TTY detected.")
     else:
         logger.info("Bot is fully active and listening on all configured channels!")
 
