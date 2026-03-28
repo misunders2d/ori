@@ -161,6 +161,18 @@ def evolution_verify_sandbox(
                 capture_output=True, text=True, timeout=120,
             )
 
+            # Clean up symlinks after pytest so they don't leak into commits.
+            # These are bootstrap artifacts, not staged changes.
+            for config_file in ("pyproject.toml", "uv.lock"):
+                link = os.path.join(sandbox_dir, config_file)
+                if os.path.islink(link):
+                    os.unlink(link)
+            if os.path.isdir(sandbox_tests):
+                for fname in os.listdir(sandbox_tests):
+                    link = os.path.join(sandbox_tests, fname)
+                    if os.path.islink(link):
+                        os.unlink(link)
+
         else:
             return {"status": "error", "message": f"Unknown check type: '{check}'. Use 'syntax', 'pytest', or 'import'."}
 
@@ -221,6 +233,11 @@ def evolution_commit_and_push(commit_message: str, tool_context: ToolContext) ->
             continue
         for fname in files:
             src = os.path.join(root, fname)
+            # Skip symlinks — these are bootstrap artifacts (uv.lock,
+            # pyproject.toml, backfilled test files) created by
+            # evolution_verify_sandbox for pytest, not real staged changes.
+            if os.path.islink(src):
+                continue
             rel = os.path.relpath(src, sandbox_dir)
             staged_files.append((src, rel))
 
