@@ -1,6 +1,6 @@
 [project]
 name = "ori"
-version = "0.3.2"
+version = "0.3.3"
 description = ""
 authors = [
     {name = "Your Name", email = "your@email.com"},
@@ -28,6 +28,7 @@ dev = [
 [project.optional-dependencies]
 jupyter = [
     "jupyter>=1.0.0,<2.0.0",
+    "jupyter-client>=8.0.0,<9.0.0",
 ]
 lint = [
     "ruff>=0.4.6,<1.0.0",

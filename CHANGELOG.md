@@ -3,6 +3,12 @@
 All notable changes to the Ori framework are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Version bumps follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.3] - 2026-03-29
+
+### Fixed
+- **Harden Evolution Sandbox Hygiene** — Updated `evolution_commit_and_push` in `app/tools/evolution.py` to recursively ignore all hidden dot-directories (e.g., `.pytest_cache`, `.venv`, `.git`) during staging. This prevents shell argument limit errors and accidental indexing of thousands of transient library files.
+- **Improved System Management Skill** — Formalized the "Clean-Before-Commit" protocol in the `system-management-skill` to guide future self-evolution cycles in maintaining a clean sandbox state.
+
 ## [0.3.2] - 2026-03-29
 
 ### Changed

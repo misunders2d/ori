@@ -24,7 +24,7 @@ Always test any changes that brush up against `system.py` logic thoroughly in yo
 
 ## First-Start Setup Flow
 
-On first start with no `ADMIN_PASSCODE` in `.env`, `run_bot.py` auto-generates a random passcode, writes it to `.env`, and prints a setup banner to the server console. This banner shows the passcode and the `/init` command syntax.
+On first start with no `ADMIN_PASSCODE` in `.env`, `run_bot.py` auto-generates a random passcode, writes it to `.env`, and prints a setup banner to the server console. This banner shows the passcode and the `/init` command format.
 
 **User-facing flow (Telegram):**
 1. User sends `/start` → bot explains that a `GOOGLE_API_KEY` is needed and shows the `/init` command format.
@@ -69,4 +69,5 @@ The sandbox (`./data/sandbox/`) uses **symlinks** as bootstrap artifacts during 
 3. **Symlinks are cleaned up automatically** after pytest verification completes. If you encounter stale symlinks in the sandbox, remove them before committing — they are not your staged work.
 4. **If pytest needs additional project files** beyond `pyproject.toml` and `uv.lock`, stage real copies via `evolution_stage_change` rather than creating manual symlinks.
 5. **Ignore transient build artifacts:** Directories like `.venv`, `.pytest_cache`, and `__pycache__` are often created during `evolution_verify_sandbox` runs. While the `evolution_commit_and_push` tool is coded to skip these, you must proactively ensure they never leak into the permanent project file structure.
-6. **Large Commit Guardrails:** If a commit fails with a `non-zero exit status 1` or mentions internal `.venv` paths, it means the sandbox has accidentally indexed system files. Use a temporary staged script (e.g., `cleaner.py`) to purge these directories from the sandbox before retrying the commit.
+6. **Clean-Before-Commit Protocol:** Before invoking `evolution_commit_and_push`, always inspect the sandbox contents. If dot-folders (like `.pytest_cache`) or virtual environments are present, use a temporary "cleaner" script to delete them. This prevents shell argument length errors and accidental indexing of thousands of library files.
+7. **Large Commit Guardrails:** If a commit fails with a `non-zero exit status 1` or mentions internal paths like `.venv/bin/...`, it means the sandbox has accidentally indexed system files. Do NOT try to force the commit. Run a cleanup script first and ensure only your intended code changes are staged.

@@ -231,8 +231,11 @@ def evolution_commit_and_push(commit_message: str, tool_context: ToolContext) ->
     # Collect sandbox files to copy
     staged_files = []
     for root, _dirs, files in os.walk(sandbox_dir):
-        # SKIP IGNORED DIRECTORIES
-        if any(ignored in root for ignored in ["__pycache__", ".venv", ".git"]):
+        # SKIP IGNORED DIRECTORIES (dot-folders and common build junk)
+        # We split by separator and check if any part starts with a dot (but isn't '.' or '..')
+        rel_root = os.path.relpath(root, sandbox_dir)
+        path_parts = rel_root.split(os.sep)
+        if any(p.startswith('.') and p not in ['.', '..'] for p in path_parts) or "__pycache__" in path_parts:
             continue
             
         for fname in files:
