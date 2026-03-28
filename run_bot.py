@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 from google.adk.runners import Runner
 from google.adk.sessions import DatabaseSessionService
 
-from app.agent import root_agent
+from app.agent import app as ori_app
 from app.scheduler_instance import scheduler
 from interfaces.telegram_poller import poll_telegram
 
@@ -59,8 +59,7 @@ def get_runner():
         session_service = DatabaseSessionService(db_url=database_url)
 
         _global_runner = Runner(
-            agent=root_agent,
-            app_name="ori",
+            app=ori_app,
             session_service=session_service,
         )
     return _global_runner
