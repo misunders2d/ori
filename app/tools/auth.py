@@ -15,7 +15,7 @@ async def connect_to_platform(
     platform: str, 
     client_id: str, 
     client_secret: str, 
-    scopes: list,
+    scopes: list[str],
     tool_context: ToolContext
 ) -> Dict[str, Any]:
     """

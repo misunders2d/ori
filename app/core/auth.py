@@ -36,7 +36,7 @@ class OAuthService:
         """Returns the access token for a platform, if available."""
         return self._tokens.get(platform, {}).get("access_token")
 
-    async def start_device_flow(self, platform: str, client_id: str, scopes: list) -> Dict[str, Any]:
+    async def start_device_flow(self, platform: str, client_id: str, scopes: list[str]) -> Dict[str, Any]:
         """Initiates a Device Code Flow for platforms that support it (Google, GitHub)."""
         
         endpoints = {
