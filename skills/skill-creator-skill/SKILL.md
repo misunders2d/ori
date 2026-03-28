@@ -10,9 +10,10 @@ This skill defines the mandatory protocol for creating or updating other skills 
 ## The Core Loop
 
 1. **Capture Intent**: Understand what the skill should do, when it triggers, and its expected output.
-2. **Draft the Skill**: Create `skills/<skill-name>/SKILL.md` applying the Progressive Disclosure pattern (see below).
-3. **Execute Test Cases**: Use your sandbox evolution tools to verify the technical logic. Run the tool/skills against dummy data or a local test script.
-4. **Evaluate & Iterate**: Did the skill work as expected? If there are failures, update the `SKILL.md` or associated Python tools. Repeat.
+2. **Research & Context**: Use the `external-research-skill` (specifically `google_search_agent_tool` and `web_fetch`) to find official documentation, GitHub repositories, or API guides for the target module or integration. **NEVER** proceed with drafting until you have verified the current state of the art.
+3. **Draft the Skill**: Create `skills/<skill-name>/SKILL.md` applying the Progressive Disclosure pattern (see below).
+4. **Execute Test Cases**: Use your sandbox evolution tools to verify the technical logic. Run the tool/skills against dummy data or a local test script.
+5. **Evaluate & Iterate**: Did the skill work as expected? If there are failures, update the `SKILL.md` or associated Python tools. Repeat.
 
 ## Anatomy of a Skill
 

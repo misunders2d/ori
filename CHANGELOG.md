@@ -3,6 +3,12 @@
 All notable changes to the Ori framework are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Version bumps follow [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] - 2026-03-29
+
+### Changed
+- **Strengthened Skill Creator Protocol** — Updated the `skill-creator-skill` to mandate a "Research & Context" phase. Agents must now actively use the `external-research-skill` to fetch official documentation or repository context before drafting new skills or integrations, eliminating hallucinations in new capability development.
+- **Improved Evolution Tool Robustness** — Switched `evolution_verify_sandbox` from `uv run pytest` to `sys.executable -m pytest`. This ensures test verification works reliably in local environments where nested `pyproject.toml` files might otherwise cause `uv` environment detection conflicts.
+
 ## [0.4.0] - 2026-03-29
 
 ### Added

@@ -1,0 +1,15 @@
+import os
+
+def test_skill_creator_contains_research_step():
+    skill_path = "skills/skill-creator-skill/SKILL.md"
+    assert os.path.exists(skill_path), f"{skill_path} does not exist"
+    
+    with open(skill_path, "r") as f:
+        content = f.read()
+    
+    # Check for the research step in the Core Loop
+    assert "Research & Context" in content, "Research & Context step missing from SKILL.md"
+    assert "external-research-skill" in content, "Reference to external-research-skill missing from SKILL.md"
+    assert "google_search_agent_tool" in content, "Reference to google_search_agent_tool missing from SKILL.md"
+    assert "web_fetch" in content, "Reference to web_fetch missing from SKILL.md"
+    assert "NEVER proceed with drafting" in content, "Drafting prohibition without research missing from SKILL.md"

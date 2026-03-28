@@ -155,10 +155,11 @@ def evolution_verify_sandbox(
                     if os.path.isfile(src) and not os.path.exists(dst):
                         os.symlink(src, dst)
 
-            # Use --offline if needed or ensure uv doesn't create local .venv in sandbox
-            # But just in case it does, we will skip it in commit_and_push.
+            # Use sys.executable to run pytest directly instead of 'uv run'.
+            # This is more robust in local environments where nested pyproject.toml
+            # files might confuse uv's project detection (VIRTUAL_ENV mismatches).
             result = subprocess.run(
-                ["uv", "run", "pytest", "tests"],
+                [sys.executable, "-m", "pytest", "tests"],
                 cwd=sandbox_dir,
                 capture_output=True, text=True, timeout=120,
             )
@@ -312,6 +313,3 @@ def evolution_commit_and_push(commit_message: str, tool_context: ToolContext) ->
         "status": "success",
         "message": f"Committed and pushed {len(staged_files)} file(s) via temporary clone: {', '.join(rel_paths)}",
     }
-
-
-
