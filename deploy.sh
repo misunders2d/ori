@@ -79,43 +79,21 @@ while true; do
         sleep 10
         cd "$SCRIPT_DIR"
 
-        PREVIOUS_COMMIT=$(git rev-parse HEAD)
+        PREVIOUS_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "UNKNOWN")
         
-        echo "  [+] Analyzing Git topology and local filesystem integrity..."
+        echo "  [+] Force-syncing to authoritative remote (origin/master)..."
         
-        if ! git diff-index --quiet HEAD --; then
-            echo "  [!] WARNING: Uncommitted local changes detected in sequence!"
-            echo "  [.] Skipping remote sync to permanently protect dirty sandbox state."
-        else
-            git fetch origin master 2>/dev/null
-            FETCH_STATUS=$?
-            
-            if [ $FETCH_STATUS -ne 0 ]; then
-               echo "  [.] No upstream origin reachable. Pushing headless local evolution..."
-            else
-               LOCAL=$(git rev-parse HEAD 2>/dev/null || echo "LOCAL_ERR")
-               REMOTE=$(git rev-parse origin/master 2>/dev/null || echo "REMOTE_ERR")
-               BASE=$(git merge-base HEAD origin/master 2>/dev/null || echo "BASE_ERR")
-               
-               if [ "$LOCAL" = "$REMOTE" ]; then
-                   echo "  [.] Synchronized with origin/master."
-               elif [ "$LOCAL" = "$BASE" ]; then
-                   echo "  [+] Upstream mutations detected. Enforcing authoritative remote footprint..."
-                   git reset --hard origin/master 2>&1
-                   if [ $? -ne 0 ]; then
-                       echo "  [-] Signal failed: Hard remote reset crashed"
-                       send_notification "$TRIGGER_CONTENT" "⚠️ Update Loop Aborted: Remote sync hard-crashed. Check deploy.log."
-                       continue
-                   fi
-               elif [ "$REMOTE" = "$BASE" ]; then
-                   echo "  [.] Local evolution commits tracking ahead. Protecting unpushed local HEAD..."
-               else
-                   echo "  [-] Divergent reality! Commits exist independently on both local and remote."
-                   send_notification "$TRIGGER_CONTENT" "⚠️ Update Loop Aborted: Git timeline diverged (Conflict Risk). Please manually SSH and merge origin/master."
-                   continue
-               fi
-            fi
+        # Remote is the ONLY source of truth. Nuke all local state unconditionally.
+        if ! git fetch origin master 2>&1; then
+            echo "  [-] FATAL: Cannot reach origin. Network or remote config broken."
+            send_notification "$TRIGGER_CONTENT" "⚠️ Update Failed: Cannot reach git remote. Check network/SSH keys."
+            continue
         fi
+        
+        # Wipe everything: uncommitted changes, diverged history, corrupted HEAD — all of it
+        git reset --hard origin/master 2>&1 || true
+        git clean -fd 2>&1 || true
+        echo "  [+] Local branch force-aligned to origin/master."
         
         chmod +x "$SCRIPT_DIR/start.sh" "$SCRIPT_DIR/deploy.sh" "$SCRIPT_DIR/rollback.sh"
 

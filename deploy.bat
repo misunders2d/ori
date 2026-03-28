@@ -36,45 +36,25 @@ timeout /t 10 /nobreak >nul
 
 pushd "%SCRIPT_DIR%"
 
-REM Capture current commit
-for /f "delims=" %%H in ('git rev-parse HEAD') do set "PREVIOUS_COMMIT=%%H"
+REM Capture current commit (tolerate broken HEAD)
+for /f "delims=" %%H in ('git rev-parse HEAD 2^>nul') do set "PREVIOUS_COMMIT=%%H"
+if not defined PREVIOUS_COMMIT set "PREVIOUS_COMMIT=UNKNOWN"
 
-echo   [+] Analyzing Git topology and local filesystem integrity...
+echo   [+] Force-syncing to authoritative remote (origin/master)...
 
-git diff-index --quiet HEAD -- >nul 2>nul
+REM Remote is the ONLY source of truth. Nuke all local state unconditionally.
+git fetch origin master >nul 2>nul
 if %errorlevel% neq 0 (
-    echo   [!] WARNING: Uncommitted local changes detected in sequence!
-    echo   [.] Skipping remote sync to permanently protect dirty sandbox state.
-) else (
-    git fetch origin master >nul 2>nul
-    if %errorlevel% neq 0 (
-        echo   [.] No upstream origin reachable. Pushing headless local evolution...
-    ) else (
-        for /f "delims=" %%L in ('git rev-parse HEAD 2^>nul') do set "LOCAL=%%L"
-        for /f "delims=" %%R in ('git rev-parse origin/master 2^>nul') do set "REMOTE=%%R"
-        for /f "delims=" %%B in ('git merge-base HEAD origin/master 2^>nul') do set "BASE=%%B"
-
-        if "!LOCAL!"=="!REMOTE!" (
-            echo   [.] Synchronized with origin/master.
-        ) else if "!LOCAL!"=="!BASE!" (
-            echo   [+] Upstream mutations detected. Enforcing authoritative remote footprint...
-            git reset --hard origin/master 2>&1
-            if !errorlevel! neq 0 (
-                echo   [-] Signal failed: Hard remote reset crashed
-                call :send_notification "!TRIGGER_CONTENT!" "⚠️ Update Loop Aborted: Remote sync hard-crashed. Check deploy.log."
-                popd
-                goto :sleep
-            )
-        ) else if "!REMOTE!"=="!BASE!" (
-            echo   [.] Local evolution commits tracking ahead. Protecting unpushed local HEAD...
-        ) else (
-            echo   [-] Divergent reality! Commits exist independently on both local and remote.
-            call :send_notification "!TRIGGER_CONTENT!" "⚠️ Update Loop Aborted: Git timeline diverged. Please manually merge origin/master."
-            popd
-            goto :sleep
-        )
-    )
+    echo   [-] FATAL: Cannot reach origin. Network or remote config broken.
+    call :send_notification "!TRIGGER_CONTENT!" "⚠️ Update Failed: Cannot reach git remote. Check network/SSH keys."
+    popd
+    goto :sleep
 )
+
+REM Wipe everything: uncommitted changes, diverged history, corrupted HEAD — all of it
+git reset --hard origin/master 2>&1
+git clean -fd 2>&1
+echo   [+] Local branch force-aligned to origin/master.
 
 REM Check for zero-delta signal
 for /f "delims=" %%C in ('git rev-parse HEAD') do set "CURRENT_COMMIT=%%C"
