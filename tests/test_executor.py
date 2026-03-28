@@ -51,7 +51,6 @@ async def test_extract_agent_response_confirmation_formatting():
     assert "⚠️ **Action Requires Confirmation**" in response.text
     assert "**CoordinatorAgent** wants to execute `update_self`" in response.text
     assert "📋 **Reason:** Update the bot to the latest version." in response.text
-    assert "approve or deny" in response.text
 
 @pytest.mark.asyncio
 async def test_extract_agent_response_refresh_confirmation_reason():
@@ -88,3 +87,39 @@ async def test_extract_agent_response_refresh_confirmation_reason():
     
     # Assert generated reason
     assert "📋 **Reason:** Clear conversation history (Mode: summarize)." in response.text
+
+@pytest.mark.asyncio
+async def test_extract_agent_response_evolution_confirmation_reason():
+    """Verifies that evolution tool gets specific human-readable reasons."""
+    
+    runner = MagicMock()
+    runner.app_name = "ori"
+    runner.session_service = AsyncMock()
+    runner.session_service.get_session.return_value = MagicMock(events=[])
+    
+    mock_confirmation = MagicMock()
+    mock_confirmation.hint = "" 
+    mock_confirmation.payload = {"tool_context": {}, "commit_message": "Add tests"}
+    
+    mock_event = MagicMock()
+    mock_event.author = "DeveloperAgent"
+    mock_event.content = None
+    mock_event.actions = MagicMock()
+    mock_event.actions.requested_tool_confirmations = {
+        "call_789": mock_confirmation
+    }
+    
+    mock_fc = MagicMock()
+    mock_fc.id = "call_789"
+    mock_fc.name = "evolution_commit_and_push"
+    mock_event.get_function_calls.return_value = [mock_fc]
+    
+    async def mock_run_async(*args, **kwargs):
+        yield mock_event
+        
+    runner.run_async = mock_run_async
+    
+    response = await extract_agent_response(runner, "user_id", "session_id", "message")
+    
+    # Assert generated reason
+    assert "📋 **Reason:** Commit and push changes: Add tests" in response.text

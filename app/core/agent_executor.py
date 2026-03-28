@@ -250,18 +250,29 @@ async def extract_agent_response(
                         # Primary: from the FunctionResponse on this event
                         # Fallback: from FunctionCalls seen earlier in the stream
                         tool_name = fr_names.get(call_id) or seen_function_calls.get(call_id) or "an action"
-                        agent_name = getattr(event, "author", "The agent")
+                        agent_name = getattr(event, "author", "The agent") or "The agent"
 
-                        # Extract payload arguments for a summary
+                        # Robust payload extraction
                         payload = getattr(confirmation, "payload", None)
                         summary_parts = []
-                        clean_payload = None
-                        if payload and isinstance(payload, dict):
-                            # Filter out internal ADK args
-                            clean_payload = {k: v for k, v in payload.items() if k != "tool_context"}
-                            for k, v in clean_payload.items():
-                                if k in ["commit_message", "mode", "enabled", "task_id", "name", "query", "reason"]:
-                                    summary_parts.append(f"{k}: {v}")
+                        clean_payload = {}
+                        
+                        # Handle both dicts and objects for payload
+                        if payload:
+                            if isinstance(payload, dict):
+                                items = payload.items()
+                            else:
+                                # Try accessing __dict__ or other methods if it's an object
+                                items = getattr(payload, "__dict__", {}).items()
+                            
+                            for k, v in items:
+                                if k != "tool_context" and not k.startswith("_"):
+                                    clean_payload[k] = v
+                                    # Include all reasonable length arguments in summary
+                                    val_str = str(v)
+                                    if len(val_str) > 100:
+                                        val_str = val_str[:97] + "..."
+                                    summary_parts.append(f"{k}: '{val_str}'")
                         
                         summary_text = ", ".join(summary_parts) if summary_parts else ""
 
@@ -270,7 +281,9 @@ async def extract_agent_response(
                         # Check if the hint is the generic ADK one
                         is_generic_hint = "Please approve or reject" in hint_text or not hint_text
 
-                        msg = f"⚠️ **Action Requires Confirmation**\n\n**{agent_name}** wants to execute `{tool_name}`."
+                        # Construct final message
+                        msg = f"⚠️ **Action Requires Confirmation**\n\n"
+                        msg += f"**{agent_name}** wants to execute `{tool_name}`."
                         
                         # Generate a meaningful reason summary
                         reason = ""
@@ -281,8 +294,11 @@ async def extract_agent_response(
                         elif tool_name == "trigger_rollback":
                             reason = "Revert to the previous stable git commit."
                         elif tool_name == "session_refresh":
-                            mode = clean_payload.get('mode', 'fresh') if isinstance(clean_payload, dict) else 'fresh'
+                            mode = clean_payload.get('mode', 'fresh')
                             reason = f"Clear conversation history (Mode: {mode})."
+                        elif tool_name == "evolution_commit_and_push":
+                            msg_arg = clean_payload.get('commit_message', 'Perform code evolution')
+                            reason = f"Commit and push changes: {msg_arg}"
                         elif summary_text:
                             reason = summary_text
                             
