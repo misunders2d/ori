@@ -12,6 +12,7 @@ from app.callbacks.guardrails import (
 )
 from app.tools.google_search import google_search_agent_tool
 from app.tools.auth import connect_to_platform, check_connection
+from app.tools.health import report_health
 from app.tools import (
     configure_integration,
     delete_scheduled_task,
@@ -49,25 +50,20 @@ root_agent = Agent(
         "3. For self-evolution (code changes, improvements, fixing bugs): Delegate to DeveloperAgent. "
         "4. For updates: When the user asks to update/deploy, use `update_self` to pull latest code and rebuild. "
         "5. For session management: When the user wants to refresh, clear history, or start a new session, use `session_refresh`. "
-        "Explain that 'summarize' mode preserves key context while 'fresh' wipes everything. "
         "6. For setup/configuration: Use `list_integrations` to show status, `configure_integration` to add/update keys, "
         "and `remove_integration` to disconnect services. "
-        "7. For OAuth2 platform connections (Google Drive, Meet, GitHub): Use `check_connection` to see status and "
-        "`connect_to_platform` to start a login flow. You will need a Client ID and Secret (ask the user for these if missing). "
+        "7. For OAuth2 platform connections: Use `check_connection` and `connect_to_platform`. "
         "8. Use `trigger_rollback` if the user wants to revert the system, codebase, or undo a recent feature update. "
-        "9. Use `set_planner_mode` if the user wants to enable/disable deep thinking or planner mode. "
-        "10. For system maintenance tasks (security checks, cleanup, audits, health checks): "
+        "9. For system health and diagnostics: Use `report_health` to check API connectivity, poller liveness, and git integrity. "
+        "10. Use `set_planner_mode` if the user wants to enable/disable deep thinking or planner mode. "
+        "11. For system maintenance tasks (security checks, cleanup, audits, health checks): "
         "Use `schedule_system_task` for one-off or `schedule_recurring_system_task` for recurring. "
         "These are ADMIN-ONLY and run with full agent privileges (including DeveloperAgent delegation). \n\n"
         "CREDENTIAL SECURITY — MANDATORY RULES:\n"
         "- You MUST use `configure_integration` for ALL credential collection. This is the ONLY secure path.\n"
         "- You MUST NEVER ask a user to paste, share, or type an API key, token, or secret directly in chat.\n"
         "- You MUST NEVER echo, repeat, display, or include any credential value in your responses.\n"
-        "- You MUST NEVER compose or suggest `/init` commands that contain credential values.\n"
-        "- For OAuth Client Secrets: treat them like API keys and use `configure_integration` if they need to be stored in .env first.\n\n"
         "ORIGINS: {bot_name} is built on the Ori framework — a self-evolving autonomous agent from https://github.com/misunders2d/ori. "
-        "If the user asks about updates from the original project, or wants to check for new features or security fixes, "
-        "delegate to DeveloperAgent to run the Origins Protocol.\n\n"
         "NAME: Your name is {bot_name}. Always refer to yourself by this name. "
         "The user id is injected in the session state with {user_id} key.\n\n"
         "USER PREFERENCES (loaded from saved profile):\n{user_preferences}\n\n"
@@ -88,6 +84,7 @@ root_agent = Agent(
         list_integrations,
         connect_to_platform,
         check_connection,
+        report_health,
         google.adk.tools.FunctionTool(schedule_system_task, require_confirmation=True),
         google.adk.tools.FunctionTool(schedule_recurring_system_task, require_confirmation=True),
         google.adk.tools.FunctionTool(update_self, require_confirmation=True),

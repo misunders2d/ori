@@ -3,6 +3,15 @@
 All notable changes to the Ori framework are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Version bumps follow [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] - 2026-03-31
+
+### Added
+- **Proactive Self-Diagnostics (The "Nervous System")** — Implemented a background monitoring task (`app/core/health.py`) that checks Google API connectivity, poller liveness, disk usage, and git integrity every 10 minutes.
+- **System Health Tool** — Added a `report_health` tool to the `CoordinatorAgent`, allowing users to manually request a detailed status report of the bot's vitals.
+- **Admin Proactive Alerts** — The bot now proactively notifies admins via Telegram if any "vital signs" (e.g., API connection or poller heartbeat) are degraded.
+
+evolved by Ori
+
 ## [0.5.0] - 2026-03-31
 
 ### Added
@@ -91,7 +100,7 @@ evolved by Ori
 ## [0.3.1] - 2026-03-29
 
 ### Changed
-- **Updated System Management Skill** — Expanded "Sandbox Hygiene Rules" with instructions for handling transient build artifacts (`.venv`, `.pytest_cache`, `__pycache__`) and resolving large commit errors. This ensures future self-evolution cycles handle sandbox clutter correctly.
+- **Updated System Management Skill** — Expanded "Sandbox Hygiene Rules" with instructions for handling transient build artifacts (`.venv`, `.pytest_cache`, `__pycache__`) admit resolving large commit errors. This ensures future self-evolution cycles handle sandbox clutter correctly.
 
 ## [0.3.0] - 2026-03-29
 

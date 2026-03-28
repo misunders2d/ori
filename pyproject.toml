@@ -1,6 +1,6 @@
 [project]
 name = "ori"
-version = "0.5.0"
+version = "0.5.1"
 description = ""
 authors = [
     {name = "Your Name", email = "your@email.com"},

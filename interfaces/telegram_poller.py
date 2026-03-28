@@ -4,6 +4,7 @@ import mimetypes
 import os
 import re
 import weakref
+from datetime import datetime
 from typing import Optional
 
 import httpx
@@ -17,6 +18,18 @@ from app.core.agent_executor import (
 from app.core.transport import TransportAdapter, register_adapter
 
 logger = logging.getLogger(__name__)
+
+# Heartbeat file for self-diagnostics
+HEARTBEAT_FILE = os.path.abspath("./data/.tg_heartbeat")
+
+def _update_heartbeat():
+    """Updates the heartbeat file with current timestamp."""
+    try:
+        os.makedirs(os.path.dirname(HEARTBEAT_FILE), exist_ok=True)
+        with open(HEARTBEAT_FILE, "w") as f:
+            f.write(datetime.now().isoformat())
+    except Exception:
+        pass
 
 # Keys whose env values are sensitive secrets (not public identifiers like GITHUB_REPO)
 _SECRET_ENV_KEYS = {"GOOGLE_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "GITHUB_TOKEN"}
@@ -303,6 +316,7 @@ async def poll_telegram(get_runner_fn, process_init_fn):
             _active_tasks[_session_id] = (task, combined_content)
 
         while True:
+            _update_heartbeat()
             try:
                 url = TELEGRAM_API.format(token=token, method="getUpdates")
                 resp = await client.get(url, params={"offset": offset, "timeout": 30})

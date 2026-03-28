@@ -81,6 +81,36 @@ def process_init_command(text: str) -> str:
         _global_runner = None  # Force a reload of environments on next tick
     return result
 
+async def run_proactive_diagnostics():
+    """Background task that checks system health and alerts the admin if degraded."""
+    from app.core.health import get_system_health
+    from app.core.transport import get_adapter
+    
+    # We only alert if status is degraded
+    try:
+        report = await get_system_health()
+        if report["status"] != "healthy":
+            logger.warning("Proactive Diagnostics: System is %s. Vitals: %s", report["status"], report["vitals"])
+            
+            # Try to notify admin via Telegram if configured
+            admin_ids = os.environ.get("ADMIN_USER_IDS", "").split(",")
+            adapter = get_adapter("telegram")
+            if adapter and admin_ids:
+                for aid in admin_ids:
+                    aid = aid.strip()
+                    if not aid: continue
+                    # Clean the raw ID if it starts with 'tg_'
+                    raw_id = aid.replace("tg_", "")
+                    try:
+                        await adapter.send_message(
+                            raw_id, 
+                            f"🚨 **Proactive Alert: System Health {report['status'].upper()}**\n\n"
+                            f"Vitals:\n" + "\n".join([f"- {k}: `{v}`" for k, v in report["vitals"].items()])
+                        )
+                    except Exception:
+                        pass
+    except Exception as e:
+        logger.error("Proactive diagnostics task failed: %s", e)
 
 async def main():
     """
@@ -125,11 +155,13 @@ async def main():
     logger.info("Starting APScheduler engine...")
     scheduler.start()
 
-    # 3. Register periodic database backups (every 12 hours, keep last 3)
+    # 3. Register periodic jobs
     from app.core.backup import backup_database
 
     sessions_db = os.path.abspath("./data/ori-sessions.db")
     scheduler_db = os.path.abspath("./data/ori-scheduler.db")
+    
+    # Backups
     scheduler.add_job(
         backup_database, "interval", hours=12,
         kwargs={"db_path": sessions_db, "label": "sessions"},
@@ -139,6 +171,12 @@ async def main():
         backup_database, "interval", hours=12,
         kwargs={"db_path": scheduler_db, "label": "scheduler"},
         id="backup_scheduler", replace_existing=True,
+    )
+    
+    # Self-Diagnostics (every 10 minutes)
+    scheduler.add_job(
+        run_proactive_diagnostics, "interval", minutes=10,
+        id="self_diagnostics", replace_existing=True,
     )
 
     # 4. Collect and spin up all polling interfaces
