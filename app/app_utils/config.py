@@ -14,6 +14,7 @@ ALLOWED_CONFIG_KEYS = frozenset({
     "GITHUB_REPO",
     "ADMIN_USER_IDS",
     "BOT_NAME",
+    "APP_NAME",
 })
 
 

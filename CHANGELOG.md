@@ -3,6 +3,14 @@
 All notable changes to the Ori framework are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Version bumps follow [Semantic Versioning](https://semver.org/).
 
+## [0.5.3] - 2026-03-31
+
+### Changed
+- **Configurable App Identity** — The internal ADK `App.name` is no longer hardcoded as "ori". It now dynamically pulls from the `APP_NAME` environment variable, allowing for easier multi-instance deployment.
+- **Refined Event Compaction** — Relaxed the memory management settings to be less aggressive. `compaction_interval` is increased to 10 events (from 5) and `overlap_size` to 3 events, ensuring more fluid and coherent long-term conversations for professional assistant use cases.
+
+evolved by Ori
+
 ## [0.5.2] - 2026-03-31
 
 ### Added
