@@ -3,6 +3,13 @@
 All notable changes to the Ori framework are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Version bumps follow [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-03-29
+
+### Added
+- **Mandatory Functional Testing Protocol** — Formalized a strict requirement for all new features and bug fixes to include corresponding functional tests in the `tests/` directory.
+- **Persistent Regression Safety Net** — Added `tests/test_installer.py`, `tests/test_executor.py`, and `tests/test_evolution_hygiene.py` to permanently verify core framework logic (installer detachment, tool confirmation formatting, and sandbox hygiene).
+- **Updated System Management Skill** — Integrated the Testing Mandate into the `system-management-skill` to guide all future self-evolution cycles.
+
 ## [0.3.4] - 2026-03-29
 
 ### Fixed
@@ -45,7 +52,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Version bumps fo
 ### Fixed
 - **Interrupted messages lost from context** — when a user sends a new message mid-response, the original message is now persisted to the session via `process_message_for_context` before cancellation, matching the group-chat background processing pattern.
 - **SameFileError on sandbox commit** — symlinks (`uv.lock`, `pyproject.toml`, backfilled test files) created during `evolution_verify_sandbox` pytest runs are now cleaned up after verification and skipped during `evolution_commit_and_push` walks.
-- **Context limit crash unrecoverable** — error message now directs users to `/reset` instead of the vague "wait a few minutes".
+- **Context limit crash unrecoverable** — error message now directs users to `/reset` instead of the borough-based "wait a few minutes".
 - **`/start` gave no setup guidance** — now shows full onboarding instructions when unconfigured.
 - **"Visit /setup page" referenced nonexistent page** — replaced with actual `/init` instructions.
 - **Deploy watcher stuck on git edge cases** — the update loop's git topology analysis could permanently stall on diverged histories, uncommitted local changes, or corrupted HEAD, requiring a manual container restart. Replaced with unconditional `fetch` + `reset --hard origin/master` + `clean -fd`, enforcing the remote as the sole source of truth.

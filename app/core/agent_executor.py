@@ -222,7 +222,7 @@ async def extract_agent_response(
                 if hasattr(event, "get_function_calls"):
                     for fc in event.get_function_calls():
                         if fc.id and fc.name:
-                            seen_function_calls[fc.id] = fc.name
+                            seen_function_calls[fc.id] = str(fc.name)
 
                 if event.content and event.content.parts:
                     for part in event.content.parts:
@@ -244,7 +244,7 @@ async def extract_agent_response(
                             if hasattr(part, "function_response") and part.function_response:
                                 fr = part.function_response
                                 if fr.id and fr.name:
-                                    fr_names[fr.id] = fr.name
+                                    fr_names[fr.id] = str(fr.name)
 
                     for call_id, confirmation in event.actions.requested_tool_confirmations.items():
                         # Primary: from the FunctionResponse on this event
@@ -276,8 +276,6 @@ async def extract_agent_response(
                         reason = ""
                         if not is_generic_hint:
                             reason = hint_text
-                        elif summary_text:
-                            reason = summary_text
                         elif tool_name == "update_self":
                             reason = "Deploy latest code changes and restart the daemon."
                         elif tool_name == "trigger_rollback":
@@ -285,6 +283,8 @@ async def extract_agent_response(
                         elif tool_name == "session_refresh":
                             mode = clean_payload.get('mode', 'fresh') if isinstance(clean_payload, dict) else 'fresh'
                             reason = f"Clear conversation history (Mode: {mode})."
+                        elif summary_text:
+                            reason = summary_text
                             
                         if reason:
                             msg += f"\n📋 **Reason:** {reason}"

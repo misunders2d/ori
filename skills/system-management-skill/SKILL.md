@@ -22,9 +22,19 @@ The `ori` daemon is a fully integrated, continuously polling worker node. It man
 
 Always test any changes that brush up against `system.py` logic thoroughly in your isolated sandbox verification pipeline (`evolution_stage_change` -> `evolution_verify_sandbox`).
 
+## REGRESSION TESTING MANDATE
+
+Every feature, bug fix, or code improvement **MUST** include a corresponding functional test file in the `tests/` directory.
+
+**Testing Protocol:**
+1. **Develop Real Tests:** No code change is complete until its corresponding test file (e.g., `tests/test_feature_name.py`) is staged and verified.
+2. **Persistence:** These tests must be saved permanently to the repository. They form the core safety net that prevents future updates from breaking existing functionality.
+3. **Full Suite Runs:** Every `evolution_verify_sandbox` cycle must invoke the entire existing test suite (`uv run pytest tests`). Any failure in any test (including older ones) must block the commit.
+4. **Mocking External Systems:** Use `unittest.mock` to simulate tools, runners, sessions, and events. Tests should verify logic without requiring live API keys or external infrastructure.
+
 ## First-Start Setup Flow
 
-On first start with no `ADMIN_PASSCODE` in `.env`, `run_bot.py` auto-generates a random passcode, writes it to `.env`, and prints a setup banner to the server console. This banner shows the passcode and the `/init` command format.
+On first start with no `ADMIN_PASSCODE` in `.env`, `run_bot.py` auto-generates a random passcode, writes it to `.env`, and prints a setup banner to the server console. This banner shows the passcode and the `/init` command syntax.
 
 **User-facing flow (Telegram):**
 1. User sends `/start` → bot explains that a `GOOGLE_API_KEY` is needed and shows the `/init` command format.
