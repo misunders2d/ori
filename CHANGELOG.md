@@ -3,6 +3,11 @@
 All notable changes to the Ori framework are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Version bumps follow [Semantic Versioning](https://semver.org/).
 
+## [0.4.2] - 2026-03-29
+
+### Added
+- **File Deletion Support in Evolution Tools** — Upgraded `evolution_commit_and_push` to support a `delete_files` parameter. This allows Ori to permanently remove obsolete or redundant files from both the GitHub repository and the live filesystem during self-evolution.
+
 ## [0.4.1] - 2026-03-29
 
 ### Changed

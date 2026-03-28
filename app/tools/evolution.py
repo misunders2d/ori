@@ -4,6 +4,7 @@ import subprocess
 import sys
 import uuid
 from datetime import datetime
+from typing import List, Optional
 
 from google.adk.auth.auth_credential import AuthCredential, OAuth2Auth
 from google.adk.auth.auth_schemes import OAuth2, OAuthGrantType
@@ -198,20 +199,25 @@ def evolution_verify_sandbox(
 
 
 
-def evolution_commit_and_push(commit_message: str, tool_context: ToolContext) -> dict:
-    """Commits and pushes the verified changes from the sandbox to the GitHub repository.
+def evolution_commit_and_push(
+    commit_message: str, tool_context: ToolContext, delete_files: Optional[List[str]] = None
+) -> dict:
+    """Commits and pushes verified changes and handles deletions in the GitHub repository.
 
     ONLY call this after ALL verification checks pass.
 
     Args:
         commit_message (str): A descriptive message explaining the improvement.
+        delete_files (Optional[List[str]]): List of relative paths to files that should be deleted.
 
     Returns:
         dict: Status of the commit and push operation.
     """
     sandbox_dir = os.path.abspath("./data/sandbox")
-    if not os.path.exists(sandbox_dir):
-        return {"status": "error", "message": "No staged changes found in sandbox."}
+    # If no staged files AND no deletions, return error
+    has_staged = os.path.exists(sandbox_dir) and any(os.listdir(sandbox_dir))
+    if not has_staged and not delete_files:
+        return {"status": "error", "message": "Nothing to commit or delete."}
 
     # Validate GitHub credentials early
     github_token = os.environ.get("GITHUB_TOKEN", "")
@@ -231,54 +237,53 @@ def evolution_commit_and_push(commit_message: str, tool_context: ToolContext) ->
 
     # Collect sandbox files to copy
     staged_files = []
-    for root, _dirs, files in os.walk(sandbox_dir):
-        # SKIP IGNORED DIRECTORIES (dot-folders and common build junk)
-        # We split by separator and check if any part starts with a dot (but isn't '.' or '..')
-        rel_root = os.path.relpath(root, sandbox_dir)
-        path_parts = rel_root.split(os.sep)
-        if any(p.startswith('.') and p not in ['.', '..'] for p in path_parts) or "__pycache__" in path_parts:
-            continue
-            
-        for fname in files:
-            src = os.path.join(root, fname)
-            # Skip symlinks — these are bootstrap artifacts (uv.lock,
-            # pyproject.toml, backfilled test files) created by
-            # evolution_verify_sandbox for pytest, not real staged changes.
-            if os.path.islink(src):
+    if os.path.exists(sandbox_dir):
+        for root, _dirs, files in os.walk(sandbox_dir):
+            rel_root = os.path.relpath(root, sandbox_dir)
+            path_parts = rel_root.split(os.sep)
+            if any(p.startswith('.') and p not in ['.', '..'] for p in path_parts) or "__pycache__" in path_parts:
                 continue
-            rel = os.path.relpath(src, sandbox_dir)
-            staged_files.append((src, rel))
+                
+            for fname in files:
+                src = os.path.join(root, fname)
+                if os.path.islink(src):
+                    continue
+                rel = os.path.relpath(src, sandbox_dir)
+                staged_files.append((src, rel))
 
-    if not staged_files:
-        return {"status": "error", "message": "Sandbox is empty — nothing to commit."}
-
-    # Use a temporary directory for the git operations to bypass potential permission
-    # issues with root-owned .git mounts in the main /code directory.
+    # Use a temporary directory for the git operations
     tmp_repo_dir = f"/tmp/evolution_{uuid.uuid4().hex[:8]}"
     push_url = f"https://x-access-token:{github_token}@github.com/{github_repo}.git"
 
     try:
-        # 1. Clone the repo (shallow) to the temporary directory
+        # 1. Clone the repo
         subprocess.run(
             ["git", "clone", "--depth", "1", push_url, tmp_repo_dir],
             capture_output=True, text=True, check=True, timeout=60,
         )
 
-        # 2. Copy the staged changes into the temporary clone
+        # 2. Handle Deletions
+        if delete_files:
+            for rel_path in delete_files:
+                target = os.path.join(tmp_repo_dir, rel_path)
+                if os.path.exists(target):
+                    subprocess.run(["git", "rm", "-f", rel_path], cwd=tmp_repo_dir, check=True)
+
+        # 3. Copy staged changes
         for src, rel in staged_files:
             dst = os.path.join(tmp_repo_dir, rel)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy2(src, dst)
 
-        # 3. Commit and Push from the temporary clone
+        # 4. Commit and Push
         subprocess.run(["git", "config", "user.email", "agent@evolution.local"], cwd=tmp_repo_dir, check=True)
         subprocess.run(["git", "config", "user.name", "Agent Evolution"], cwd=tmp_repo_dir, check=True)
 
-        rel_paths = [rel for _, rel in staged_files]
-        # Chunk git add to avoid shell argument length limits
-        chunk_size = 50
-        for i in range(0, len(rel_paths), chunk_size):
-            subprocess.run(["git", "add"] + rel_paths[i:i+chunk_size], cwd=tmp_repo_dir, check=True)
+        if staged_files:
+            rel_paths = [rel for _, rel in staged_files]
+            chunk_size = 50
+            for i in range(0, len(rel_paths), chunk_size):
+                subprocess.run(["git", "add"] + rel_paths[i:i+chunk_size], cwd=tmp_repo_dir, check=True)
             
         subprocess.run(["git", "commit", "-m", commit_message], cwd=tmp_repo_dir, check=True)
 
@@ -291,7 +296,13 @@ def evolution_commit_and_push(commit_message: str, tool_context: ToolContext) ->
             err_msg = (result.stderr or result.stdout)[-500:].replace(github_token, "***")
             return {"status": "error", "message": f"git push failed: {err_msg}"}
 
-        # 4. Push succeeded — now apply changes to live code for partial instant effect
+        # 5. Push succeeded — apply to live code
+        if delete_files:
+            for rel_path in delete_files:
+                live_target = os.path.join(PROJECT_ROOT, rel_path)
+                if os.path.exists(live_target):
+                    os.remove(live_target)
+
         for src, rel in staged_files:
             live_dst = os.path.join(PROJECT_ROOT, rel)
             os.makedirs(os.path.dirname(live_dst), exist_ok=True)
@@ -307,9 +318,16 @@ def evolution_commit_and_push(commit_message: str, tool_context: ToolContext) ->
             shutil.rmtree(tmp_repo_dir)
 
     # Clean up sandbox
-    shutil.rmtree(sandbox_dir, ignore_errors=True)
+    if os.path.exists(sandbox_dir):
+        shutil.rmtree(sandbox_dir, ignore_errors=True)
+
+    summary = []
+    if staged_files:
+        summary.append(f"added/updated {len(staged_files)} file(s)")
+    if delete_files:
+        summary.append(f"deleted {len(delete_files)} file(s)")
 
     return {
         "status": "success",
-        "message": f"Committed and pushed {len(staged_files)} file(s) via temporary clone: {', '.join(rel_paths)}",
+        "message": f"Successfully {' and '.join(summary)} via temporary clone.",
     }
