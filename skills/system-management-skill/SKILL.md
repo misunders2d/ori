@@ -1,6 +1,12 @@
+---
+name: system-management-skill
+description: Critical execution rules for the Core Lifecycle Tools that govern the Daemon.
+---
+
 # System Management Constraints
 
 The `ori` daemon is a fully integrated, continuously polling worker node. It manages its own persistent execution via four system-critical tools defined in `app/tools/system.py`.
+
 
 ## Core System Tools
 

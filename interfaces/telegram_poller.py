@@ -3,6 +3,7 @@ import logging
 import mimetypes
 import os
 import re
+import weakref
 from typing import Optional
 
 import httpx
@@ -230,38 +231,55 @@ async def poll_telegram(get_runner_fn, process_init_fn):
         _active_tasks = {}      # session_id -> (asyncio.Task, message_content)
         _media_group_buffers = {}
         _media_group_timers = {}
+        _session_locks = weakref.WeakValueDictionary()  # session_id -> asyncio.Lock
+
+        async def _get_lock(sid):
+            lock = _session_locks.get(sid)
+            if lock is None:
+                lock = asyncio.Lock()
+                _session_locks[sid] = lock
+            return lock
 
         async def _process_and_send(_runner, _session_user_id, _session_id, _message_content, _user_id, _chat_id):
-            async def keep_typing(__chat_id=_chat_id):
-                while True:
-                    await adapter.send_typing(__chat_id)
-                    await asyncio.sleep(4)
-            
-            typing_task = asyncio.create_task(keep_typing())
-            try:
-                response = await extract_agent_response(
-                    _runner, _session_user_id, _session_id, _message_content, _user_id
-                )
-                # Send text response
-                if response.text:
-                    await adapter.send_message(_chat_id, response.text)
-                # Send any media attachments the agent produced
-                for media_item in response.media_items:
-                    await adapter.send_media(
-                        _chat_id,
-                        media_item["data"],
-                        media_item["mime_type"],
-                    )
-            except asyncio.CancelledError:
-                pass
-            finally:
-                typing_task.cancel()
+            async with await _get_lock(_session_id):
+                async def keep_typing(__chat_id=_chat_id):
+                    while True:
+                        await adapter.send_typing(__chat_id)
+                        await asyncio.sleep(4)
+                
+                typing_task = asyncio.create_task(keep_typing())
                 try:
-                    await typing_task
+                    response = await extract_agent_response(
+                        _runner, _session_user_id, _session_id, _message_content, _user_id
+                    )
+                    # Send text response
+                    if response.text:
+                        await adapter.send_message(_chat_id, response.text)
+                    # Send any media attachments the agent produced
+                    for media_item in response.media_items:
+                        await adapter.send_media(
+                            _chat_id,
+                            media_item["data"],
+                            media_item["mime_type"],
+                        )
                 except asyncio.CancelledError:
                     pass
-                if _session_id in _active_tasks and _active_tasks[_session_id][0] == asyncio.current_task():
-                    del _active_tasks[_session_id]
+                finally:
+                    typing_task.cancel()
+                    try:
+                        await typing_task
+                    except asyncio.CancelledError:
+                        pass
+                    if _session_id in _active_tasks and _active_tasks[_session_id][0] == asyncio.current_task():
+                        del _active_tasks[_session_id]
+
+        async def _save_context(_runner, _session_user_id, _session_id, _message_content):
+            """Helper to save a message to history sequentially."""
+            async with await _get_lock(_session_id):
+                try:
+                    await process_message_for_context(_runner, _session_user_id, _session_id, _message_content)
+                except Exception:
+                    logger.exception("Failed to save message to context for session %s", _session_id)
 
         async def flush_media_group(mg_id, _runner, _session_user_id, _session_id, _user_id, _chat_id):
             await asyncio.sleep(1.5)
@@ -276,7 +294,7 @@ async def poll_telegram(get_runner_fn, process_init_fn):
             if _session_id in _active_tasks and not _active_tasks[_session_id][0].done():
                 prev_task, prev_msg = _active_tasks[_session_id]
                 prev_task.cancel()
-                asyncio.create_task(process_message_for_context(_runner, _session_user_id, _session_id, prev_msg))
+                asyncio.create_task(_save_context(_runner, _session_user_id, _session_id, prev_msg))
                 await adapter.send_message(_chat_id, "Aborting previous task to prioritize new grouped media...")
 
             task = asyncio.create_task(
@@ -336,12 +354,18 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                     elif "audio" in msg:
                         file_id = msg["audio"]["file_id"]
                         file_info_text = f"[Audio: {msg['audio'].get('title', 'unknown')}]"
+                    elif "video" in msg:
+                        file_id = msg["video"]["file_id"]
+                        file_info_text = f"[Video: {msg['video'].get('file_name', 'unknown')}]"
+                    elif "video_note" in msg:
+                        file_id = msg["video_note"]["file_id"]
+                        file_info_text = "[Video Message]"
                     
                     # Prevent empty messages without files
                     if not text and not file_id:
                         continue
 
-                    # Suppress the redundant "[Photo]" tag for every single photo in a media group to prevent pollution
+                    # Suppress the redundant tag for media groups to prevent pollution
                     mg_id = msg.get("media_group_id")
                     if mg_id and not text:
                         enriched_text = ""
@@ -455,7 +479,7 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                     is_mentioned = bot_username and (f"@{bot_username}" in text)
                     if is_group and not is_mentioned:
                         logger.info("Silently adding group message for context to session %s", session_id)
-                        asyncio.create_task(process_message_for_context(runner, session_user_id, session_id, message_content))
+                        asyncio.create_task(_save_context(runner, session_user_id, session_id, message_content))
                         continue
                         
                     if mg_id:
@@ -474,8 +498,8 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                     if session_id in _active_tasks and not _active_tasks[session_id][0].done():
                         prev_task, prev_msg = _active_tasks[session_id]
                         prev_task.cancel()
-                        # Persist the interrupted message as context so it's not lost
-                        asyncio.create_task(process_message_for_context(runner, session_user_id, session_id, prev_msg))
+                        # Persist the interrupted message as context sequentially so it's not lost
+                        asyncio.create_task(_save_context(runner, session_user_id, session_id, prev_msg))
                         if text.strip().lower() in ["cancel", "stop", "abort", "nevermind"]:
                             await adapter.send_message(chat_id, "Aborted previous request seamlessly.")
                             continue

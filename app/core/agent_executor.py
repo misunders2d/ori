@@ -404,6 +404,8 @@ async def process_message_for_context(runner, user_id: str, session_id: str, mes
         content = message
 
     event = Event(
+        id=str(uuid.uuid4()),
+        author=user_id,
         timestamp=time.time(),
         content=content
     )

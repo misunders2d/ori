@@ -3,6 +3,22 @@
 All notable changes to the Ori framework are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Version bumps follow [Semantic Versioning](https://semver.org/).
 
+## [0.4.5] - 2026-03-31
+
+### Fixed
+- **Pydantic Event Validation** — Fixed a `ValidationError` in `app/core/agent_executor.py` where `Event` objects created in `process_message_for_context` were missing the required `author` and `id` fields. This was causing background context-saving tasks to crash silently.
+- **Skill Loading Robustness** — Reinforced the requirement for YAML frontmatter in `SKILL.md` files, which was causing boot-time crashes when incorrectly formatted.
+
+evolved by Ori
+
+## [0.4.4] - 2026-03-31
+
+### Fixed
+- **Sequential Context Persistence** — Implemented a `weakref.WeakValueDictionary` of session locks in `interfaces/telegram_poller.py`. This ensures that rapid-fire or forwarded messages are processed in strict sequence, preventing a race condition where previous messages were lost from history during task cancellation.
+- **Enhanced Video Handling** — Added support for `video` and `video_note` file types in the Telegram poller, allowing the agent to receive and process video attachments.
+
+evolved by Ori
+
 ## [0.4.3] - 2026-03-30
 
 ### Added
