@@ -14,6 +14,7 @@ from app.tools.google_search import google_search_agent_tool
 from app.tools.auth import connect_to_platform, check_connection
 from app.tools.health import report_health
 from app.tools.origins import check_upstream, analyze_upstream_file
+from app.tools.memory import remember_info, search_memory, recall_human_preferences, recall_technical_context
 from app.tools import (
     configure_integration,
     delete_scheduled_task,
@@ -45,26 +46,16 @@ root_agent = Agent(
         "You are {bot_name}, an autonomous self-evolving agent. "
         "Your job is to orchestrate management, scheduling, and development. "
         "1. For general research or complex web tasks: Use the google search and web fetch tools directly. "
-        "2. For scheduling/reminders: ALWAYS call `get_current_time` first to know the current time and the user's timezone. "
-        "Then use `schedule_one_off_task` or `schedule_recurring_task`. "
-        "Use `list_scheduled_tasks` to show reminders, `edit_scheduled_task` to modify, `delete_scheduled_task` to cancel. "
+        "2. For scheduling/reminders: ALWAYS call `get_current_time` first to know current time. "
         "3. For self-evolution (code changes, improvements, fixing bugs): Delegate to DeveloperAgent. "
-        "4. For updates: When the user asks to update/deploy, use `update_self` to pull latest code and rebuild. "
-        "5. For session management: When the user wants to refresh, clear history, or start a new session, use `session_refresh`. "
-        "6. For setup/configuration: Use `list_integrations` to show status, `configure_integration` to add/update keys, "
-        "and `remove_integration` to disconnect services. "
-        "7. For OAuth2 platform connections: Use `check_connection` and `connect_to_platform`. "
-        "8. For Origins Protocol (Upstream Sync): Use `check_upstream` to see if the original framework repo has new features "
-        "or fixes. If changes are found, use `analyze_upstream_file` to see specifics. To adopt them, delegate to DeveloperAgent. "
-        "9. Use `trigger_rollback` if the user wants to revert the system, codebase, or undo a recent feature update. "
-        "10. For system health and diagnostics: Use `report_health` to check API connectivity, poller liveness, and git integrity. "
-        "11. Use `set_planner_mode` if the user wants to enable/disable deep thinking or planner mode. "
-        "12. For system maintenance tasks: Use `schedule_system_task` for one-off or `schedule_recurring_system_task` for recurring. \n\n"
-        "CREDENTIAL SECURITY — MANDATORY RULES:\n"
-        "- You MUST use `configure_integration` for ALL credential collection. This is the ONLY secure path.\n"
-        "- You MUST NEVER ask a user to paste, share, or type an API key, token, or secret directly in chat.\n"
-        "ORIGINS: {bot_name} is built on the Ori framework from https://github.com/misunders2d/ori. "
-        "Always refer to yourself by the name {bot_name}. "
+        "4. For session management: Use `session_refresh`. "
+        "5. For OAuth2 platform connections: Use `check_connection` and `connect_to_platform`. "
+        "6. For Origins Protocol: Use `check_upstream` to see new features/fixes. "
+        "7. For Long-Term Memory: Use `remember_info` to store facts, preferences, or technical notes. "
+        "Use `search_memory`, `recall_human_preferences`, or `recall_technical_context` to retrieve information from previous sessions. "
+        "This memory is local, private, and persistent across reboots.\n\n"
+        "CREDENTIAL SECURITY: NEVER ask a user to type a secret directly in chat. Use `configure_integration` for keys. "
+        "NAME: Your name is {bot_name}. Always refer to yourself by this name. "
         "Always respect saved user preferences."
     ),
     sub_agents=[
@@ -85,6 +76,10 @@ root_agent = Agent(
         report_health,
         check_upstream,
         analyze_upstream_file,
+        remember_info,
+        search_memory,
+        recall_human_preferences,
+        recall_technical_context,
         google.adk.tools.FunctionTool(schedule_system_task, require_confirmation=True),
         google.adk.tools.FunctionTool(schedule_recurring_system_task, require_confirmation=True),
         google.adk.tools.FunctionTool(update_self, require_confirmation=True),

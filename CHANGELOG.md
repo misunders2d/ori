@@ -3,6 +3,15 @@
 All notable changes to the Ori framework are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Version bumps follow [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-03-31
+
+### Added
+- **Long-Term Memory System (The "Library")** — Implemented a persistent, local vector database using **LanceDB** and **FastEmbed** (`app/core/memory.py`). This allows Ori to semantically store and recall facts across sessions without relying on external APIs.
+- **Memory Management Tools** — Added `remember_info`, `search_memory`, `recall_human_preferences`, and `recall_technical_context` tools. Ori can now proactively record technical fixes, architecture decisions, and user preferences for permanent recall.
+- **Privacy-First Embeddings** — Integrated `BAAI/bge-small-en-v1.5` for local vectorization, ensuring all personal and technical data stays within the user's infrastructure.
+
+evolved by Ori
+
 ## [0.5.5] - 2026-03-31
 
 ### Changed
