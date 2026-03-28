@@ -7,6 +7,7 @@ from google.adk.skills import load_skill_from_dir
 from google.adk.tools import skill_toolset
 
 from app.tools.google_search import google_search_agent_tool
+from app.tools.origins import analyze_upstream_file
 from app.callbacks.guardrails import (
     admin_only_guardrail,
     prompt_injection_guardrail,
@@ -60,10 +61,10 @@ developer_agent = Agent(
         "you MUST read the source code and documentation at that link using `web_fetch` and `google_search_agent_tool` to fully understand the API. "
         "Then integrate it into the agent's codebase following all structural mandates above.\n\n"
         "ORIGINS PROTOCOL: This instance originates from the Ori framework at `https://github.com/misunders2d/ori`. "
-        "When the user asks to check for upstream updates, security fixes, or new features, use `web_fetch` to read the "
-        "upstream repo and compare against the local codebase via `evolution_read_file`. Present differences as proposals — "
-        "never auto-merge. Apply accepted changes through the standard sandbox pipeline. Read the `system-management-skill` "
-        "for the full Origins Protocol rules.\n\n"
+        "When the user asks to check for upstream updates, security fixes, or new features, use the `check_upstream` tool (mounted to Coordinator) "
+        "or `analyze_upstream_file` to see differences between the local evolved codebase and the original repository. "
+        "Present differences as proposals — never auto-merge. Apply accepted changes through the standard sandbox pipeline. "
+        "Read the `system-management-skill` for the full Origins Protocol rules.\n\n"
         "SKILL MAINTENANCE MANDATE: The `skills/` directory contains structured instruction sets that guide your behavior. "
         "These are living documents, not static artifacts. If you discover during your work that any skill documentation has become "
         "outdated, incomplete, or contradicts the current codebase, you MUST update that skill file via `evolution_stage_change` "
@@ -85,6 +86,7 @@ developer_agent = Agent(
         evolution_read_file,
         evolution_stage_change,
         evolution_verify_sandbox,
+        analyze_upstream_file,
         google.adk.tools.FunctionTool(evolution_commit_and_push, require_confirmation=True),
         google_search_agent_tool,
         web_fetch,

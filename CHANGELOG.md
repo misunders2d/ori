@@ -3,6 +3,15 @@
 All notable changes to the Ori framework are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Version bumps follow [Semantic Versioning](https://semver.org/).
 
+## [0.5.2] - 2026-03-31
+
+### Added
+- **Intelligent Upstream Merging (Origins Protocol)** — Implemented automated upstream tracking via `app/core/origins.py`. Ori can now natively fetch the latest improvements from the master repository and identify specific code differences.
+- **Origins Report Tool** — Added a `check_upstream` tool to the `CoordinatorAgent`. This generates a summary report of new commits and files available in the upstream Ori project.
+- **Selective Adoption Support** — Added `analyze_upstream_file` to both Coordinator and Developer agents, allowing users to inspect code diffs before approving a merge.
+
+evolved by Ori
+
 ## [0.5.1] - 2026-03-31
 
 ### Added
