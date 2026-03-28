@@ -250,14 +250,44 @@ async def extract_agent_response(
                         # Primary: from the FunctionResponse on this event
                         # Fallback: from FunctionCalls seen earlier in the stream
                         tool_name = fr_names.get(call_id) or seen_function_calls.get(call_id) or "an action"
+                        agent_name = getattr(event, "author", "The agent")
 
-                        # Include the hint from ToolConfirmation if available
+                        # Extract payload arguments for a summary
+                        payload = getattr(confirmation, "payload", None)
+                        summary_parts = []
+                        if payload and isinstance(payload, dict):
+                            # Filter out internal ADK args
+                            clean_payload = {k: v for k, v in payload.items() if k != "tool_context"}
+                            for k, v in clean_payload.items():
+                                if k in ["commit_message", "mode", "enabled", "task_id", "name", "query", "reason"]:
+                                    summary_parts.append(f"{k}: {v}")
+                        
+                        summary_text = ", ".join(summary_parts) if summary_parts else ""
+
+                        # Use the hint from ToolConfirmation if available
                         hint_text = getattr(confirmation, "hint", "") or ""
+                        # Check if the hint is the generic ADK one
+                        is_generic_hint = "Please approve or reject" in hint_text or not hint_text
 
-                        msg = f"⚠️ **Action Requires Confirmation**\n\nThe agent wants to execute `{tool_name}`."
-                        if hint_text:
-                            msg += f"\n📋 Reason: {hint_text}"
-                        msg += "\nPlease approve or deny by explicitly responding 'yes' or 'no'."
+                        msg = f"⚠️ **Action Requires Confirmation**\n\n**{agent_name}** wants to execute `{tool_name}`."
+                        
+                        # Generate a meaningful reason summary
+                        reason = ""
+                        if not is_generic_hint:
+                            reason = hint_text
+                        elif summary_text:
+                            reason = summary_text
+                        elif tool_name == "update_self":
+                            reason = "Deploy latest code changes and restart the daemon."
+                        elif tool_name == "trigger_rollback":
+                            reason = "Revert to the previous stable git commit."
+                        elif tool_name == "session_refresh":
+                            reason = f"Clear conversation history (Mode: {clean_payload.get('mode', 'fresh') if isinstance(clean_payload, dict) else 'fresh'})."
+                            
+                        if reason:
+                            msg += f"\n📋 **Reason:** {reason}"
+                        
+                        msg += "\n\nPlease approve or deny by explicitly responding **'yes'** or **'no'**."
 
                         parts.append(msg)
 

@@ -3,6 +3,11 @@
 All notable changes to the Ori framework are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Version bumps follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.2] - 2026-03-29
+
+### Changed
+- **Enhanced Tool Confirmation Messages** — Improved the `extract_agent_response` logic in `app/core/agent_executor.py` to provide more context during tool confirmations. The messages now include the calling agent's name and a meaningful reason or argument summary (e.g., commit messages, refresh modes, or deploy descriptions) instead of generic technical hints.
+
 ## [0.3.1] - 2026-03-29
 
 ### Changed
