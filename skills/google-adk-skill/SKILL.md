@@ -36,6 +36,13 @@ The application supports multiple messaging platforms via the `TransportAdapter`
 For the security-critical group chat identity isolation pattern, see:
 `examples/communication_channel.md`
 
+## Headless Integration Patterns
+
+Building integrations for platforms like Google Drive, Facebook, or GitHub requires handling authentication in a server-side, browser-less environment without exposing inbound ports.
+
+**You must read the approved "Dark Server" strategy at**:
+`references/headless-auth-patterns.md`
+
 ## System Critical Tools & Guardrails
 
 The ADK framework natively offloads system-level mutations to standard Tool definitions rather than relying on clunky hardcoded Python intercepts.

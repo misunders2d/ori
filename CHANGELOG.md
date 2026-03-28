@@ -3,6 +3,13 @@
 All notable changes to the Ori framework are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Version bumps follow [Semantic Versioning](https://semver.org/).
 
+## [0.4.6] - 2026-03-31
+
+### Added
+- **Headless Auth Reference Patterns** — Added a comprehensive reference guide for building integrations on browser-less, inbound-blocked servers. This includes the Out-of-Band (OOB) Copy-Paste flow, Device Code flow, and Ephemeral Tunnel patterns, providing a clear roadmap for future external integrations like Google Drive or Meet.
+
+evolved by Ori
+
 ## [0.4.5] - 2026-03-31
 
 ### Fixed
