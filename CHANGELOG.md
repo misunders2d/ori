@@ -3,6 +3,11 @@
 All notable changes to the Ori framework are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Version bumps follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.4] - 2026-03-29
+
+### Fixed
+- **UnboundLocalError in Tool Confirmation** — Fixed a bug in `app/core/agent_executor.py` where `clean_payload` could be accessed before being defined during tool confirmation message generation.
+
 ## [0.3.3] - 2026-03-29
 
 ### Fixed

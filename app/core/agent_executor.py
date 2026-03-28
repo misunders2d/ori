@@ -255,6 +255,7 @@ async def extract_agent_response(
                         # Extract payload arguments for a summary
                         payload = getattr(confirmation, "payload", None)
                         summary_parts = []
+                        clean_payload = None
                         if payload and isinstance(payload, dict):
                             # Filter out internal ADK args
                             clean_payload = {k: v for k, v in payload.items() if k != "tool_context"}
@@ -282,7 +283,8 @@ async def extract_agent_response(
                         elif tool_name == "trigger_rollback":
                             reason = "Revert to the previous stable git commit."
                         elif tool_name == "session_refresh":
-                            reason = f"Clear conversation history (Mode: {clean_payload.get('mode', 'fresh') if isinstance(clean_payload, dict) else 'fresh'})."
+                            mode = clean_payload.get('mode', 'fresh') if isinstance(clean_payload, dict) else 'fresh'
+                            reason = f"Clear conversation history (Mode: {mode})."
                             
                         if reason:
                             msg += f"\n📋 **Reason:** {reason}"
