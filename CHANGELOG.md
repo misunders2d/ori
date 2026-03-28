@@ -3,11 +3,17 @@
 All notable changes to the Ori framework are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Version bumps follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] - 2026-03-29
+
+### Changed
+- **Updated System Management Skill** — Expanded "Sandbox Hygiene Rules" with instructions for handling transient build artifacts (`.venv`, `.pytest_cache`, `__pycache__`) and resolving large commit errors. This ensures future self-evolution cycles handle sandbox clutter correctly.
+
 ## [0.3.0] - 2026-03-29
 
 ### Added
 - **One-Liner Installation (Detached Mode)** — Added `scripts/install.sh` (Linux/macOS) and `scripts/install.ps1` (Windows) for rapid deployment. These scripts clone the repository, sever the git connection to the original repository (DNA detachment), and launch the interactive setup wizard.
 - **Detached Mode Documentation** — Updated `README.md` to feature the quick install method as the primary onboarding path.
+- **Harden Evolution Logic** — Modified `evolution_commit_and_push` in `app/tools/evolution.py` to automatically skip system directories (`.venv`, `.git`, `__pycache__`) and chunk git operations to avoid shell argument limits.
 
 ## [0.2.0] - 2026-03-28
 
