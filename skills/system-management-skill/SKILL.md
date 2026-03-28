@@ -1,8 +1,3 @@
----
-name: system-management-skill
-description: Critical execution rules for the Core Lifecycle Tools that govern the Daemon.
----
-
 # System Management Constraints
 
 The `ori` daemon is a fully integrated, continuously polling worker node. It manages its own persistent execution via four system-critical tools defined in `app/tools/system.py`.
@@ -63,6 +58,10 @@ This daemon is designed to be copied, deployed independently, and evolved as a s
 - The user controls what gets adopted — nothing is applied without approval
 
 **Bot name:** The instance name is stored in `BOT_NAME` in `.env` (defaults to "Ori"). It is loaded into session state as `{bot_name}` and used throughout the agent instructions. Users can rename their bot via `/init <PASSCODE> BOT_NAME=NewName` or by asking the coordinator to update it. The name is cosmetic — it does not affect the internal `app_name` ("ori") used for sessions and databases.
+
+**Signature Mandate:** All git commits and `CHANGELOG.md` entries authored by the agent **MUST** be signed with the phrase "evolved by {bot_name}". 
+- The `evolution_commit_and_push` tool handles the git commit signature automatically.
+- The Developer Agent is responsible for manually appending "evolved by {bot_name}" to the end of each new entry in `CHANGELOG.md`.
 
 **Critical constraints:**
 1. **Never auto-sync from upstream.** All changes require user confirmation through the standard `require_confirmation` commit flow.

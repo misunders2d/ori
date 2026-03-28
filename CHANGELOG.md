@@ -3,6 +3,17 @@
 All notable changes to the Ori framework are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Version bumps follow [Semantic Versioning](https://semver.org/).
 
+## [0.4.3] - 2026-03-30
+
+### Added
+- **Automated Signature Protocol** — Updated the `evolution_commit_and_push` tool to automatically sign every git commit with "evolved by {bot_name}". This ensures the agent's identity is clearly attributed in the repository history.
+- **Bot Name Git Attribution** — Git commits made by the agent now use the `BOT_NAME` from the environment for the `user.name` configuration.
+
+### Changed
+- **System Management Skill Update** — Formally integrated the Signature Mandate into the `system-management-skill`, requiring all `CHANGELOG.md` entries to be signed by the bot.
+
+evolved by Ori
+
 ## [0.4.2] - 2026-03-29
 
 ### Added
@@ -62,7 +73,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Version bumps fo
 
 ### Fixed
 - **Interrupted messages lost from context** — when a user sends a new message mid-response, the original message is now persisted to the session via `process_message_for_context` before cancellation, matching the group-chat background processing pattern.
-- **SameFileError on sandbox commit** — symlinks (`uv.lock`, `pyproject.toml`, backfilled test files) created during `evolution_verify_sandbox` pytest runs are now cleaned up after verification and skipped during `evolution_commit_and_push` walks.
+- **SameFileError on sandbox commit** — symlinks (`uv.lock`, `pyproject.toml`, such as existing test files) created during `evolution_verify_sandbox` pytest runs are now cleaned up after verification and skipped during `evolution_commit_and_push` walks.
 - **Context limit crash unrecoverable** — error message now directs users to `/reset` instead of the borough-based "wait a few minutes".
 - **`/start` gave no setup guidance** — now shows full onboarding instructions when unconfigured.
 - **"Visit /setup page" referenced nonexistent page** — replaced with actual `/init` instructions.

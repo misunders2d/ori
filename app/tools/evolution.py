@@ -269,8 +269,9 @@ def evolution_commit_and_push(
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy2(src, dst)
 
+        bot_name = os.environ.get("BOT_NAME", "Ori")
         subprocess.run(["git", "config", "user.email", "agent@evolution.local"], cwd=tmp_repo_dir, check=True)
-        subprocess.run(["git", "config", "user.name", "Agent Evolution"], cwd=tmp_repo_dir, check=True)
+        subprocess.run(["git", "config", "user.name", f"{bot_name} (Agent)"], cwd=tmp_repo_dir, check=True)
 
         if staged_files:
             rel_paths = [rel for _, rel in staged_files]
@@ -278,7 +279,9 @@ def evolution_commit_and_push(
             for i in range(0, len(rel_paths), chunk_size):
                 subprocess.run(["git", "add"] + rel_paths[i:i+chunk_size], cwd=tmp_repo_dir, check=True)
             
-        subprocess.run(["git", "commit", "-m", commit_message], cwd=tmp_repo_dir, check=True)
+        # Append "evolved by {bot_name}" to the commit message
+        signed_message = f"{commit_message}\n\nevolved by {bot_name}"
+        subprocess.run(["git", "commit", "-m", signed_message], cwd=tmp_repo_dir, check=True)
 
         result = subprocess.run(
             ["git", "push", "origin", "HEAD:master"],
