@@ -55,6 +55,10 @@ def evolution_stage_change(
 
     This does NOT modify the live running code. It prepares the change for verification.
 
+    IMPORTANT: You MUST NOT stage changes that remove, modify, or bypass system guardrails
+    (event callbacks like `before_agent_callback`, `before_model_callback`, etc.)
+    unless explicitly requested by the user.
+
     Args:
         file_path (str): The relative path to the file to modify.
         new_content (str): The full new content of the file.
@@ -207,6 +211,10 @@ def evolution_commit_and_push(
 
     ONLY call this after ALL verification checks pass.
 
+    IMPORTANT: You MUST NOT commit changes that remove, modify, or bypass system guardrails
+    (event callbacks like `before_agent_callback`, `before_model_callback`, etc.)
+    unless explicitly requested by the user.
+
     Args:
         commit_message (str): A descriptive message explaining the improvement.
         delete_files (Optional[List[str]]): List of relative paths to files that should be deleted.
@@ -280,7 +288,7 @@ def evolution_commit_and_push(
                 subprocess.run(["git", "add"] + rel_paths[i:i+chunk_size], cwd=tmp_repo_dir, check=True)
             
         # Append "evolved by {bot_name}" to the commit message
-        signed_message = f"{commit_message}\n\nevolved by {bot_name}"
+        signed_message = f"{commit_message}\n\enevolved by {bot_name}"
         subprocess.run(["git", "commit", "-m", signed_message], cwd=tmp_repo_dir, check=True)
 
         result = subprocess.run(
