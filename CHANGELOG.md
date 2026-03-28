@@ -3,6 +3,15 @@
 All notable changes to the Ori framework are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Version bumps follow [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-03-31
+
+### Added
+- **The Autonomous Auth Engine** — Implemented a core `OAuthService` (`app/core/auth.py`) and a set of `CoordinatorAgent` tools for managing platform integrations.
+- **Headless OAuth2 (Device Code Flow)** — The system now natively supports the OAuth2 Device Code Flow, allowing Ori to connect to services like Google Drive, Meet, and GitHub on browser-less remote servers without opening inbound ports.
+- **Background Handshake Polling** — Introduced background tasks for auth handshake polling, which proactively notify the user via their messaging platform (e.g., Telegram) once a connection is successful.
+
+evolved by Ori
+
 ## [0.4.7] - 2026-03-31
 
 ### Added
