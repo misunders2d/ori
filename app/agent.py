@@ -18,6 +18,6 @@ app = App(
         compaction_interval=10,
         # Keep the last 3 events raw to preserve immediate conversational context.
         overlap_size=3,
-        summarizer=LlmEventSummarizer(llm=Gemini(model="gemini-2.0-flash")),
+        summarizer=LlmEventSummarizer(llm=Gemini(model="gemini-2.5-flash-lite")),
     ),
 )
