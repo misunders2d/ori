@@ -28,7 +28,23 @@ Before hatching your Ori, ensure you have the following installed on your host m
 - **Git**
 - **Python 3** (used by the startup script for bootstrapping)
 
-## 🛠 Hatching Your Ori
+## 🛠 Quick Installation (One-Liner)
+
+The easiest way to birth your Ori is with a single command. These scripts clone the repository, **detach it from the original code**, and start the setup wizard immediately.
+
+**Linux / macOS:**
+```bash
+curl -sSL https://raw.githubusercontent.com/misunders2d/ori/master/scripts/install.sh | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/misunders2d/ori/master/scripts/install.ps1 | iex
+```
+
+---
+
+## 🛠 Manual Installation
 
 Ori utilizes a hardened Docker deployment bound to a standalone internal user to keep it safely contained.
 

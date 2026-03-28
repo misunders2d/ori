@@ -3,6 +3,12 @@
 All notable changes to the Ori framework are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Version bumps follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-03-29
+
+### Added
+- **One-Liner Installation (Detached Mode)** — Added `scripts/install.sh` (Linux/macOS) and `scripts/install.ps1` (Windows) for rapid deployment. These scripts clone the repository, sever the git connection to the original repository (DNA detachment), and launch the interactive setup wizard.
+- **Detached Mode Documentation** — Updated `README.md` to feature the quick install method as the primary onboarding path.
+
 ## [0.2.0] - 2026-03-28
 
 ### Added

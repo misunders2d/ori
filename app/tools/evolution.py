@@ -155,6 +155,8 @@ def evolution_verify_sandbox(
                     if os.path.isfile(src) and not os.path.exists(dst):
                         os.symlink(src, dst)
 
+            # Use --offline if needed or ensure uv doesn't create local .venv in sandbox
+            # But just in case it does, we will skip it in commit_and_push.
             result = subprocess.run(
                 ["uv", "run", "pytest", "tests"],
                 cwd=sandbox_dir,
@@ -229,8 +231,10 @@ def evolution_commit_and_push(commit_message: str, tool_context: ToolContext) ->
     # Collect sandbox files to copy
     staged_files = []
     for root, _dirs, files in os.walk(sandbox_dir):
-        if "__pycache__" in root:
+        # SKIP IGNORED DIRECTORIES
+        if any(ignored in root for ignored in ["__pycache__", ".venv", ".git"]):
             continue
+            
         for fname in files:
             src = os.path.join(root, fname)
             # Skip symlinks — these are bootstrap artifacts (uv.lock,
@@ -267,7 +271,11 @@ def evolution_commit_and_push(commit_message: str, tool_context: ToolContext) ->
         subprocess.run(["git", "config", "user.name", "Agent Evolution"], cwd=tmp_repo_dir, check=True)
 
         rel_paths = [rel for _, rel in staged_files]
-        subprocess.run(["git", "add"] + rel_paths, cwd=tmp_repo_dir, check=True)
+        # Chunk git add to avoid shell argument length limits
+        chunk_size = 50
+        for i in range(0, len(rel_paths), chunk_size):
+            subprocess.run(["git", "add"] + rel_paths[i:i+chunk_size], cwd=tmp_repo_dir, check=True)
+            
         subprocess.run(["git", "commit", "-m", commit_message], cwd=tmp_repo_dir, check=True)
 
         result = subprocess.run(
