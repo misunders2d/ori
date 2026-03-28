@@ -53,29 +53,49 @@ while true; do
         sleep 10
         cd "$SCRIPT_DIR"
 
-        # Pop previous stable commit off local head securely
-        PREVIOUS_COMMIT=$(git log -2 --format="%H" | tail -n 1)
-        
-        echo "  [!] Rolling back single evolution node to $PREVIOUS_COMMIT..."
-        git reset --hard "$PREVIOUS_COMMIT"
-        
-        # Clear out remote tracking temporarily so next update works properly
-        git fetch origin master 2>&1 || true
+        # --- Step 1: Align to remote truth ---
+        echo "  [+] Fetching authoritative remote state..."
+        if ! git fetch origin master 2>&1; then
+            echo "  [-] FATAL: Cannot reach origin. Rollback impossible without remote."
+            send_notification "$TRIGGER_CONTENT" "⚠️ Rollback Failed: Cannot reach git remote. Check network/SSH keys."
+            continue
+        fi
+        git reset --hard origin/master 2>&1 || true
+        git clean -fd 2>&1 || true
 
+        # --- Step 2: Revert HEAD on remote ---
+        CURRENT_HEAD=$(git rev-parse --short HEAD 2>/dev/null)
+        echo "  [!] Reverting commit $CURRENT_HEAD on remote..."
+        
+        if ! git revert HEAD --no-edit 2>&1; then
+            echo "  [-] FATAL: git revert failed (merge commit or conflict)."
+            send_notification "$TRIGGER_CONTENT" "⚠️ Rollback Failed: Could not cleanly revert HEAD ($CURRENT_HEAD). Manual revert required."
+            git revert --abort 2>/dev/null || true
+            continue
+        fi
+
+        if ! git push origin master 2>&1; then
+            echo "  [-] FATAL: Push to remote failed."
+            send_notification "$TRIGGER_CONTENT" "⚠️ Rollback Failed: Revert created locally but push to origin rejected. Check remote permissions."
+            continue
+        fi
+        echo "  [+] Revert pushed to origin/master."
+
+        # --- Step 3: Rebuild and restart ---
         chmod +x "$SCRIPT_DIR/start.sh" "$SCRIPT_DIR/deploy.sh" "$SCRIPT_DIR/rollback.sh"
         
-        echo "  [+] Force compiling previous stable..."
+        echo "  [+] Rebuilding daemon from reverted code..."
         docker compose build 2>&1
         docker compose up -d 2>&1
 
         if wait_for_healthy; then
             echo "$(date): Rollback Sequence completed."
-            send_notification "$TRIGGER_CONTENT" "✅ Rollback Sequence Complete. Daemon stabilized onto previous Git signature."
+            send_notification "$TRIGGER_CONTENT" "✅ Rollback complete. Reverted $CURRENT_HEAD on origin/master. Daemon rebuilt and stable."
             echo "  [+] Cleaning up dangling Docker build caches..."
             docker image prune -f --filter "dangling=true" > /dev/null 2>&1
         else
-            echo "$(date): Rollback structure failed. Re-initiating container cycle..."
-            send_notification "$TRIGGER_CONTENT" "🚨 FATAL: The previous stable code also crashed on boot. You must manually unbrick via SSH!"
+            echo "$(date): Rollback structure failed. Reverted code also crashes."
+            send_notification "$TRIGGER_CONTENT" "🚨 FATAL: Reverted code ($CURRENT_HEAD~1) also crashed on boot. Manual SSH intervention required."
         fi
         
         echo "=========================================="

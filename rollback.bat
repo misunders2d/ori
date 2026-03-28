@@ -33,28 +33,54 @@ timeout /t 10 /nobreak >nul
 
 pushd "%SCRIPT_DIR%"
 
-REM Pop previous stable commit off local head securely
-for /f "skip=1 delims=" %%H in ('git log -2 --format^="%%H"') do set "PREVIOUS_COMMIT=%%H"
+REM --- Step 1: Align to remote truth ---
+echo   [+] Fetching authoritative remote state...
+git fetch origin master >nul 2>nul
+if %errorlevel% neq 0 (
+    echo   [-] FATAL: Cannot reach origin. Rollback impossible without remote.
+    call :send_notification "!TRIGGER_CONTENT!" "⚠️ Rollback Failed: Cannot reach git remote. Check network/SSH keys."
+    popd
+    goto :sleep
+)
+git reset --hard origin/master 2>&1
+git clean -fd 2>&1
 
-echo   [!] Rolling back single evolution node to !PREVIOUS_COMMIT!...
-git reset --hard "!PREVIOUS_COMMIT!"
+REM --- Step 2: Revert HEAD on remote ---
+for /f "delims=" %%H in ('git rev-parse --short HEAD 2^>nul') do set "CURRENT_HEAD=%%H"
+echo   [!] Reverting commit !CURRENT_HEAD! on remote...
 
-REM Clear out remote tracking temporarily so next update works properly
-git fetch origin master >nul 2>&1
+git revert HEAD --no-edit 2>&1
+if %errorlevel% neq 0 (
+    echo   [-] FATAL: git revert failed (merge commit or conflict^).
+    call :send_notification "!TRIGGER_CONTENT!" "⚠️ Rollback Failed: Could not cleanly revert HEAD (!CURRENT_HEAD!). Manual revert required."
+    git revert --abort 2>nul
+    popd
+    goto :sleep
+)
 
-echo   [+] Force compiling previous stable...
+git push origin master 2>&1
+if %errorlevel% neq 0 (
+    echo   [-] FATAL: Push to remote failed.
+    call :send_notification "!TRIGGER_CONTENT!" "⚠️ Rollback Failed: Revert created locally but push to origin rejected. Check remote permissions."
+    popd
+    goto :sleep
+)
+echo   [+] Revert pushed to origin/master.
+
+REM --- Step 3: Rebuild and restart ---
+echo   [+] Rebuilding daemon from reverted code...
 docker compose build 2>&1
 docker compose up -d 2>&1
 
 call :wait_for_healthy
 if %errorlevel% equ 0 (
     echo %date% %time%: Rollback Sequence completed.
-    call :send_notification "!TRIGGER_CONTENT!" "✅ Rollback Sequence Complete. Daemon stabilized onto previous Git signature."
+    call :send_notification "!TRIGGER_CONTENT!" "✅ Rollback complete. Reverted !CURRENT_HEAD! on origin/master. Daemon rebuilt and stable."
     echo   [+] Cleaning up dangling Docker build caches...
     docker image prune -f --filter "dangling=true" >nul 2>nul
 ) else (
-    echo %date% %time%: Rollback structure failed. Re-initiating container cycle...
-    call :send_notification "!TRIGGER_CONTENT!" "🚨 FATAL: Previous stable code also crashed on boot. Manual intervention required!"
+    echo %date% %time%: Rollback structure failed. Reverted code also crashes.
+    call :send_notification "!TRIGGER_CONTENT!" "🚨 FATAL: Reverted code also crashed on boot. Manual intervention required."
 )
 
 echo ==========================================

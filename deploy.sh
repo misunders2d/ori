@@ -48,18 +48,20 @@ rollback() {
     local previous_commit="$1"
     local trigger_content="$2"
 
-    echo "  [!] Rolling back logic directly to stable signature: $previous_commit..."
-    git reset --hard "$previous_commit"
+    echo "  [!] Reverting broken commit on remote to prevent re-deploy loop..."
+    git revert HEAD --no-edit 2>&1 || true
+    git push origin master 2>&1 || echo "  [-] WARNING: Could not push revert to remote."
+    
     chmod +x "$SCRIPT_DIR/start.sh" "$SCRIPT_DIR/deploy.sh" "$SCRIPT_DIR/rollback.sh"
     docker compose build 2>&1
     docker compose up -d 2>&1
 
     if wait_for_healthy; then
         echo "$(date): Rollback successful."
-        send_notification "$trigger_content" "✅ Stability fallback successful. Reverted to previous stable logic cycle."
+        send_notification "$trigger_content" "✅ Auto-rollback successful. Broken commit reverted on origin/master."
     else
         echo "$(date): FATAL CASCADING FAILURE."
-        send_notification "$trigger_content" "🚨 FATAL: Fallback failed to boot. Core loop broken. Manual SSH intervention required immediately."
+        send_notification "$trigger_content" "🚨 FATAL: Reverted code also failed to boot. Manual SSH intervention required immediately."
     fi
 }
 

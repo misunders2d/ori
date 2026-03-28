@@ -118,17 +118,19 @@ exit /b 1
 :rollback
 set "RB_COMMIT=%~1"
 set "RB_TRIGGER=%~2"
-echo   [!] Rolling back logic directly to stable signature: %RB_COMMIT%...
-git reset --hard "%RB_COMMIT%"
+echo   [!] Reverting broken commit on remote to prevent re-deploy loop...
+git revert HEAD --no-edit 2>&1
+git push origin master 2>&1
+if %errorlevel% neq 0 echo   [-] WARNING: Could not push revert to remote.
 docker compose build 2>&1
 docker compose up -d 2>&1
 call :wait_for_healthy
 if %errorlevel% equ 0 (
     echo %date% %time%: Rollback successful.
-    call :send_notification "%RB_TRIGGER%" "✅ Stability fallback successful. Reverted to previous stable logic cycle."
+    call :send_notification "%RB_TRIGGER%" "✅ Auto-rollback successful. Broken commit reverted on origin/master."
 ) else (
     echo %date% %time%: FATAL CASCADING FAILURE.
-    call :send_notification "%RB_TRIGGER%" "🚨 FATAL: Fallback failed to boot. Core loop broken. Manual intervention required."
+    call :send_notification "%RB_TRIGGER%" "🚨 FATAL: Reverted code also failed to boot. Manual intervention required."
 )
 exit /b 0
 
