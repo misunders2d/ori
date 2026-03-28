@@ -21,6 +21,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Version bumps fo
 - **`/start` gave no setup guidance** — now shows full onboarding instructions when unconfigured.
 - **"Visit /setup page" referenced nonexistent page** — replaced with actual `/init` instructions.
 - **Deploy watcher stuck on git edge cases** — the update loop's git topology analysis could permanently stall on diverged histories, uncommitted local changes, or corrupted HEAD, requiring a manual container restart. Replaced with unconditional `fetch` + `reset --hard origin/master` + `clean -fd`, enforcing the remote as the sole source of truth.
+- **Rollback undone by next deploy cycle** — rollback scripts did a local-only `git reset` which the deploy watcher would immediately overwrite on the next trigger. Rollback now creates a `git revert` commit and pushes it to `origin/master`, keeping the remote as the authoritative source. Same fix applied to the internal deploy rollback function.
 
 ## [0.1.0] - Initial Release
 
