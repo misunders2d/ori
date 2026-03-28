@@ -227,7 +227,7 @@ async def poll_telegram(get_runner_fn, process_init_fn):
         adapter = TelegramAdapter(client, token)
         register_adapter(adapter)
 
-        _active_tasks = {}
+        _active_tasks = {}      # session_id -> (asyncio.Task, message_content)
         _media_group_buffers = {}
         _media_group_timers = {}
 
@@ -260,7 +260,7 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                     await typing_task
                 except asyncio.CancelledError:
                     pass
-                if _session_id in _active_tasks and _active_tasks[_session_id] == asyncio.current_task():
+                if _session_id in _active_tasks and _active_tasks[_session_id][0] == asyncio.current_task():
                     del _active_tasks[_session_id]
 
         async def flush_media_group(mg_id, _runner, _session_user_id, _session_id, _user_id, _chat_id):
@@ -273,14 +273,16 @@ async def poll_telegram(get_runner_fn, process_init_fn):
             
             combined_content = types.Content(role="user", parts=combined_parts)
             
-            if _session_id in _active_tasks and not _active_tasks[_session_id].done():
-                _active_tasks[_session_id].cancel()
+            if _session_id in _active_tasks and not _active_tasks[_session_id][0].done():
+                prev_task, prev_msg = _active_tasks[_session_id]
+                prev_task.cancel()
+                asyncio.create_task(process_message_for_context(_runner, _session_user_id, _session_id, prev_msg))
                 await adapter.send_message(_chat_id, "Aborting previous task to prioritize new grouped media...")
-                
+
             task = asyncio.create_task(
                 _process_and_send(_runner, _session_user_id, _session_id, combined_content, _user_id, _chat_id)
             )
-            _active_tasks[_session_id] = task
+            _active_tasks[_session_id] = (task, combined_content)
 
         while True:
             try:
@@ -469,8 +471,11 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                         continue
 
                     # Mid-flight Cancellation Logic
-                    if session_id in _active_tasks and not _active_tasks[session_id].done():
-                        _active_tasks[session_id].cancel()
+                    if session_id in _active_tasks and not _active_tasks[session_id][0].done():
+                        prev_task, prev_msg = _active_tasks[session_id]
+                        prev_task.cancel()
+                        # Persist the interrupted message as context so it's not lost
+                        asyncio.create_task(process_message_for_context(runner, session_user_id, session_id, prev_msg))
                         if text.strip().lower() in ["cancel", "stop", "abort", "nevermind"]:
                             await adapter.send_message(chat_id, "Aborted previous request seamlessly.")
                             continue
@@ -481,7 +486,7 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                     task = asyncio.create_task(
                         _process_and_send(runner, session_user_id, session_id, message_content, user_id, chat_id)
                     )
-                    _active_tasks[session_id] = task
+                    _active_tasks[session_id] = (task, message_content)
 
             except httpx.ReadTimeout:
                 continue

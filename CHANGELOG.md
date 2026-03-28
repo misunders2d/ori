@@ -15,6 +15,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Version bumps fo
 - **Changelog and versioning mandate** — developer agent is now required to bump version and append to this changelog for all meaningful updates.
 
 ### Fixed
+- **Interrupted messages lost from context** — when a user sends a new message mid-response, the original message is now persisted to the session via `process_message_for_context` before cancellation, matching the group-chat background processing pattern.
 - **SameFileError on sandbox commit** — symlinks (`uv.lock`, `pyproject.toml`, backfilled test files) created during `evolution_verify_sandbox` pytest runs are now cleaned up after verification and skipped during `evolution_commit_and_push` walks.
 - **Context limit crash unrecoverable** — error message now directs users to `/reset` instead of the vague "wait a few minutes".
 - **`/start` gave no setup guidance** — now shows full onboarding instructions when unconfigured.
