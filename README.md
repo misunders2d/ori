@@ -2,11 +2,11 @@
 
 **Ori** is not just a background process—it is a headless, messenger-agnostic autonomous worker built to grow, learn, and evolve. Think of it as a "digital pet" for developers. It lives in your infrastructure, handles your chores, and most importantly, **it writes its own DNA.**
 
-## 🎮 The "Grow Your Own Pet" Experience
+## 🎮 The Evolution Experience
 
 Ori is designed to be raised. Out of the box, it is a capable assistant, but its true form is determined by how you interact with it and the "skills" you allow it to develop.
 
-*   **Vibe Coding as Evolution:** Instead of manual refactoring, you "vibe" with Ori. Describe a capability or a fix in natural language, and Ori's `DeveloperAgent` will stage, test, and commit the code to its own repository.
+*   **Evolutionary Engineering:** Instead of manual refactoring, you engage in natural language evolution with Ori. Propose a new capability, a logic refinement, or a fix, and Ori's `DeveloperAgent` will research, stage, test, and commit the code to its own repository autonomously.
 *   **Plug-and-Play Integration:** Want to add a new tool or feature? Just share a GitHub link to the library or project you want integrated. Ori will read the source, study the API, and do its best to wire it into its own codebase seamlessly.
 *   **Self-Genetic Engineering:** Through the `app/sub_agents/developer_agent.py`, Ori researches API documentation and deploys code changes to itself using strict System Management limits.
 *   **Living Knowledge:** Ori maintains its own `skills/` directory — structured instruction sets that guide its behavior. When it discovers that existing skill documentation has become outdated or incomplete, it can rewrite and update its own skills to stay current.
@@ -20,6 +20,7 @@ Ori is designed to be raised. Out of the box, it is a capable assistant, but its
     *   **Output Interception:** Ori inspects data from the web *before* it hits its own context, ensuring it doesn't "catch a virus" from malicious external payloads.
 *   **Metabolism (Scheduling):** Using `APScheduler`, Ori manages its own workloads and background tasks, with a rolling 12-hour `.backup()` routine to ensure its state is never lost.
 *   **Nervous System (Rich Media):** Ori can receive and send images, audio, video, and documents through any connected messenger — not just text.
+*   **Vitals (Self-Diagnostics):** Ori proactively monitors its own health (API connectivity, poller liveness, disk usage) and alerts you if any systems are degraded.
 
 ## 📋 Prerequisites
 
@@ -88,10 +89,22 @@ start.bat
 ```
 Use `start.bat --no-sync` for offline mode. Requires Docker Desktop, Git for Windows, and Python on PATH.
 
-### 3. First Contact
-Once the bot is running, send `/init <your_admin_passcode>` in Telegram to claim admin privileges. From there, you can start talking to Ori and teaching it new tricks.
+### 3. First Contact (Interactive CLI Chat)
+If you haven't configured a messenger (like Telegram) yet, Ori detects this and automatically launches an **interactive CLI chat session** in your terminal. 
 
-### 4. Watching it Grow
+Just start typing! Ori will:
+- Ask for your preferred language.
+- Outline its core principles.
+- Guide you through the final setup steps to get onto your preferred messenger.
+
+### 4. Claiming Admin (Messenger)
+Once Telegram is configured, open your bot and send:
+```text
+/init <your_admin_passcode>
+```
+This claims your admin identity and unlocks the full suite of self-evolution and system management tools.
+
+### 5. Watching it Grow
 When the `DeveloperAgent` triggers an evolution, a `.update_trigger` is injected into `/data/`. The deploy watcher script (`deploy.sh` on Linux/macOS, `deploy.bat` on Windows)—acting as the "Host Supervisor"—intercepts this, safely shuts down the SQLite buffers, rebuilds the image, and notifies you via messenger that Ori has successfully evolved.
 
 ## 📄 License

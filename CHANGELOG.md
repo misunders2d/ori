@@ -3,6 +3,13 @@
 All notable changes to the Ori framework are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Version bumps follow [Semantic Versioning](https://semver.org/).
 
+## [0.5.5] - 2026-03-31
+
+### Changed
+- **Documentation Refinement** — Updated `README.md` to prioritize "Evolutionary Engineering" over "Vibe Coding." Added comprehensive instructions for the Zero-Configuration CLI Onboarding Chat (v0.4.7), ensuring a smoother first-contact experience for new users.
+
+evolved by Ori
+
 ## [0.5.4] - 2026-03-31
 
 ### Changed
