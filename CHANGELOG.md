@@ -20,6 +20,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Version bumps fo
 - **Context limit crash unrecoverable** — error message now directs users to `/reset` instead of the vague "wait a few minutes".
 - **`/start` gave no setup guidance** — now shows full onboarding instructions when unconfigured.
 - **"Visit /setup page" referenced nonexistent page** — replaced with actual `/init` instructions.
+- **Deploy watcher stuck on git edge cases** — the update loop's git topology analysis could permanently stall on diverged histories, uncommitted local changes, or corrupted HEAD, requiring a manual container restart. Replaced with unconditional `fetch` + `reset --hard origin/master` + `clean -fd`, enforcing the remote as the sole source of truth.
 
 ## [0.1.0] - Initial Release
 
