@@ -1,6 +1,6 @@
 [project]
 name = "ori"
-version = "0.6.0"
+version = "0.7.0"
 description = ""
 authors = [
     {name = "Your Name", email = "your@email.com"},
@@ -100,13 +100,13 @@ packages = ["app","frontend"]
 # Generation metadata - enables CLI commands to understand project context
 # These fields allow any generated project to work as a remote template
 name = "ori"
-version = "0.1.0"
+version = "0.7.0"
 description = ""
 base_template = "local_ori"
 agent_directory = "app"
 
 # Generation context
-generated_at = "2026-03-24T13:46:28.241758+00:00"
+generated_at = "2024-03-29T13:46:28.241758+00:00"
 asp_version = "0.39.6"
 
 [tool.agent-starter-pack.create_params]

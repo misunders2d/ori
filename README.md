@@ -22,6 +22,24 @@ Ori is designed to be raised. Out of the box, it is a capable assistant, but its
 *   **Nervous System (Rich Media):** Ori can receive and send images, audio, video, and documents through any connected messenger — not just text.
 *   **Vitals (Self-Diagnostics):** Ori proactively monitors its own health (API connectivity, poller liveness, disk usage) and alerts you if any systems are degraded.
 
+## 🌐 The Ori-Net Bridge [UNLOCKED]
+
+Your Ori is no longer an island. With the launch of the **Agent-to-Agent (A2A) Protocol**, Ori can now communicate and collaborate with other autonomous beings across the internet.
+
+*   **Neural Link:** Connect your Ori to others to share research, exchange technical DNA (gene capsules), and coordinate on complex multi-agent tasks.
+*   **Discovery:** Each Ori hosts its own "Digital Business Card" at `/.well-known/agent.json`, allowing for seamless handshake and capability discovery.
+*   **Decentralized Evolution:** Oris can now learn from each other, pulling optimized tools and skills from "friends" within the secure Ori-Net.
+
+## ⚡ Feature Showcase (Ability Tree)
+
+Ori comes packed with advanced cognitive features designed for high-performance autonomy:
+
+*   **[SYSTEM PERK] Tactical Silence:** Interrupt Ori mid-thought. If the logic is going off-track, stop it instantly to save tokens and time.
+*   **[SYSTEM PERK] Neural Overclocking:** Ori can process new commands and thoughts concurrently while a previous long-running task is still executing in the background.
+*   **[SYSTEM PERK] Autonomous Self-Refinement:** Ori's `DeveloperAgent` continuously researches and tests code improvements in a protected sandbox before committing them to its own DNA.
+*   **[SYSTEM PERK] The Chronos Scheduler:** Automate your life with `APScheduler`. Set recurring tasks, reminders, and background jobs that Ori manages tirelessly.
+*   **[SYSTEM PERK] Neural Lattice Memory:** Powered by **LanceDB** and **SQLite**, Ori possesses long-term recall of human preferences, technical context, and past decisions that survives any reboot.
+
 ## 📋 Prerequisites
 
 Before hatching your Ori, ensure you have the following installed on your host machine:
