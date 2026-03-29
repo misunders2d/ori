@@ -21,30 +21,31 @@ def get_agent_identity(tool_context: ToolContext) -> Dict[str, Any]:
         bot_name = os.environ.get("BOT_NAME", "Ori")
         app_name = os.environ.get("APP_NAME", "ori")
         
-        # Standard A2A Agent Card structure
+        # Consistent A2A Agent Card structure (v0.7.0 schema)
         identity = {
             "name": bot_name,
             "description": "An autonomous self-evolving digital organism.",
-            "version": "0.6.0",
-            "capabilities": [
-                "self-evolution",
-                "scheduling",
-                "web-research",
-                "a2a-knowledge-exchange"
-            ],
+            "version": "0.7.0",
+            "capabilities": {
+                "self-evolution": True,
+                "scheduling": True,
+                "web-research": True,
+                "a2a-knowledge-exchange": True
+            },
+            "defaultInputModes": ["text"],
+            "defaultOutputModes": ["text"],
+            "skills": [],
+            "url": "http://localhost:8000",
             "endpoints": {
-                # Primary A2A execution root
                 "a2a": "/",
-                # Discovery endpoints
-                "discovery": [
-                    "/.well-known/agent.json",
-                    "/.well-known/agent-card.json"
-                ]
+                "discovery": ["/.well-known/agent.json", "/.well-known/agent-card.json"]
             }
         }
         
         # Save to root as agent.json for the native A2A server to pick up
-        with open("agent.json", "w") as f:
+        agent_card_path = os.path.abspath("data/agent.json")
+        os.makedirs(os.path.dirname(agent_card_path), exist_ok=True)
+        with open(agent_card_path, "w") as f:
             json.dump(identity, f, indent=4)
             
         return {
@@ -189,7 +190,7 @@ def export_dna(tool_context: ToolContext) -> Dict[str, Any]:
     """
     try:
         dna_package = {
-            "version": "0.6.0",
+            "version": "0.7.0",
             "tools": {},
             "skills": {}
         }

@@ -167,8 +167,12 @@ async def extract_agent_response(
                 parts.append(p.text)
         message_str = " ".join(parts)
 
-    match = re.search(r'(?i)(?:[:]\s*)?(yes|y|no|n)\s*$', message_str.strip())
-    text_lower = match.group(1).lower() if match else message_str.strip().lower()
+    # REFINED REGEX: Matches only if 'yes' or 'no' is the standalone word 
+    # (optionally preceded by a colon for UI consistency).
+    # Prevents matching 'n' in 'interaction'.
+    clean_msg = message_str.strip().lower()
+    match = re.fullmatch(r'(?i)(?:[:]\s*)?(yes|y|no|n)', clean_msg)
+    text_lower = match.group(1).lower() if match else ""
 
     was_confirmation = False
     is_confirmed = False
