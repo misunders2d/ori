@@ -9,6 +9,7 @@ from app.callbacks.guardrails import (
     prompt_injection_guardrail,
     state_setter,
     tool_output_injection_guardrail,
+    a2a_privacy_guardrail,
 )
 from app.tools.google_search import google_search_agent_tool
 from app.tools.auth import connect_to_platform, check_connection
@@ -103,8 +104,8 @@ root_agent = Agent(
     ],
     before_agent_callback=[state_setter],
     before_model_callback=prompt_injection_guardrail,
-    before_tool_callback=admin_tool_guardrail,
-    after_tool_callback=tool_output_injection_guardrail,
+    before_tool_callback=[admin_tool_guardrail, a2a_privacy_guardrail],
+    after_tool_callback=[tool_output_injection_guardrail, a2a_privacy_guardrail],
     planner=BuiltInPlanner(
         thinking_config=types.ThinkingConfig(
             include_thoughts=True, thinking_budget=-1

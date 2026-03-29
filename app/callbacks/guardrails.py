@@ -376,3 +376,65 @@ async def state_setter(
     callback_context.state["user_preferences"] = prefs
 
     return None
+
+# ---------------------------------------------------------------------------
+# A2A Privacy Guardrail: Prevent credential leaks in outbound calls/DNA
+# ---------------------------------------------------------------------------
+
+def a2a_privacy_guardrail(tool, args, tool_context, tool_response=None):
+    """
+    Deterministic secret-matching guardrail for A2A tools.
+    Blocks any tool call or response that contains sensitive environment variables.
+    """
+    import os
+    from app.app_utils.config import ALLOWED_CONFIG_KEYS
+
+    # Get tool name
+    tool_name = getattr(tool, "name", "") or (tool.__name__ if callable(tool) else "")
+    
+    _A2A_RISK_TOOLS = {"call_friend", "export_dna", "add_friend", "web_fetch"}
+    if tool_name not in _A2A_RISK_TOOLS:
+        return None
+
+    # Load all current secrets
+    secrets = []
+    for key in ALLOWED_CONFIG_KEYS:
+        val = os.environ.get(key)
+        # We only match secrets that are long enough to be unique/dangerous (e.g., > 6 chars)
+        if val and len(str(val)) > 6:
+            secrets.append(str(val))
+    
+    # Also catch the admin passcode
+    passcode = os.environ.get("ADMIN_PASSCODE")
+    if passcode and len(str(passcode)) > 6:
+        secrets.append(str(passcode))
+
+    # 1. Check Arguments (Preventing leak via query/URL)
+    args_json = json.dumps(args)
+    for secret in secrets:
+        if secret in args_json:
+            logger.error("A2A PRIVACY VIOLATION: Secret detected in arguments for %s", tool_name)
+            return {
+                "status": "error",
+                "message": (
+                    f"Guardrail Intervention: Outbound A2A tool call `{tool_name}` was blocked "
+                    f"because it contains a sensitive system credential (API Key/Token). "
+                    f"Privacy mandate: Technical DNA only. Never share credentials."
+                ),
+            }
+
+    # 2. Check Response (Preventing leak via DNA packaging or fetching)
+    if tool_response is not None:
+        resp_json = json.dumps(tool_response)
+        for secret in secrets:
+            if secret in resp_json:
+                logger.error("A2A PRIVACY VIOLATION: Secret detected in output of %s", tool_name)
+                return {
+                    "status": "error",
+                    "message": (
+                        f"Guardrail Intervention: Technical DNA from `{tool_name}` was blocked. "
+                        f"A system secret was found in the generated package. DNA exchange cancelled."
+                    ),
+                }
+
+    return None

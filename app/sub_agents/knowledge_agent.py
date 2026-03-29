@@ -1,6 +1,7 @@
 from google.adk.agents import Agent
 from google.adk.models import Gemini
 from app.tools.a2a import get_agent_identity, add_friend, list_friends, call_friend, export_dna, import_dna
+from app.callbacks.guardrails import a2a_privacy_guardrail, prompt_injection_guardrail
 
 knowledge_agent = Agent(
     name="KnowledgeAgent",
@@ -23,4 +24,7 @@ knowledge_agent = Agent(
         "MANDATE: Never share user-specific data or long-term human memory. Technical DNA only."
     ),
     tools=[get_agent_identity, add_friend, list_friends, call_friend, export_dna, import_dna],
+    before_tool_callback=a2a_privacy_guardrail,
+    after_tool_callback=a2a_privacy_guardrail,
+    before_model_callback=prompt_injection_guardrail,
 )
