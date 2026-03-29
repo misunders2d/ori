@@ -156,12 +156,15 @@ committer_agent = Agent(
     model=model_config,
     description="Finalizes the development process by committing and pushing verified changes.",
     instruction=(
-        "You are the deployment coordinator. You only run after a successful code review.\n"
-        "Your ONLY task is to call `evolution_commit_and_push` with a descriptive message.\n"
-        "Do NOT modify any code. Just commit what is in the sandbox."
+        "You are the deployment coordinator. You only run after a successful code review.\n\n"
+        "### Workflow:\n"
+        "1. **Commit & Push**: Call `evolution_commit_and_push` with a descriptive message.\n"
+        "2. **Memory Logging**: Use the `remember_info` tool to summarize and store the technical details of the fix/improvement in the 'technical' category. Include the problem solved and the files modified.\n\n"
+        "Do NOT modify any code. Just commit what is in the sandbox and record the technical history."
     ),
     tools=[
         google.adk.tools.FunctionTool(evolution_commit_and_push, require_confirmation=True),
+        remember_info,
     ],
     before_agent_callback=admin_only_guardrail,
     before_model_callback=prompt_injection_guardrail,

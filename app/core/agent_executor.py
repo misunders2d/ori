@@ -27,6 +27,20 @@ class AgentResponse:
 
 logger = logging.getLogger(__name__)
 
+# Tools that are considered "internal" or "silent" and should not be reported
+# in the automated success fallback message if no text response is generated.
+_SILENT_TOOLS = {
+    "get_current_time",
+    "evolution_read_file",
+    "evolution_read_sandbox_file",
+    "evolution_verify_sandbox",
+    "analyze_upstream_file",
+    "check_upstream",
+    "search_memory",
+    "recall_technical_context",
+    "recall_human_preferences",
+}
+
 
 async def _summarize_session(session) -> str:
     """Use Gemini to summarize session events into a compact context string."""
@@ -364,9 +378,11 @@ async def extract_agent_response(
 
     # Final response construction with improved fallback UX
     if not parts:
-        if seen_function_calls:
-            # Tool calls occurred but produced no text. Provide a summary.
-            tool_names = ", ".join([f"`{name}`" for name in set(seen_function_calls.values())])
+        # Filter out internal/silent tools from the summary
+        visible_tools = [name for name in seen_function_calls.values() if name not in _SILENT_TOOLS]
+        
+        if visible_tools:
+            tool_names = ", ".join([f"`{name}`" for name in set(visible_tools)])
             final_text = f"Action(s) executed successfully: {tool_names}. Is there anything else you'd like to do?"
         else:
             final_text = "I processed your request, but I don't have a specific text response. How can I help you further?"
