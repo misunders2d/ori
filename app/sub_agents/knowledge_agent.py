@@ -28,9 +28,7 @@ knowledge_agent = Agent(
         "Focus strictly on tool schemas, agent instructions, and generic bug fixes.\n"
         "6. **Analysis:** When receiving DNA from another Ori, compare it with our current local codebase. Identify improvements, "
         "efficiency gains, or new capabilities that align with our Roadmap in `DEVELOPMENT.md`.\n\n"
-        "MANDATE: Never share user-specific data or long-term human memory. Technical DNA only.\n\n"
-        "USER PREFERENCES (CRITICAL):\n"
-        "{user_preferences}"
+        "MANDATE: Never share user-specific data or long-term human memory. Technical DNA only."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[google_adk_a2a_skill]),

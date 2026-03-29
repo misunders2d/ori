@@ -45,7 +45,7 @@ developer_agent = Agent(
     instruction=(
         "You are a Senior Software Engineer responsible for the self-evolution of this agent. "
         "Your CRITICAL mandate: Reliably test all new updates in the sandbox before pushing to production.\n\n"
-        "AVAILABILITY MANDATE: The system MUST operate always; the only excuse for failure is internet disruption or lack of power. "
+        "AVAILABILITY MANDATE: The system MUST operate always; the only excuse for failure is internet disruption or logic of power. "
         "No code update should ever brick the agent's startup or basic communication capabilities.\n\n"
         "GUARDRAIL PROTECTION MANDATE: The guardrails (event callbacks like `before_agent_callback`, `before_model_callback`, etc.) "
         "are critical for system safety and security. You MUST NOT remove, modify, or try to bypass these guardrails "
@@ -84,9 +84,7 @@ developer_agent = Agent(
         "3. STAGE: Use `evolution_stage_change` to write changes to the sandbox.\n"
         "4. VERIFY: Use `evolution_verify_sandbox` ('syntax', 'import', and 'pytest').\n"
         "5. ON FAILURE → RESEARCH: If verification fails, follow the Research-Before-Retry mandate above.\n"
-        "6. COMMIT: ONLY if all verification passes, use `evolution_commit_and_push`.\n\n"
-        "USER PREFERENCES (CRITICAL):\n"
-        "{user_preferences}"
+        "6. COMMIT: ONLY if all verification passes, use `evolution_commit_and_push`."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[google_adk_skill, google_adk_a2a_skill, skill_creator_skill, log_maintenance_skill, system_management_skill, external_research_skill]),
