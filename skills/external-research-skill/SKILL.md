@@ -1,16 +1,34 @@
 ---
 name: external-research-skill
-description: "Forces the agent to actively research official documentation and GitHub repositories before implementing requested integrations or frameworks."
+description: "Forces the agent to actively research official documentation, GitHub issues, and installed package versions before implementing new features OR debugging failures."
 ---
 
 # External Research Mandate
 
-When the user asks you to implement a completely new feature, framework, database connection (e.g. Pinecone), API library (e.g. Keepa), or even a new ADK feature that you aren't 100% confident in, you **MUST NOT GUESS OR HALLUCINATE** the implementation.
+Your pre-training knowledge has a cutoff date. Libraries change their APIs, deprecate features, and introduce breaking changes constantly. **You MUST NOT guess or hallucinate** implementations, fixes, or workarounds.
 
-Instead:
-1. **Identify the Target**: Understand what framework or library the user wants you to integrate.
-2. **Search the Web**: Actively use the `google_search_agent_tool` to locate the official documentation, GitHub repositories, or official migration guides for that specific technology.
-3. **Fetch Context**: Use the `web_fetch` tool to scrape and read the "Getting Started" pages, "Best Practices" guides, or README files from the target's repository.
-4. **Implement**: Only after you have actively read the official context should you begin scaffolding the code utilizing `evolution_stage_change`.
+## When to Research
 
-Because APIs and libraries evolve constantly, assume your pre-training knowledge might be out of date. Always verify the current state of the art via live web research first!
+This mandate applies in TWO situations:
+
+### 1. New Features / Integrations
+When asked to implement a new framework, database connection, API library, or ADK feature you aren't 100% confident in:
+
+1. **Identify the Target**: Understand what framework or library is needed.
+2. **Check the Version**: Use `check_installed_package` to see what's actually installed locally.
+3. **Search the Web**: Use `google_search_agent_tool` to locate the official documentation or GitHub repo.
+4. **Fetch Context**: Use `web_fetch` to read the "Getting Started" pages, API reference, or README.
+5. **Implement**: Only after reading official, current context should you begin coding.
+
+### 2. Bug Fixes / Failed Verifications
+When a verification check fails and you don't immediately recognize the root cause:
+
+1. **Check the Version**: Use `check_installed_package` to confirm the library version — the API may differ from what you expect.
+2. **Search GitHub Issues**: Use `search_github_issues` with the error message or symptom against the library's repo. Someone may have already reported or solved this.
+3. **Search the Web**: Use `google_search_agent_tool` to find Stack Overflow answers, migration guides, or changelogs.
+4. **Read the Source**: Use `web_fetch` on the most relevant GitHub issue or docs page.
+5. **Fix with Evidence**: Apply the fix based on what you found, not on assumptions.
+
+## The One-Retry Rule
+
+You get ONE attempt based on your own knowledge. If that fails verification, you **MUST** research externally before your second attempt. Do not loop on the same approach hoping it will work. Every retry after the first must be backed by external evidence.

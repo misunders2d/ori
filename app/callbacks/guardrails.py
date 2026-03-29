@@ -284,6 +284,68 @@ def tool_output_injection_guardrail(tool, args, tool_context, tool_response):
     return None
 
 
+# ---------------------------------------------------------------------------
+# After-tool guardrail: cap verification retry attempts for DeveloperAgent
+# ---------------------------------------------------------------------------
+
+_MAX_VERIFY_FAILURES = 3
+
+
+def verify_retry_guardrail(tool, args, tool_context, tool_response):
+    """After-tool callback: counts evolution_verify_sandbox failures in session state.
+
+    After _MAX_VERIFY_FAILURES consecutive failures, blocks further verify attempts
+    and instructs the agent to stop and report the issue instead of looping.
+    A successful verification resets the counter.
+    """
+    tool_name = getattr(tool, "name", "") or (tool.__name__ if callable(tool) else "")
+    if tool_name != "evolution_verify_sandbox":
+        return None
+
+    # Determine if the verification passed or failed
+    is_failure = False
+    if isinstance(tool_response, dict):
+        is_failure = tool_response.get("status") == "error"
+
+    state = tool_context.state
+    counter_key = "verify_failure_count"
+
+    if not is_failure:
+        # Success — reset counter
+        state[counter_key] = 0
+        return None
+
+    # Increment failure counter
+    current_count = state.get(counter_key, 0) + 1
+    state[counter_key] = current_count
+
+    if current_count >= _MAX_VERIFY_FAILURES:
+        logger.warning(
+            "DeveloperAgent hit verify retry limit (%d/%d). Halting further attempts.",
+            current_count, _MAX_VERIFY_FAILURES,
+        )
+        return {
+            "status": "error",
+            "message": (
+                f"RETRY LIMIT REACHED: Verification has failed {current_count} consecutive times. "
+                f"You MUST stop attempting fixes. Report the issue back to the user with: "
+                f"(1) what you were trying to do, (2) the error output, and "
+                f"(3) what you found during your research. Do NOT call evolution_verify_sandbox again."
+            ),
+        }
+
+    remaining = _MAX_VERIFY_FAILURES - current_count
+    # Inject a nudge into the response to push toward research
+    if isinstance(tool_response, dict):
+        tool_response["retry_warning"] = (
+            f"Verification failed ({current_count}/{_MAX_VERIFY_FAILURES} attempts used, {remaining} remaining). "
+            f"You MUST research the error externally before retrying — use search_github_issues, "
+            f"check_installed_package, or google_search_agent_tool."
+        )
+
+    return None
+
+
 async def state_setter(
     callback_context: CallbackContext, **kwargs
 ) -> types.Content | None:
