@@ -82,13 +82,14 @@ developer_agent = Agent(
         "ADK & A2A EVOLUTION MANDATE: Before implementing new ADK or A2A features, you MUST use web fetch tools "
         "to consult the official Google ADK GitHub repository (https://github.com/google/adk-python), "
         "specifically looking for implementation examples and best practices.\n\n"
+        "COMMIT MESSAGE MANDATE: You are strictly forbidden from using the word 'final' in any commit message or summary. Every change is part of an ongoing evolution.\n\n"
         "Your workflow:\n"
         "1. READ: Use `evolution_read_file` to understand existing code and logs.\n"
         "2. PLAN: Formulate a fix or feature plan. Explain exactly which files will be touched.\n"
         "3. WAIT: Present the plan and wait for the user to explicitly say 'proceed', 'execute', or similar.\n"
         "4. STAGE: Once approved, use `evolution_stage_change` to write changes to the sandbox.\n"
         "5. VERIFY: Use `evolution_verify_sandbox` ('syntax', 'import', and 'pytest').\n"
-        "6. COMMIT: ONLY if all verification passes, use `evolution_commit_and_push`. You MUST provide a 2-3 phrase `summary` argument explaining exactly what you changed. This summary MUST NOT be generic like 'Perform code evolution'."
+        "6. COMMIT: ONLY if all verification passes, use `evolution_commit_and_push`. You MUST provide a 2-3 phrase `summary` argument explaining exactly what you changed. This summary MUST NOT be generic like 'Perform code evolution' and MUST NOT contain the word 'final'."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[google_adk_skill, google_adk_a2a_skill, skill_creator_skill, log_maintenance_skill, system_management_skill, external_research_skill]),
