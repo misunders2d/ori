@@ -113,3 +113,8 @@ MIT — use it, fork it, evolve it, share it. See [LICENSE](LICENSE) for details
 
 ---
 _"Don't just code your tools. Raise them."_
+
+---
+
+### 😄 Just for fun
+Why did the programmer quit his job? Because he didn't get arrays.
