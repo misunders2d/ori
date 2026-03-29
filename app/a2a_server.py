@@ -15,9 +15,11 @@ def create_a2a_app():
     """
     app_name = os.environ.get("APP_NAME", "ori")
     
-    # 1. Initialize the base A2A app for the root agent
-    # This automatically creates the JSON-RPC endpoints (e.g., /ori/a2a)
-    a2a_app = to_a2a(root_agent, base_path=f"/{app_name}")
+    # 1. Initialize the base A2A app for the root agent.
+    # The 'base_path' parameter was removed as it is not supported by the current 
+    # google-adk version. Prefixing is handled via uvicorn --root-path or 
+    # reverse proxy configuration.
+    a2a_app = to_a2a(root_agent)
 
     # 2. Expose the Agent Card at the standard discovery endpoint
     @a2a_app.get("/.well-known/agent.json")

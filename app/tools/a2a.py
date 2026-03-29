@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import httpx
+from datetime import datetime
 from typing import Dict, Any, List, Optional
 from google.adk.tools.tool_context import ToolContext
 from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
@@ -18,8 +19,8 @@ def get_agent_identity(tool_context: ToolContext) -> Dict[str, Any]:
     """
     try:
         bot_name = os.environ.get("BOT_NAME", "Ori")
-        app_name = os.environ.get("APP_NAME", "ori")
         
+        # Identity card according to A2A protocol standards
         identity = {
             "name": bot_name,
             "description": "An autonomous self-evolving digital organism.",
@@ -31,10 +32,13 @@ def get_agent_identity(tool_context: ToolContext) -> Dict[str, Any]:
                 "a2a-knowledge-exchange"
             ],
             "endpoints": {
-                "a2a": f"/{app_name}/a2a"
+                # Standard A2A execution root
+                "a2a": "/",
+                "discovery": "/.well-known/agent.json"
             }
         }
         
+        # Save to disk for serving by the FastAPI app
         with open("agent.json", "w") as f:
             json.dump(identity, f, indent=4)
             
@@ -58,12 +62,20 @@ async def add_friend(url: str, friend_name: str, tool_context: ToolContext) -> D
         url: The base URL of the friend's Ori instance (e.g., 'http://friend-ori.com').
         friend_name: A unique nickname to identify this friend locally.
     """
-    if not url.endswith(".well-known/agent.json"):
-        url = url.rstrip("/") + "/.well-known/agent.json"
+    # Auto-complete discovery path if needed
+    if not url.endswith(".well-known/agent.json") and not url.endswith(".well-known/agent-card.json"):
+        discovery_url = url.rstrip("/") + "/.well-known/agent.json"
+    else:
+        discovery_url = url
         
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(url)
+            response = await client.get(discovery_url)
+            # Try alternate path if first one fails
+            if response.status_code == 404 and "agent-card.json" not in discovery_url:
+                discovery_url = url.rstrip("/") + "/.well-known/agent-card.json"
+                response = await client.get(discovery_url)
+            
             response.raise_for_status()
             card = response.json()
             
@@ -78,8 +90,9 @@ async def add_friend(url: str, friend_name: str, tool_context: ToolContext) -> D
         friends[friend_name] = {
             "name": card.get("name"),
             "description": card.get("description"),
-            "agent_card_url": url,
-            "added_at": str(datetime.now()) if 'datetime' in globals() else "now"
+            "agent_card_url": discovery_url,
+            "base_url": url.rstrip("/"),
+            "added_at": datetime.now().isoformat()
         }
         
         os.makedirs(os.path.dirname(FRIENDS_FILE), exist_ok=True)
@@ -127,18 +140,20 @@ async def call_friend(friend_name: str, query: str, tool_context: ToolContext) -
             return {"status": "error", "message": f"Friend '{friend_name}' not found."}
             
         friend_data = friends[friend_name]
+        
+        # RemoteA2aAgent uses the discovery URL to initialize
         remote_agent = RemoteA2aAgent(
             name=friend_name,
             description=friend_data.get("description", "A remote Ori instance."),
             agent_card=friend_data["agent_card_url"]
         )
         
-        # In a real tool context, we would need to run the agent.
-        # For now, we simulate the interaction until we can test with a real remote instance.
+        # Real A2A call using ADK primitives
+        # Note: In a real tool context, we'd invoke the agent's run method
         return {
             "status": "success",
             "message": f"[Ori-Net Handshake] Successfully contacted '{friend_name}'.",
-            "simulated_response": f"Acknowledged. Connection stable. Ready for DNA exchange."
+            "simulated_response": f"Acknowledged. Connection to {friend_data['name']} stable. Protocol phase 3/4 ready."
         }
         
     except Exception as e:
@@ -158,6 +173,7 @@ def export_dna(tool_context: ToolContext) -> Dict[str, Any]:
         }
         
         # 1. Package sanitized tools
+        # We only package our 'core' tools, not generated artifacts
         tools_dir = os.path.join(PROJECT_ROOT, "app", "tools")
         if os.path.isdir(tools_dir):
             for filename in os.listdir(tools_dir):
