@@ -214,6 +214,7 @@ async def extract_agent_response(
 
     parts = []
     media_items = []
+    # Key: call_id, Value: {name: str, args: dict}
     seen_function_calls = {}
     latest_tool_results = []
 
@@ -227,7 +228,11 @@ async def extract_agent_response(
                 if hasattr(event, "get_function_calls"):
                     for fc in event.get_function_calls():
                         if fc.id and fc.name:
-                            seen_function_calls[fc.id] = str(fc.name)
+                            # Store name and args from the function call for confirmation prompt build
+                            seen_function_calls[fc.id] = {
+                                "name": str(fc.name),
+                                "args": getattr(fc, "args", {}) or {}
+                            }
 
                 if event.content and event.content.parts:
                     for part in event.content.parts:
@@ -256,16 +261,17 @@ async def extract_agent_response(
                                     fr_names[fr.id] = str(fr.name)
 
                     for call_id, confirmation in event.actions.requested_tool_confirmations.items():
-                        tool_name = fr_names.get(call_id) or seen_function_calls.get(call_id) or "an action"
-                        agent_name = getattr(event, "author", "The agent") or "The agent"
-
+                        # Retrieve original tool name and arguments from captured function call data
+                        call_data = seen_function_calls.get(call_id, {})
+                        tool_name = call_data.get("name") or fr_names.get(call_id) or "an action"
+                        
+                        # Args come from original FunctionCall (Boolean confirmation) 
+                        # or confirmation.payload (Advanced confirmation)
+                        fc_args = call_data.get("args") or {}
                         payload = getattr(confirmation, "payload", None)
+                        
                         clean_payload = {}
-                        
-                        logger.info("Extracting payload for %s. Payload type: %s", tool_name, type(payload))
-                        
                         if payload:
-                            # 1. Try common Pydantic methods
                             if hasattr(payload, "model_dump"):
                                 clean_payload = payload.model_dump()
                             elif hasattr(payload, "dict"):
@@ -273,16 +279,18 @@ async def extract_agent_response(
                             elif isinstance(payload, dict):
                                 clean_payload = payload
                             else:
-                                # 2. Fallback to __dict__ but be careful
                                 try:
                                     clean_payload = {k: v for k, v in vars(payload).items() if not k.startswith("_")}
                                 except Exception:
                                     pass
                         
-                        logger.info("Cleaned payload for %s: %s", tool_name, clean_payload)
+                        # Merge args (fc_args usually has them for require_confirmation=True)
+                        full_payload = {**fc_args, **clean_payload}
+                        
+                        agent_name = getattr(event, "author", "The agent") or "The agent"
                         
                         summary_parts = []
-                        for k, v in clean_payload.items():
+                        for k, v in full_payload.items():
                             if k == "tool_context": continue
                             val_str = str(v)
                             if len(val_str) > 100:
@@ -304,11 +312,11 @@ async def extract_agent_response(
                         elif tool_name == "trigger_rollback":
                             reason = "Revert to the previous stable git commit."
                         elif tool_name == "session_refresh":
-                            mode = clean_payload.get('mode', 'fresh')
+                            mode = full_payload.get('mode', 'fresh')
                             reason = f"Clear conversation history (Mode: {mode})."
                         elif tool_name == "evolution_commit_and_push":
-                            msg_arg = clean_payload.get('commit_message', 'Perform code evolution')
-                            summary_arg = clean_payload.get('summary')
+                            msg_arg = full_payload.get('commit_message', 'Perform code evolution')
+                            summary_arg = full_payload.get('summary')
                             # Prioritize summary_arg if present
                             reason = f"Commit and push changes: {summary_arg if summary_arg else msg_arg}"
                         elif summary_text:
