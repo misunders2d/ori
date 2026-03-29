@@ -18,6 +18,7 @@ from app.callbacks.guardrails import (
     admin_only_guardrail,
     prompt_injection_guardrail,
     tool_output_injection_guardrail,
+    verify_call_limiter,
 )
 from app.tools import (
     evolution_commit_and_push,
@@ -34,6 +35,12 @@ skill_creator_skill = load_skill_from_dir(base_dir / "skill-creator-skill")
 log_maintenance_skill = load_skill_from_dir(base_dir / "log-maintenance-skill")
 system_management_skill = load_skill_from_dir(base_dir / "system-management-skill")
 external_research_skill = load_skill_from_dir(base_dir / "external-research-skill")
+
+def _generator_before_agent(callback_context):
+    """Reset verify call counter at the start of each GeneratorAgent turn, then run admin check."""
+    callback_context.state["_verify_call_count"] = 0
+    return admin_only_guardrail(callback_context)
+
 
 model_config = Gemini(
     model="gemini-3-flash-preview",
@@ -57,8 +64,14 @@ generator_agent = Agent(
         "1. READ: Use `evolution_read_file` to understand existing code.\n"
         "2. STAGE: Use `evolution_stage_change` to write changes to the sandbox.\n"
         "3. VERIFY: Use `evolution_verify_sandbox` ('syntax', 'import', and 'pytest').\n"
-        "4. ITERATE: If verification fails, fix the code and stage again.\n"
-        "5. STOP: Once you have a verified implementation that passes tests, stop and let the ReviewerAgent evaluate your work.\n\n"
+        "4. If verification fails, you may attempt ONE fix: stage the corrected code and verify again.\n"
+        "5. STOP: After at most 2 verify attempts (initial + one retry), STOP your turn and hand off to the ReviewerAgent — even if tests still fail. The ReviewerAgent will assess whether the remaining issue is environmental or a real bug. Do NOT keep retrying.\n\n"
+        "HARD LIMIT: You must NEVER call `evolution_verify_sandbox` more than 2 times in a single turn. If the second attempt fails, stop immediately.\n\n"
+        "### When Stuck on an Error:\n"
+        "If your first fix attempt fails, do NOT keep guessing. Before retrying:\n"
+        "1. Use `google_search` or `web_fetch` to search for the exact error message on Google or GitHub Issues — someone has likely already solved it.\n"
+        "2. Look for known issues, upstream fixes, or workarounds before writing more code.\n"
+        "3. If the error is environmental (e.g. ModuleNotFoundError, missing dependency, path issue), note it for the ReviewerAgent rather than trying to hack around it.\n\n"
         "CRITICAL: Do NOT call `evolution_commit_and_push` directly. Your job is to prepare the change in the sandbox."
     ),
     tools=[
@@ -73,9 +86,9 @@ generator_agent = Agent(
         google_search_agent_tool,
         web_fetch,
     ],
-    before_agent_callback=admin_only_guardrail,
+    before_agent_callback=_generator_before_agent,
     before_model_callback=prompt_injection_guardrail,
-    after_tool_callback=tool_output_injection_guardrail,
+    after_tool_callback=[verify_call_limiter, tool_output_injection_guardrail],
 )
 
 # --- 2. Reviewer Agent (The Critic) ---
