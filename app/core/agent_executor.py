@@ -179,13 +179,11 @@ async def extract_agent_response(
         for i in range(len(session.events)-1, max(-1, len(session.events)-15), -1):
             ev = session.events[i]
             
-            # 1. Check for requested confirmations (The canonical ADK source)
             if hasattr(ev, "actions") and ev.actions and hasattr(ev.actions, "requested_tool_confirmations"):
                 if ev.actions.requested_tool_confirmations:
                     for cid in ev.actions.requested_tool_confirmations.keys():
                         pending_call_ids.append(cid)
             
-            # 2. Check for actual function calls (Fallback for direct adk_request_confirmation calls)
             if not pending_call_ids:
                 fcs = ev.get_function_calls() if hasattr(ev, "get_function_calls") else []
                 for fc in fcs:
@@ -226,7 +224,6 @@ async def extract_agent_response(
                 session_id=session_id,
                 new_message=message_arg,
             ):
-                # Track function calls across the entire event stream
                 if hasattr(event, "get_function_calls"):
                     for fc in event.get_function_calls():
                         if fc.id and fc.name:
@@ -265,18 +262,24 @@ async def extract_agent_response(
                         payload = getattr(confirmation, "payload", None)
                         clean_payload = {}
                         
+                        logger.info("Extracting payload for %s. Payload type: %s", tool_name, type(payload))
+                        
                         if payload:
-                            try:
-                                if hasattr(payload, "model_dump"):
-                                    clean_payload = payload.model_dump()
-                                elif hasattr(payload, "dict"):
-                                    clean_payload = payload.dict()
-                                elif isinstance(payload, dict):
-                                    clean_payload = payload
-                                else:
-                                    clean_payload = {k: v for k, v in getattr(payload, "__dict__", {}).items() if not k.startswith("_")}
-                            except Exception:
-                                pass
+                            # 1. Try common Pydantic methods
+                            if hasattr(payload, "model_dump"):
+                                clean_payload = payload.model_dump()
+                            elif hasattr(payload, "dict"):
+                                clean_payload = payload.dict()
+                            elif isinstance(payload, dict):
+                                clean_payload = payload
+                            else:
+                                # 2. Fallback to __dict__ but be careful
+                                try:
+                                    clean_payload = {k: v for k, v in vars(payload).items() if not k.startswith("_")}
+                                except Exception:
+                                    pass
+                        
+                        logger.info("Cleaned payload for %s: %s", tool_name, clean_payload)
                         
                         summary_parts = []
                         for k, v in clean_payload.items():
@@ -306,11 +309,14 @@ async def extract_agent_response(
                         elif tool_name == "evolution_commit_and_push":
                             msg_arg = clean_payload.get('commit_message', 'Perform code evolution')
                             summary_arg = clean_payload.get('summary')
-                            reason = f"Commit and push changes: {summary_arg or msg_arg}"
+                            # Prioritize summary_arg if present
+                            reason = f"Commit and push changes: {summary_arg if summary_arg else msg_arg}"
                         elif summary_text:
                             reason = summary_text
                             
                         if reason:
+                            # Clean reason of any markdown-breaking characters
+                            reason = reason.replace("*", "").replace("_", "").replace("`", "")
                             msg += f"\n📋 **Reason:** {reason}"
                         
                         msg += "\n\nPlease approve or deny by explicitly responding **'yes'** or **'no'**."

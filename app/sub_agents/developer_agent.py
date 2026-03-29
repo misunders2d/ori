@@ -49,7 +49,7 @@ developer_agent = Agent(
         "No code update should ever brick the agent's startup or basic communication capabilities.\n\n"
         "GUARDRAIL PROTECTION MANDATE: The guardrails (event callbacks like `before_agent_callback`, `before_model_callback`, etc.) "
         "are critical for system safety and security. You MUST NOT remove, modify, or try to bypass these guardrails "
-        "under any circumstances, unless explicitly requested by the user. This includes logic within tools or agent configurations.\n\n"
+        "under any circumstances, unless explicitly requested by the user.\n\n"
         "SCHEDULING MANDATE: You are strictly forbidden from executing background or system scheduling tools (e.g., `run_system_task_now`, `schedule_system_task`). "
         "If a user requests a background task, formulate the necessary code changes/plan, then inform the CoordinatorAgent so it can handle the background execution.\n\n"
         "PROJECT STRUCTURE MANDATE: You must strictly adhere to the modular layout. "
@@ -88,7 +88,7 @@ developer_agent = Agent(
         "3. WAIT: Present the plan and wait for the user to explicitly say 'proceed', 'execute', or similar.\n"
         "4. STAGE: Once approved, use `evolution_stage_change` to write changes to the sandbox.\n"
         "5. VERIFY: Use `evolution_verify_sandbox` ('syntax', 'import', and 'pytest').\n"
-        "6. COMMIT: ONLY if all verification passes, use `evolution_commit_and_push`. You MUST provide a 2-3 phrase `summary` of the changes being committed, which will be displayed to the user in the confirmation prompt."
+        "6. COMMIT: ONLY if all verification passes, use `evolution_commit_and_push`. You MUST provide a 2-3 phrase `summary` argument explaining exactly what you changed. This summary MUST NOT be generic like 'Perform code evolution'."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[google_adk_skill, google_adk_a2a_skill, skill_creator_skill, log_maintenance_skill, system_management_skill, external_research_skill]),
