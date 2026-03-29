@@ -3,7 +3,7 @@ import re
 import google.adk.tools
 import pathlib
 from typing import AsyncGenerator
-from google.adk.agents import Agent, BaseAgent, LoopAgent
+from google.adk.agents import Agent, BaseAgent, LoopAgent, SequentialAgent
 from google.adk.models import Gemini
 from google.genai import types
 from google.adk.skills import load_skill_from_dir
@@ -172,7 +172,11 @@ development_loop = LoopAgent(
 # --- 6. Commit Gate (Deterministic Check) ---
 
 class CommitGate(BaseAgent):
-    """Checks session state for review_passed before allowing the CommitterAgent to run."""
+    """Checks session state for review_passed before allowing the CommitterAgent to run.
+
+    Escalates (halts the SequentialAgent) if the review did not pass,
+    preventing the CommitterAgent from ever executing.
+    """
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         state = ctx.session.state or {}
         review_passed = state.get("review_passed", False)
@@ -187,11 +191,14 @@ class CommitGate(BaseAgent):
                 actions=EventActions(escalate=True),
             )
         else:
-            # Pass through — let the next sub_agent (CommitterAgent) run
+            # Pass through — SequentialAgent continues to CommitterAgent
             yield Event(author=self.name)
 
-# Final exported agent
-developer_agent = Agent(
+# Final exported agent — SequentialAgent guarantees deterministic execution order:
+#   1. DevelopmentLoop (generate → review → check, up to 3 iterations)
+#   2. CommitGate (hard gate: escalates to abort if review_passed is False)
+#   3. CommitterAgent (only reached if gate passes)
+developer_agent = SequentialAgent(
     name="DeveloperAgent",
     description="Analyzes the agent's own source code and proposes/executes improvements or bug fixes using a generator-reviewer loop.",
     sub_agents=[
@@ -199,13 +206,4 @@ developer_agent = Agent(
         CommitGate(name="CommitGate"),
         committer_agent,
     ],
-    instruction=(
-        "You are the entry point for the self-evolution system.\n"
-        "1. Start the `DevelopmentLoop` to implement and review the changes.\n"
-        "2. The `CommitGate` will automatically check if the review passed.\n"
-        "3. If the gate passes, `CommitterAgent` will push the changes.\n"
-        "4. If the gate fails, report that the review did not pass and no changes were committed.\n\n"
-        "CRITICAL: Never bypass the CommitGate. If the review loop exhausted all iterations without passing, do NOT commit."
-    ),
-    model=model_config,
 )
