@@ -17,48 +17,63 @@ read_env_value() {
 send_notification() {
     local trigger_content="$1"
     local message="$2"
-
     local notify_type=$(echo "$trigger_content" | python3 -c "import sys,json; print(json.load(sys.stdin).get('notify',{}).get('type',''))" 2>/dev/null)
-
+    
     if [ "$notify_type" = "telegram" ]; then
         local chat_id=$(echo "$trigger_content" | python3 -c "import sys,json; print(json.load(sys.stdin)['notify']['chat_id'])" 2>/dev/null)
         local bot_token=$(read_env_value TELEGRAM_BOT_TOKEN)
-
+        
         if [ -n "$bot_token" ] && [ -n "$chat_id" ]; then
             curl -s -X POST "https://api.telegram.org/bot${bot_token}/sendMessage" \
                 -H "Content-Type: application/json" \
                 -d "{\"chat_id\": ${chat_id}, \"text\": \"${message}\"}" > /dev/null 2>&1
-            echo "  [+] Notification sent to Telegram chat ${chat_id}"
+            echo "
+[+] Notification sent to Telegram chat ${chat_id}"
         fi
     fi
 }
 
 wait_for_healthy() {
-    echo "  [.] Waiting for daemon stability check (15s)..."
+    echo "
+[.] Waiting for daemon stability check (15s)..."
     sleep 15
     if [ "$(docker inspect -f '{{.State.Running}}' ori-agent-daemon 2>/dev/null)" = "true" ]; then
-        echo "  [+] Daemon container persists and is stable."
+        echo "
+[+] Daemon container persists and is stable."
         return 0
     fi
-    echo "  [-] FATAL: Container crashed on boot!"
+    echo "
+[-] FATAL: Container crashed on boot!"
     return 1
+}
+
+cleanup_docker() {
+    echo "
+[+] Decluttering Docker artifacts..."
+    # Remove dangling images (the <none> ones created during rebuilds)
+    docker image prune -f --filter "dangling=true" > /dev/null 2>&1
+    # Remove stopped containers to prevent accumulation
+    docker container prune -f > /dev/null 2>&1
 }
 
 rollback() {
     local previous_commit="$1"
     local trigger_content="$2"
-
-    echo "  [!] Reverting broken commit on remote to prevent re-deploy loop..."
+    
+    echo "
+[!] Reverting broken commit on remote to prevent re-deploy loop..."
     git revert HEAD --no-edit 2>&1 || true
-    git push origin master 2>&1 || echo "  [-] WARNING: Could not push revert to remote."
+    git push origin master 2>&1 || echo "
+[-] WARNING: Could not push revert to remote."
     
     chmod +x "$SCRIPT_DIR/start.sh" "$SCRIPT_DIR/deploy.sh" "$SCRIPT_DIR/rollback.sh"
     docker compose build 2>&1
     docker compose up -d 2>&1
-
+    
     if wait_for_healthy; then
         echo "$(date): Rollback successful."
         send_notification "$trigger_content" "✅ Auto-rollback successful. Broken commit reverted on origin/master."
+        cleanup_docker
     else
         echo "$(date): FATAL CASCADING FAILURE."
         send_notification "$trigger_content" "🚨 FATAL: Reverted code also failed to boot. Manual SSH intervention required immediately."
@@ -73,21 +88,22 @@ while true; do
         echo "=========================================="
         echo "$(date): UPDATE SIGNAL DETECTED. SEIZING HOST CONTROL."
         echo "=========================================="
-
+        
         TRIGGER_CONTENT=$(cat "$TRIGGER_FILE")
         rm -f "$TRIGGER_FILE"
-
+        
         # Give agent 10s to cleanly exit current API request handling
         sleep 10
+        
         cd "$SCRIPT_DIR"
-
         PREVIOUS_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "UNKNOWN")
         
-        echo "  [+] Force-syncing to authoritative remote (origin/master)..."
-        
+        echo "
+[+] Force-syncing to authoritative remote (origin/master)..."
         # Remote is the ONLY source of truth. Nuke all local state unconditionally.
         if ! git fetch origin master 2>&1; then
-            echo "  [-] FATAL: Cannot reach origin. Network or remote config broken."
+            echo "
+[-] FATAL: Cannot reach origin. Network or remote config broken."
             send_notification "$TRIGGER_CONTENT" "⚠️ Update Failed: Cannot reach git remote. Check network/SSH keys."
             continue
         fi
@@ -95,40 +111,42 @@ while true; do
         # Wipe everything: uncommitted changes, diverged history, corrupted HEAD — all of it
         git reset --hard origin/master 2>&1 || true
         git clean -fd 2>&1 || true
-        echo "  [+] Local branch force-aligned to origin/master."
         
+        echo "
+[+] Local branch force-aligned to origin/master."
         chmod +x "$SCRIPT_DIR/start.sh" "$SCRIPT_DIR/deploy.sh" "$SCRIPT_DIR/rollback.sh"
-
+        
         if [ "$PREVIOUS_COMMIT" = "$(git rev-parse HEAD)" ] && git diff-index --quiet HEAD --; then
-            echo "  [.] Zero-delta signal. Agent architecture and local file state unchanged."
+            echo "
+[.] Zero-delta signal. Agent architecture and local file state unchanged."
             continue
         fi
-
-        echo "  [+] Building fresh daemon container..."
+        
+        echo "
+[+] Building fresh daemon container..."
         if ! docker compose build 2>&1; then
             send_notification "$TRIGGER_CONTENT" "⚠️ Compile Failure. Container failed to package. Initiating structural rollback..."
             rollback "$PREVIOUS_COMMIT" "$TRIGGER_CONTENT"
             continue
         fi
-
-        echo "  [+] Orchestrating local cluster swap..."
+        
+        echo "
+[+] Orchestrating local cluster swap..."
         if ! docker compose up -d 2>&1; then
             send_notification "$TRIGGER_CONTENT" "⚠️ Upstream Failure. Compose daemon rejected start sequence. Initiating structural rollback..."
             rollback "$PREVIOUS_COMMIT" "$TRIGGER_CONTENT"
             continue
         fi
-
+        
         if wait_for_healthy; then
             echo "$(date): Evolution sequence closed successfully."
             send_notification "$TRIGGER_CONTENT" "💠 Self-Evolution Successful. Daemon rebuilt and actively polling."
-            echo "  [+] Cleaning up dangling Docker build caches..."
-            docker image prune -f --filter "dangling=true" > /dev/null 2>&1
+            cleanup_docker
         else
             echo "$(date): Core loop rejection on start! Rolling back mutations."
             send_notification "$TRIGGER_CONTENT" "🚨 CRITICAL: The newly compiled code immediately crashed the daemon container upon boot. Triggering structural rollback..."
             rollback "$PREVIOUS_COMMIT" "$TRIGGER_CONTENT"
         fi
-
         echo "=========================================="
     fi
     sleep 5

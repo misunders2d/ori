@@ -11,5 +11,5 @@ services:
     environment:
       - DOTENV_PATH=/code/data/.env
     ports:
-      - "8000:8000"
+      - "${AGENT_PORT:-8000}:8000"
     restart: unless-stopped
