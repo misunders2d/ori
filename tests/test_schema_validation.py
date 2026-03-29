@@ -41,18 +41,20 @@ def test_all_agent_tools_gemini_schema_validity():
             return
         seen_agents.add(id(a))
         
-        for tool in a.tools:
-            func = None
-            if callable(tool):
-                func = tool
-            elif hasattr(tool, "function"):
-                func = tool.function
-            elif hasattr(tool, "_function"):
-                func = tool._function
-            
-            if func and id(func) not in seen_tools:
-                seen_tools.add(id(func))
-                validate_tool_schema(func)
+        # Some agents (like SequentialAgent) may not have tools directly
+        if hasattr(a, "tools"):
+            for tool in a.tools:
+                func = None
+                if callable(tool):
+                    func = tool
+                elif hasattr(tool, "function"):
+                    func = tool.function
+                elif hasattr(tool, "_function"):
+                    func = tool._function
+                
+                if func and id(func) not in seen_tools:
+                    seen_tools.add(id(func))
+                    validate_tool_schema(func)
         
         for sub in getattr(a, "sub_agents", []):
             _walk(sub)
