@@ -2,7 +2,7 @@ services:
   ori-agent:
     build: .
     container_name: ori-agent-daemon
-    init: true # Passes graceful shutdown signals correctly to APScheduler
+    init: true
     stdin_open: true
     tty: true
     volumes:
@@ -10,4 +10,6 @@ services:
       - ./.git:/code/.git
     environment:
       - DOTENV_PATH=/code/data/.env
+    ports:
+      - "8000:8000"
     restart: unless-stopped
