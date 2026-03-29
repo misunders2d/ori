@@ -1,12 +1,9 @@
 import os
-def list_files(startpath):
-    for root, dirs, files in os.walk(startpath):
-        level = root.replace(startpath, '').count(os.sep)
-        indent = ' ' * 4 * (level)
-        print(f'{indent}{os.path.basename(root)}/')
-        subindent = ' ' * 4 * (level + 1)
-        for f in files:
-            print(f'{subindent}{f}')
+
+def list_files(directory):
+    for root, dirs, files in os.walk(directory):
+        for file in files:
+            print(os.path.join(root, file))
 
 if __name__ == "__main__":
-    list_files('.')
+    list_files("tests")

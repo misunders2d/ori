@@ -3,6 +3,7 @@
 import logging
 import time
 import uuid
+import re
 from dataclasses import dataclass, field
 
 from google import genai
@@ -144,18 +145,17 @@ async def extract_agent_response(
             app_name=runner.app_name, user_id=user_id, session_id=session_id
         )
         if session is None:
-            await runner.session_service.create_session(
+            session = await runner.session_service.create_session(
                 app_name=runner.app_name, user_id=user_id, session_id=session_id
             )
 
     except Exception:
-        await runner.session_service.create_session(
+        session = await runner.session_service.create_session(
             app_name=runner.app_name, user_id=user_id, session_id=session_id
         )
 
     MAX_RETRIES = 2
 
-    import re
     message_str = ""
     if isinstance(message, str):
         message_str = message
@@ -167,7 +167,7 @@ async def extract_agent_response(
                 parts.append(p.text)
         message_str = " ".join(parts)
 
-    match = re.search(r'(?i)(?::\s*)(yes|y|no|n)\s*$', message_str.strip())
+    match = re.search(r'(?i)(?:[:]\s*)?(yes|y|no|n)\s*$', message_str.strip())
     text_lower = match.group(1).lower() if match else message_str.strip().lower()
 
     was_confirmation = False
@@ -175,20 +175,28 @@ async def extract_agent_response(
     if text_lower in ("yes", "y", "no", "n") and session and getattr(session, "events", None):
         pending_call_ids = []
         
-        # Scan the last 15 events maximum backwards to find the most recent confirmation request
+        # Scan history for the most recent confirmation request
         for i in range(len(session.events)-1, max(-1, len(session.events)-15), -1):
             ev = session.events[i]
             
-            # Check for actual 'adk_request_confirmation' tool calls in the event
-            fcs = ev.get_function_calls() if hasattr(ev, "get_function_calls") else []
-            for fc in fcs:
-                if fc.name == "adk_request_confirmation" and fc.id:
-                    pending_call_ids.append(fc.id)
+            # 1. Check for requested confirmations (The canonical ADK source)
+            if hasattr(ev, "actions") and ev.actions and hasattr(ev.actions, "requested_tool_confirmations"):
+                if ev.actions.requested_tool_confirmations:
+                    for cid in ev.actions.requested_tool_confirmations.keys():
+                        pending_call_ids.append(cid)
+            
+            # 2. Check for actual function calls (Fallback for direct adk_request_confirmation calls)
+            if not pending_call_ids:
+                fcs = ev.get_function_calls() if hasattr(ev, "get_function_calls") else []
+                for fc in fcs:
+                    if fc.name == "adk_request_confirmation" and fc.id:
+                        pending_call_ids.append(fc.id)
             
             if pending_call_ids:
                 break
         
         if pending_call_ids:
+            logger.info("Intercepted user confirmation: %s for call IDs %s", text_lower, pending_call_ids)
             was_confirmation = True
             is_confirmed = text_lower in ("yes", "y")
             func_parts = []
@@ -199,22 +207,16 @@ async def extract_agent_response(
                     response={"hint": "", "confirmed": is_confirmed, "payload": None}
                 )
                 func_parts.append(types.Part(function_response=fr))
-            # Critical: return a Content object with ONLY the FunctionResponse to unblock the agent
             message_arg = types.Content(role="user", parts=func_parts)
         else:
-            # Not confirmed, or no pending call found
             message_arg = message if isinstance(message, types.Content) else types.Content(role="user", parts=[types.Part.from_text(text=message)])
     else:
-        # Standard chat message
         message_arg = message if isinstance(message, types.Content) else types.Content(role="user", parts=[types.Part.from_text(text=message)])
     
 
     parts = []
     media_items = []
-    # Running map of call_id -> tool_name accumulated across ALL events in the stream
     seen_function_calls = {}
-    
-    # Track latest tool results to provide better feedback if the model is silent
     latest_tool_results = []
 
     for attempt in range(1 + MAX_RETRIES):
@@ -224,7 +226,7 @@ async def extract_agent_response(
                 session_id=session_id,
                 new_message=message_arg,
             ):
-                # Track all function calls across the entire event stream
+                # Track function calls across the entire event stream
                 if hasattr(event, "get_function_calls"):
                     for fc in event.get_function_calls():
                         if fc.id and fc.name:
@@ -234,7 +236,6 @@ async def extract_agent_response(
                     for part in event.content.parts:
                         if hasattr(part, "text") and part.text:
                             parts.append(part.text)
-                        # Capture tool results for fallback feedback
                         elif hasattr(part, "function_response") and part.function_response:
                             res = part.function_response.response
                             if isinstance(res, dict) and "message" in res:
@@ -242,7 +243,6 @@ async def extract_agent_response(
                             elif isinstance(res, dict) and "status" in res:
                                 latest_tool_results.append(f"Status: {res['status']}")
 
-                        # Capture inline binary data (images, audio, etc.)
                         elif hasattr(part, "inline_data") and part.inline_data:
                             media_items.append({
                                 "data": part.inline_data.data,
@@ -250,8 +250,6 @@ async def extract_agent_response(
                             })
 
                 if getattr(event, "actions", None) and getattr(event.actions, "requested_tool_confirmations", None):
-                    # The ADK replaces FunctionCall with a FunctionResponse on confirmation events.
-                    # Extract tool names from function_response parts on this event.
                     fr_names = {}
                     if event.content and event.content.parts:
                         for part in event.content.parts:
@@ -261,51 +259,40 @@ async def extract_agent_response(
                                     fr_names[fr.id] = str(fr.name)
 
                     for call_id, confirmation in event.actions.requested_tool_confirmations.items():
-                        # Primary: from the FunctionResponse on this event
-                        # Fallback: from FunctionCalls seen earlier in the stream
                         tool_name = fr_names.get(call_id) or seen_function_calls.get(call_id) or "an action"
                         agent_name = getattr(event, "author", "The agent") or "The agent"
 
-                        # Robust payload extraction
                         payload = getattr(confirmation, "payload", None)
                         clean_payload = {}
                         
                         if payload:
-                            # Try model_dump (Pydantic v2)
-                            if hasattr(payload, "model_dump"):
-                                items = payload.model_dump().items()
-                            # Try dict() (Pydantic v1)
-                            elif hasattr(payload, "dict"):
-                                items = payload.dict().items()
-                            elif isinstance(payload, dict):
-                                items = payload.items()
-                            else:
-                                items = getattr(payload, "__dict__", {}).items()
-                            
-                            for k, v in items:
-                                if k != "tool_context" and not k.startswith("_"):
-                                    clean_payload[k] = v
+                            try:
+                                if hasattr(payload, "model_dump"):
+                                    clean_payload = payload.model_dump()
+                                elif hasattr(payload, "dict"):
+                                    clean_payload = payload.dict()
+                                elif isinstance(payload, dict):
+                                    clean_payload = payload
+                                else:
+                                    clean_payload = {k: v for k, v in getattr(payload, "__dict__", {}).items() if not k.startswith("_")}
+                            except Exception:
+                                pass
                         
                         summary_parts = []
                         for k, v in clean_payload.items():
-                            # Include all reasonable length arguments in summary
+                            if k == "tool_context": continue
                             val_str = str(v)
                             if len(val_str) > 100:
                                 val_str = val_str[:97] + "..."
                             summary_parts.append(f"{k}: '{val_str}'")
                         
                         summary_text = ", ".join(summary_parts) if summary_parts else ""
-
-                        # Use the hint from ToolConfirmation if available
                         hint_text = getattr(confirmation, "hint", "") or ""
-                        # Check if the hint is the generic ADK one
                         is_generic_hint = "Please approve or reject" in hint_text or not hint_text
 
-                        # Construct final message
                         msg = f"⚠️ **Action Requires Confirmation**\n\n"
                         msg += f"**{agent_name}** wants to execute `{tool_name}`."
                         
-                        # Generate a meaningful reason summary
                         reason = ""
                         if not is_generic_hint:
                             reason = hint_text
@@ -327,114 +314,60 @@ async def extract_agent_response(
                             msg += f"\n📋 **Reason:** {reason}"
                         
                         msg += "\n\nPlease approve or deny by explicitly responding **'yes'** or **'no'**."
-
                         parts.append(msg)
 
             break  # success
         except Exception as exc:
             error_msg = str(exc).split("\n")[0] if str(exc) else type(exc).__name__
-            logger.warning(
-                "Agent error (attempt %d/%d) for user %s: %s",
-                attempt + 1,
-                1 + MAX_RETRIES,
-                user_id,
-                error_msg,
-            )
-
-            # Catch rate limit / quota errors gracefully
-            if (
-                "429" in error_msg
-                or "RESOURCE_EXHAUSTED" in error_msg
-                or "QuotaExceeded" in error_msg
-            ):
-                return AgentResponse(
-                    text="⚠️ **Rate Limit Exceeded**\n\n"
-                    "You've hit the API quota limit. Please wait a bit before trying again. "
-                    "If this persists, check your billing details or rate limits."
-                )
-
-            # Catch token limit / context window errors
-            if "token count exceeds" in error_msg.lower() or "400" in error_msg:
-                logger.error(
-                    "Context limit reached for session %s: %s", session_id, error_msg
-                )
-                return AgentResponse(
-                    text="⚠️ **Context Limit Reached**\n\n"
-                    "The conversation has become too large for me to process. "
-                    "Send /reset to start a fresh session."
-                )
+            logger.warning("Agent execution error: %s", error_msg)
 
             if attempt < MAX_RETRIES:
                 parts.clear()
                 message_arg = types.Content(
                     role="user",
-                    parts=[
-                        types.Part.from_text(
-                            text=(
-                                f"Your previous action failed with this error: {error_msg}\n"
-                                "Analyze what went wrong and retry my original request. "
-                                "If a tool caused the error, do NOT use it again."
-                            )
-                        )
-                    ],
+                    parts=[types.Part.from_text(text=f"Your previous action failed with this error: {error_msg}\nAnalyze what went wrong and retry.")]
                 )
                 continue
-            return AgentResponse(
-                text=f"Agent error after {1 + MAX_RETRIES} attempts. Last error: {error_msg}"
-            )
+            return AgentResponse(text=f"Agent error after retries: {error_msg}")
 
     if not parts:
-        if was_confirmation and is_confirmed:
-            if latest_tool_results:
-                final_text = f"✅ **Action Confirmed**\n\n{latest_tool_results[-1]}"
+        if was_confirmation:
+            if is_confirmed:
+                if latest_tool_results:
+                    final_text = f"✅ **Action Confirmed**\n\n{latest_tool_results[-1]}"
+                else:
+                    final_text = "✅ **Action Confirmed**\n\nThe operation was performed successfully."
             else:
-                final_text = "✅ **Action Confirmed**\n\nThe requested operation was performed successfully."
-        elif was_confirmation and not is_confirmed:
-            final_text = "❌ **Action Cancelled**\n\nI have cancelled the requested operation as you instructed."
+                final_text = "❌ **Action Cancelled**\n\nI have cancelled the operation."
         else:
             final_text = "I processed your request but have no response to show."
     else:
         final_text = "\n".join(parts)
 
-    # Check for manual session refresh signal
     refresh_mode = get_pending_refresh(session_id)
     if refresh_mode:
-        logger.info(
-            "Manual session refresh (%s) triggered for %s", refresh_mode, session_id
-        )
-        refresh_msg = await _perform_session_refresh(
-            runner, user_id, session_id, refresh_mode
-        )
+        refresh_msg = await _perform_session_refresh(runner, user_id, session_id, refresh_mode)
         final_text += f"\n\n--- SESSION REFRESHED ---\n{refresh_msg}"
 
     return AgentResponse(text=final_text, media_items=media_items)
 
 
 async def process_message_for_context(runner, user_id: str, session_id: str, message: str | types.Content):
-    """Silently add a message as context to the session without triggering the agent."""
+    """Silently add a message as context to the session."""
     try:
         from google.adk.events.event import Event
     except ImportError:
         import sys
         Event = sys.modules['google.adk.events.event'].Event
 
-    session = await runner.session_service.get_session(
-        app_name=runner.app_name, user_id=user_id, session_id=session_id
-    )
+    session = await runner.session_service.get_session(app_name=runner.app_name, user_id=user_id, session_id=session_id)
     if session is None:
-        session = await runner.session_service.create_session(
-            app_name=runner.app_name, user_id=user_id, session_id=session_id
-        )
+        session = await runner.session_service.create_session(app_name=runner.app_name, user_id=user_id, session_id=session_id)
 
     if isinstance(message, str):
         content = types.Content(role="user", parts=[types.Part.from_text(text=message)])
     else:
         content = message
 
-    event = Event(
-        id=str(uuid.uuid4()),
-        author=user_id,
-        timestamp=time.time(),
-        content=content
-    )
+    event = Event(id=str(uuid.uuid4()), author=user_id, timestamp=time.time(), content=content)
     await runner.session_service.append_event(session, event)

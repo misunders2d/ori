@@ -23,8 +23,17 @@ def create_a2a_app():
         default_identity = {
             "name": bot_name,
             "description": "An autonomous self-evolving digital organism.",
-            "version": "0.6.0",
-            "capabilities": ["self-evolution", "scheduling", "web-research", "a2a-knowledge-exchange"],
+            "version": "0.7.0",
+            "capabilities": {
+                "self-evolution": True,
+                "scheduling": True,
+                "web-research": True,
+                "a2a-knowledge-exchange": True
+            },
+            "defaultInputModes": ["text"],
+            "defaultOutputModes": ["text"],
+            "skills": [],
+            "url": "http://localhost:8000",
             "endpoints": {
                 "a2a": "/",
                 "discovery": ["/.well-known/agent.json", "/.well-known/agent-card.json"]
@@ -53,7 +62,8 @@ def create_a2a_app():
         return app
     except Exception as e:
         logger.error(f"Failed to create A2A app via to_a2a: {e}")
-        raise
+        # We don't want to crash the whole daemon if A2A fails (e.g. port already bound)
+        return None
 
 # The ASGI application instance (Starlette app)
 a2a_app = create_a2a_app()
