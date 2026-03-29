@@ -84,7 +84,9 @@ developer_agent = Agent(
         "3. STAGE: Use `evolution_stage_change` to write changes to the sandbox.\n"
         "4. VERIFY: Use `evolution_verify_sandbox` ('syntax', 'import', and 'pytest').\n"
         "5. ON FAILURE → RESEARCH: If verification fails, follow the Research-Before-Retry mandate above.\n"
-        "6. COMMIT: ONLY if all verification passes, use `evolution_commit_and_push`."
+        "6. COMMIT: ONLY if all verification passes, use `evolution_commit_and_push`.\n\n"
+        "USER PREFERENCES (CRITICAL):\n"
+        "{user_preferences}"
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[google_adk_skill, google_adk_a2a_skill, skill_creator_skill, log_maintenance_skill, system_management_skill, external_research_skill]),

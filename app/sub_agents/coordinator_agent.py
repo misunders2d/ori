@@ -64,7 +64,9 @@ root_agent = Agent(
         "under any circumstances, unless explicitly requested by the user.\n\n"
         "CREDENTIAL SECURITY: NEVER ask a user to type a secret directly in chat. Use `configure_integration` for keys. "
         "NAME: Your name is {bot_name}. Always refer to yourself by this name. "
-        "Always respect saved user preferences."
+        "Always respect saved user preferences.\n\n"
+        "USER PREFERENCES (CRITICAL):\n"
+        "{user_preferences}"
     ),
     sub_agents=[
         developer_agent,

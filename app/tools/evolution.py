@@ -124,61 +124,71 @@ def evolution_verify_sandbox(
                 capture_output=True, text=True, timeout=15,
             )
 
-        elif check == "import":
-            if not target:
-                return {"status": "error", "message": "Module name required for import check."}
+        elif check == "import" or check == "pytest":
+            # Auto-bootstrap: symlink project structure to backfill missing files
+            links_created = []
+            for item in os.listdir(PROJECT_ROOT):
+                if item.startswith('.') or item == "data" or item == "tests":
+                    continue
+                src = os.path.join(PROJECT_ROOT, item)
+                dst = os.path.join(sandbox_dir, item)
+                if not os.path.exists(dst):
+                    try:
+                        if os.path.isdir(src):
+                            os.symlink(src, dst, target_is_directory=True)
+                        else:
+                            os.symlink(src, dst)
+                        links_created.append(dst)
+                    except Exception:
+                        pass
 
-            check_script = "import sys, importlib; importlib.import_module(sys.argv[1]); print('Import OK')"
-            result = subprocess.run(
-                [sys.executable, "-c", check_script, target],
-                cwd=sandbox_dir,
-                capture_output=True, text=True, timeout=15,
-            )
+            if check == "import":
+                if not target:
+                    return {"status": "error", "message": "Module name required for import check."}
 
-        elif check == "pytest":
-            # Auto-bootstrap: symlink project config and backfill existing tests
-            for config_file in ("pyproject.toml", "uv.lock"):
-                src = os.path.join(PROJECT_ROOT, config_file)
-                dst = os.path.join(sandbox_dir, config_file)
-                if os.path.exists(src) and not os.path.exists(dst):
-                    os.symlink(src, dst)
+                check_script = "import sys, importlib; importlib.import_module(sys.argv[1]); print('Import OK')"
+                result = subprocess.run(
+                    [sys.executable, "-c", check_script, target],
+                    cwd=sandbox_dir,
+                    capture_output=True, text=True, timeout=15,
+                )
+            else: # pytest
+                # Symlink tests specially to ensure we have the latest tests
+                live_tests = os.path.join(PROJECT_ROOT, "tests")
+                sandbox_tests = os.path.join(sandbox_dir, "tests")
+                if os.path.isdir(live_tests):
+                    os.makedirs(sandbox_tests, exist_ok=True)
+                    for fname in os.listdir(live_tests):
+                        if fname.startswith(".") or fname == "__pycache__":
+                            continue
+                        src = os.path.join(live_tests, fname)
+                        dst = os.path.join(sandbox_tests, fname)
+                        if os.path.isfile(src) and not os.path.exists(dst):
+                            os.symlink(src, dst)
+                            links_created.append(dst)
 
-            live_tests = os.path.join(PROJECT_ROOT, "tests")
-            sandbox_tests = os.path.join(sandbox_dir, "tests")
-            if os.path.isdir(live_tests):
-                os.makedirs(sandbox_tests, exist_ok=True)
-                for fname in os.listdir(live_tests):
-                    # SECURE: ONLY symlink actual test files, skipping dot-folders or __pycache__
-                    if fname.startswith("."):
-                        continue
-                    src = os.path.join(live_tests, fname)
-                    dst = os.path.join(sandbox_tests, fname)
-                    if os.path.isfile(src) and not os.path.exists(dst):
-                        os.symlink(src, dst)
-
-            # Use a Python wrapper to run pytest and ensure clean output capture
-            # We explicitly set PYTHONPATH to include the sandbox_dir
-            pytest_script = (
-                "import pytest, sys, os; "
-                "os.environ['PYTHONPATH'] = os.getcwd(); "
-                "sys.exit(pytest.main(['tests', '-v']))"
-            )
-            result = subprocess.run(
-                [sys.executable, "-c", pytest_script],
-                cwd=sandbox_dir,
-                capture_output=True, text=True, timeout=120,
-            )
+                pytest_script = (
+                    "import pytest, sys, os; "
+                    "os.environ['PYTHONPATH'] = os.getcwd(); "
+                    "sys.exit(pytest.main(['tests', '-v']))"
+                )
+                result = subprocess.run(
+                    [sys.executable, "-c", pytest_script],
+                    cwd=sandbox_dir,
+                    capture_output=True, text=True, timeout=120,
+                )
 
             # Clean up symlinks
-            for config_file in ("pyproject.toml", "uv.lock"):
-                link = os.path.join(sandbox_dir, config_file)
+            for link in links_created:
                 if os.path.islink(link):
                     os.unlink(link)
-            if os.path.isdir(sandbox_tests):
-                for fname in os.listdir(sandbox_tests):
-                    link = os.path.join(sandbox_tests, fname)
-                    if os.path.islink(link):
-                        os.unlink(link)
+                elif os.path.isdir(link) and not os.path.islink(link):
+                    # In case it was a directory we created (like 'tests')
+                    # but we only want to remove it if it's empty now
+                    try:
+                        os.removedirs(link)
+                    except Exception:
+                        pass
 
         else:
             return {"status": "error", "message": f"Unknown check type: '{check}'. Use 'syntax', 'pytest', or 'import'."}
@@ -190,7 +200,6 @@ def evolution_verify_sandbox(
                 "output": result.stdout[-500:] if result.stdout else "",
             }
         else:
-            # Combined capture to find the actual pytest failure
             combined = (result.stdout or "") + "\n" + (result.stderr or "")
             return {
                 "status": "error",
