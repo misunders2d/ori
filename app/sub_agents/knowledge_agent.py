@@ -1,7 +1,14 @@
+import pathlib
 from google.adk.agents import Agent
 from google.adk.models import Gemini
+from google.adk.skills import load_skill_from_dir
+from google.adk.tools import skill_toolset
+
 from app.tools.a2a import get_agent_identity, add_friend, list_friends, call_friend, export_dna, import_dna
 from app.callbacks.guardrails import a2a_privacy_guardrail, prompt_injection_guardrail
+
+base_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
+google_adk_a2a_skill = load_skill_from_dir(base_dir / "google-adk-a2a-skill")
 
 knowledge_agent = Agent(
     name="KnowledgeAgent",
@@ -23,7 +30,15 @@ knowledge_agent = Agent(
         "efficiency gains, or new capabilities that align with our Roadmap in `DEVELOPMENT.md`.\n\n"
         "MANDATE: Never share user-specific data or long-term human memory. Technical DNA only."
     ),
-    tools=[get_agent_identity, add_friend, list_friends, call_friend, export_dna, import_dna],
+    tools=[
+        skill_toolset.SkillToolset(skills=[google_adk_a2a_skill]),
+        get_agent_identity, 
+        add_friend, 
+        list_friends, 
+        call_friend, 
+        export_dna, 
+        import_dna
+    ],
     before_tool_callback=a2a_privacy_guardrail,
     after_tool_callback=a2a_privacy_guardrail,
     before_model_callback=prompt_injection_guardrail,

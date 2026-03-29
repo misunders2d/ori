@@ -27,6 +27,7 @@ from app.tools import (
 
 base_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 google_adk_skill = load_skill_from_dir(base_dir / "google-adk-skill")
+google_adk_a2a_skill = load_skill_from_dir(base_dir / "google-adk-a2a-skill")
 skill_creator_skill = load_skill_from_dir(base_dir / "skill-creator-skill")
 log_maintenance_skill = load_skill_from_dir(base_dir / "log-maintenance-skill")
 system_management_skill = load_skill_from_dir(base_dir / "system-management-skill")
@@ -86,7 +87,7 @@ developer_agent = Agent(
         "6. COMMIT: ONLY if all verification passes, use `evolution_commit_and_push`."
     ),
     tools=[
-        skill_toolset.SkillToolset(skills=[google_adk_skill, skill_creator_skill, log_maintenance_skill, system_management_skill, external_research_skill]),
+        skill_toolset.SkillToolset(skills=[google_adk_skill, google_adk_a2a_skill, skill_creator_skill, log_maintenance_skill, system_management_skill, external_research_skill]),
         evolution_read_file,
         evolution_stage_change,
         evolution_verify_sandbox,
