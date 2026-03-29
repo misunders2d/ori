@@ -15,6 +15,7 @@ from app.tools.auth import connect_to_platform, check_connection
 from app.tools.health import report_health
 from app.tools.origins import check_upstream, analyze_upstream_file
 from app.tools.memory import remember_info, search_memory, recall_human_preferences, recall_technical_context
+from app.tools.a2a import get_agent_identity
 from app.tools import (
     configure_integration,
     delete_scheduled_task,
@@ -38,6 +39,7 @@ from app.tools import (
 )
 
 from app.sub_agents.developer_agent import developer_agent
+from app.sub_agents.knowledge_agent import knowledge_agent
 
 root_agent = Agent(
     name="CoordinatorAgent",
@@ -49,10 +51,11 @@ root_agent = Agent(
         "1. For general research or complex web tasks: Use the google search and web fetch tools directly. "
         "2. For scheduling/reminders: ALWAYS call `get_current_time` first to know current time. "
         "3. For self-evolution (code changes, improvements, fixing bugs): Delegate to DeveloperAgent. "
-        "4. For session management: Use `session_refresh`. "
-        "5. For OAuth2 platform connections: Use `check_connection` and `connect_to_platform`. "
-        "6. For Origins Protocol: Use `check_upstream` to see new features/fixes. "
-        "7. For Long-Term Memory: Use `remember_info` to store facts, preferences, or technical notes. "
+        "4. For A2A collaboration and knowledge management (Ori-Net): Delegate to KnowledgeAgent. "
+        "5. For session management: Use `session_refresh`. "
+        "6. For OAuth2 platform connections: Use `check_connection` and `connect_to_platform`. "
+        "7. For Origins Protocol: Use `check_upstream` to see new features/fixes. "
+        "8. For Long-Term Memory: Use `remember_info` to store facts, preferences, or technical notes. "
         "Use `search_memory`, `recall_human_preferences`, or `recall_technical_context` to retrieve information from previous sessions. "
         "This memory is local, private, and persistent across reboots.\n\n"
         "GUARDRAIL PROTECTION MANDATE: The guardrails (event callbacks like `before_agent_callback`, `before_model_callback`, etc.) "
@@ -64,6 +67,7 @@ root_agent = Agent(
     ),
     sub_agents=[
         developer_agent,
+        knowledge_agent,
     ],
     tools=[
         get_current_time,
@@ -84,6 +88,7 @@ root_agent = Agent(
         search_memory,
         recall_human_preferences,
         recall_technical_context,
+        get_agent_identity,
         google.adk.tools.FunctionTool(run_system_task_now, require_confirmation=True),
         google.adk.tools.FunctionTool(schedule_system_task, require_confirmation=True),
         google.adk.tools.FunctionTool(schedule_recurring_system_task, require_confirmation=True),
