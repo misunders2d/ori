@@ -362,11 +362,16 @@ async def extract_agent_response(
                 text=f"Agent error after {1 + MAX_RETRIES} attempts. Last error: {error_msg}"
             )
 
-    final_text = (
-        "\n".join(parts)
-        if parts
-        else "I processed your request but have no response to show."
-    )
+    # Final response construction with improved fallback UX
+    if not parts:
+        if seen_function_calls:
+            # Tool calls occurred but produced no text. Provide a summary.
+            tool_names = ", ".join([f"`{name}`" for name in set(seen_function_calls.values())])
+            final_text = f"Action(s) executed successfully: {tool_names}. Is there anything else you'd like to do?"
+        else:
+            final_text = "I processed your request, but I don't have a specific text response. How can I help you further?"
+    else:
+        final_text = "\n".join(parts)
 
     # Check for manual session refresh signal
     refresh_mode = get_pending_refresh(session_id)

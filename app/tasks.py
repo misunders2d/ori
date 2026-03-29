@@ -146,7 +146,11 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
         logger.error("System task timed out after %ds: %s", _SYSTEM_TASK_TIMEOUT, task_prompt)
         await _deliver_message(
             notify,
-            f"System Task Timed Out (>{_SYSTEM_TASK_TIMEOUT}s):\nTask: {task_prompt}",
+            f"🚨 **System Task Timeout**\n\n"
+            f"The background task exceeded the maximum execution time of {_SYSTEM_TASK_TIMEOUT}s and was terminated.\n"
+            f"**Task:** {task_prompt}\n\n"
+            "This usually happens if the agent gets stuck in a complex loop or a tool call hangs. "
+            "Check the logs (`data/agent.log`) for technical details."
         )
     except Exception:
         logger.exception("System task execution failed: %s", task_prompt)
