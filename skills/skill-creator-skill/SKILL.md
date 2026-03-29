@@ -7,14 +7,6 @@ description: "A metacognitive workflow to create new skills, modify and improve 
 
 This skill defines the mandatory protocol for creating or updating other skills in the `skills/` directory. By following this metacognitive loop, you ensure that new capabilities are robust, tested, and structurally sound.
 
-## Architectural Philosophy: Architectural Economy
-
-Before creating a new skill, you MUST evaluate if the requirement can be met by existing system primitives. Adhere to these principles:
-
-1.  **Leverage Existing Primitives**: Can this be solved by updating an existing agent's instructions? Can it use the `schedule_system_task` or the `memory` skill?
-2.  **Reject Over-Engineering**: Avoid creating complex multi-step skills for simple tasks. Choose the path of least complexity.
-3.  **Minimalism**: Only create a new skill if it provides a distinct, reusable capability that cannot be easily achieved with existing tools.
-
 ## The Core Loop
 
 1. **Capture Intent**: Understand what the skill should do, when it triggers, and its expected output.

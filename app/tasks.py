@@ -1,20 +1,7 @@
-import asyncio
 import logging
 import os
-import re
 
 logger = logging.getLogger(__name__)
-
-# Maximum wall-clock time for a single system task execution (10 minutes)
-_SYSTEM_TASK_TIMEOUT = int(os.environ.get("SYSTEM_TASK_TIMEOUT", 600))
-
-# Matches failure indicators only when they appear as standalone signals,
-# not inside negations like "no errors" or "without error".
-_FAILURE_RE = re.compile(
-    r'(?<!\bno\s)(?<!\bno\b)(?<!\bwithout\s)'
-    r'\b(error|failed|failure|Guardrail Intervention:|not available)\b',
-    re.IGNORECASE,
-)
 
 
 async def run_scheduled_task(task_prompt: str, notify: dict, is_actionable: bool = False):
@@ -90,20 +77,6 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
         await _deliver_message(notify, f"System Task Failed: Runner not available.\nTask: {task_prompt}")
         return
 
-    # Re-validate admin privileges at execution time (may have been revoked since scheduling)
-    admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
-    admin_users = [u.strip() for u in admin_users_str.split(",") if u.strip()]
-    if admin_users and admin_user_id not in admin_users:
-        logger.warning(
-            "System task aborted: admin_user_id %s is no longer authorized. Task: %s",
-            admin_user_id, task_prompt,
-        )
-        await _deliver_message(
-            notify,
-            f"System Task Aborted: Admin '{admin_user_id}' is no longer authorized.\nTask: {task_prompt}",
-        )
-        return
-
     # Isolated session — created fresh, deleted after execution
     session_id = f"sys_task_{uuid.uuid4().hex[:8]}"
     user_id = "system_admin"
@@ -129,12 +102,12 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
             state_delta={"user_id": admin_user_id},
         )
 
-        response = await asyncio.wait_for(
-            extract_agent_response(runner, user_id, session_id, query),
-            timeout=_SYSTEM_TASK_TIMEOUT,
-        )
+        response = await extract_agent_response(runner, user_id, session_id, query)
 
-        is_failure = bool(_FAILURE_RE.search(str(response)))
+        is_failure = any(
+            indicator in response
+            for indicator in ["error", "Error", "failed", "Failed", "Guardrail Intervention:", "not available"]
+        )
 
         if silent and not is_failure:
             logger.info("System task completed silently: %s", task_prompt)
@@ -142,16 +115,6 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
             prefix = "System Task Report" if not is_failure else "System Task Warning"
             await _deliver_message(notify, f"{prefix}:\n{response}")
 
-    except asyncio.TimeoutError:
-        logger.error("System task timed out after %ds: %s", _SYSTEM_TASK_TIMEOUT, task_prompt)
-        await _deliver_message(
-            notify,
-            f"🚨 **System Task Timeout**\n\n"
-            f"The background task exceeded the maximum execution time of {_SYSTEM_TASK_TIMEOUT}s and was terminated.\n"
-            f"**Task:** {task_prompt}\n\n"
-            "This usually happens if the agent gets stuck in a complex loop or a tool call hangs. "
-            "Check the logs (`data/agent.log`) for technical details."
-        )
     except Exception:
         logger.exception("System task execution failed: %s", task_prompt)
         await _deliver_message(notify, f"System Task Failed:\nTask: {task_prompt}\nCheck logs for details.")

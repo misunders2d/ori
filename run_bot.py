@@ -112,35 +112,6 @@ async def run_proactive_diagnostics():
     except Exception as e:
         logger.error("Proactive diagnostics task failed: %s", e)
 
-async def _send_startup_notification():
-    """Checks for a pending update trigger and notifies the user upon successful restart."""
-    import json
-    trigger_path = os.path.abspath("./data/.update_trigger")
-    if os.path.exists(trigger_path):
-        try:
-            with open(trigger_path, "r") as f:
-                data = json.load(f)
-            
-            notify = data.get("notify", {})
-            if notify:
-                # Wait briefly for adapters to register
-                await asyncio.sleep(2)
-                from app.core.transport import get_adapter
-                adapter = get_adapter(notify.get("type"))
-                if adapter:
-                    target = notify.get("chat_id") or notify.get("channel")
-                    bot_name = os.environ.get("BOT_NAME", "Ori")
-                    await adapter.send_message(
-                        target, 
-                        f"✅ **{bot_name} is back online!**\n\n"
-                        "The system has successfully rebooted and is ready for commands."
-                    )
-            
-            # Remove the trigger so it doesn't fire again
-            os.remove(trigger_path)
-        except Exception as e:
-            logger.error("Failed to send startup notification: %s", e)
-
 async def main():
     """
     The Master Entrypoint for the Docker application daemon.
@@ -218,9 +189,6 @@ async def main():
         )
     else:
         logger.warning("TELEGRAM_BOT_TOKEN missing. Telegram poller skipped.")
-
-    # 5. Startup Notification (Async)
-    asyncio.create_task(_send_startup_notification())
 
     # Future: Slack/Discord/Webex pollers can be added here identically.
 

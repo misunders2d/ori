@@ -361,6 +361,51 @@ def schedule_system_task(
     }
 
 
+def run_system_task_now(
+    task_prompt: str, tool_context: ToolContext, silent: bool = False
+) -> dict:
+    """Immediately launches a system maintenance task in the background with admin privileges.
+
+    Use this instead of schedule_system_task when the task should start right away
+    (e.g., 'evolve yourself', 'fix this bug now', 'run a health check').
+    The task runs asynchronously — the user gets a confirmation immediately and
+    receives the result via their notification channel when it completes.
+
+    Args:
+        task_prompt (str): The exact system task instruction (e.g. 'Analyze and fix the failing test in tests/test_structure.py').
+        silent (bool): If True, only notify the admin on failure/warnings. Successes are logged silently. Default: False.
+
+    Returns:
+        dict: Confirmation that the task has been launched.
+    """
+    import asyncio
+
+    from app.tasks import run_system_task
+
+    admin_user_id = _require_admin(tool_context)
+    if not admin_user_id:
+        return {"status": "error", "message": "Only admin users can run system tasks."}
+
+    notify = _get_session_notify_info(tool_context)
+    task_id = f"immediate_{uuid.uuid4().hex[:8]}"
+
+    asyncio.create_task(
+        run_system_task(
+            task_prompt=task_prompt,
+            notify=notify,
+            admin_user_id=admin_user_id,
+            silent=silent,
+        ),
+        name=task_id,
+    )
+
+    mode = "silent (notify on failure only)" if silent else "verbose (always notify)"
+    return {
+        "status": "success",
+        "message": f"System task launched immediately: '{task_prompt}'. Mode: {mode}. Task ID: {task_id}",
+    }
+
+
 def schedule_recurring_system_task(
     task_prompt: str, cron_expression: str, timezone: str, tool_context: ToolContext, silent: bool = False
 ) -> dict:

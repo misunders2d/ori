@@ -1,15 +1,10 @@
-import re
-
 import google.adk.tools
 import pathlib
-from typing import AsyncGenerator
-from google.adk.agents import Agent, BaseAgent, LoopAgent, SequentialAgent
+from google.adk.agents import Agent
 from google.adk.models import Gemini
 from google.genai import types
 from google.adk.skills import load_skill_from_dir
 from google.adk.tools import skill_toolset
-from google.adk.events import Event, EventActions
-from google.adk.agents.invocation_context import InvocationContext
 
 from app.tools.google_search import google_search_agent_tool
 from app.tools.origins import analyze_upstream_file
@@ -18,12 +13,10 @@ from app.callbacks.guardrails import (
     admin_only_guardrail,
     prompt_injection_guardrail,
     tool_output_injection_guardrail,
-    verify_call_limiter,
 )
 from app.tools import (
     evolution_commit_and_push,
     evolution_read_file,
-    evolution_read_sandbox_file,
     evolution_stage_change,
     evolution_verify_sandbox,
     web_fetch,
@@ -36,43 +29,38 @@ log_maintenance_skill = load_skill_from_dir(base_dir / "log-maintenance-skill")
 system_management_skill = load_skill_from_dir(base_dir / "system-management-skill")
 external_research_skill = load_skill_from_dir(base_dir / "external-research-skill")
 
-def _generator_before_agent(callback_context):
-    """Reset verify call counter at the start of each GeneratorAgent turn, then run admin check."""
-    callback_context.state["_verify_call_count"] = 0
-    return admin_only_guardrail(callback_context)
-
-
 model_config = Gemini(
     model="gemini-3-flash-preview",
     retry_options=types.HttpRetryOptions(attempts=3),
 )
 
-# --- 1. Generator Agent (Formerly DeveloperAgent) ---
-
-generator_agent = Agent(
-    name="GeneratorAgent",
+developer_agent = Agent(
+    name="DeveloperAgent",
     model=model_config,
-    description="The primary coding unit. Analyzes requirements and implements code changes in the sandbox.",
+    description="Analyzes the agent's own source code and proposes/executes improvements or bug fixes.",
     instruction=(
-        "You are a Senior Software Engineer responsible for implementing code changes.\n\n"
-        "### ARCHITECTURAL PHILOSOPHY: Architectural Economy\n"
-        "You MUST adhere to the principles in `ARCHITECTURE.md`:\n"
-        "- **Leverage Existing Primitives**: Before adding new infrastructure or complexity, use existing tools (Agent Instructions, Scheduler, Session State, Memory Skill).\n"
-        "- **Reject Over-Engineering**: Do NOT introduce new background workers, messaging queues, or complex parallel orchestration if simpler solutions exist.\n"
-        "- **Minimalism**: Choose the path of least complexity that solves the problem correctly.\n\n"
-        "### Workflow:\n"
+        "You are a Senior Software Engineer responsible for the self-evolution of this agent. "
+        "Your CRITICAL mandate: Reliably test all new updates in the sandbox before pushing to production.\n\n"
+        "AVAILABILITY MANDATE: The system MUST operate always; the only excuse for failure is internet disruption or lack of power. "
+        "No code update should ever brick the agent's startup or basic communication capabilities.\n\n"
+        "GUARDRAIL PROTECTION MANDATE: The guardrails (event callbacks like `before_agent_callback`, `before_model_callback`, etc.) "
+        "are critical for system safety and security. You MUST NOT remove, modify, or try to bypass these guardrails "
+        "under any circumstances, unless explicitly requested by the user. This includes logic within tools or agent configurations.\n\n"
+        "PROJECT STRUCTURE MANDATE: You must strictly adhere to the modular layout. "
+        "Tools belong in `app/tools/`, agents in `app/sub_agents/`, data structures in `app/models/`, and tests in `tests/`.\n\n"
+        "LONG-TERM MEMORY: Use `remember_info` to record bug fixes, architecture decisions, and important repos. "
+        "Use `recall_technical_context` to search for past solutions when facing similar coding tasks. "
+        "This ensures our evolution is consistent and doesn't repeat past mistakes.\n\n"
+        "SYSTEM MANAGEMENT CONSTRAINT: Read the `system-management-skill`. You MUST respect `require_confirmation=True` wrappers.\n\n"
+        "REGRESSION TESTING MANDATE: You MUST persist your logical validation tests in the `tests/` directory.\n\n"
+        "SCHEMA VALIDATION MANDATE: When adding or modifying tools, you MUST ensure their function declarations "
+        "are strictly compliant with the Gemini API (e.g., all 'array' parameters MUST have 'items' defined). "
+        "Automate this check in your test suite to prevent 400 INVALID_ARGUMENT errors.\n\n"
+        "Your workflow:\n"
         "1. READ: Use `evolution_read_file` to understand existing code.\n"
         "2. STAGE: Use `evolution_stage_change` to write changes to the sandbox.\n"
         "3. VERIFY: Use `evolution_verify_sandbox` ('syntax', 'import', and 'pytest').\n"
-        "4. If verification fails, you may attempt ONE fix: stage the corrected code and verify again.\n"
-        "5. STOP: After at most 2 verify attempts (initial + one retry), STOP your turn and hand off to the ReviewerAgent — even if tests still fail. The ReviewerAgent will assess whether the remaining issue is environmental or a real bug. Do NOT keep retrying.\n\n"
-        "HARD LIMIT: You must NEVER call `evolution_verify_sandbox` more than 2 times in a single turn. If the second attempt fails, stop immediately.\n\n"
-        "### When Stuck on an Error:\n"
-        "If your first fix attempt fails, do NOT keep guessing. Before retrying:\n"
-        "1. Use `google_search` or `web_fetch` to search for the exact error message on Google or GitHub Issues — someone has likely already solved it.\n"
-        "2. Look for known issues, upstream fixes, or workarounds before writing more code.\n"
-        "3. If the error is environmental (e.g. ModuleNotFoundError, missing dependency, path issue), note it for the ReviewerAgent rather than trying to hack around it.\n\n"
-        "CRITICAL: Do NOT call `evolution_commit_and_push` directly. Your job is to prepare the change in the sandbox."
+        "4. COMMIT: ONLY if all verification passes, use `evolution_commit_and_push`."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[google_adk_skill, skill_creator_skill, log_maintenance_skill, system_management_skill, external_research_skill]),
@@ -83,154 +71,11 @@ generator_agent = Agent(
         remember_info,
         search_memory,
         recall_technical_context,
+        google.adk.tools.FunctionTool(evolution_commit_and_push, require_confirmation=True),
         google_search_agent_tool,
         web_fetch,
     ],
-    before_agent_callback=_generator_before_agent,
-    before_model_callback=prompt_injection_guardrail,
-    after_tool_callback=[verify_call_limiter, tool_output_injection_guardrail],
-)
-
-# --- 2. Reviewer Agent (The Critic) ---
-
-reviewer_agent = Agent(
-    name="ReviewerAgent",
-    model=model_config,
-    description="Evaluates code changes in the sandbox for quality, safety, and adherence to standards.",
-    instruction=(
-        "You are a Principal Software Engineer and Security Auditor.\n\n"
-        "Your job is to review the code changes staged in the sandbox by the GeneratorAgent.\n"
-        "### CRITICAL AUDIT CRITERIA: Architectural Economy\n"
-        "You MUST strictly enforce the principles in `ARCHITECTURE.md`. Reject any PR that:\n"
-        "- Introduces unnecessary infrastructure or complexity.\n"
-        "- Fails to leverage existing system primitives (Scheduler, Memory, Agent Instructions).\n"
-        "- Over-engineers a solution when a simpler alternative is available.\n\n"
-        "### Review Steps:\n"
-        "1. Use `evolution_read_sandbox_file` to inspect the staged files in the sandbox.\n"
-        "2. Use `evolution_verify_sandbox` to independently confirm the code passes tests.\n"
-        "3. Evaluate the code for:\n"
-        "   - Safety: No removal of guardrails.\n"
-        "   - Quality: Idiomatic Python, proper error handling, modularity.\n"
-        "   - Correctness: Does it fulfill the original request?\n\n"
-        "OUTPUT REQUIREMENT: You MUST conclude your review with a clear 'GRADE: PASS' or 'GRADE: FAIL'.\n"
-        "If FAIL, provide specific, actionable feedback for the GeneratorAgent to fix."
-    ),
-    tools=[
-        evolution_read_file,
-        evolution_read_sandbox_file,
-        evolution_verify_sandbox,
-        analyze_upstream_file,
-        recall_technical_context,
-    ],
     before_agent_callback=admin_only_guardrail,
     before_model_callback=prompt_injection_guardrail,
     after_tool_callback=tool_output_injection_guardrail,
-)
-
-# --- 3. Review Checker (Logic Gate) ---
-
-_GRADE_PASS_RE = re.compile(r'\bGRADE:\s*PASS\b', re.IGNORECASE)
-
-class ReviewChecker(BaseAgent):
-    """Inspects the ReviewerAgent's output and determines if the loop should terminate."""
-    async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
-        # Inspect the conversation history for the Reviewer's grade
-        found_pass = False
-        for event in reversed(ctx.session.events):
-            if event.author == "ReviewerAgent" and event.content and event.content.parts:
-                text = event.content.parts[0].text
-                if text and _GRADE_PASS_RE.search(text):
-                    found_pass = True
-                    break
-                # Stop searching once we hit the most recent reviewer event
-                break
-
-        if found_pass:
-            # Signal success via session state so the outer agent can check deterministically
-            yield Event(
-                author=self.name,
-                actions=EventActions(
-                    escalate=True,
-                    state_delta={"review_passed": True},
-                ),
-            )
-        else:
-            # Signal failure — loop continues, but if this is the last iteration
-            # the outer agent will see review_passed=False
-            yield Event(
-                author=self.name,
-                actions=EventActions(state_delta={"review_passed": False}),
-            )
-
-# --- 4. Committer Agent (Final Action) ---
-
-committer_agent = Agent(
-    name="CommitterAgent",
-    model=model_config,
-    description="Finalizes the development process by committing and pushing verified changes.",
-    instruction=(
-        "You are the deployment coordinator. You only run after a successful code review.\n\n"
-        "### Workflow:\n"
-        "1. **Commit & Push**: Call `evolution_commit_and_push` with a descriptive message.\n"
-        "2. **Memory Logging**: Use the `remember_info` tool to summarize and store the technical details of the fix/improvement in the 'technical' category. Include the problem solved and the files modified.\n\n"
-        "Do NOT modify any code. Just commit what is in the sandbox and record the technical history."
-    ),
-    tools=[
-        google.adk.tools.FunctionTool(evolution_commit_and_push, require_confirmation=True),
-        remember_info,
-    ],
-    before_agent_callback=admin_only_guardrail,
-    before_model_callback=prompt_injection_guardrail,
-    after_tool_callback=tool_output_injection_guardrail,
-)
-
-# --- 5. Orchestrated Developer Agent (The System) ---
-
-development_loop = LoopAgent(
-    name="DevelopmentLoop",
-    sub_agents=[
-        generator_agent,
-        reviewer_agent,
-        ReviewChecker(name="ReviewChecker"),
-    ],
-    max_iterations=3,
-)
-
-# --- 6. Commit Gate (Deterministic Check) ---
-
-class CommitGate(BaseAgent):
-    """Checks session state for review_passed before allowing the CommitterAgent to run.
-
-    Escalates (halts the SequentialAgent) if the review did not pass,
-    preventing the CommitterAgent from ever executing.
-    """
-    async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
-        state = ctx.session.state or {}
-        review_passed = state.get("review_passed", False)
-
-        if not review_passed:
-            yield Event(
-                author=self.name,
-                content=types.Content(parts=[types.Part(text=(
-                    "Review did NOT pass after all iterations. "
-                    "Aborting commit to protect code quality."
-                ))]),
-                actions=EventActions(escalate=True),
-            )
-        else:
-            # Pass through — SequentialAgent continues to CommitterAgent
-            yield Event(author=self.name)
-
-# Final exported agent — SequentialAgent guarantees deterministic execution order:
-#   1. DevelopmentLoop (generate → review → check, up to 3 iterations)
-#   2. CommitGate (hard gate: escalates to abort if review_passed is False)
-#   3. CommitterAgent (only reached if gate passes)
-developer_agent = SequentialAgent(
-    name="DeveloperAgent",
-    description="Analyzes the agent's own source code and proposes/executes improvements or bug fixes using a generator-reviewer loop.",
-    sub_agents=[
-        development_loop,
-        CommitGate(name="CommitGate"),
-        committer_agent,
-    ],
 )

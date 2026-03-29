@@ -13,17 +13,6 @@ from google.adk.tools.tool_context import ToolContext
 
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-_SANDBOX_BASE = os.path.join(os.path.abspath("./data"), "sandbox")
-
-
-def _get_sandbox_dir(tool_context: "ToolContext") -> str:
-    """Return a per-session sandbox directory to prevent concurrent clobbering."""
-    session = getattr(tool_context, "session", None)
-    sid = str(getattr(session, "id", "")) if session else ""
-    # Sanitise session id to be filesystem-safe
-    safe_sid = sid.replace("/", "_").replace("..", "_").strip("_") if sid else "default"
-    return os.path.join(_SANDBOX_BASE, safe_sid)
-
 
 def _safe_resolve_path(file_path: str, base_dir: str) -> str | None:
     """Resolve file_path relative to base_dir and ensure it stays within it."""
@@ -59,32 +48,6 @@ def evolution_read_file(file_path: str, tool_context: ToolContext) -> dict:
 
 
 
-def evolution_read_sandbox_file(file_path: str, tool_context: ToolContext) -> dict:
-    """Reads the content of a file from the sandbox environment.
-
-    Use this to review changes staged by yourself or another agent before verification.
-
-    Args:
-        file_path (str): The relative path to the file within the sandbox.
-
-    Returns:
-        dict: Content of the file or error.
-    """
-    sandbox_dir = _get_sandbox_dir(tool_context)
-    resolved = _safe_resolve_path(file_path, sandbox_dir)
-    if resolved is None:
-        return {"status": "error", "message": "Path traversal denied."}
-    
-    try:
-        if not os.path.exists(resolved):
-            return {"status": "error", "message": f"File {file_path} not found in sandbox."}
-        with open(resolved) as f:
-            return {"status": "success", "content": f.read()}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-
-
 def evolution_stage_change(
     file_path: str, new_content: str, tool_context: ToolContext
 ) -> dict:
@@ -105,8 +68,8 @@ def evolution_stage_change(
     """
     if file_path.endswith(".env"):
         return {"status": "error", "message": "Security error: Writing to .env directly is blocked. Instruct human to configure integrations properly."}
-
-    sandbox_dir = _get_sandbox_dir(tool_context)
+    
+    sandbox_dir = os.path.abspath("./data/sandbox")
     os.makedirs(sandbox_dir, exist_ok=True)
 
     resolved = _safe_resolve_path(file_path, sandbox_dir)
@@ -144,7 +107,7 @@ def evolution_verify_sandbox(
     Returns:
         dict: Verification status and output.
     """
-    sandbox_dir = _get_sandbox_dir(tool_context)
+    sandbox_dir = os.path.abspath("./data/sandbox")
     if not os.path.exists(sandbox_dir):
         return {"status": "error", "message": "No staged changes found in sandbox."}
 
@@ -259,7 +222,7 @@ def evolution_commit_and_push(
     Returns:
         dict: Status of the commit and push operation.
     """
-    sandbox_dir = _get_sandbox_dir(tool_context)
+    sandbox_dir = os.path.abspath("./data/sandbox")
     # If no staged files AND no deletions, return error
     has_staged = os.path.exists(sandbox_dir) and any(os.path.isfile(os.path.join(root, f)) for root, _, files in os.walk(sandbox_dir) for f in files)
     
@@ -325,7 +288,7 @@ def evolution_commit_and_push(
                 subprocess.run(["git", "add"] + rel_paths[i:i+chunk_size], cwd=tmp_repo_dir, check=True)
             
         # Append "evolved by {bot_name}" to the commit message
-        signed_message = f"{commit_message}\n\nevolved by {bot_name}"
+        signed_message = f"{commit_message}\n\enevolved by {bot_name}"
         subprocess.run(["git", "commit", "-m", signed_message], cwd=tmp_repo_dir, check=True)
 
         result = subprocess.run(

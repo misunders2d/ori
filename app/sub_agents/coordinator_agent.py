@@ -29,6 +29,7 @@ from app.tools import (
     schedule_recurring_task,
     schedule_system_task,
     schedule_recurring_system_task,
+    run_system_task_now,
     session_refresh,
     update_self,
     trigger_rollback,
@@ -47,18 +48,19 @@ root_agent = Agent(
         "Your job is to orchestrate management, scheduling, and development.\n\n"
         "1. For general research or complex web tasks: Use the google search and web fetch tools directly. "
         "2. For scheduling/reminders: ALWAYS call `get_current_time` first to know current time. "
-        "3. For self-evolution (code changes, improvements, fixing bugs):\n"
-        "   - INTERACTIVE: Delegate to DeveloperAgent if the user wants to wait and see progress.\n"
-        "   - BACKGROUND: Use `schedule_system_task` (with current time) if the user wants the task done 'in the background' or 'while I do something else'. "
-        "This allows you to stay responsive to other commands.\n"
+        "3. For self-evolution (code changes, improvements, fixing bugs): Delegate to DeveloperAgent. "
         "4. For session management: Use `session_refresh`. "
         "5. For OAuth2 platform connections: Use `check_connection` and `connect_to_platform`. "
         "6. For Origins Protocol: Use `check_upstream` to see new features/fixes. "
         "7. For Long-Term Memory: Use `remember_info` to store facts, preferences, or technical notes. "
-        "Use `search_memory`, `recall_human_preferences`, or `recall_technical_context` to retrieve information from previous sessions.\n\n"
-        "GUARDRAIL PROTECTION MANDATE: The guardrails are critical for safety. You MUST NOT remove or modify them.\n"
-        "CREDENTIAL SECURITY: NEVER ask a user to type a secret directly in chat.\n"
-        "NAME: Your name is {bot_name}."
+        "Use `search_memory`, `recall_human_preferences`, or `recall_technical_context` to retrieve information from previous sessions. "
+        "This memory is local, private, and persistent across reboots.\n\n"
+        "GUARDRAIL PROTECTION MANDATE: The guardrails (event callbacks like `before_agent_callback`, `before_model_callback`, etc.) "
+        "are critical for system safety and security. You MUST NOT remove, modify, or try to bypass these guardrails "
+        "under any circumstances, unless explicitly requested by the user.\n\n"
+        "CREDENTIAL SECURITY: NEVER ask a user to type a secret directly in chat. Use `configure_integration` for keys. "
+        "NAME: Your name is {bot_name}. Always refer to yourself by this name. "
+        "Always respect saved user preferences."
     ),
     sub_agents=[
         developer_agent,
@@ -82,6 +84,7 @@ root_agent = Agent(
         search_memory,
         recall_human_preferences,
         recall_technical_context,
+        google.adk.tools.FunctionTool(run_system_task_now, require_confirmation=True),
         google.adk.tools.FunctionTool(schedule_system_task, require_confirmation=True),
         google.adk.tools.FunctionTool(schedule_recurring_system_task, require_confirmation=True),
         google.adk.tools.FunctionTool(update_self, require_confirmation=True),

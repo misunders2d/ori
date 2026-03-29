@@ -284,47 +284,6 @@ def tool_output_injection_guardrail(tool, args, tool_context, tool_response):
     return None
 
 
-# ---------------------------------------------------------------------------
-# After-tool guardrail: cap repeated verify calls to prevent death loops
-# ---------------------------------------------------------------------------
-
-_MAX_VERIFY_CALLS_PER_TURN = 2
-
-
-def verify_call_limiter(tool, args, tool_context, tool_response):
-    """After-tool callback: enforce a hard cap on evolution_verify_sandbox calls.
-
-    Prevents the GeneratorAgent from entering an unbounded internal loop
-    when tests keep failing (e.g. due to environment issues like
-    ModuleNotFoundError that the agent cannot fix by editing code).
-    """
-    tool_name = getattr(tool, "name", "") or (tool.__name__ if callable(tool) else "")
-    if tool_name != "evolution_verify_sandbox":
-        return None
-
-    state = tool_context.state.to_dict() if hasattr(tool_context, "state") else {}
-    count = state.get("_verify_call_count", 0) + 1
-
-    # Persist the incremented count
-    tool_context.state["_verify_call_count"] = count
-
-    if count > _MAX_VERIFY_CALLS_PER_TURN:
-        logger.warning(
-            "Verify call limiter: blocked call #%d (max %d per turn)",
-            count, _MAX_VERIFY_CALLS_PER_TURN,
-        )
-        return {
-            "status": "blocked",
-            "message": (
-                f"HARD LIMIT REACHED: You have already called evolution_verify_sandbox "
-                f"{_MAX_VERIFY_CALLS_PER_TURN} times this turn. You MUST stop now and "
-                f"hand off to the ReviewerAgent. Do NOT attempt further verification."
-            ),
-        }
-
-    return None
-
-
 async def state_setter(
     callback_context: CallbackContext, **kwargs
 ) -> types.Content | None:
