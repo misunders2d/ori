@@ -214,7 +214,7 @@ def evolution_verify_sandbox(
 
 
 def evolution_commit_and_push(
-    commit_message: str, tool_context: ToolContext, delete_files: Optional[List[str]] = None
+    commit_message: str, tool_context: ToolContext, delete_files: Optional[List[str]] = None, summary: Optional[str] = None
 ) -> dict:
     """Commits and pushes verified changes and handles deletions in the GitHub repository.
 
@@ -226,7 +226,9 @@ def evolution_commit_and_push(
 
     Args:
         commit_message (str): A descriptive message explaining the improvement.
+        tool_context (ToolContext): The tool context (injected by the framework).
         delete_files (Optional[List[str]]): List of relative paths to files that should be deleted.
+        summary (Optional[str]): A 2-3 phrase summary of the exact changes being committed. This will be shown to the user in the confirmation prompt.
 
     Returns:
         dict: Status of the commit and push operation.
@@ -332,13 +334,13 @@ def evolution_commit_and_push(
     if os.path.exists(sandbox_dir):
         shutil.rmtree(sandbox_dir, ignore_errors=True)
 
-    summary = []
+    summary_list = []
     if staged_files:
-        summary.append(f"added/updated {len(staged_files)} file(s)")
+        summary_list.append(f"added/updated {len(staged_files)} file(s)")
     if delete_files:
-        summary.append(f"deleted {len(delete_files)} file(s)")
+        summary_list.append(f"deleted {len(delete_files)} file(s)")
 
     return {
         "status": "success",
-        "message": f"Successfully {' and '.join(summary)} via temporary clone.",
+        "message": f"Successfully {' and '.join(summary_list)} via temporary clone.",
     }

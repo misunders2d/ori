@@ -298,7 +298,8 @@ async def extract_agent_response(
                             reason = f"Clear conversation history (Mode: {mode})."
                         elif tool_name == "evolution_commit_and_push":
                             msg_arg = clean_payload.get('commit_message', 'Perform code evolution')
-                            reason = f"Commit and push changes: {msg_arg}"
+                            summary_arg = clean_payload.get('summary')
+                            reason = f"Commit and push changes: {summary_arg or msg_arg}"
                         elif summary_text:
                             reason = summary_text
                             
