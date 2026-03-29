@@ -26,7 +26,7 @@ def create_a2a_app():
     # - Discovery at /.well-known/agent.json (if symlinked or handled)
     # We prioritize the native ADK implementation as requested.
     app = to_a2a(
-        root_agent=root_agent,
+        agent=root_agent,
         agent_card=agent_card_path if os.path.exists(agent_card_path) else None
     )
 
