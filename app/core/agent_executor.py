@@ -3,6 +3,7 @@
 import logging
 import time
 import uuid
+import re
 from dataclasses import dataclass, field
 
 from google import genai
@@ -144,14 +145,16 @@ async def extract_agent_response(
             app_name=runner.app_name, user_id=user_id, session_id=session_id
         )
         if session is None:
-            await runner.session_service.create_session(
+            session = await runner.session_service.create_session(
                 app_name=runner.app_name, user_id=user_id, session_id=session_id
             )
 
     except Exception:
-        await runner.session_service.create_session(
+        session = await runner.session_service.create_session(
             app_name=runner.app_name, user_id=user_id, session_id=session_id
         )
+
+    MAX_RETRIES = 2
 
     message_str = ""
     if isinstance(message, str):
@@ -164,8 +167,13 @@ async def extract_agent_response(
                 parts.append(p.text)
         message_str = " ".join(parts)
 
-    text_lower = message_str.strip().lower()
+    # SURGICAL FIX: Strict fullmatch only. Prevents the 'interaction' trap.
+    clean_msg = message_str.strip().lower()
+    match = re.fullmatch(r'(?i)(?:[:]\s*)?(yes|y|no|n)', clean_msg)
+    text_lower = match.group(1).lower() if match else ""
 
+    was_confirmation = False
+    is_confirmed = False
     if text_lower in ("yes", "y", "no", "n") and session and getattr(session, "events", None):
         pending_call_ids = []
         
@@ -173,16 +181,24 @@ async def extract_agent_response(
         for i in range(len(session.events)-1, max(-1, len(session.events)-15), -1):
             ev = session.events[i]
             
-            # Check for actual 'adk_request_confirmation' tool calls in the event
-            fcs = ev.get_function_calls() if hasattr(ev, "get_function_calls") else []
-            for fc in fcs:
-                if fc.name == "adk_request_confirmation" and fc.id:
-                    pending_call_ids.append(fc.id)
+            # 1. Check for requested confirmations (The canonical ADK source)
+            if hasattr(ev, "actions") and ev.actions and hasattr(ev.actions, "requested_tool_confirmations"):
+                if ev.actions.requested_tool_confirmations:
+                    for cid in ev.actions.requested_tool_confirmations.keys():
+                        pending_call_ids.append(cid)
+            
+            # 2. Check for actual function calls (Fallback for direct adk_request_confirmation calls)
+            if not pending_call_ids:
+                fcs = ev.get_function_calls() if hasattr(ev, "get_function_calls") else []
+                for fc in fcs:
+                    if fc.name == "adk_request_confirmation" and fc.id:
+                        pending_call_ids.append(fc.id)
             
             if pending_call_ids:
                 break
         
         if pending_call_ids:
+            was_confirmation = True
             is_confirmed = text_lower in ("yes", "y")
             func_parts = []
             for pc_id in pending_call_ids:
@@ -192,22 +208,17 @@ async def extract_agent_response(
                     response={"hint": "", "confirmed": is_confirmed, "payload": None}
                 )
                 func_parts.append(types.Part(function_response=fr))
-            # Critical: return a Content object with ONLY the FunctionResponse to unblock the agent
             message_arg = types.Content(role="user", parts=func_parts)
         else:
-            # Not confirmed, or no pending call found
             message_arg = message if isinstance(message, types.Content) else types.Content(role="user", parts=[types.Part.from_text(text=message)])
     else:
-        # Standard chat message
         message_arg = message if isinstance(message, types.Content) else types.Content(role="user", parts=[types.Part.from_text(text=message)])
     
 
     parts = []
     media_items = []
-    # Running map of call_id -> tool_name accumulated across ALL events in the stream
     seen_function_calls = {}
 
-    MAX_RETRIES = 2
     for attempt in range(1 + MAX_RETRIES):
         try:
             async for event in runner.run_async(
@@ -215,7 +226,7 @@ async def extract_agent_response(
                 session_id=session_id,
                 new_message=message_arg,
             ):
-                # Track all function calls across the entire event stream
+                # Track function calls across the entire event stream
                 if hasattr(event, "get_function_calls"):
                     for fc in event.get_function_calls():
                         if fc.id and fc.name:
@@ -281,32 +292,16 @@ async def extract_agent_response(
             break  # success
         except Exception as exc:
             error_msg = str(exc).split("\n")[0] if str(exc) else type(exc).__name__
-            logger.warning(
-                "Agent error (attempt %d/%d) for user %s: %s",
-                attempt + 1,
-                1 + MAX_RETRIES,
-                user_id,
-                error_msg,
-            )
+            logger.warning("Agent error: %s", error_msg)
 
             if attempt < MAX_RETRIES:
                 parts.clear()
                 message_arg = types.Content(
                     role="user",
-                    parts=[
-                        types.Part.from_text(
-                            text=(
-                                f"Your previous action failed with this error: {error_msg}\n"
-                                "Analyze what went wrong and retry my original request. "
-                                "If a tool caused the error, do NOT use it again."
-                            )
-                        )
-                    ],
+                    parts=[types.Part.from_text(text=f"Your previous action failed with this error: {error_msg}\nAnalyze what went wrong and retry.")]
                 )
                 continue
-            return AgentResponse(
-                text=f"Agent error after {1 + MAX_RETRIES} attempts. Last error: {error_msg}"
-            )
+            return AgentResponse(text=f"Agent error after retries: {error_msg}")
 
     final_text = (
         "\n".join(parts)
