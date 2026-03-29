@@ -112,6 +112,34 @@ async def run_proactive_diagnostics():
     except Exception as e:
         logger.error("Proactive diagnostics task failed: %s", e)
 
+async def run_a2a_server():
+    """
+    Dynamically runs the A2A Native Server (FastAPI) via uvicorn if dependencies are met.
+    This allows this Ori instance to be called by other Oris in the network.
+    """
+    try:
+        import uvicorn
+        from app.a2a_server import a2a_app
+        
+        # Default to port 8000 for A2A communication
+        port = int(os.environ.get("A2A_PORT", 8000))
+        
+        logger.info(f"Launching A2A Native Server on port {port}...")
+        config = uvicorn.Config(
+            a2a_app, 
+            host="0.0.0.0", 
+            port=port, 
+            log_level="info",
+            proxy_headers=True, # Important for reverse proxy detection
+            forwarded_allow_ips="*"
+        )
+        server = uvicorn.Server(config)
+        await server.serve()
+    except (ImportError, ModuleNotFoundError):
+        logger.warning("Uvicorn or FastAPI not found. A2A Native Server is currently disabled.")
+    except Exception as e:
+        logger.error(f"Failed to start A2A Native Server: {e}")
+
 async def main():
     """
     The Master Entrypoint for the Docker application daemon.
@@ -181,6 +209,9 @@ async def main():
 
     # 4. Collect and spin up all polling interfaces
     tasks = []
+    
+    # A2A Native Server (The Ori-Net Bridge)
+    tasks.append(asyncio.create_task(run_a2a_server()))
 
     # Telegram
     if os.environ.get("TELEGRAM_BOT_TOKEN"):
