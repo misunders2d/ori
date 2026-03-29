@@ -169,7 +169,7 @@ async def extract_agent_response(
 
     # REFINED REGEX: Matches only if 'yes' or 'no' is the standalone word 
     # (optionally preceded by a colon for UI consistency).
-    # Prevents matching 'n' in 'interaction'.
+    # Prevents matching 'n' in 'interaction' or 'd' in 'proceed'.
     clean_msg = message_str.strip().lower()
     match = re.fullmatch(r'(?i)(?:[:]\s*)?(yes|y|no|n)', clean_msg)
     text_lower = match.group(1).lower() if match else ""
