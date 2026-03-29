@@ -268,25 +268,31 @@ async def extract_agent_response(
 
                         # Robust payload extraction
                         payload = getattr(confirmation, "payload", None)
-                        summary_parts = []
                         clean_payload = {}
                         
-                        # Handle both dicts and objects for payload
                         if payload:
-                            if isinstance(payload, dict):
+                            # Try model_dump (Pydantic v2)
+                            if hasattr(payload, "model_dump"):
+                                items = payload.model_dump().items()
+                            # Try dict() (Pydantic v1)
+                            elif hasattr(payload, "dict"):
+                                items = payload.dict().items()
+                            elif isinstance(payload, dict):
                                 items = payload.items()
                             else:
-                                # Try accessing __dict__ or other methods if it's an object
                                 items = getattr(payload, "__dict__", {}).items()
                             
                             for k, v in items:
                                 if k != "tool_context" and not k.startswith("_"):
                                     clean_payload[k] = v
-                                    # Include all reasonable length arguments in summary
-                                    val_str = str(v)
-                                    if len(val_str) > 100:
-                                        val_str = val_str[:97] + "..."
-                                    summary_parts.append(f"{k}: '{val_str}'")
+                        
+                        summary_parts = []
+                        for k, v in clean_payload.items():
+                            # Include all reasonable length arguments in summary
+                            val_str = str(v)
+                            if len(val_str) > 100:
+                                val_str = val_str[:97] + "..."
+                            summary_parts.append(f"{k}: '{val_str}'")
                         
                         summary_text = ", ".join(summary_parts) if summary_parts else ""
 
