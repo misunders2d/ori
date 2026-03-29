@@ -10,6 +10,7 @@ def create_a2a_app():
     Initializes and configures the A2A Server for this Ori instance.
     Uses the native Google ADK to_a2a wrapper for maximum protocol compliance.
     """
+    logger.info("Initializing A2A Server application...")
     # Path to the Agent Card (Digital Business Card)
     # This file is generated/updated by the 'get_agent_identity' tool.
     agent_card_path = os.path.abspath("agent.json")
@@ -25,12 +26,17 @@ def create_a2a_app():
     # - Discovery at /.well-known/agent-card.json (standard ADK path)
     # - Discovery at /.well-known/agent.json (if symlinked or handled)
     # We prioritize the native ADK implementation as requested.
-    app = to_a2a(
-        agent=root_agent,
-        agent_card=agent_card_path if os.path.exists(agent_card_path) else None
-    )
-
-    return app
+    logger.info("Wrapping root_agent with to_a2a wrapper...")
+    try:
+        app = to_a2a(
+            agent=root_agent,
+            agent_card=agent_card_path if os.path.exists(agent_card_path) else None
+        )
+        logger.info("A2A Server application successfully initialized.")
+        return app
+    except Exception as e:
+        logger.error(f"Failed to create A2A app via to_a2a: {e}")
+        raise
 
 # The ASGI application instance (Starlette app)
 a2a_app = create_a2a_app()
