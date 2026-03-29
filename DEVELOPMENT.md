@@ -1,18 +1,41 @@
-# 🧬 Ori Development Roadmap
+# 🗺️ Ori Development Roadmap
 
-This document is the official blueprint for Ori's growth. It serves as the source of truth for all self-evolution tasks.
+This document tracks the long-term vision, ongoing evolution, and pending tasks for Ori.
 
 ## 🔭 Roadmap (Vision)
-*High-level, long-term strategic goals. New items require user approval.*
 
-1. **A2A Protocol (Ori-Net):** Implement the native Google ADK A2A protocol to enable real-time, decentralized technical collaboration between independent Ori instances. Use Agent Cards for discovery and strictly isolate human-memory from technical DNA exchange. *Status: Phase 4 (DNA Exchange in progress)*
+The goal is to transform Ori from a capable assistant into a fully autonomous, secure, and collaborative digital organism.
 
-## 🛠️ Backlog (Technical Debt & Bugs)
-*Practical technical improvements and known bug fixes.*
+### 🧬 Core Evolution & Intelligence
+- **Model Hot Swap**: Enable the ability to switch between different LLM models (e.g., Gemini, GPT-4, Claude) dynamically without requiring a system reboot or code change.
+- **Neural Expansion**: Integrate deeper RAG (Retrieval-Augmented Generation) for user preferences and technical history to handle massive context windows efficiently.
 
-1. **Delayed Credential Check** - `evolution_commit_and_push` only checks for `GITHUB_TOKEN` and `GITHUB_REPO` after full sandbox verification, causing long wait times before notifying the user about missing authentication. *Status: Open*
+### 🛡️ Security & Reliability
+- **Immune System Hardening**: Implement automated **Packages Vulnerability Checks** (e.g., `safety`, `pip-audit`) during the sandbox verification phase.
+- **Rollback Refinement**: Improve the `trigger_rollback` mechanism to handle database migrations and state consistency across versions.
 
-## 📜 Principles of Evolution
-*   **Source of Truth:** This file is the primary reference for all self-evolution decisions.
-*   **Permission First:** Suggestions for the Roadmap are welcome, but additions require explicit user approval.
-*   **Continuous Alignment:** Every code update must be checked against this roadmap to prevent technical drift.
+### 👥 Interaction & Multi-Tenancy
+- **Enhanced Multi-User Interaction**: Move beyond simple chat isolation to a robust multi-user system with roles (Admin, Developer, User) and granular permissions.
+- **Rich Interaction UI**: **Improve confirmation prompts** further by including code diffs (where possible) and more interactive elements in supported messengers.
+
+### 🌐 Ori-Net (A2A)
+- **Decentralized Collaboration**: Enable Oris to form "swarms" for parallelizing large research or coding tasks.
+- **DNA Marketplace**: Create a secure way for Oris to discover and "purchase" (or exchange) verified skills and tools from each other.
+
+---
+
+## 📋 Backlog
+
+### High Priority
+- [ ] Implement `packages vulnerability check` tool.
+- [ ] Refactor confirmation prompt logic to support multi-line diff summaries.
+- [ ] Prototype model switching utility.
+
+### Medium Priority
+- [ ] Add support for Discord and Slack transport adapters.
+- [ ] Implement automated documentation generation for new skills.
+
+### Completed (Recent Milestones)
+- [x] **v0.7.0**: Agent-to-Agent (A2A) Protocol implementation (Ori-Net).
+- [x] **v0.7.1**: Robust Tool Confirmation system with human-readable summaries.
+- [x] **Workflow Overhaul**: Enforced strict conversational routing and log-first diagnostic mandates.
