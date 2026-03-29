@@ -170,6 +170,8 @@ async def extract_agent_response(
     match = re.search(r'(?i)(?::\s*)(yes|y|no|n)\s*$', message_str.strip())
     text_lower = match.group(1).lower() if match else message_str.strip().lower()
 
+    was_confirmation = False
+    is_confirmed = False
     if text_lower in ("yes", "y", "no", "n") and session and getattr(session, "events", None):
         pending_call_ids = []
         
@@ -187,6 +189,7 @@ async def extract_agent_response(
                 break
         
         if pending_call_ids:
+            was_confirmation = True
             is_confirmed = text_lower in ("yes", "y")
             func_parts = []
             for pc_id in pending_call_ids:
@@ -210,6 +213,9 @@ async def extract_agent_response(
     media_items = []
     # Running map of call_id -> tool_name accumulated across ALL events in the stream
     seen_function_calls = {}
+    
+    # Track latest tool results to provide better feedback if the model is silent
+    latest_tool_results = []
 
     for attempt in range(1 + MAX_RETRIES):
         try:
@@ -228,6 +234,14 @@ async def extract_agent_response(
                     for part in event.content.parts:
                         if hasattr(part, "text") and part.text:
                             parts.append(part.text)
+                        # Capture tool results for fallback feedback
+                        elif hasattr(part, "function_response") and part.function_response:
+                            res = part.function_response.response
+                            if isinstance(res, dict) and "message" in res:
+                                latest_tool_results.append(res["message"])
+                            elif isinstance(res, dict) and "status" in res:
+                                latest_tool_results.append(f"Status: {res['status']}")
+
                         # Capture inline binary data (images, audio, etc.)
                         elif hasattr(part, "inline_data") and part.inline_data:
                             media_items.append({
@@ -363,11 +377,18 @@ async def extract_agent_response(
                 text=f"Agent error after {1 + MAX_RETRIES} attempts. Last error: {error_msg}"
             )
 
-    final_text = (
-        "\n".join(parts)
-        if parts
-        else "I processed your request but have no response to show."
-    )
+    if not parts:
+        if was_confirmation and is_confirmed:
+            if latest_tool_results:
+                final_text = f"✅ **Action Confirmed**\n\n{latest_tool_results[-1]}"
+            else:
+                final_text = "✅ **Action Confirmed**\n\nThe requested operation was performed successfully."
+        elif was_confirmation and not is_confirmed:
+            final_text = "❌ **Action Cancelled**\n\nI have cancelled the requested operation as you instructed."
+        else:
+            final_text = "I processed your request but have no response to show."
+    else:
+        final_text = "\n".join(parts)
 
     # Check for manual session refresh signal
     refresh_mode = get_pending_refresh(session_id)
