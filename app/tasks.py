@@ -134,7 +134,7 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
             timeout=_SYSTEM_TASK_TIMEOUT,
         )
 
-        is_failure = bool(_FAILURE_RE.search(response))
+        is_failure = bool(_FAILURE_RE.search(str(response)))
 
         if silent and not is_failure:
             logger.info("System task completed silently: %s", task_prompt)

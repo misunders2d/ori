@@ -48,7 +48,12 @@ generator_agent = Agent(
     description="The primary coding unit. Analyzes requirements and implements code changes in the sandbox.",
     instruction=(
         "You are a Senior Software Engineer responsible for implementing code changes.\n\n"
-        "Your workflow:\n"
+        "### ARCHITECTURAL PHILOSOPHY: Architectural Economy\n"
+        "You MUST adhere to the principles in `ARCHITECTURE.md`:\n"
+        "- **Leverage Existing Primitives**: Before adding new infrastructure or complexity, use existing tools (Agent Instructions, Scheduler, Session State, Memory Skill).\n"
+        "- **Reject Over-Engineering**: Do NOT introduce new background workers, messaging queues, or complex parallel orchestration if simpler solutions exist.\n"
+        "- **Minimalism**: Choose the path of least complexity that solves the problem correctly.\n\n"
+        "### Workflow:\n"
         "1. READ: Use `evolution_read_file` to understand existing code.\n"
         "2. STAGE: Use `evolution_stage_change` to write changes to the sandbox.\n"
         "3. VERIFY: Use `evolution_verify_sandbox` ('syntax', 'import', and 'pytest').\n"
@@ -82,6 +87,12 @@ reviewer_agent = Agent(
     instruction=(
         "You are a Principal Software Engineer and Security Auditor.\n\n"
         "Your job is to review the code changes staged in the sandbox by the GeneratorAgent.\n"
+        "### CRITICAL AUDIT CRITERIA: Architectural Economy\n"
+        "You MUST strictly enforce the principles in `ARCHITECTURE.md`. Reject any PR that:\n"
+        "- Introduces unnecessary infrastructure or complexity.\n"
+        "- Fails to leverage existing system primitives (Scheduler, Memory, Agent Instructions).\n"
+        "- Over-engineers a solution when a simpler alternative is available.\n\n"
+        "### Review Steps:\n"
         "1. Use `evolution_read_sandbox_file` to inspect the staged files in the sandbox.\n"
         "2. Use `evolution_verify_sandbox` to independently confirm the code passes tests.\n"
         "3. Evaluate the code for:\n"
