@@ -35,6 +35,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Integrate Uvicorn logs into our rotating file handler
+logging.getLogger("uvicorn").handlers = [
+    logging.StreamHandler(),
+    RotatingFileHandler(LOG_FILE_PATH, maxBytes=100_000, backupCount=1)
+]
+logging.getLogger("uvicorn.access").handlers = [
+    logging.StreamHandler(),
+    RotatingFileHandler(LOG_FILE_PATH, maxBytes=100_000, backupCount=1)
+]
+
 from google.adk.runners import Runner
 from google.adk.sessions import DatabaseSessionService
 
@@ -116,18 +126,15 @@ async def run_a2a_server():
     Dynamically runs the A2A Native Server (FastAPI) via uvicorn if dependencies are met.
     This allows this Ori instance to be called by other Oris in the network.
     """
-    print("[A2A DEBUG] run_a2a_server task started.")
+    logger.info("Initializing A2A Native Server task...")
     try:
-        print("[A2A DEBUG] Importing uvicorn and a2a_app...")
         import uvicorn
         from app.a2a_server import a2a_app
-        print("[A2A DEBUG] Imports successful.")
         
         # Default to port 8000 for A2A communication
         port = int(os.environ.get("A2A_PORT", 8000))
         
         logger.info(f"Launching A2A Native Server on port {port}...")
-        print(f"[A2A DEBUG] Launching uvicorn on port {port}...")
         config = uvicorn.Config(
             a2a_app, 
             host="0.0.0.0", 
@@ -140,10 +147,8 @@ async def run_a2a_server():
         await server.serve()
     except (ImportError, ModuleNotFoundError) as e:
         logger.warning(f"Uvicorn or FastAPI not found. A2A Native Server is currently disabled. Error: {e}")
-        print(f"[A2A DEBUG] Missing dependencies: {e}")
     except Exception as e:
         logger.error(f"Failed to start A2A Native Server: {e}")
-        print(f"[A2A DEBUG] Error starting server: {e}")
         import traceback
         traceback.print_exc()
 
@@ -154,7 +159,6 @@ async def main():
     and concurrently maps all polling interfaces (Telegram, Slack, etc.) to the ADK `Runner`.
     """
     logger.info("Initializing Autonomous Worker Daemon...")
-    print("[A2A DEBUG] main() started.")
 
     # 1. Warm up the runner
     runner = get_runner()
@@ -219,12 +223,10 @@ async def main():
     tasks = []
     
     # A2A Native Server (The Ori-Net Bridge)
-    print("[A2A DEBUG] Creating run_a2a_server task...")
     tasks.append(asyncio.create_task(run_a2a_server()))
 
     # Telegram
     if os.environ.get("TELEGRAM_BOT_TOKEN"):
-        print("[A2A DEBUG] Creating poll_telegram task...")
         tasks.append(
             asyncio.create_task(poll_telegram(get_runner, process_init_command))
         )
