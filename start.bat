@@ -60,9 +60,12 @@ echo   %DIM%By continuing, you accept these terms.%RESET%
 echo.
 echo %HR%
 echo.
-set /p "=  %WHITE%Press Enter to continue (or Ctrl+C to abort)...%RESET% " <nul
-pause >nul
-echo.
+REM Skip interactive pause if already configured
+if not exist "%SCRIPT_DIR%\data\.env" (
+    set /p "=  %WHITE%Press Enter to continue (or Ctrl+C to abort)...%RESET% " <nul
+    pause >nul
+    echo.
+)
 
 REM ---------------------------------------------------------------------------
 REM Prerequisite checks

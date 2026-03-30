@@ -79,9 +79,12 @@ echo ""
 hr
 echo ""
 
-prompt "Press Enter to continue (or Ctrl+C to abort)... "
-read -r
-echo ""
+# Skip the interactive pause if already configured (not a fresh install)
+if [ ! -f "$SCRIPT_DIR/data/.env" ]; then
+    prompt "Press Enter to continue (or Ctrl+C to abort)... "
+    read -r
+    echo ""
+fi
 
 # ---------------------------------------------------------------------------
 # Prerequisite checks
