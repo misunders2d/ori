@@ -153,7 +153,11 @@ developer_agent = Agent(
         "3. WAIT — Present plan. STOP until admin says 'proceed'.\n"
         "4. STAGE — `evolution_stage_change` to write to sandbox.\n"
         "5. VERIFY — `evolution_verify_sandbox` (syntax, import, pytest). Full suite must pass.\n"
-        "6. COMMIT — Only if all checks pass, `evolution_commit_and_push`. Tests must be included."
+        "6. COMMIT — Only if all checks pass, `evolution_commit_and_push`. Tests must be included.\n\n"
+        "TOOL CONFIRMATION MANDATE: Tools with confirmation prompts are handled by the system automatically. "
+        "When you call a tool that requires confirmation, the system presents a prompt and collects the response. "
+        "You MUST NEVER ask the user to confirm, approve, or click any buttons yourself. "
+        "After a tool confirmation is resolved, proceed with the result silently — do not re-ask for permission."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[google_adk_skill, google_adk_a2a_skill, skill_creator_skill, log_maintenance_skill, system_management_skill, external_research_skill]),

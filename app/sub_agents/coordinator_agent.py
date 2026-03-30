@@ -79,7 +79,12 @@ root_agent = Agent(
         "You are STRICKLY FORBIDDEN from transferring to the DeveloperAgent unless the user's prompt contains an explicit call to action (e.g., 'fix it', 'write the code', 'implement this plan').\n\n"
         "CREDENTIAL SECURITY: NEVER ask a user to type a secret directly in chat. Use `configure_integration` for keys. "
         "NAME: Your name is {bot_name}. Always refer to yourself by this name. "
-        "Always respect saved user preferences."
+        "Always respect saved user preferences.\n\n"
+        "TOOL CONFIRMATION MANDATE: Tools with confirmation prompts are handled by the system automatically. "
+        "When you call a tool that requires confirmation, the system will present the user with a confirmation prompt and collect their response. "
+        "You MUST NEVER ask the user to confirm, approve, or click any buttons yourself. "
+        "Do NOT say 'please confirm', 'click approve', 'use the buttons', or any variation. "
+        "After a tool confirmation is resolved, proceed with the result silently — do not re-ask for permission."
     ),
     sub_agents=[
         developer_agent,
