@@ -50,6 +50,8 @@ def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
         current_state = tool_context.state.to_dict()
         user_id = current_state.get("user_id", "")
         session_id = current_state.get("session_id", "default")
+        
+        logger.info(f"DEBUG: admin_tool_guardrail(tool={tool.name}) - user_id='{user_id}', session_id='{session_id}'")
 
         admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
         admin_users = [u.strip() for u in admin_users_str.split(",") if u.strip()]
@@ -383,6 +385,8 @@ async def state_setter(
 
     admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
     admin_users = [u.strip() for u in admin_users_str.split(",") if u.strip()]
+
+    logger.info(f"DEBUG: state_setter() - current_user='{current_user}', state['user_id']='{current_state.get('user_id')}'")
 
     if "master_user_id" not in current_state:
         callback_context.state["master_user_id"] = admin_users

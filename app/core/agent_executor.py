@@ -102,6 +102,8 @@ async def update_session_state(runner, user_id: str, session_id: str, state_delt
     """Natively injects state_delta into the ADK Session DB without invoking the graph."""
     from google.adk.events.event import Event, EventActions
 
+    logger.info(f"DEBUG: update_session_state(user_id={user_id}, session_id={session_id}, state_delta={state_delta})")
+
     session = await runner.session_service.get_session(
         app_name=runner.app_name, user_id=user_id, session_id=session_id
     )
@@ -130,6 +132,8 @@ async def extract_agent_response(
         import sys
         Event = sys.modules['google.adk.events.event'].Event
         EventActions = sys.modules['google.adk.events.event'].EventActions
+
+    logger.info(f"DEBUG: extract_agent_response(user_id={user_id}, session_id={session_id}, actual_caller_id={actual_caller_id})")
 
     if actual_caller_id:
         await update_session_state(

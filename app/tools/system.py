@@ -185,11 +185,16 @@ async def execute_approved_action(token: str, tool_context: ToolContext) -> dict
 
     # Security Gate: Use the state-persistent user_id (individual ID) instead of the session runner ID (chat ID)
     # This ensures consistency with how the guardrail staged the action.
-    current_user_id = tool_context.state.get("user_id", "")
+    current_state = tool_context.state.to_dict()
+    current_user_id = current_state.get("user_id", "")
+    
+    logger.info(f"DEBUG: execute_approved_action(token={token}) - action['user_id']='{action['user_id']}', current_user_id='{current_user_id}'")
+
     if not current_user_id:
-        # Fallback to session.user_id if state is missing (unlikely)
+        # Fallback to session.user_id if state is missing
         session = getattr(tool_context, "session", None)
         current_user_id = getattr(session, "user_id", "") if session else ""
+        logger.info(f"DEBUG: Fallback current_user_id='{current_user_id}'")
 
     if current_user_id != action["user_id"]:
          logger.warning(f"Security Violation: Token {token} staged by {action['user_id']} but execution attempted by {current_user_id}")
@@ -202,7 +207,7 @@ async def execute_approved_action(token: str, tool_context: ToolContext) -> dict
     admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
     admin_users = [u.strip() for u in admin_users_str.split(",") if u.strip()]
     if current_user_id not in admin_users:
-        return {"status": "error", "message": "Unauthorized user."}
+        return {"status": "error", "message": f"Unauthorized user: {current_user_id}"}
 
     # Tunnel Execution: Call the original tool function directly, bypassing the tool-level guardrail
     tool_name = action["tool_name"]
