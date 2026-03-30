@@ -49,9 +49,13 @@ def _build_agent_card() -> dict:
         "name": bot_name,
         "version": "0.7.0",
         "description": "An autonomous self-evolving digital organism.",
+        "url": base_url,
         "provider": {
-            "name": os.environ.get("A2A_PROVIDER_NAME", "Ori Project"),
+            "organization": os.environ.get("A2A_PROVIDER_NAME", "Ori Project"),
+            "url": os.environ.get("A2A_PROVIDER_URL", base_url),
         },
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
         "endpoints": [
             {"type": "json-rpc", "url": base_url},
         ],
@@ -63,20 +67,28 @@ def _build_agent_card() -> dict:
         },
         "skills": [
             {
+                "id": "general-conversation",
                 "name": "general-conversation",
                 "description": "General-purpose conversation, task management, and scheduling.",
+                "tags": ["conversation", "scheduling"],
             },
             {
+                "id": "self-evolution",
                 "name": "self-evolution",
                 "description": "Analyzes and improves its own source code through sandboxed evolution.",
+                "tags": ["evolution", "code"],
             },
             {
+                "id": "web-research",
                 "name": "web-research",
                 "description": "Searches the web and fetches content for research tasks.",
+                "tags": ["research", "web"],
             },
             {
+                "id": "dna-exchange",
                 "name": "dna-exchange",
                 "description": "Exchanges sanitized technical improvements (tools/skills) with other Ori instances.",
+                "tags": ["a2a", "exchange"],
             },
         ],
     }
@@ -91,10 +103,6 @@ def _build_agent_card() -> dict:
             }
         }
         card["security"] = [{"apiKey": []}]
-
-    provider_url = os.environ.get("A2A_PROVIDER_URL")
-    if provider_url:
-        card["provider"]["url"] = provider_url
 
     return card
 

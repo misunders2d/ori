@@ -3,9 +3,13 @@
     "name": "Ori",
     "version": "0.7.0",
     "description": "An autonomous self-evolving digital organism.",
+    "url": "http://localhost:8000",
     "provider": {
-        "name": "Ori Project"
+        "organization": "Ori Project",
+        "url": "http://localhost:8000"
     },
+    "defaultInputModes": ["text/plain"],
+    "defaultOutputModes": ["text/plain"],
     "endpoints": [
         {
             "type": "json-rpc",
@@ -20,20 +24,28 @@
     },
     "skills": [
         {
+            "id": "general-conversation",
             "name": "general-conversation",
-            "description": "General-purpose conversation, task management, and scheduling."
+            "description": "General-purpose conversation, task management, and scheduling.",
+            "tags": ["conversation", "scheduling"]
         },
         {
+            "id": "self-evolution",
             "name": "self-evolution",
-            "description": "Analyzes and improves its own source code through sandboxed evolution."
+            "description": "Analyzes and improves its own source code through sandboxed evolution.",
+            "tags": ["evolution", "code"]
         },
         {
+            "id": "web-research",
             "name": "web-research",
-            "description": "Searches the web and fetches content for research tasks."
+            "description": "Searches the web and fetches content for research tasks.",
+            "tags": ["research", "web"]
         },
         {
+            "id": "dna-exchange",
             "name": "dna-exchange",
-            "description": "Exchanges sanitized technical improvements (tools/skills) with other Ori instances."
+            "description": "Exchanges sanitized technical improvements (tools/skills) with other Ori instances.",
+            "tags": ["a2a", "exchange"]
         }
     ]
 }

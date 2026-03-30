@@ -75,11 +75,8 @@ def test_verify_outside_window():
 
 
 def test_verify_wrong_code():
-    """A made-up code should fail."""
-    secret = "JBSWY3DPEHPK3PXP"
-    assert verify_totp(secret, "000000") is False or True  # Could theoretically match
-    # Use a definitely wrong approach: verify with wrong secret
-    assert verify_totp("AAAAAAAAAAAAAAAA", "123456") is False or True
+    """A code generated for a different secret should fail."""
+    assert verify_totp("AAAAAAAAAAAAAAAA", _generate_code("JBSWY3DPEHPK3PXP", 0)) is False
 
 
 def test_verify_rejects_non_digits():

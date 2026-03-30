@@ -255,6 +255,28 @@ async def extract_agent_response(
                         tool_name = fr_names.get(call_id) or seen_function_calls.get(call_id) or "an action"
                         agent_name = getattr(event, "author", "The agent") or "The agent"
 
+                        # Robust payload extraction
+                        payload = getattr(confirmation, "payload", None)
+                        summary_parts = []
+                        clean_payload = {}
+
+                        # Handle both dicts and objects for payload
+                        if payload:
+                            if isinstance(payload, dict):
+                                items = payload.items()
+                            else:
+                                items = getattr(payload, "__dict__", {}).items()
+
+                            for k, v in items:
+                                if k != "tool_context" and not k.startswith("_"):
+                                    clean_payload[k] = v
+                                    val_str = str(v)
+                                    if len(val_str) > 100:
+                                        val_str = val_str[:97] + "..."
+                                    summary_parts.append(f"{k}: '{val_str}'")
+
+                        summary_text = ", ".join(summary_parts) if summary_parts else ""
+
                         # Use the hint from ToolConfirmation if available
                         hint_text = getattr(confirmation, "hint", "") or ""
                         # Check if the hint is the generic ADK one
@@ -273,10 +295,14 @@ async def extract_agent_response(
                         elif tool_name == "trigger_rollback":
                             reason = "Revert to the previous stable git commit."
                         elif tool_name == "session_refresh":
-                            reason = "Clear conversation history."
+                            mode = clean_payload.get('mode', 'fresh')
+                            reason = f"Clear conversation history (Mode: {mode})."
                         elif tool_name == "evolution_commit_and_push":
-                            reason = "Perform code evolution"
-                            
+                            msg_arg = clean_payload.get('commit_message', 'Perform code evolution')
+                            reason = f"Commit and push changes: {msg_arg}"
+                        elif summary_text:
+                            reason = summary_text
+
                         if reason:
                             msg += f"\n📋 **Reason:** {reason}"
                         
@@ -294,6 +320,29 @@ async def extract_agent_response(
                 user_id,
                 error_msg,
             )
+
+            # Catch rate limit / quota errors gracefully
+            if (
+                "429" in error_msg
+                or "RESOURCE_EXHAUSTED" in error_msg
+                or "QuotaExceeded" in error_msg
+            ):
+                return AgentResponse(
+                    text="⚠️ **Rate Limit Exceeded**\n\n"
+                    "You've hit the API quota limit. Please wait a bit before trying again. "
+                    "If this persists, check your billing details or rate limits."
+                )
+
+            # Catch token limit / context window errors
+            if "token count exceeds" in error_msg.lower() or "400" in error_msg:
+                logger.error(
+                    "Context limit reached for session %s: %s", session_id, error_msg
+                )
+                return AgentResponse(
+                    text="⚠️ **Context Limit Reached**\n\n"
+                    "The conversation has become too large for me to process. "
+                    "Send /reset to start a fresh session."
+                )
 
             if attempt < MAX_RETRIES:
                 parts.clear()

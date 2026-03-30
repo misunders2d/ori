@@ -14,7 +14,18 @@
       "Bash(grep -E \"\\(auth_credential|auth_schemes|auth_tool\\)\\\\.py$\")",
       "Bash(find /media/misunderstood/DATA/projects/ori/.venv/lib/python3.13/site-packages/google/adk -name \"*.py\" -type f -exec grep -l \"create_auth_request\\\\|AuthToolArguments\" {})",
       "WebSearch",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(git -C /media/misunderstood/DATA/projects/ori log --all --oneline --grep=\"confirm\")",
+      "Bash(git -C /media/misunderstood/DATA/projects/ori log --all -p --grep=\"fullmatch\\\\|confirmation\")",
+      "Bash(.venv/bin/python -m pytest tests/ -v)",
+      "Bash(git diff:*)",
+      "Bash(.venv/bin/python -m pytest tests/test_schema_validation.py -v 2>&1)",
+      "Bash(.venv/bin/pip install:*)",
+      "Bash(.venv/bin/python -m pip install a2a-sdk)",
+      "Bash(.venv/bin/uv pip:*)",
+      "Bash(uv pip:*)",
+      "Bash(.venv/bin/python -c \"\nimport json\nfrom a2a.types import AgentCard\nwith open\\('agent.json'\\) as f:\n    card = AgentCard\\(**json.load\\(f\\)\\)\nprint\\('AgentCard validated OK:', card.name, card.url\\)\nprint\\('Skills:', [s.id for s in card.skills]\\)\n\" 2>&1)",
+      "Bash(.venv/bin/python -m pytest tests/test_agent_card.py -v 2>&1)"
     ]
   }
 }

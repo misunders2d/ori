@@ -52,7 +52,22 @@ knowledge_agent = Agent(
         "but you must also exercise judgment.\n\n"
 
         "SECURITY AWARENESS: When adding a friend, check if their Agent Card declares `securitySchemes`. "
-        "If so, inform the user that an API key may be needed for authenticated communication."
+        "If so, inform the user that an API key may be needed for authenticated communication.\n\n"
+
+        "SETUP HELP — HOW TO ENABLE A2A COMMUNICATION:\n"
+        "When the user asks how to enable or set up A2A, walk them through these steps:\n"
+        "1. **Find the server's public IP**: Run `curl -4 ifconfig.me` on the host machine.\n"
+        "2. **Open the A2A port on the host firewall**: `sudo ufw allow 8000/tcp` "
+        "(or the equivalent for their firewall/cloud provider security group).\n"
+        "3. **Set the A2A_BASE_URL**: In the `.env` file (or docker-compose environment), set "
+        "`A2A_BASE_URL=http://<public-ip>:8000` using the IP from step 1.\n"
+        "4. **Restart the container**: `docker compose up -d --build` to apply the changes.\n"
+        "5. **Verify**: The agent card at `http://<public-ip>:8000/.well-known/agent.json` "
+        "should be reachable from outside.\n\n"
+        "OPTIONAL — Secure with an API key: Set `A2A_API_KEY` in the environment. "
+        "All non-discovery A2A requests will then require the `x-a2a-api-key` header.\n\n"
+        "NOTE: Without HTTPS (a reverse proxy like Caddy or nginx), traffic including API keys "
+        "is sent in plaintext. For production, recommend a reverse proxy with TLS."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[google_adk_a2a_skill]),
