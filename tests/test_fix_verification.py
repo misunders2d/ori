@@ -2,10 +2,9 @@ import pytest
 import os
 from unittest.mock import MagicMock
 from app.callbacks.guardrails import admin_tool_guardrail
-from app.tools.system import session_refresh
 
-def test_admin_tool_guardrail_allows_new_tools_for_admin():
-    """Verifies that the expanded admin_tool_guardrail allows the new system tools for admins."""
+def test_admin_tool_guardrail_stages_for_admin():
+    """Verifies that the admin_tool_guardrail stages system tools for admins."""
     
     # Mock OS environ for ADMIN_USER_IDS
     os.environ["ADMIN_USER_IDS"] = "tg_123"
@@ -21,16 +20,20 @@ def test_admin_tool_guardrail_allows_new_tools_for_admin():
     for tool_name in tools_to_test:
         mock_tool_call = MagicMock()
         mock_tool_call.name = tool_name
+        mock_tool_call.args = {"test": "args"}
         
         mock_callback_context = MagicMock()
-        mock_callback_context.state.to_dict.return_value = {"user_id": "tg_123"}
+        mock_callback_context.state.to_dict.return_value = {"user_id": "tg_123", "session_id": "sess1"}
         
-        # Should return None (meaning allowed)
+        # Should return a staging message (dict with status='error')
         result = admin_tool_guardrail(tool_call=mock_tool_call, callback_context=mock_callback_context)
-        assert result is None, f"Admin guardrail should allow {tool_name} for admin user"
+        assert result is not None, f"Admin guardrail should return staging message for {tool_name}"
+        assert result["status"] == "error"
+        assert "CRITICAL ACTION STAGED" in result["message"]
+        assert "Approve ACT-" in result["message"]
 
 def test_admin_tool_guardrail_blocks_new_tools_for_non_admin():
-    """Verifies that the expanded admin_tool_guardrail blocks the new system tools for non-admins."""
+    """Verifies that the admin_tool_guardrail blocks the new system tools for non-admins."""
     
     os.environ["ADMIN_USER_IDS"] = "tg_123"
     
@@ -56,6 +59,7 @@ def test_admin_tool_guardrail_blocks_new_tools_for_non_admin():
 
 def test_session_refresh_uses_string_session_id():
     """Verifies that session_refresh now correctly pulls session_id (the string ID)."""
+    from unittest.mock import patch
     
     mock_session = MagicMock()
     # If session.session_id is present, it should use it.
@@ -75,12 +79,11 @@ def test_session_refresh_uses_string_session_id():
         # Verify request_refresh was called with the STRING id, not the integer 1
         mock_request_refresh.assert_called_once_with("tg_chat_330959414", "fresh")
 
-from unittest.mock import patch
-
 @pytest.mark.parametrize("tool_name", ["update_self", "trigger_rollback"])
 def test_system_tools_use_string_session_id_for_notifications(tool_name):
     """Verifies that system tools use the string session_id for notification routing."""
     from app.tools import system
+    from unittest.mock import patch
     tool_func = getattr(system, tool_name)
     
     mock_session = MagicMock()

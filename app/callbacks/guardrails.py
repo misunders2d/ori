@@ -2,6 +2,7 @@ import json
 import logging
 import math
 import re
+import os
 
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models.llm_request import LlmRequest
@@ -34,7 +35,8 @@ def intent_security_guardrail(*args, **kwargs) -> dict | None:
 def admin_tool_guardrail(*args, **kwargs) -> dict | None:
     """
     Runtime Guardrail: Intercepts highly privileged tool calls before execution.
-    Specifically checks if the invoking user is an admin before allowing tools that manage API keys.
+    For Admin users, it stages the intent and requires a follow-up token approval.
+    For non-Admin users, it blocks execution entirely.
     """
     tool_call = kwargs.get("tool_call")
     if not tool_call and len(args) >= 3:
@@ -58,10 +60,9 @@ def admin_tool_guardrail(*args, **kwargs) -> dict | None:
         "trigger_rollback",
         "set_planner_mode",
     ]:
-        import os
-
         current_state = callback_context.state.to_dict()
         user_id = current_state.get("user_id", "")
+        session_id = current_state.get("session_id", "default")
 
         admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
         admin_users = [u.strip() for u in admin_users_str.split(",") if u.strip()]
@@ -69,7 +70,32 @@ def admin_tool_guardrail(*args, **kwargs) -> dict | None:
         if not admin_users or user_id not in admin_users:
             return {
                 "status": "error",
-                "message": f"Guardrail Intervention: Only Admin/Master users can invoke `{tool_call.name}` to manage API integrations and environment variables. Your user_id ({user_id}) is unauthorized.",
+                "message": f"Guardrail Intervention: Only Admin/Master users can invoke `{tool_call.name}`. Your user_id ({user_id}) is unauthorized.",
+            }
+
+        # FOR ADMINS: Stage the intent if not already approved
+        # This replaces the framework-level confirmation UI with a messenger-agnostic token protocol.
+        try:
+            from app.core.pending_actions import stage_action
+            token = stage_action(tool_call.name, tool_call.args, user_id, session_id)
+            
+            logger.info(f"Admin Guardrail: Staged {tool_call.name} for {user_id} -> {token}")
+            
+            return {
+                "status": "error", # Abort current execution
+                "message": (
+                    f"**CRITICAL ACTION STAGED**\n\n"
+                    f"To protect the system, the `{tool_call.name}` command requires explicit admin confirmation.\n\n"
+                    f"Please reply with:\n"
+                    f"**Approve {token}**\n\n"
+                    f"_Note: This token expires in 15 minutes and is single-use._"
+                )
+            }
+        except Exception as e:
+            logger.error(f"Failed to stage action in guardrail: {e}")
+            return {
+                "status": "error",
+                "message": "Guardrail Error: Failed to stage your action for approval. Please check the logs."
             }
 
     return None
