@@ -2,6 +2,9 @@
 # This script clones the repository, removes the connection to the original repo,
 # and starts the setup process.
 
+# Force UTF-8 encoding for the session to handle emojis/DNA icons
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host "    🧬 Ori — Digital Organism Birth" -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan

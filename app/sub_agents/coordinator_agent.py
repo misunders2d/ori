@@ -83,15 +83,7 @@ root_agent = Agent(
         "You are STRICKLY FORBIDDEN from transferring to the DeveloperAgent unless the user's prompt contains an explicit call to action (e.g., 'fix it', 'write the code', 'implement this plan').\n\n"
         "CREDENTIAL SECURITY: NEVER ask a user to type a secret directly in chat. Use `configure_integration` for keys. "
         "NAME: Your name is {bot_name}. Always refer to yourself by this name. "
-        "Always respect saved user preferences.\n\n"
-        "TOOL CONFIRMATION MANDATE: Tools with confirmation prompts are handled by the system automatically. "
-        "When you call a tool that requires confirmation, the system will present the user with a confirmation prompt and collect their response. "
-        "You MUST NEVER ask the user to confirm, approve, or click any buttons yourself. "
-        "Do NOT say 'please confirm', 'click approve', 'use the buttons', or any variation. "
-        "After a tool confirmation is resolved, proceed with the result silently — do not re-ask for permission.\n\n"
-        "SILENT EXECUTION MANDATE: When invoking tools that require confirmation (like `update_self`, `session_refresh`, `trigger_rollback`, or system scheduling), "
-        "you MUST remain COMPLETELY SILENT. Do NOT generate any preamble or postamble (e.g., 'On it', 'Successfully refreshed', 'Starting update'). "
-        "Generate ONLY the tool call and stop. This prevents your predicted success messages from contradicting the system's confirmation UI."
+        "Always respect saved user preferences."
     ),
     sub_agents=[
         developer_agent,
@@ -108,14 +100,12 @@ root_agent = Agent(
         remove_integration,
         list_integrations,
         list_platforms,
-        google.adk.tools.FunctionTool(register_platform, require_confirmation=True),
+        register_platform,
         connect_to_platform,
         complete_auth_code,
         check_connection,
-        google.adk.tools.FunctionTool(disconnect_platform, require_confirmation=True),
-        google.adk.tools.FunctionTool(
-            remove_platform_registration, require_confirmation=True
-        ),
+        disconnect_platform,
+        remove_platform_registration,
         report_health,
         check_upstream,
         analyze_upstream_file,
@@ -124,15 +114,13 @@ root_agent = Agent(
         recall_human_preferences,
         recall_technical_context,
         get_agent_identity,
-        google.adk.tools.FunctionTool(run_system_task_now, require_confirmation=True),
-        google.adk.tools.FunctionTool(schedule_system_task, require_confirmation=True),
-        google.adk.tools.FunctionTool(
-            schedule_recurring_system_task, require_confirmation=True
-        ),
-        google.adk.tools.FunctionTool(update_self, require_confirmation=True),
-        google.adk.tools.FunctionTool(session_refresh, require_confirmation=True),
-        google.adk.tools.FunctionTool(trigger_rollback, require_confirmation=True),
-        google.adk.tools.FunctionTool(set_planner_mode, require_confirmation=True),
+        run_system_task_now,
+        schedule_system_task,
+        schedule_recurring_system_task,
+        update_self,
+        session_refresh,
+        trigger_rollback,
+        set_planner_mode,
         save_user_preferences,
         get_user_preferences,
         google_search_agent_tool,

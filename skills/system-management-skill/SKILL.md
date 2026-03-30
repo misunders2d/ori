@@ -17,7 +17,7 @@ The `ori` daemon is a fully integrated, continuously polling worker node. It man
 
 ## MANDATORY Security Constraints
 
-1. **Never Bypass Confirmation:** These four tools are fundamentally mapped to the `CoordinatorAgent` as ADK `FunctionTool` wrappers with `require_confirmation=True`. Under NO CIRCUMSTANCES should you alter, remove, or try to bypass the `require_confirmation` wrapper. The system depends on delegating this security authorization step to the human user sitting at the chat interface. DO NOT attempt to execute them implicitly.
+1. **Admin-Only Execution:** These four tools are mapped to the `CoordinatorAgent` and protected by the `admin_only_guardrail` callback. Only users in `ADMIN_USER_IDS` may invoke them.
 2. **Never Remove From Root Agent:** These tools belong permanently bound to the `CoordinatorAgent`. Do NOT attempt to mount them internally into sub-agents unless explicitly architecting a new confirmation matrix.
 3. **Runner Lifecycle:** DO NOT attempt to rewrite `run_bot.py`'s daemon lifecycle or memory references without explicit user permission. The async loop handles complex APScheduler and Messenger state interactions precisely, and modifying the polling architecture without extreme caution will break the deployment container loop.
 4. **Guardrail Protection:** The guardrails (event callbacks like `before_agent_callback`, `before_model_callback`, `before_tool_callback`, and `after_tool_callback`) are critical for system safety and security. You MUST NOT remove, modify, or try to bypass these guardrails under any circumstances, unless explicitly requested by the user. This includes logic within tools or agent configurations.
@@ -72,7 +72,7 @@ This daemon is designed to be copied, deployed independently, and evolved as a s
 - **CRITICAL:** This signature MUST NOT be used in regular chat messages. It is strictly for technical version control and documentation history.
 
 **Critical constraints:**
-1. **Never auto-sync from upstream.** All changes require user confirmation through the standard `require_confirmation` commit flow.
+1. **Never auto-sync from upstream.** All changes require explicit user approval through the standard commit flow.
 2. **Never overwrite local customizations blindly.** When adopting upstream changes, reconcile them with local modifications — the user's evolution takes priority over upstream defaults.
 3. **Always verify upstream code in the sandbox** before committing, just like any other change.
 

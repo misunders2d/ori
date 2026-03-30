@@ -155,104 +155,15 @@ async def extract_agent_response(
 
     MAX_RETRIES = 2
 
-    message_str = ""
+    # Prepare message_arg
     if isinstance(message, str):
-        message_str = message
+        message_arg = types.Content(role="user", parts=[types.Part.from_text(text=message)])
     else:
-        # Extract text from types.Content
-        parts = []
-        for p in (getattr(message, "parts", []) or []):
-            if hasattr(p, "text") and p.text:
-                parts.append(p.text)
-        message_str = " ".join(parts)
-
-    # Extract the user's actual text from the enriched Telegram format:
-    # "Message from Name (user_id): yes" → "yes"
-    # Also handles bare messages like "yes" or ": yes"
-    clean_msg = message_str.strip().lower()
-    colon_pos = clean_msg.rfind(":")
-    if colon_pos >= 0:
-        val_to_check = clean_msg[colon_pos + 1:].strip()
-    else:
-        val_to_check = clean_msg
-
-    # Accept natural affirmative/negative responses, not just "yes"/"no"
-    _AFFIRM = {"yes", "y", "yeah", "yep", "yup", "sure", "ok", "okay", "of course", "go ahead", "do it", "proceed", "confirm", "approved", "approve", "yes please", "do it", "okay, proceed"}
-    _DENY = {"no", "n", "nah", "nope", "cancel", "stop", "deny", "denied", "reject", "abort"}
-    is_confirmation_reply = (val_to_check in _AFFIRM or val_to_check in _DENY)
-
-    was_confirmation = False
-    is_confirmed = False
-
-    if is_confirmation_reply and session and getattr(session, "events", None):
-        pending_call_ids = []
-
-        # Collect call_ids that have already been confirmed/denied via FunctionResponse.
-        # We check for ANY FunctionResponse parts in history, as they represent resolved turns.
-        already_responded = set()
-        for ev in session.events:
-            if ev.content and ev.content.parts:
-                for part in (ev.content.parts or []):
-                    if hasattr(part, "function_response") and part.function_response:
-                        fr = part.function_response
-                        if fr.id:
-                            already_responded.add(fr.id)
-
-        # Map call IDs to their original tool names from history (Dynamic Name Recovery)
-        # Gemini requires that FunctionResponse names match the original FunctionCall.
-        call_id_to_name = {}
-        for ev in reversed(session.events[-50:]): # Scan slightly deeper for safety
-            if ev.content and ev.content.parts:
-                for part in ev.content.parts:
-                    if hasattr(part, "function_call") and part.function_call:
-                        fc = part.function_call
-                        if fc.id and fc.name:
-                            call_id_to_name[str(fc.id)] = str(fc.name)
-
-        # Scan history for the most recent UNRESOLVED confirmation request.
-        # The ADK stores pending confirmations in event.actions.requested_tool_confirmations.
-        for i in range(len(session.events) - 1, max(-1, len(session.events) - 20), -1):
-            ev = session.events[i]
-
-            if getattr(ev, "actions", None) and getattr(ev.actions, "requested_tool_confirmations", None):
-                for call_id in ev.actions.requested_tool_confirmations:
-                    if call_id not in already_responded:
-                        pending_call_ids.append(call_id)
-
-            if pending_call_ids:
-                break
-
-        if pending_call_ids:
-            was_confirmation = True
-            is_confirmed = val_to_check in _AFFIRM
-            logger.info("Confirmation reply identified: %s (confirmed=%s) for calls: %s", val_to_check, is_confirmed, pending_call_ids)
-            func_parts = []
-            for pc_id in pending_call_ids:
-                # Use the real tool name if found, fallback to protocol name
-                # Gemini protocol mandate: name MUST match the original FunctionCall
-                real_name = call_id_to_name.get(pc_id, "adk_request_confirmation")
-                fr = types.FunctionResponse(
-                    id=pc_id,
-                    name=real_name,
-                    response={"hint": "", "confirmed": is_confirmed, "payload": None}
-                )
-                func_parts.append(types.Part(function_response=fr))
-            # Critical: return a Content object with ONLY the FunctionResponse to unblock the agent
-            message_arg = types.Content(role="user", parts=func_parts)
-        else:
-            logger.info("Message was a confirmation keyword ('%s') but no pending calls were found in history.", val_to_check)
-            # Not confirmed, or no pending call found
-            message_arg = message if isinstance(message, types.Content) else types.Content(role="user", parts=[types.Part.from_text(text=message)])
-    else:
-        # Standard chat message
-        message_arg = message if isinstance(message, types.Content) else types.Content(role="user", parts=[types.Part.from_text(text=message)])
-    
+        message_arg = message
 
     agent_text_parts = []
-    confirmation_parts = []
     media_items = []
-    # Running map of call_id -> tool_name accumulated across ALL events in the stream
-    seen_function_calls = {}
+    
     # Track latest tool results to provide better feedback if the model is silent
     latest_tool_results = []
 
@@ -263,12 +174,6 @@ async def extract_agent_response(
                 session_id=session_id,
                 new_message=message_arg,
             ):
-                # Track all function calls across the entire event stream
-                if hasattr(event, "get_function_calls"):
-                    for fc in event.get_function_calls():
-                        if fc.id and fc.name:
-                            seen_function_calls[fc.id] = str(fc.name)
-
                 if event.content and event.content.parts:
                     for part in event.content.parts:
                         if hasattr(part, "text") and part.text:
@@ -286,81 +191,6 @@ async def extract_agent_response(
                                 "data": part.inline_data.data,
                                 "mime_type": part.inline_data.mime_type or "application/octet-stream",
                             })
-
-                if getattr(event, "actions", None) and getattr(event.actions, "requested_tool_confirmations", None):
-                    # The ADK replaces FunctionCall with a FunctionResponse on confirmation events.
-                    # Extract tool names from function_response parts on this event.
-                    fr_names = {}
-                    if event.content and event.content.parts:
-                        for part in event.content.parts:
-                            if hasattr(part, "function_response") and part.function_response:
-                                fr = part.function_response
-                                if fr.id and fr.name:
-                                    fr_names[fr.id] = str(fr.name)
-
-                    for call_id, confirmation in event.actions.requested_tool_confirmations.items():
-                        # Primary: from the FunctionResponse on this event
-                        # Fallback: from FunctionCalls seen earlier in the stream
-                        tool_name = fr_names.get(call_id) or seen_function_calls.get(call_id) or "an action"
-                        agent_name = getattr(event, "author", "The agent") or "The agent"
-
-                        # Robust payload extraction
-                        payload = getattr(confirmation, "payload", None)
-                        summary_parts = []
-                        clean_payload = {}
-
-                        # Handle both dicts and objects for payload
-                        if payload:
-                            if isinstance(payload, dict):
-                                items = payload.items()
-                            else:
-                                items = getattr(payload, "__dict__", {}).items()
-
-                            for k, v in items:
-                                if k != "tool_context" and not k.startswith("_"):
-                                    clean_payload[k] = v
-                                    val_str = str(v)
-                                    if len(val_str) > 100:
-                                        val_str = val_str[:97] + "..."
-                                    summary_parts.append(f"{k}: '{val_str}'")
-
-                        summary_text = ", ".join(summary_parts) if summary_parts else ""
-
-                        # Use the hint from ToolConfirmation if available
-                        hint_text = getattr(confirmation, "hint", "") or ""
-                        # Check if the hint is the generic ADK one
-                        is_generic_hint = "Please approve or reject" in hint_text or not hint_text
-
-                        # Construct final message
-                        msg = f"⚠️ **Action Requires Confirmation**\n\n"
-                        msg += f"**{agent_name}** wants to execute `{tool_name}`."
-
-                        # Generate a meaningful reason summary
-                        reason = ""
-                        if not is_generic_hint:
-                            reason = hint_text
-                        elif tool_name == "update_self":
-                            reason = "Deploy latest code changes and restart the daemon."
-                        elif tool_name == "trigger_rollback":
-                            reason = "Revert to the previous stable git commit."
-                        elif tool_name == "session_refresh":
-                            mode = clean_payload.get('mode', 'fresh')
-                            reason = f"Clear conversation history (mode: {mode})."
-                        elif tool_name == "evolution_commit_and_push":
-                            msg_arg = clean_payload.get('commit_message', 'code changes')
-                            reason = f"Commit and push: {msg_arg}"
-                        elif summary_text:
-                            reason = summary_text
-
-                        if reason:
-                            # Sanitize reason for Markdown (simple escaping for common issue chars)
-                            safe_reason = reason.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
-                            msg += f"\n📋 **Reason:** {safe_reason}"
-
-                        msg += "\n\nPlease approve or deny by explicitly responding **'yes'** or **'no'**."
-                        
-                        logger.info("Presenting confirmation prompt to user for tool: %s", tool_name)
-                        confirmation_parts.append(msg)
 
             break  # success
         except Exception as exc:
@@ -398,7 +228,6 @@ async def extract_agent_response(
 
             if attempt < MAX_RETRIES:
                 agent_text_parts.clear()
-                confirmation_parts.clear()
                 message_arg = types.Content(
                     role="user",
                     parts=[
@@ -416,21 +245,8 @@ async def extract_agent_response(
                 text=f"Agent error after {1 + MAX_RETRIES} attempts. Last error: {error_msg}"
             )
 
-    # FINAL TEXT SELECTION:
-    # If a confirmation was requested, we SUPPRESS the agent's generated text
-    # to avoid "Success" hallucinations or preamble desync.
-    if confirmation_parts:
-        final_text = "\n".join(confirmation_parts)
-    elif not agent_text_parts:
-        if was_confirmation and is_confirmed:
-            if latest_tool_results:
-                final_text = f"✅ **Action Confirmed**\n\n{latest_tool_results[-1]}"
-            else:
-                final_text = "✅ **Action Confirmed**\n\nThe requested operation was performed successfully."
-        elif was_confirmation and not is_confirmed:
-            final_text = "❌ **Action Cancelled**\n\nThe requested operation was cancelled."
-        else:
-            final_text = "I processed your request but have no response to show."
+    if not agent_text_parts:
+        final_text = "I processed your request but have no response to show."
     else:
         final_text = "\n".join(agent_text_parts)
 

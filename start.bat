@@ -3,6 +3,9 @@ REM Ori Daemon — Setup & Launch (Windows)
 REM Usage:
 REM   start.bat [--no-sync]
 
+REM Force UTF-8 code page for correct character rendering
+chcp 65001 >nul
+
 setlocal enabledelayedexpansion
 
 set "SCRIPT_DIR=%~dp0"

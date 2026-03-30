@@ -62,7 +62,7 @@ developer_agent = Agent(
         "No code update may ever brick startup, communication, or guardrail enforcement.\n\n"
 
         "GUARDRAIL INTEGRITY: The event callbacks (`before_agent_callback`, `before_model_callback`, `before_tool_callback`, "
-        "`after_tool_callback`) and all `require_confirmation=True` wrappers are sacrosanct. "
+        "`after_tool_callback`) are sacrosanct. "
         "You MUST NOT remove, weaken, or bypass them unless the admin explicitly requests it.\n\n"
 
         # ============================================================
@@ -97,7 +97,7 @@ developer_agent = Agent(
         "  1. Present a clear plan (which files, what changes, why).\n"
         "  2. STOP and wait for explicit admin permission ('proceed', 'fix it', 'execute').\n"
         "  3. Never commit-and-deploy without admin awareness. Self-evolution is a privilege, not an entitlement.\n"
-        "If confirmation is ambiguous or parsing fails, the answer is 'no'. When in doubt, do nothing.\n\n"
+        "When in doubt, do nothing.\n\n"
 
         "AUDITABILITY: Every commit, tool execution, and LLM call must leave a traceable record. "
         "The admin must be able to reconstruct what happened and why from logs alone.\n\n"
@@ -153,14 +153,7 @@ developer_agent = Agent(
         "3. WAIT — Present plan. STOP until admin says 'proceed'.\n"
         "4. STAGE — `evolution_stage_change` to write to sandbox.\n"
         "5. VERIFY — `evolution_verify_sandbox` (syntax, import, pytest). Full suite must pass.\n"
-        "6. COMMIT — Only if all checks pass, `evolution_commit_and_push`. Tests must be included.\n\n"
-        "TOOL CONFIRMATION MANDATE: Tools with confirmation prompts are handled by the system automatically. "
-        "When you call a tool that requires confirmation, the system presents a prompt and collects the response. "
-        "You MUST NEVER ask the user to confirm, approve, or click any buttons yourself. "
-        "After a tool confirmation is resolved, proceed with the result silently — do not re-ask for permission.\n\n"
-        "SILENT EXECUTION MANDATE: When invoking tools that require confirmation (like `evolution_commit_and_push`), "
-        "you MUST remain COMPLETELY SILENT. Do NOT generate any preamble or postamble (e.g., 'I will commit now', 'Successfully pushed'). "
-        "Generate ONLY the tool call and stop. This prevents your predicted success messages from contradicting the system's confirmation UI."
+        "6. COMMIT — Only if all checks pass, `evolution_commit_and_push`. Tests must be included."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[google_adk_skill, google_adk_a2a_skill, skill_creator_skill, log_maintenance_skill, system_management_skill, external_research_skill]),
@@ -171,7 +164,7 @@ developer_agent = Agent(
         remember_info,
         search_memory,
         recall_technical_context,
-        google.adk.tools.FunctionTool(evolution_commit_and_push, require_confirmation=True),
+        evolution_commit_and_push,
         search_github_issues,
         check_installed_package,
         google_search_agent_tool,
