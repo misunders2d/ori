@@ -3,9 +3,12 @@ import shutil
 import subprocess
 import sys
 import uuid
+import logging
 from datetime import datetime
 
 from google.adk.tools.tool_context import ToolContext
+
+logger = logging.getLogger(__name__)
 
 
 def update_self(tool_context: ToolContext) -> dict:
@@ -32,6 +35,8 @@ def update_self(tool_context: ToolContext) -> dict:
         sid = getattr(session, "session_id", None) or getattr(session, "id", None)
         notify = parse_notify_from_session_id(sid)
 
+    logger.info("TRIGGER: update_self called. Notify info: %s", notify)
+
     try:
         with open(trigger_path, "w") as f:
             _json.dump({
@@ -44,6 +49,7 @@ def update_self(tool_context: ToolContext) -> dict:
                        "I'll notify you when the update is complete.",
         }
     except Exception as e:
+        logger.error("TRIGGER: update_self failed: %s", e)
         return {"status": "error", "message": f"Failed to trigger update: {e}"}
 
 
@@ -75,6 +81,7 @@ def session_refresh(mode: str, tool_context: ToolContext) -> dict:
         return {"status": "error", "message": "Session ID not found."}
 
     from app.session_signals import request_refresh
+    logger.info("TRIGGER: session_refresh called with mode: %s for session: %s", mode, sid)
     request_refresh(sid, mode)
 
     return {
@@ -103,6 +110,8 @@ def trigger_rollback(tool_context: ToolContext) -> dict:
         sid = getattr(session, "session_id", None) or getattr(session, "id", None)
         notify = parse_notify_from_session_id(sid)
             
+    logger.info("TRIGGER: trigger_rollback called. Notify info: %s", notify)
+
     try:
         with open(trigger_path, "w") as f:
             _json.dump({"notify": notify}, f)
@@ -111,6 +120,7 @@ def trigger_rollback(tool_context: ToolContext) -> dict:
             "message": "Rollback triggered. The system will revert and restart. I'll notify you when I'm back online."
         }
     except Exception as e:
+        logger.error("TRIGGER: trigger_rollback failed: %s", e)
         return {"status": "error", "message": f"Failed to trigger rollback: {e}"}
 
 

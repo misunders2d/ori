@@ -177,7 +177,7 @@ async def extract_agent_response(
         val_to_check = clean_msg
 
     # Accept natural affirmative/negative responses, not just "yes"/"no"
-    _AFFIRM = {"yes", "y", "yeah", "yep", "yup", "sure", "ok", "okay", "of course", "go ahead", "do it", "proceed", "confirm", "approved", "approve"}
+    _AFFIRM = {"yes", "y", "yeah", "yep", "yup", "sure", "ok", "okay", "of course", "go ahead", "do it", "proceed", "confirm", "approved", "approve", "yes please", "do it", "okay, proceed"}
     _DENY = {"no", "n", "nah", "nope", "cancel", "stop", "deny", "denied", "reject", "abort"}
     is_confirmation_reply = (val_to_check in _AFFIRM or val_to_check in _DENY)
 
@@ -196,6 +196,15 @@ async def extract_agent_response(
                         fr = part.function_response
                         if getattr(fr, "name", None) == "adk_request_confirmation" and fr.id:
                             already_responded.add(fr.id)
+
+        # Map call IDs to their original tool names from history (Dynamic Name Recovery)
+        call_id_to_name = {}
+        for ev in reversed(session.events[-30:]):
+            if ev.content and ev.content.parts:
+                for part in ev.content.parts:
+                    if hasattr(part, "function_call") and part.function_call:
+                        fc = part.function_call
+                        call_id_to_name[fc.id] = str(fc.name)
 
         # Scan history for the most recent UNRESOLVED confirmation request.
         # The ADK stores pending confirmations in event.actions.requested_tool_confirmations,
@@ -217,9 +226,11 @@ async def extract_agent_response(
             logger.info("Confirmation reply identified: %s (confirmed=%s) for calls: %s", val_to_check, is_confirmed, pending_call_ids)
             func_parts = []
             for pc_id in pending_call_ids:
+                # Use the real tool name if found, fallback to protocol name
+                real_name = call_id_to_name.get(pc_id, "adk_request_confirmation")
                 fr = types.FunctionResponse(
                     id=pc_id,
-                    name="adk_request_confirmation",
+                    name=real_name,
                     response={"hint": "", "confirmed": is_confirmed, "payload": None}
                 )
                 func_parts.append(types.Part(function_response=fr))
