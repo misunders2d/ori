@@ -38,4 +38,4 @@ chmod +x start.sh deploy.sh rollback.sh
 # Launch Setup
 echo "  [+] Launching incubation wizard..."
 echo ""
-./start.sh
+exec ./start.sh </dev/tty

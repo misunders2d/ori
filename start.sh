@@ -9,6 +9,12 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# When piped (curl … | bash), stdin is not a terminal.
+# Redirect interactive reads from /dev/tty so prompts still work.
+if [ ! -t 0 ] && [ -e /dev/tty ]; then
+    exec < /dev/tty
+fi
+
 # ---------------------------------------------------------------------------
 # Colors & formatting
 # ---------------------------------------------------------------------------
