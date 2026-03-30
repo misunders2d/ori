@@ -398,6 +398,46 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                                 types.Part(inline_data=types.Blob(data=blob_bytes, mime_type=mime_type))
                             )
 
+                    # Handle /start command — always accessible (just a welcome message)
+                    bot_name = os.environ.get("BOT_NAME", "Ori")
+                    if text.strip() == "/start":
+                        runner_check = get_runner_fn()
+                        if runner_check:
+                            await adapter.send_message(
+                                chat_id,
+                                f"{bot_name} is online and ready. Send me a message to get started.",
+                            )
+                        else:
+                            await adapter.send_message(
+                                chat_id,
+                                f"Welcome to {bot_name}!\n\n"
+                                "The bot needs a Google API key before it can respond.\n\n"
+                                "Send the following command to configure it:\n"
+                                "`/init YOUR_PASSCODE GOOGLE_API_KEY=your-key-here`\n\n"
+                                "You can also give me a custom name:\n"
+                                "`/init YOUR_PASSCODE BOT_NAME=MyBot`\n\n"
+                                "Your admin passcode was printed to the server console on first start. "
+                                "You can also find it in the `.env` file on the server.",
+                            )
+                        continue
+
+                    # ── ACCESS CONTROL GATE ──────────────────────────────────
+                    # Enforced BEFORE /init, secure capture, TOTP, and all
+                    # other handlers so unauthorized users cannot reach them.
+                    allowed_users_str = os.environ.get("ALLOWED_USER_IDS", "")
+                    allowed_users = [u.strip() for u in allowed_users_str.split(",") if u.strip()]
+
+                    if allowed_users and user_id not in allowed_users and session_id not in allowed_users:
+                        logger.warning("Unauthorized access attempt by %s in chat %s", user_id, session_id)
+                        await adapter.send_message(
+                            chat_id,
+                            f"⛔ You are not authorized to interact with this agent.\n\n"
+                            f"To allow access, add your ID to the `ALLOWED_USER_IDS` environment variable.\n"
+                            f"Your User ID: `{user_id}`\n"
+                            f"This Chat ID: `{session_id}`"
+                            )
+                        continue
+
                     # SECURE KEY CAPTURE: intercept before anything reaches the agent
                     from app.secure_config import capture_key, check_pending
 
@@ -426,29 +466,6 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                         await adapter.delete_message(chat_id, message_id)
                         result = process_init_fn(text, session_id=session_id)
                         await adapter.send_message(chat_id, result)
-                        continue
-
-                    # Handle /start command
-                    bot_name = os.environ.get("BOT_NAME", "Ori")
-                    if text.strip() == "/start":
-                        runner_check = get_runner_fn()
-                        if runner_check:
-                            await adapter.send_message(
-                                chat_id,
-                                f"{bot_name} is online and ready. Send me a message to get started.",
-                            )
-                        else:
-                            await adapter.send_message(
-                                chat_id,
-                                f"Welcome to {bot_name}!\n\n"
-                                "The bot needs a Google API key before it can respond.\n\n"
-                                "Send the following command to configure it:\n"
-                                "`/init YOUR_PASSCODE GOOGLE_API_KEY=your-key-here`\n\n"
-                                "You can also give me a custom name:\n"
-                                "`/init YOUR_PASSCODE BOT_NAME=MyBot`\n\n"
-                                "Your admin passcode was printed to the server console on first start. "
-                                "You can also find it in the `.env` file on the server.",
-                            )
                         continue
 
                     # Handle /reset command — bypass the agent entirely
@@ -484,21 +501,6 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                             "`/init YOUR_PASSCODE GOOGLE_API_KEY=your-key-here`\n\n"
                             "Check the server console or `.env` file for your admin passcode.",
                         )
-                        continue
-
-                    # Upstream Access Control 
-                    allowed_users_str = os.environ.get("ALLOWED_USER_IDS", "")
-                    allowed_users = [u.strip() for u in allowed_users_str.split(",") if u.strip()]
-                    
-                    if allowed_users and user_id not in allowed_users and session_id not in allowed_users:
-                        logger.warning("Unauthorized access attempt by %s in chat %s", user_id, session_id)
-                        await adapter.send_message(
-                            chat_id, 
-                            f"⛔ You are not authorized to interact with this agent.\n\n"
-                            f"To allow access, add your ID to the `ALLOWED_USER_IDS` environment variable.\n"
-                            f"Your User ID: `{user_id}`\n"
-                            f"This Chat ID: `{session_id}`"
-                            )
                         continue
 
 

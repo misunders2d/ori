@@ -29,14 +29,14 @@ def configure_integration(key_name: str, tool_context: ToolContext) -> dict:
     Returns:
         dict: Status and instructions to relay to the user.
     """
-    from app.app_utils.config import ALLOWED_CONFIG_KEYS
+    from app.app_utils.config import AGENT_CONFIG_KEYS
 
     key_name = key_name.strip().upper()
 
-    if key_name not in ALLOWED_CONFIG_KEYS:
+    if key_name not in AGENT_CONFIG_KEYS:
         return {
             "status": "error",
-            "message": f"Unknown key: {key_name}. Allowed keys: {', '.join(sorted(ALLOWED_CONFIG_KEYS))}",
+            "message": f"Unknown or restricted key: {key_name}. Allowed keys: {', '.join(sorted(AGENT_CONFIG_KEYS))}",
         }
 
     # Register pending capture using the session_id — works for any channel
@@ -75,14 +75,14 @@ def remove_integration(key_name: str, tool_context: ToolContext) -> dict:
     """
     from dotenv import unset_key
 
-    from app.app_utils.config import ALLOWED_CONFIG_KEYS, ENV_FILE_PATH
+    from app.app_utils.config import AGENT_CONFIG_KEYS, ENV_FILE_PATH
 
     key_name = key_name.strip().upper()
 
-    if key_name not in ALLOWED_CONFIG_KEYS:
+    if key_name not in AGENT_CONFIG_KEYS:
         return {
             "status": "error",
-            "message": f"Unknown key: {key_name}. Allowed keys: {', '.join(sorted(ALLOWED_CONFIG_KEYS))}",
+            "message": f"Unknown or restricted key: {key_name}. Allowed keys: {', '.join(sorted(AGENT_CONFIG_KEYS))}",
         }
 
     if key_name == "GOOGLE_API_KEY":
@@ -110,10 +110,10 @@ def list_integrations(tool_context: ToolContext) -> dict:
     Returns:
         dict: Map of integration names to their status (connected/missing).
     """
-    from app.app_utils.config import ALLOWED_CONFIG_KEYS
+    from app.app_utils.config import AGENT_CONFIG_KEYS
 
     integrations = {}
-    for key in sorted(ALLOWED_CONFIG_KEYS):
+    for key in sorted(AGENT_CONFIG_KEYS):
         integrations[key] = "connected" if os.environ.get(key) else "not configured"
 
     return {"status": "success", "integrations": integrations}

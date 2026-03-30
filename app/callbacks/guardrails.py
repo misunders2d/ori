@@ -65,6 +65,70 @@ def admin_tool_guardrail(*args, **kwargs) -> dict | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Confirmation Reason Registry
+# ---------------------------------------------------------------------------
+# Maps tool names to reason builders. Each builder is a callable that receives
+# the tool's args dict and returns a human-readable reason string.
+#
+# To register a new tool:
+#   register_confirmation_reason("my_tool", lambda a: f"Do something with {a.get('x')}")
+#
+# Or for static reasons:
+#   register_confirmation_reason("my_tool", "Perform a dangerous action.")
+# ---------------------------------------------------------------------------
+_CONFIRMATION_REASONS: dict = {}
+
+
+def register_confirmation_reason(tool_name: str, reason):
+    """Register a confirmation reason for a tool.
+
+    Args:
+        tool_name: The tool function name (e.g. "update_self").
+        reason: Either a static string or a callable(args_dict) -> str.
+    """
+    _CONFIRMATION_REASONS[tool_name] = reason
+
+
+# Built-in registrations
+register_confirmation_reason("update_self", "Deploy latest code changes and restart the daemon.")
+register_confirmation_reason("trigger_rollback", "Revert to the previous stable git commit.")
+register_confirmation_reason("session_refresh", lambda a: f"Clear conversation history (mode: {a.get('mode', 'fresh')})")
+register_confirmation_reason("set_planner_mode", lambda a: f"{'Enable' if a.get('enabled') else 'Disable'} deep thinking / planner mode")
+register_confirmation_reason("evolution_commit_and_push", lambda a: f"Commit and push: {a.get('commit_message', 'code changes')}")
+register_confirmation_reason("run_system_task_now", lambda a: f"Run background task: {a.get('task_description', '')[:100]}")
+register_confirmation_reason("schedule_system_task", lambda a: f"Schedule task: {a.get('task_description', '')[:80]}")
+register_confirmation_reason("schedule_recurring_system_task", lambda a: f"Schedule recurring task: {a.get('task_description', '')[:80]}")
+register_confirmation_reason("register_platform", lambda a: f"Register OAuth2 platform: {a.get('provider', 'unknown')}")
+register_confirmation_reason("disconnect_platform", lambda a: f"Disconnect platform: {a.get('provider', 'unknown')}")
+register_confirmation_reason("remove_platform_registration", lambda a: f"Remove platform registration: {a.get('provider', 'unknown')}")
+
+
+def confirmation_reason_callback(*args, **kwargs) -> None:
+    """before_tool_callback that writes _confirmation_reason to session state."""
+    tool = kwargs.get("tool")
+    if not tool and args:
+        tool = args[0]
+    tool_args = kwargs.get("args") or (args[1] if len(args) > 1 else {}) or {}
+    tool_context = kwargs.get("tool_context") or (args[2] if len(args) > 2 else None)
+
+    tool_name = getattr(tool, "name", "") or ""
+    builder = _CONFIRMATION_REASONS.get(tool_name)
+    if not builder or not tool_context:
+        return None
+
+    a = tool_args if isinstance(tool_args, dict) else {}
+    reason = builder(a) if callable(builder) else builder
+
+    if reason:
+        try:
+            tool_context.state["_confirmation_reason"] = reason
+        except Exception:
+            pass
+
+    return None
+
+
 _CACHED_VECTORS = None
 
 

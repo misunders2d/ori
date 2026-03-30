@@ -4,6 +4,168 @@ from google.genai import types
 from app.core.agent_executor import extract_agent_response, AgentResponse
 
 @pytest.mark.asyncio
+async def test_yes_response_creates_function_response_for_pending_confirmation():
+    """Verifies that 'yes' is detected as a confirmation and converted to a FunctionResponse,
+    NOT forwarded as a new chat message (which would cause an infinite confirmation loop)."""
+
+    runner = MagicMock()
+    runner.app_name = "ori"
+    runner.session_service = AsyncMock()
+
+    # Build a session with a pending confirmation in event history
+    mock_confirmation = MagicMock()
+    mock_confirmation.hint = "Deploy latest code"
+
+    past_event = MagicMock()
+    past_event.actions = MagicMock()
+    past_event.actions.requested_tool_confirmations = {"call_abc": mock_confirmation}
+
+    session = MagicMock()
+    session.id = "tg_chat_123"
+    session.events = [past_event]
+    session.state = {"_confirmation_owner": "tg_123"}
+    runner.session_service.get_session.return_value = session
+    runner.session_service.append_event = AsyncMock()
+
+    # The runner should receive a FunctionResponse, not a text message.
+    # Track what message_arg is passed to run_async.
+    captured_args = {}
+
+    async def mock_run_async(*args, **kwargs):
+        captured_args.update(kwargs)
+        # Yield a simple text response so the function completes
+        text_event = MagicMock()
+        text_event.content = MagicMock()
+        text_part = MagicMock()
+        text_part.text = "Update started."
+        text_part.inline_data = None
+        text_event.content.parts = [text_part]
+        text_event.actions = None
+        text_event.get_function_calls = MagicMock(return_value=[])
+        yield text_event
+
+    runner.run_async = mock_run_async
+
+    # User sends "yes" as a types.Content (as the Telegram poller would)
+    yes_message = types.Content(
+        role="user",
+        parts=[types.Part.from_text(text="Message from Sergey (tg_123): yes")]
+    )
+    response = await extract_agent_response(runner, "tg_123", "tg_chat_123", yes_message, actual_caller_id="tg_123")
+
+    # The critical assertion: run_async must have received a FunctionResponse, not a text "yes"
+    new_message = captured_args.get("new_message")
+    assert new_message is not None, "run_async was not called"
+    assert new_message.parts, "message_arg has no parts"
+
+    fr_part = new_message.parts[0]
+    assert hasattr(fr_part, "function_response") and fr_part.function_response, \
+        f"Expected FunctionResponse part, got: {fr_part}"
+    assert fr_part.function_response.id == "call_abc"
+    assert fr_part.function_response.response["confirmed"] is True
+
+
+@pytest.mark.asyncio
+async def test_no_response_denies_pending_confirmation():
+    """Verifies that 'no' correctly denies a pending confirmation."""
+
+    runner = MagicMock()
+    runner.app_name = "ori"
+    runner.session_service = AsyncMock()
+
+    mock_confirmation = MagicMock()
+    past_event = MagicMock()
+    past_event.actions = MagicMock()
+    past_event.actions.requested_tool_confirmations = {"call_xyz": mock_confirmation}
+
+    session = MagicMock()
+    session.id = "tg_chat_123"
+    session.events = [past_event]
+    session.state = {"_confirmation_owner": "tg_123"}
+    runner.session_service.get_session.return_value = session
+    runner.session_service.append_event = AsyncMock()
+
+    captured_args = {}
+
+    async def mock_run_async(*args, **kwargs):
+        captured_args.update(kwargs)
+        text_event = MagicMock()
+        text_event.content = MagicMock()
+        text_part = MagicMock()
+        text_part.text = "Cancelled."
+        text_part.inline_data = None
+        text_event.content.parts = [text_part]
+        text_event.actions = None
+        text_event.get_function_calls = MagicMock(return_value=[])
+        yield text_event
+
+    runner.run_async = mock_run_async
+
+    no_message = types.Content(
+        role="user",
+        parts=[types.Part.from_text(text="Message from Sergey (tg_123): no")]
+    )
+    response = await extract_agent_response(runner, "tg_123", "tg_chat_123", no_message, actual_caller_id="tg_123")
+
+    new_message = captured_args.get("new_message")
+    fr_part = new_message.parts[0]
+    assert fr_part.function_response.response["confirmed"] is False
+
+
+@pytest.mark.asyncio
+async def test_different_user_cannot_confirm_in_group_chat():
+    """In a group chat, only the user who triggered the action can confirm it."""
+
+    runner = MagicMock()
+    runner.app_name = "ori"
+    runner.session_service = AsyncMock()
+
+    mock_confirmation = MagicMock()
+    past_event = MagicMock()
+    past_event.actions = MagicMock()
+    past_event.actions.requested_tool_confirmations = {"call_group": mock_confirmation}
+
+    session = MagicMock()
+    session.id = "tg_group_456"
+    session.events = [past_event]
+    session.state = {"_confirmation_owner": "tg_111"}  # User A owns the confirmation
+    runner.session_service.get_session.return_value = session
+    runner.session_service.append_event = AsyncMock()
+
+    captured_args = {}
+
+    async def mock_run_async(*args, **kwargs):
+        captured_args.update(kwargs)
+        text_event = MagicMock()
+        text_event.content = MagicMock()
+        text_part = MagicMock()
+        text_part.text = "ok"
+        text_part.inline_data = None
+        text_event.content.parts = [text_part]
+        text_event.actions = None
+        text_event.get_function_calls = MagicMock(return_value=[])
+        yield text_event
+
+    runner.run_async = mock_run_async
+
+    # User B (tg_222) tries to confirm User A's action
+    yes_message = types.Content(
+        role="user",
+        parts=[types.Part.from_text(text="Message from Bob (tg_222): yes")]
+    )
+    response = await extract_agent_response(runner, "tg_222", "tg_group_456", yes_message, actual_caller_id="tg_222")
+
+    # The message should be forwarded as plain text, NOT as a FunctionResponse
+    new_message = captured_args.get("new_message")
+    assert new_message is not None
+    first_part = new_message.parts[0]
+    # Should be a text part, not a function_response
+    assert hasattr(first_part, "text") and first_part.text, \
+        f"Expected plain text (rejected confirmation), got: {first_part}"
+    assert first_part.function_response is None
+
+
+@pytest.mark.asyncio
 async def test_extract_agent_response_confirmation_formatting():
     """Verifies that tool confirmation messages are formatted with agent name and reasons."""
     

@@ -25,7 +25,10 @@
       "Bash(.venv/bin/uv pip:*)",
       "Bash(uv pip:*)",
       "Bash(.venv/bin/python -c \"\nimport json\nfrom a2a.types import AgentCard\nwith open\\('agent.json'\\) as f:\n    card = AgentCard\\(**json.load\\(f\\)\\)\nprint\\('AgentCard validated OK:', card.name, card.url\\)\nprint\\('Skills:', [s.id for s in card.skills]\\)\n\" 2>&1)",
-      "Bash(.venv/bin/python -m pytest tests/test_agent_card.py -v 2>&1)"
+      "Bash(.venv/bin/python -m pytest tests/test_agent_card.py -v 2>&1)",
+      "Bash(grep -r \"google-adk\\\\|google_adk\" requirements*.txt pyproject.toml setup.py)",
+      "Bash(ls:*)",
+      "Bash(uv run:*)"
     ]
   }
 }

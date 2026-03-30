@@ -265,7 +265,6 @@ if [ -z "$existing_totp" ]; then
         totp_issuer="${bot_name:-Ori}"
         totp_uri="otpauth://totp/${totp_issuer}:admin?secret=${totp_secret}&issuer=${totp_issuer}&digits=6&period=30"
 
-        echo "ADMIN_TOTP_SECRET=\"$totp_secret\"" >> "$ENV_FILE"
         echo ""
         ok "TOTP secret generated"
         echo ""
@@ -278,7 +277,11 @@ if [ -z "$existing_totp" ]; then
             qrencode -t ANSIUTF8 -m 2 "$totp_uri"
             qr_displayed=true
         else
-            # Try Python qrcode module
+            # Try Python qrcode module, install it if missing
+            if ! python3 -c "import qrcode" 2>/dev/null; then
+                info "Installing qrcode package for QR display..."
+                python3 -m pip install --quiet qrcode 2>/dev/null || pip3 install --quiet qrcode 2>/dev/null || true
+            fi
             python3 -c "
 import sys
 try:
@@ -293,7 +296,7 @@ except ImportError:
         fi
 
         if [ "$qr_displayed" = false ]; then
-            echo -e "  ${YELLOW}Could not display QR code (install qrencode for next time).${RESET}"
+            echo -e "  ${YELLOW}Could not display QR code.${RESET}"
             echo -e "  ${DIM}Manually add this to your authenticator app:${RESET}"
         else
             echo ""
@@ -305,7 +308,49 @@ except ImportError:
         echo -e "  ${WHITE}Secret:${RESET}   ${GREEN}${totp_secret}${RESET}"
         echo -e "  ${WHITE}Type:${RESET}     TOTP  |  ${WHITE}Digits:${RESET} 6  |  ${WHITE}Period:${RESET} 30s"
         echo ""
-        warn "Save this secret now. It will not be displayed again."
+
+        # Verify the user has successfully added the secret to their app
+        echo -e "  ${WHITE}Verify setup:${RESET} enter the 6-digit code from your authenticator app."
+        echo ""
+        totp_verified=false
+        for attempt in 1 2 3; do
+            prompt "  Code: "
+            read -r totp_code
+            if python3 -c "
+import sys, base64, hashlib, hmac, struct, time
+secret = sys.argv[1]
+code = sys.argv[2].strip()
+if len(code) != 6 or not code.isdigit():
+    sys.exit(1)
+padding = 8 - (len(secret) % 8)
+if padding != 8:
+    secret += '=' * padding
+key = base64.b32decode(secret.upper())
+step = int(time.time()) // 30
+for off in (-1, 0, 1):
+    msg = struct.pack('>Q', step + off)
+    d = hmac.new(key, msg, hashlib.sha1).digest()
+    o = d[-1] & 0x0F
+    c = str((struct.unpack('>I', d[o:o+4])[0] & 0x7FFFFFFF) % 1000000).zfill(6)
+    if hmac.compare_digest(c, code):
+        sys.exit(0)
+sys.exit(1)
+" "$totp_secret" "$totp_code" 2>/dev/null; then
+                echo "ADMIN_TOTP_SECRET=\"$totp_secret\"" >> "$ENV_FILE"
+                ok "Code verified — 2FA is active"
+                totp_verified=true
+                break
+            else
+                if [ "$attempt" -lt 3 ]; then
+                    warn "Invalid code. Try again (attempt $((attempt+1))/3)."
+                fi
+            fi
+        done
+
+        if [ "$totp_verified" = false ]; then
+            fail "Could not verify TOTP code after 3 attempts."
+            info "2FA not enabled — you can re-enable by re-running setup."
+        fi
         echo ""
     else
         info "Skipped — you can enable this later"

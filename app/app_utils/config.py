@@ -20,6 +20,18 @@ ALLOWED_CONFIG_KEYS = frozenset({
     "APP_NAME",
 })
 
+# Keys the agent can set via configure_integration (conversational flow).
+# ADMIN_USER_IDS is excluded — it must only be set via /init (requires passcode).
+AGENT_CONFIG_KEYS = frozenset({
+    "GOOGLE_API_KEY",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_WEBHOOK_SECRET",
+    "GITHUB_TOKEN",
+    "GITHUB_REPO",
+    "BOT_NAME",
+    "APP_NAME",
+})
+
 
 # ---------------------------------------------------------------------------
 # Pending TOTP verification state

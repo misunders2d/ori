@@ -245,17 +245,20 @@ if "!existing_totp!"=="" (
         set "totp_issuer=!bot_name!"
         set "totp_uri=otpauth://totp/!totp_issuer!:admin?secret=!totp_secret!^&issuer=!totp_issuer!^&digits=6^&period=30"
 
-        echo ADMIN_TOTP_SECRET="!totp_secret!">> "%ENV_FILE%"
         echo.
         echo   %GREEN%✓%RESET% TOTP secret generated
         echo.
 
-        REM Try Python qrcode module for QR display
+        REM Try Python qrcode module for QR display, install if missing
         set "qr_displayed=0"
+        python -c "import qrcode" 2>nul || (
+            echo   %CYAN%→%RESET% Installing qrcode package for QR display...
+            python -m pip install --quiet qrcode 2>nul || pip install --quiet qrcode 2>nul
+        )
         python -c "import sys; import qrcode; qr = qrcode.QRCode(version=1, box_size=1, border=2); qr.add_data(sys.argv[1]); qr.make(fit=True); qr.print_ascii(invert=True)" "!totp_uri!" 2>nul && set "qr_displayed=1"
 
         if "!qr_displayed!"=="0" (
-            echo   %YELLOW%Could not display QR code (install qrcode: pip install qrcode).%RESET%
+            echo   %YELLOW%Could not display QR code.%RESET%
             echo   %DIM%Manually add this to your authenticator app:%RESET%
         ) else (
             echo.
@@ -267,7 +270,32 @@ if "!existing_totp!"=="" (
         echo   %WHITE%Secret:%RESET%   %GREEN%!totp_secret!%RESET%
         echo   %WHITE%Type:%RESET%     TOTP  ^|  %WHITE%Digits:%RESET% 6  ^|  %WHITE%Period:%RESET% 30s
         echo.
-        echo   %YELLOW%⚠%RESET% Save this secret now. It will not be displayed again.
+
+        REM Verify the user has successfully added the secret to their app
+        echo   %WHITE%Verify setup:%RESET% enter the 6-digit code from your authenticator app.
+        echo.
+        set "totp_verified=0"
+        for /L %%A in (1,1,3) do (
+            if "!totp_verified!"=="0" (
+                set /p "totp_code=    Code: "
+                python -c "import sys,base64,hashlib,hmac,struct,time;secret=sys.argv[1];code=sys.argv[2].strip();sys.exit(1) if len(code)!=6 or not code.isdigit() else None;padding=8-(len(secret)%%8);secret+='='*padding if padding!=8 else '';key=base64.b32decode(secret.upper());step=int(time.time())//30;[sys.exit(0) for off in (-1,0,1) if hmac.compare_digest(str((struct.unpack('>I',(d:=hmac.new(key,struct.pack('>Q',step+off),hashlib.sha1).digest())[(o:=d[-1]&0x0F):o+4])[0]&0x7FFFFFFF)%%1000000).zfill(6),code)];sys.exit(1)" "!totp_secret!" "!totp_code!" 2>nul
+                if !errorlevel! equ 0 (
+                    echo ADMIN_TOTP_SECRET="!totp_secret!">> "%ENV_FILE%"
+                    echo   %GREEN%✓%RESET% Code verified — 2FA is active
+                    set "totp_verified=1"
+                ) else (
+                    if %%A lss 3 (
+                        set /a "next=%%A+1"
+                        echo   %YELLOW%⚠%RESET% Invalid code. Try again ^(attempt !next!/3^).
+                    )
+                )
+            )
+        )
+
+        if "!totp_verified!"=="0" (
+            echo   %RED%✗%RESET% Could not verify TOTP code after 3 attempts.
+            echo   %CYAN%→%RESET% 2FA not enabled — you can re-enable by re-running setup.
+        )
         echo.
     ) else (
         echo   %CYAN%→%RESET% Skipped — you can enable this later

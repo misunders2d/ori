@@ -166,36 +166,61 @@ async def extract_agent_response(
                 parts.append(p.text)
         message_str = " ".join(parts)
 
-    # NO REGEX: Simple string matching only.
+    # Extract the user's actual text from the enriched Telegram format:
+    # "Message from Name (user_id): yes" → "yes"
+    # Also handles bare messages like "yes" or ": yes"
     clean_msg = message_str.strip().lower()
-    if clean_msg.startswith(":"):
-        val_to_check = clean_msg[1:].strip()
+    colon_pos = clean_msg.rfind(":")
+    if colon_pos >= 0:
+        val_to_check = clean_msg[colon_pos + 1:].strip()
     else:
         val_to_check = clean_msg
 
     if val_to_check in ("yes", "y", "no", "n") and session and getattr(session, "events", None):
         pending_call_ids = []
-        
-        # Scan history for the most recent confirmation request
-        for i in range(len(session.events)-1, max(-1, len(session.events)-15), -1):
+
+        # Scan history for the most recent confirmation request.
+        # The ADK stores pending confirmations in event.actions.requested_tool_confirmations,
+        # NOT as function calls — so we must check there.
+        for i in range(len(session.events) - 1, max(-1, len(session.events) - 15), -1):
             ev = session.events[i]
-            
-            # Check for actual 'adk_request_confirmation' tool calls in the event
-            fcs = ev.get_function_calls() if hasattr(ev, "get_function_calls") else []
-            for fc in fcs:
-                if fc.name == "adk_request_confirmation" and fc.id:
-                    pending_call_ids.append(fc.id)
-            
+
+            if getattr(ev, "actions", None) and getattr(ev.actions, "requested_tool_confirmations", None):
+                for call_id in ev.actions.requested_tool_confirmations:
+                    pending_call_ids.append(call_id)
+
             if pending_call_ids:
                 break
-        
+
+        # In group chats, only the user who triggered the action can confirm it.
+        # The owner is persisted in ADK session state as _confirmation_owner.
+        session_state = getattr(session, "state", None) or {}
+        confirmation_owner = ""
+        try:
+            _raw_owner = session_state.get("_confirmation_owner", "")
+            confirmation_owner = _raw_owner if isinstance(_raw_owner, str) else ""
+        except (TypeError, AttributeError):
+            pass
+        caller = actual_caller_id or user_id
+        if pending_call_ids and confirmation_owner and caller != confirmation_owner:
+            logger.warning(
+                "Confirmation rejected: user %s tried to confirm action owned by %s in session %s",
+                caller, confirmation_owner, session_id,
+            )
+            pending_call_ids = []  # Treat as no pending confirmation — forward as normal message
+
         if pending_call_ids:
+            # Clear the owner now that the confirmation is consumed
+            try:
+                await update_session_state(runner, user_id, session_id, {"_confirmation_owner": ""})
+            except Exception:
+                pass
             is_confirmed = val_to_check in ("yes", "y")
             func_parts = []
             for pc_id in pending_call_ids:
                 fr = types.FunctionResponse(
-                    id=pc_id, 
-                    name="adk_request_confirmation", 
+                    id=pc_id,
+                    name="adk_request_confirmation",
                     response={"hint": "", "confirmed": is_confirmed, "payload": None}
                 )
                 func_parts.append(types.Part(function_response=fr))
@@ -285,10 +310,24 @@ async def extract_agent_response(
                         # Construct final message
                         msg = f"⚠️ **Action Requires Confirmation**\n\n"
                         msg += f"**{agent_name}** wants to execute `{tool_name}`."
-                        
-                        # Generate a meaningful reason summary
+
+                        # Generate a meaningful reason summary.
+                        # Priority: 1) session state _confirmation_reason (set by tool)
+                        #           2) non-generic ADK hint
+                        #           3) hardcoded fallbacks per tool name
+                        #           4) payload summary
                         reason = ""
-                        if not is_generic_hint:
+                        session_reason = ""
+                        try:
+                            _ss = getattr(session, "state", None) or {}
+                            _raw = _ss.get("_confirmation_reason", "")
+                            session_reason = _raw if isinstance(_raw, str) else ""
+                        except (TypeError, AttributeError):
+                            pass
+
+                        if session_reason:
+                            reason = session_reason
+                        elif not is_generic_hint:
                             reason = hint_text
                         elif tool_name == "update_self":
                             reason = "Deploy latest code changes and restart the daemon."
@@ -307,6 +346,15 @@ async def extract_agent_response(
                             msg += f"\n📋 **Reason:** {reason}"
                         
                         msg += "\n\nPlease approve or deny by explicitly responding **'yes'** or **'no'**."
+
+                        # Record who owns this confirmation in session state so only they can approve/deny
+                        try:
+                            await update_session_state(
+                                runner, user_id, session_id,
+                                {"_confirmation_owner": actual_caller_id or user_id},
+                            )
+                        except Exception:
+                            logger.debug("Could not persist confirmation owner to session state")
 
                         parts.append(msg)
 

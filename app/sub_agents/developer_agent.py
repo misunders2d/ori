@@ -11,6 +11,7 @@ from app.tools.origins import analyze_upstream_file
 from app.tools.memory import remember_info, search_memory, recall_technical_context
 from app.callbacks.guardrails import (
     admin_only_guardrail,
+    confirmation_reason_callback,
     prompt_injection_guardrail,
     tool_output_injection_guardrail,
     verify_retry_guardrail,
@@ -172,5 +173,6 @@ developer_agent = Agent(
     ],
     before_agent_callback=admin_only_guardrail,
     before_model_callback=prompt_injection_guardrail,
+    before_tool_callback=confirmation_reason_callback,
     after_tool_callback=[tool_output_injection_guardrail, verify_retry_guardrail],
 )
