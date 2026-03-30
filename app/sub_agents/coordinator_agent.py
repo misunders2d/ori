@@ -139,7 +139,7 @@ root_agent = Agent(
     before_model_callback=prompt_injection_guardrail,
     before_tool_callback=[admin_tool_guardrail, a2a_privacy_guardrail],
     after_tool_callback=[tool_output_injection_guardrail, a2a_privacy_guardrail],
-    planner=BuiltInPlanner(
-        thinking_config=types.ThinkingConfig(include_thoughts=True, thinking_budget=-1)
-    ),
+    # planner=BuiltInPlanner(
+    #     thinking_config=types.ThinkingConfig(include_thoughts=True, thinking_budget=-1)
+    # ),
 )
