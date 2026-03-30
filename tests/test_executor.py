@@ -36,7 +36,7 @@ async def test_extract_agent_response_returns_text():
     response = await extract_agent_response(runner, "tg_123", "tg_chat_123", msg)
 
     assert response.text == "Hello, world!"
-    assert response.media == []
+    assert response.media_items == []
 
 
 @pytest.mark.asyncio

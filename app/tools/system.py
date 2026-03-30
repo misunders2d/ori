@@ -161,7 +161,7 @@ async def set_planner_mode(enabled: bool, tool_context: ToolContext) -> dict:
         "message": f"Planner mode set to {enabled}."
     }
 
-def execute_approved_action(token: str, tool_context: ToolContext) -> dict:
+async def execute_approved_action(token: str, tool_context: ToolContext) -> dict:
     """Executes a previously staged and approved system action using its unique Token ID.
 
     Use this when the user provides an approval token (e.g., 'ACT-8A4F9X') for a
@@ -183,13 +183,16 @@ def execute_approved_action(token: str, tool_context: ToolContext) -> dict:
                        f"Please try the original command again to generate a new token."
         }
 
-    # Security Gate: Strictly validate user_id against the one who staged it
-    session = getattr(tool_context, "session", None)
-    if not session:
-        return {"status": "error", "message": "No active session."}
-        
-    current_user_id = getattr(session, "user_id", "")
+    # Security Gate: Use the state-persistent user_id (individual ID) instead of the session runner ID (chat ID)
+    # This ensures consistency with how the guardrail staged the action.
+    current_user_id = tool_context.state.get("user_id", "")
+    if not current_user_id:
+        # Fallback to session.user_id if state is missing (unlikely)
+        session = getattr(tool_context, "session", None)
+        current_user_id = getattr(session, "user_id", "") if session else ""
+
     if current_user_id != action["user_id"]:
+         logger.warning(f"Security Violation: Token {token} staged by {action['user_id']} but execution attempted by {current_user_id}")
          return {
              "status": "error", 
              "message": "Security Violation: This action token was generated for a different user and cannot be executed by you."
@@ -215,9 +218,8 @@ def execute_approved_action(token: str, tool_context: ToolContext) -> dict:
         elif tool_name == "trigger_rollback":
             return trigger_rollback(tool_context)
         elif tool_name == "set_planner_mode":
-            # Note: set_planner_mode is async
-            import asyncio
-            return asyncio.run(set_planner_mode(enabled=args.get("enabled", False), tool_context=tool_context))
+            # Correctly await the async function instead of trying to run a second event loop
+            return await set_planner_mode(enabled=args.get("enabled", False), tool_context=tool_context)
         elif tool_name == "configure_integration":
             from app.tools.integrations import configure_integration
             return configure_integration(
