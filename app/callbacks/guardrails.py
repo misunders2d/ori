@@ -12,18 +12,13 @@ from google.genai import types
 logger = logging.getLogger(__name__)
 
 
-def intent_security_guardrail(*args, **kwargs) -> dict | None:
+def intent_security_guardrail(tool, args, tool_context=None, **kwargs) -> dict | None:
     """
     Runtime Guardrail: Intercepts tool calls before execution.
     Specifically checks SP-API updates for dangerous price drops or disallowed keywords.
     """
-    tool_call = kwargs.get("tool_call")
-    if not tool_call and len(args) >= 3:
-        tool_call = args[2]
-
-    if tool_call and tool_call.name == "sp_api_update_listing":
-        args_payload = tool_call.args
-        if args_payload.get("price", 0) < 5.0:
+    if tool and tool.name == "sp_api_update_listing":
+        if args.get("price", 0) < 5.0:
             return {
                 "status": "error",
                 "message": "Guardrail blocked: Proposed price is dangerously low (below $5.0).",
@@ -32,24 +27,16 @@ def intent_security_guardrail(*args, **kwargs) -> dict | None:
     return None
 
 
-def admin_tool_guardrail(*args, **kwargs) -> dict | None:
+def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
     """
     Runtime Guardrail: Intercepts highly privileged tool calls before execution.
     For Admin users, it stages the intent and requires a follow-up token approval.
     For non-Admin users, it blocks execution entirely.
     """
-    tool_call = kwargs.get("tool_call")
-    if not tool_call and len(args) >= 3:
-        tool_call = args[2]
-
-    callback_context = kwargs.get("callback_context")
-    if not callback_context and len(args) >= 2:
-        callback_context = args[1]
-
-    if not tool_call or not callback_context:
+    if not tool or not tool_context:
         return None
 
-    if tool_call.name in [
+    if tool.name in [
         "configure_integration",
         "remove_integration",
         "schedule_system_task",
@@ -60,7 +47,7 @@ def admin_tool_guardrail(*args, **kwargs) -> dict | None:
         "trigger_rollback",
         "set_planner_mode",
     ]:
-        current_state = callback_context.state.to_dict()
+        current_state = tool_context.state.to_dict()
         user_id = current_state.get("user_id", "")
         session_id = current_state.get("session_id", "default")
 
@@ -70,22 +57,22 @@ def admin_tool_guardrail(*args, **kwargs) -> dict | None:
         if not admin_users or user_id not in admin_users:
             return {
                 "status": "error",
-                "message": f"Guardrail Intervention: Only Admin/Master users can invoke `{tool_call.name}`. Your user_id ({user_id}) is unauthorized.",
+                "message": f"Guardrail Intervention: Only Admin/Master users can invoke `{tool.name}`. Your user_id ({user_id}) is unauthorized.",
             }
 
         # FOR ADMINS: Stage the intent if not already approved
         # This replaces the framework-level confirmation UI with a messenger-agnostic token protocol.
         try:
             from app.core.pending_actions import stage_action
-            token = stage_action(tool_call.name, tool_call.args, user_id, session_id)
+            token = stage_action(tool.name, args, user_id, session_id)
             
-            logger.info(f"Admin Guardrail: Staged {tool_call.name} for {user_id} -> {token}")
+            logger.info(f"Admin Guardrail: Staged {tool.name} for {user_id} -> {token}")
             
             return {
                 "status": "error", # Abort current execution
                 "message": (
                     f"**CRITICAL ACTION STAGED**\n\n"
-                    f"To protect the system, the `{tool_call.name}` command requires explicit admin confirmation.\n\n"
+                    f"To protect the system, the `{tool.name}` command requires explicit admin confirmation.\n\n"
                     f"Please reply with:\n"
                     f"**Approve {token}**\n\n"
                     f"_Note: This token expires in 15 minutes and is single-use._"
