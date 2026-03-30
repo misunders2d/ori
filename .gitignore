@@ -207,3 +207,6 @@ data/
 # ADK and nested local folders
 .adk/
 amazon_manager/
+
+# Claude Code local settings
+.claude/settings.local.json
