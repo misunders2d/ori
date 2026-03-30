@@ -5,26 +5,14 @@ from google.adk.planners import BuiltInPlanner
 from google.genai import types
 
 from app.callbacks.guardrails import (
+    a2a_privacy_guardrail,
     admin_tool_guardrail,
     prompt_injection_guardrail,
     state_setter,
     tool_output_injection_guardrail,
-    a2a_privacy_guardrail,
 )
-from app.tools.google_search import google_search_agent_tool
-from app.tools.auth import (
-    register_platform,
-    connect_to_platform,
-    complete_auth_code,
-    check_connection,
-    disconnect_platform,
-    remove_platform_registration,
-    list_platforms,
-)
-from app.tools.health import report_health
-from app.tools.origins import check_upstream, analyze_upstream_file
-from app.tools.memory import remember_info, search_memory, recall_human_preferences, recall_technical_context
-from app.tools.a2a import get_agent_identity
+from app.sub_agents.developer_agent import developer_agent
+from app.sub_agents.knowledge_agent import knowledge_agent
 from app.tools import (
     configure_integration,
     delete_scheduled_task,
@@ -34,21 +22,37 @@ from app.tools import (
     list_integrations,
     list_scheduled_tasks,
     remove_integration,
+    run_system_task_now,
     save_user_preferences,
     schedule_one_off_task,
+    schedule_recurring_system_task,
     schedule_recurring_task,
     schedule_system_task,
-    schedule_recurring_system_task,
-    run_system_task_now,
     session_refresh,
-    update_self,
-    trigger_rollback,
     set_planner_mode,
+    trigger_rollback,
+    update_self,
     web_fetch,
 )
-
-from app.sub_agents.developer_agent import developer_agent
-from app.sub_agents.knowledge_agent import knowledge_agent
+from app.tools.a2a import get_agent_identity
+from app.tools.auth import (
+    check_connection,
+    complete_auth_code,
+    connect_to_platform,
+    disconnect_platform,
+    list_platforms,
+    register_platform,
+    remove_platform_registration,
+)
+from app.tools.google_search import google_search_agent_tool
+from app.tools.health import report_health
+from app.tools.memory import (
+    recall_human_preferences,
+    recall_technical_context,
+    remember_info,
+    search_memory,
+)
+from app.tools.origins import analyze_upstream_file, check_upstream
 
 root_agent = Agent(
     name="CoordinatorAgent",
@@ -106,7 +110,9 @@ root_agent = Agent(
         complete_auth_code,
         check_connection,
         google.adk.tools.FunctionTool(disconnect_platform, require_confirmation=True),
-        google.adk.tools.FunctionTool(remove_platform_registration, require_confirmation=True),
+        google.adk.tools.FunctionTool(
+            remove_platform_registration, require_confirmation=True
+        ),
         report_health,
         check_upstream,
         analyze_upstream_file,
@@ -117,7 +123,9 @@ root_agent = Agent(
         get_agent_identity,
         google.adk.tools.FunctionTool(run_system_task_now, require_confirmation=True),
         google.adk.tools.FunctionTool(schedule_system_task, require_confirmation=True),
-        google.adk.tools.FunctionTool(schedule_recurring_system_task, require_confirmation=True),
+        google.adk.tools.FunctionTool(
+            schedule_recurring_system_task, require_confirmation=True
+        ),
         google.adk.tools.FunctionTool(update_self, require_confirmation=True),
         google.adk.tools.FunctionTool(session_refresh, require_confirmation=True),
         google.adk.tools.FunctionTool(trigger_rollback, require_confirmation=True),
@@ -132,8 +140,6 @@ root_agent = Agent(
     before_tool_callback=[admin_tool_guardrail, a2a_privacy_guardrail],
     after_tool_callback=[tool_output_injection_guardrail, a2a_privacy_guardrail],
     planner=BuiltInPlanner(
-        thinking_config=types.ThinkingConfig(
-            include_thoughts=True, thinking_budget=16000
-        )
+        thinking_config=types.ThinkingConfig(include_thoughts=True, thinking_budget=-1)
     ),
 )

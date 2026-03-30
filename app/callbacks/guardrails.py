@@ -48,15 +48,15 @@ def admin_tool_guardrail(*args, **kwargs) -> dict | None:
         return None
 
     if tool_call.name in [
-        "configure_integration", 
-        "remove_integration", 
-        "schedule_system_task", 
+        "configure_integration",
+        "remove_integration",
+        "schedule_system_task",
         "schedule_recurring_system_task",
         "run_system_task_now",
         "session_refresh",
         "update_self",
         "trigger_rollback",
-        "set_planner_mode"
+        "set_planner_mode",
     ]:
         import os
 
@@ -73,8 +73,6 @@ def admin_tool_guardrail(*args, **kwargs) -> dict | None:
             }
 
     return None
-
-
 
 
 _CACHED_VECTORS = None
@@ -164,9 +162,7 @@ def prompt_injection_guardrail(
     return None
 
 
-def admin_only_guardrail(
-    callback_context: CallbackContext
-) -> types.Content | None:
+def admin_only_guardrail(callback_context: CallbackContext) -> types.Content | None:
     """
     Runtime Guardrail: Checks if the user is explicitly set in ADMIN_USER_IDS setup.
     If not, it preemptively returns Content to halt execution of the agent.
@@ -259,6 +255,7 @@ def tool_output_injection_guardrail(tool, args, tool_context, tool_response):
         return None
 
     import os
+
     from google.genai import Client
 
     # Extract a ~300-char window around the match
@@ -280,7 +277,8 @@ def tool_output_injection_guardrail(tool, args, tool_context, tool_response):
             if sim >= _INDIRECT_THRESHOLD:
                 logger.warning(
                     "Indirect prompt injection blocked in %s output (similarity: %.2f)",
-                    tool_name, sim,
+                    tool_name,
+                    sim,
                 )
                 return {
                     "status": "blocked",
@@ -334,7 +332,8 @@ def verify_retry_guardrail(tool, args, tool_context, tool_response):
     if current_count >= _MAX_VERIFY_FAILURES:
         logger.warning(
             "DeveloperAgent hit verify retry limit (%d/%d). Halting further attempts.",
-            current_count, _MAX_VERIFY_FAILURES,
+            current_count,
+            _MAX_VERIFY_FAILURES,
         )
         return {
             "status": "error",
@@ -389,9 +388,11 @@ async def state_setter(
 
     return None
 
+
 # ---------------------------------------------------------------------------
 # A2A Privacy Guardrail: Prevent credential leaks in outbound calls/DNA
 # ---------------------------------------------------------------------------
+
 
 def a2a_privacy_guardrail(tool, args, tool_context, tool_response=None):
     """
@@ -399,12 +400,19 @@ def a2a_privacy_guardrail(tool, args, tool_context, tool_response=None):
     Blocks any tool call or response that contains sensitive environment variables.
     """
     import os
+
     from app.app_utils.config import ALLOWED_CONFIG_KEYS
 
     # Get tool name
     tool_name = getattr(tool, "name", "") or (tool.__name__ if callable(tool) else "")
-    
-    _A2A_RISK_TOOLS = {"call_friend", "call_agent", "export_dna", "add_friend", "web_fetch"}
+
+    _A2A_RISK_TOOLS = {
+        "call_friend",
+        "call_agent",
+        "export_dna",
+        "add_friend",
+        "web_fetch",
+    }
     if tool_name not in _A2A_RISK_TOOLS:
         return None
 
@@ -415,7 +423,7 @@ def a2a_privacy_guardrail(tool, args, tool_context, tool_response=None):
         # We only match secrets that are long enough to be unique/dangerous (e.g., > 6 chars)
         if val and len(str(val)) > 6:
             secrets.append(str(val))
-    
+
     # Also catch the admin passcode
     passcode = os.environ.get("ADMIN_PASSCODE")
     if passcode and len(str(passcode)) > 6:
@@ -425,7 +433,9 @@ def a2a_privacy_guardrail(tool, args, tool_context, tool_response=None):
     args_json = json.dumps(args)
     for secret in secrets:
         if secret in args_json:
-            logger.error("A2A PRIVACY VIOLATION: Secret detected in arguments for %s", tool_name)
+            logger.error(
+                "A2A PRIVACY VIOLATION: Secret detected in arguments for %s", tool_name
+            )
             return {
                 "status": "error",
                 "message": (
@@ -440,7 +450,9 @@ def a2a_privacy_guardrail(tool, args, tool_context, tool_response=None):
         resp_json = json.dumps(tool_response)
         for secret in secrets:
             if secret in resp_json:
-                logger.error("A2A PRIVACY VIOLATION: Secret detected in output of %s", tool_name)
+                logger.error(
+                    "A2A PRIVACY VIOLATION: Secret detected in output of %s", tool_name
+                )
                 return {
                     "status": "error",
                     "message": (
