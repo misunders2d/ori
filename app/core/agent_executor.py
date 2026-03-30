@@ -187,29 +187,31 @@ async def extract_agent_response(
     if is_confirmation_reply and session and getattr(session, "events", None):
         pending_call_ids = []
 
-        # Collect call_ids that have already been confirmed/denied via FunctionResponse
+        # Collect call_ids that have already been confirmed/denied via FunctionResponse.
+        # We check for ANY FunctionResponse parts in history, as they represent resolved turns.
         already_responded = set()
         for ev in session.events:
             if ev.content and ev.content.parts:
                 for part in (ev.content.parts or []):
                     if hasattr(part, "function_response") and part.function_response:
                         fr = part.function_response
-                        if getattr(fr, "name", None) == "adk_request_confirmation" and fr.id:
+                        if fr.id:
                             already_responded.add(fr.id)
 
         # Map call IDs to their original tool names from history (Dynamic Name Recovery)
+        # Gemini requires that FunctionResponse names match the original FunctionCall.
         call_id_to_name = {}
-        for ev in reversed(session.events[-30:]):
+        for ev in reversed(session.events[-50:]): # Scan slightly deeper for safety
             if ev.content and ev.content.parts:
                 for part in ev.content.parts:
                     if hasattr(part, "function_call") and part.function_call:
                         fc = part.function_call
-                        call_id_to_name[fc.id] = str(fc.name)
+                        if fc.id and fc.name:
+                            call_id_to_name[str(fc.id)] = str(fc.name)
 
         # Scan history for the most recent UNRESOLVED confirmation request.
-        # The ADK stores pending confirmations in event.actions.requested_tool_confirmations,
-        # NOT as function calls — so we must check there.
-        for i in range(len(session.events) - 1, max(-1, len(session.events) - 15), -1):
+        # The ADK stores pending confirmations in event.actions.requested_tool_confirmations.
+        for i in range(len(session.events) - 1, max(-1, len(session.events) - 20), -1):
             ev = session.events[i]
 
             if getattr(ev, "actions", None) and getattr(ev.actions, "requested_tool_confirmations", None):
@@ -227,6 +229,7 @@ async def extract_agent_response(
             func_parts = []
             for pc_id in pending_call_ids:
                 # Use the real tool name if found, fallback to protocol name
+                # Gemini protocol mandate: name MUST match the original FunctionCall
                 real_name = call_id_to_name.get(pc_id, "adk_request_confirmation")
                 fr = types.FunctionResponse(
                     id=pc_id,
