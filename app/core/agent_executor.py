@@ -245,7 +245,8 @@ async def extract_agent_response(
         message_arg = message if isinstance(message, types.Content) else types.Content(role="user", parts=[types.Part.from_text(text=message)])
     
 
-    parts = []
+    agent_text_parts = []
+    confirmation_parts = []
     media_items = []
     # Running map of call_id -> tool_name accumulated across ALL events in the stream
     seen_function_calls = {}
@@ -268,7 +269,7 @@ async def extract_agent_response(
                 if event.content and event.content.parts:
                     for part in event.content.parts:
                         if hasattr(part, "text") and part.text:
-                            parts.append(part.text)
+                            agent_text_parts.append(part.text)
                         # Capture tool results for fallback feedback
                         elif hasattr(part, "function_response") and part.function_response:
                             res = part.function_response.response
@@ -349,12 +350,14 @@ async def extract_agent_response(
                             reason = summary_text
 
                         if reason:
-                            msg += f"\n📋 **Reason:** {reason}"
+                            # Sanitize reason for Markdown (simple escaping for common issue chars)
+                            safe_reason = reason.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
+                            msg += f"\n📋 **Reason:** {safe_reason}"
 
                         msg += "\n\nPlease approve or deny by explicitly responding **'yes'** or **'no'**."
                         
                         logger.info("Presenting confirmation prompt to user for tool: %s", tool_name)
-                        parts.append(msg)
+                        confirmation_parts.append(msg)
 
             break  # success
         except Exception as exc:
@@ -391,7 +394,8 @@ async def extract_agent_response(
                 )
 
             if attempt < MAX_RETRIES:
-                parts.clear()
+                agent_text_parts.clear()
+                confirmation_parts.clear()
                 message_arg = types.Content(
                     role="user",
                     parts=[
@@ -409,7 +413,12 @@ async def extract_agent_response(
                 text=f"Agent error after {1 + MAX_RETRIES} attempts. Last error: {error_msg}"
             )
 
-    if not parts:
+    # FINAL TEXT SELECTION:
+    # If a confirmation was requested, we SUPPRESS the agent's generated text
+    # to avoid "Success" hallucinations or preamble desync.
+    if confirmation_parts:
+        final_text = "\n".join(confirmation_parts)
+    elif not agent_text_parts:
         if was_confirmation and is_confirmed:
             if latest_tool_results:
                 final_text = f"✅ **Action Confirmed**\n\n{latest_tool_results[-1]}"
@@ -420,7 +429,7 @@ async def extract_agent_response(
         else:
             final_text = "I processed your request but have no response to show."
     else:
-        final_text = "\n".join(parts)
+        final_text = "\n".join(agent_text_parts)
 
     # Check for manual session refresh signal
     refresh_mode = get_pending_refresh(session_id)

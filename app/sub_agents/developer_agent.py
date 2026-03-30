@@ -157,7 +157,10 @@ developer_agent = Agent(
         "TOOL CONFIRMATION MANDATE: Tools with confirmation prompts are handled by the system automatically. "
         "When you call a tool that requires confirmation, the system presents a prompt and collects the response. "
         "You MUST NEVER ask the user to confirm, approve, or click any buttons yourself. "
-        "After a tool confirmation is resolved, proceed with the result silently — do not re-ask for permission."
+        "After a tool confirmation is resolved, proceed with the result silently — do not re-ask for permission.\n\n"
+        "SILENT EXECUTION MANDATE: When invoking tools that require confirmation (like `evolution_commit_and_push`), "
+        "you MUST remain COMPLETELY SILENT. Do NOT generate any preamble or postamble (e.g., 'I will commit now', 'Successfully pushed'). "
+        "Generate ONLY the tool call and stop. This prevents your predicted success messages from contradicting the system's confirmation UI."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[google_adk_skill, google_adk_a2a_skill, skill_creator_skill, log_maintenance_skill, system_management_skill, external_research_skill]),

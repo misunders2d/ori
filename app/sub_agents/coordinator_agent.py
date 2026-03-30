@@ -90,8 +90,8 @@ root_agent = Agent(
         "Do NOT say 'please confirm', 'click approve', 'use the buttons', or any variation. "
         "After a tool confirmation is resolved, proceed with the result silently — do not re-ask for permission.\n\n"
         "SILENT EXECUTION MANDATE: When invoking tools that require confirmation (like `update_self`, `session_refresh`, `trigger_rollback`, or system scheduling), "
-        "you MUST remain completely silent. Do NOT generate any preamble like 'On it', 'Starting the update', or 'I'll do that now'. "
-        "Call the tool directly and wait for the system to present the confirmation UI to the user."
+        "you MUST remain COMPLETELY SILENT. Do NOT generate any preamble or postamble (e.g., 'On it', 'Successfully refreshed', 'Starting update'). "
+        "Generate ONLY the tool call and stop. This prevents your predicted success messages from contradicting the system's confirmation UI."
     ),
     sub_agents=[
         developer_agent,

@@ -11,12 +11,24 @@ echo "=========================================="
 echo ""
 
 # Check prerequisites
-for cmd in docker git python3 curl; do
+check_cmd() {
+    local cmd=$1
+    local help=$2
     if ! command -v "$cmd" &> /dev/null; then
-        echo "ERROR: '$cmd' is not installed. Please install it first."
+        echo ""
+        echo "----------------------------------------------------------"
+        echo "  ❌ ERROR: '$cmd' is not installed."
+        echo "  👉 HELP:  $help"
+        echo "----------------------------------------------------------"
+        echo ""
         exit 1
     fi
-done
+}
+
+check_cmd "docker" "Install Docker: https://docs.docker.com/get-docker/"
+check_cmd "git" "Install Git: https://git-scm.com/downloads"
+check_cmd "python3" "Install Python 3: https://www.python.org/downloads/"
+check_cmd "curl" "Install Curl: sudo apt install curl (or brew install curl)"
 
 # Clone
 echo "  [+] Cloning Ori (latest master)..."

@@ -8,9 +8,24 @@ Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host ""
 
 # Check prerequisites
-foreach ($cmd in "docker", "git", "python", "curl") {
+$Prereqs = [ordered]@{
+    "docker" = "Install Docker Desktop from https://www.docker.com/products/docker-desktop/"
+    "git"    = "Install Git for Windows from https://git-scm.com/download/win"
+    "python" = "Install Python from https://www.python.org/downloads/windows/ or the Microsoft Store"
+    "curl"   = "Curl is missing. It is usually built-in to Windows 10/11. Please check your system updates."
+}
+
+foreach ($item in $Prereqs.GetEnumerator()) {
+    $cmd = $item.Key
+    $help = $item.Value
     if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
-        Write-Error "ERROR: '$cmd' is not installed or not in your PATH. Please install it first."
+        Write-Host ""
+        Write-Host "----------------------------------------------------------" -ForegroundColor Red
+        Write-Host "  ❌ ERROR: '$cmd' is not installed or not in your PATH." -ForegroundColor Red
+        Write-Host "  👉 HELP:  $help" -ForegroundColor Yellow
+        Write-Host "----------------------------------------------------------" -ForegroundColor Red
+        Write-Host ""
+        Read-Host "Press Enter to exit and try again after installing..."
         exit 1
     }
 }
