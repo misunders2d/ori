@@ -200,7 +200,7 @@ async def execute_approved_action(token: str, tool_context: ToolContext) -> dict
          logger.warning(f"Security Violation: Token {token} staged by {action['user_id']} but execution attempted by {current_user_id}")
          return {
              "status": "error", 
-             "message": "Security Violation: This action token was generated for a different user and cannot be executed by you."
+             "message": f"Security Violation: This action token was generated for user '{action['user_id']}' but execution was attempted by '{current_user_id}'. Access denied."
          }
 
     # Double-check ADMIN_USER_IDS in case environment changed
