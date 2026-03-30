@@ -12,7 +12,9 @@
       "Bash(ls /media/misunderstood/DATA/projects/ori/.venv/lib/*/site-packages/)",
       "Bash(find /media/misunderstood/DATA/projects/ori/.venv -path */google/adk/auth* -type f)",
       "Bash(grep -E \"\\(auth_credential|auth_schemes|auth_tool\\)\\\\.py$\")",
-      "Bash(find /media/misunderstood/DATA/projects/ori/.venv/lib/python3.13/site-packages/google/adk -name \"*.py\" -type f -exec grep -l \"create_auth_request\\\\|AuthToolArguments\" {})"
+      "Bash(find /media/misunderstood/DATA/projects/ori/.venv/lib/python3.13/site-packages/google/adk -name \"*.py\" -type f -exec grep -l \"create_auth_request\\\\|AuthToolArguments\" {})",
+      "WebSearch",
+      "WebFetch(domain:github.com)"
     ]
   }
 }
