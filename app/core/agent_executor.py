@@ -214,6 +214,7 @@ async def extract_agent_response(
         if pending_call_ids:
             was_confirmation = True
             is_confirmed = val_to_check in _AFFIRM
+            logger.info("Confirmation reply identified: %s (confirmed=%s) for calls: %s", val_to_check, is_confirmed, pending_call_ids)
             func_parts = []
             for pc_id in pending_call_ids:
                 fr = types.FunctionResponse(
@@ -225,6 +226,7 @@ async def extract_agent_response(
             # Critical: return a Content object with ONLY the FunctionResponse to unblock the agent
             message_arg = types.Content(role="user", parts=func_parts)
         else:
+            logger.info("Message was a confirmation keyword ('%s') but no pending calls were found in history.", val_to_check)
             # Not confirmed, or no pending call found
             message_arg = message if isinstance(message, types.Content) else types.Content(role="user", parts=[types.Part.from_text(text=message)])
     else:
@@ -339,7 +341,8 @@ async def extract_agent_response(
                             msg += f"\n📋 **Reason:** {reason}"
 
                         msg += "\n\nPlease approve or deny by explicitly responding **'yes'** or **'no'**."
-
+                        
+                        logger.info("Presenting confirmation prompt to user for tool: %s", tool_name)
                         parts.append(msg)
 
             break  # success
