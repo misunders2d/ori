@@ -240,21 +240,27 @@ async def execute_approved_action(token: str, tool_context: ToolContext) -> dict
             )
         elif tool_name == "run_system_task_now":
             from app.tools.scheduling import run_system_task_now
-            return run_system_task_now(task_id=args.get("task_id"), tool_context=tool_context)
+            return run_system_task_now(
+                task_prompt=args.get("task_prompt"),
+                silent=args.get("silent", False),
+                tool_context=tool_context
+            )
         elif tool_name == "schedule_system_task":
             from app.tools.scheduling import schedule_system_task
             return schedule_system_task(
-                task_id=args.get("task_id"),
-                interval_minutes=args.get("interval_minutes"),
-                args=args.get("args"),
+                task_prompt=args.get("task_prompt"),
+                run_at_iso_datetime=args.get("run_at_iso_datetime"),
+                timezone=args.get("timezone"),
+                silent=args.get("silent", False),
                 tool_context=tool_context
             )
         elif tool_name == "schedule_recurring_system_task":
              from app.tools.scheduling import schedule_recurring_system_task
              return schedule_recurring_system_task(
-                 task_id=args.get("task_id"),
-                 cron=args.get("cron"),
-                 args=args.get("args"),
+                 task_prompt=args.get("task_prompt"),
+                 cron_expression=args.get("cron_expression"),
+                 timezone=args.get("timezone"),
+                 silent=args.get("silent", False),
                  tool_context=tool_context
              )
         else:

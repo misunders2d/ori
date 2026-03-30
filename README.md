@@ -22,6 +22,16 @@ Ori is designed to be raised. Out of the box, it is a capable assistant, but its
 *   **Nervous System (Rich Media):** Ori can receive and send images, audio, video, and documents through any connected messenger — not just text.
 *   **Vitals (Self-Diagnostics):** Ori proactively monitors its own health (API connectivity, poller liveness, disk usage) and alerts you if any systems are degraded.
 
+## 🛡️ Action Approval Protocol & Security
+
+To ensure system integrity, highly privileged actions (e.g., updating the core, rolling back code, or modifying system integrations) are protected by a two-stage staging protocol.
+
+1.  **Staging (The Token):** When a sensitive command is issued, Ori stages the intent and generates a unique, single-use token (e.g., `ACT-8A4F9X`).
+2.  **Explicit Approval:** The command is not executed until the admin explicitly replies with **"Approve ACT-XXXXXX"**.
+3.  **One-Time Password (OTP) Option:** For enhanced security, admins can provide their `ADMIN_PASSCODE` alongside the token. If an OTP is required or requested, ensure your `/init` session is active.
+
+> **Note:** Staged tokens expire after 15 minutes of inactivity.
+
 ## 🌐 The Ori-Net Bridge [UNLOCKED]
 
 Your Ori is no longer an island. With the launch of the **Agent-to-Agent (A2A) Protocol**, Ori can now communicate and collaborate with other autonomous beings across the internet.
@@ -83,7 +93,7 @@ GITHUB_TOKEN=for_self_evolution
 
 | Variable | Purpose |
 |---|---|
-| `GOOGLE_API_KEY` | Powers the semantic prompt-injection guardrail. Grab one for free at [Google AI Studio](https://aistudio.google.com/app/apikey). |
+| `GOOGLE_API_KEY` | Powers the semantic prompt-injection guardrail. Grab one for free at [Google AI Studio](https://a studio.google.com/app/apikey). |
 | `ADMIN_PASSCODE` | A secret phrase you send via `/init <passcode>` on first contact to claim admin privileges over your Ori. |
 | `TELEGRAM_BOT_TOKEN` | Your Telegram bot token from [@BotFather](https://t.me/BotFather). Other messengers use their own env vars. |
 | `GITHUB_TOKEN` | *(Optional)* Enables Ori to push self-evolution commits back to your fork. Without it, changes stay local. |

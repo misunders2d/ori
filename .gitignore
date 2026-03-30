@@ -1,12 +1,6 @@
-data/
-__pycache__/
-*.pyc
+# standard ignore
 .env
-.tg_poll_offset
-.tg_heartbeat
-.update_trigger
-.rollback_trigger
-ori-sessions.db
-ori-scheduler.db
-pending_actions.db
-agent.json
+data/*.db
+data/*.json
+__pycache__/
+.venv/

@@ -9,14 +9,14 @@ def test_version_bump():
         content = f.read()
     match = re.search(r'version\s*=\s*"(.*?)"', content)
     assert match is not None
-    assert match.group(1) == '0.7.0'
+    assert match.group(1) == '0.8.0'
 
 def test_changelog_exists():
     if not os.path.exists('CHANGELOG.md'):
         pytest.skip("CHANGELOG.md not found")
     with open('CHANGELOG.md', 'r') as f:
         content = f.read()
-    assert '## [0.7.0] - 2024-03-29' in content
+    assert '## [0.8.0] - 2024-03-29' in content
     # Ensure no future dates left
     # Look for '2026' followed by '-' and month (to avoid false positives with other numbers)
     assert not re.search(r'2026-\d{2}-\d{2}', content)
