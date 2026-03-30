@@ -1,8 +1,11 @@
 import hmac
+import logging
 import os
 import shlex
 
 from dotenv import set_key
+
+logger = logging.getLogger(__name__)
 
 ENV_FILE_PATH = os.environ.get("DOTENV_PATH", "./data/.env")
 
@@ -18,11 +21,66 @@ ALLOWED_CONFIG_KEYS = frozenset({
 })
 
 
-def update_config(command_text: str, admin_passcode: str | None = None) -> str:
+# ---------------------------------------------------------------------------
+# Pending TOTP verification state
+# Maps session_id -> {"command_text": str, "attempts": int}
+# ---------------------------------------------------------------------------
+_pending_totp: dict[str, dict] = {}
+
+_MAX_TOTP_ATTEMPTS = 3
+
+
+def totp_enabled() -> bool:
+    """Check if TOTP 2FA is configured."""
+    return bool(os.environ.get("ADMIN_TOTP_SECRET", "").strip())
+
+
+def has_pending_totp(session_id: str) -> bool:
+    """Check if a session has a pending TOTP verification."""
+    return session_id in _pending_totp
+
+
+def verify_pending_totp(session_id: str, code: str) -> tuple[bool, str]:
+    """
+    Verify a TOTP code for a pending /init command.
+
+    Returns (success, message). On success, the pending config update is applied.
+    On failure, the pending state is preserved for retry (up to max attempts).
+    """
+    from app.app_utils.totp import verify_totp
+
+    pending = _pending_totp.get(session_id)
+    if not pending:
+        return False, "No pending verification for this session."
+
+    secret = os.environ.get("ADMIN_TOTP_SECRET", "")
+    if not secret:
+        # TOTP was disabled between init and verification — apply directly
+        command_text = _pending_totp.pop(session_id)["command_text"]
+        return True, _apply_config(command_text)
+
+    if verify_totp(secret, code):
+        command_text = _pending_totp.pop(session_id)["command_text"]
+        result = _apply_config(command_text)
+        return True, result
+    else:
+        pending["attempts"] += 1
+        if pending["attempts"] >= _MAX_TOTP_ATTEMPTS:
+            _pending_totp.pop(session_id, None)
+            logger.warning("TOTP verification failed %d times for session %s — init cancelled.", _MAX_TOTP_ATTEMPTS, session_id)
+            return False, f"Verification failed {_MAX_TOTP_ATTEMPTS} times. /init cancelled for security. Try again."
+
+        remaining = _MAX_TOTP_ATTEMPTS - pending["attempts"]
+        return False, f"Invalid code. {remaining} attempt(s) remaining. Send your 6-digit authenticator code."
+
+
+def update_config(command_text: str, admin_passcode: str | None = None, session_id: str = "") -> str:
     """
     Parses a string in the format '/init PASSCODE KEY=VALUE KEY2=VALUE'
     and updates the .env file and current environment.
-    Requires the admin passcode as the first argument and only allows known config keys.
+
+    If TOTP is enabled, the config update is held pending until the user
+    provides a valid authenticator code. Returns a prompt for the code.
     """
     body = command_text.replace("/init", "", 1).strip()
     if not body:
@@ -44,6 +102,32 @@ def update_config(command_text: str, admin_passcode: str | None = None) -> str:
     kv_parts = parts[1:]
     if not kv_parts:
         return "No KEY=VALUE pairs provided after passcode."
+
+    # Validate that there's at least one valid KEY=VALUE before prompting for TOTP
+    has_valid_kv = any("=" in p for p in kv_parts)
+    if not has_valid_kv:
+        return "No valid KEY=VALUE pairs found."
+
+    # If TOTP is enabled, hold the update and request verification
+    if totp_enabled() and session_id:
+        _pending_totp[session_id] = {
+            "command_text": command_text,
+            "attempts": 0,
+        }
+        return (
+            "Passcode accepted. Two-factor authentication is enabled.\n\n"
+            "Send your 6-digit authenticator code to complete the update."
+        )
+
+    # No TOTP — apply immediately
+    return _apply_config(command_text)
+
+
+def _apply_config(command_text: str) -> str:
+    """Apply the KEY=VALUE pairs from a validated /init command to .env and environment."""
+    body = command_text.replace("/init", "", 1).strip()
+    parts = shlex.split(body)
+    kv_parts = parts[1:]  # Skip the passcode
 
     os.makedirs(os.path.dirname(os.path.abspath(ENV_FILE_PATH)), exist_ok=True)
     if not os.path.exists(ENV_FILE_PATH):

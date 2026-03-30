@@ -75,16 +75,17 @@ def get_runner():
     return _global_runner
 
 
-def process_init_command(text: str) -> str:
+def process_init_command(text: str, session_id: str = "") -> str:
     """
     Parses the `/init <passcode>` command intercept from communication channels.
     Validates against the `.env` ADMIN_PASSCODE and unlocks agent routing.
+    If TOTP is enabled, returns a prompt for the authenticator code before applying.
     Forces an asynchronous runner reload on a successful auth to capture new keys.
     """
     from app.app_utils.config import update_config
 
     ADMIN_PASSCODE = os.environ.get("ADMIN_PASSCODE", "SETUP")
-    result = update_config(text, admin_passcode=ADMIN_PASSCODE)
+    result = update_config(text, admin_passcode=ADMIN_PASSCODE, session_id=session_id)
     if "updated" in result.lower():
         global _global_runner
         _global_runner = None  # Force a reload of environments on next tick

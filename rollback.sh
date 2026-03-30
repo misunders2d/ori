@@ -44,9 +44,9 @@ wait_for_healthy() {
 cleanup_docker() {
     echo "
 [+] Decluttering Docker artifacts..."
-    # Remove dangling images (the <none> ones created during rebuilds)
-    docker image prune -f --filter "dangling=true" > /dev/null 2>&1
-    # Remove stopped containers to prevent accumulation
+    # Remove ALL unused images to prevent accumulation on remote servers
+    docker image prune -af --filter "label!=com.docker.compose.project" > /dev/null 2>&1
+    # Remove stopped containers
     docker container prune -f > /dev/null 2>&1
 }
 
@@ -104,8 +104,8 @@ while true; do
         chmod +x "$SCRIPT_DIR/start.sh" "$SCRIPT_DIR/deploy.sh" "$SCRIPT_DIR/rollback.sh"
         
         echo "
-[+] Rebuilding daemon from reverted code..."
-        docker compose build 2>&1
+[+] Rebuilding daemon from reverted code (no cache)..."
+        docker compose build --no-cache --pull 2>&1
         docker compose up -d 2>&1
         
         if wait_for_healthy; then

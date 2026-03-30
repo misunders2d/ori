@@ -12,7 +12,15 @@ from app.callbacks.guardrails import (
     a2a_privacy_guardrail,
 )
 from app.tools.google_search import google_search_agent_tool
-from app.tools.auth import connect_to_platform, check_connection
+from app.tools.auth import (
+    register_platform,
+    connect_to_platform,
+    complete_auth_code,
+    check_connection,
+    disconnect_platform,
+    remove_platform_registration,
+    list_platforms,
+)
 from app.tools.health import report_health
 from app.tools.origins import check_upstream, analyze_upstream_file
 from app.tools.memory import remember_info, search_memory, recall_human_preferences, recall_technical_context
@@ -54,7 +62,9 @@ root_agent = Agent(
         "3. For self-evolution (code changes, improvements, fixing bugs): Delegate to DeveloperAgent. "
         "4. For A2A collaboration and knowledge management (Ori-Net): Delegate to KnowledgeAgent. "
         "5. For session management: Use `session_refresh`. "
-        "6. For OAuth2 platform connections: Use `check_connection` and `connect_to_platform`. "
+        "6. For OAuth2 platform connections: Use `list_platforms` to see what's registered, `register_platform` to add a new provider, "
+        "`connect_to_platform` to authenticate, `complete_auth_code` to finish PKCE flows, `check_connection` to verify status, "
+        "and `disconnect_platform` or `remove_platform_registration` to clean up. "
         "7. For Origins Protocol: Use `check_upstream` to see new features/fixes. "
         "8. For Long-Term Memory: Use `remember_info` to store facts, preferences, or technical notes. "
         "Use `search_memory`, `recall_human_preferences`, or `recall_technical_context` to retrieve information from previous sessions. "
@@ -85,8 +95,13 @@ root_agent = Agent(
         configure_integration,
         remove_integration,
         list_integrations,
+        list_platforms,
+        google.adk.tools.FunctionTool(register_platform, require_confirmation=True),
         connect_to_platform,
+        complete_auth_code,
         check_connection,
+        google.adk.tools.FunctionTool(disconnect_platform, require_confirmation=True),
+        google.adk.tools.FunctionTool(remove_platform_registration, require_confirmation=True),
         report_health,
         check_upstream,
         analyze_upstream_file,

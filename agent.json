@@ -1,18 +1,39 @@
 {
+    "id": "ori-default",
     "name": "Ori",
+    "version": "0.7.0",
     "description": "An autonomous self-evolving digital organism.",
-    "version": "0.6.0",
-    "capabilities": [
-        "self-evolution",
-        "scheduling",
-        "web-research",
-        "a2a-knowledge-exchange"
+    "provider": {
+        "name": "Ori Project"
+    },
+    "endpoints": [
+        {
+            "type": "json-rpc",
+            "url": "http://localhost:8000"
+        }
     ],
-    "endpoints": {
-        "a2a": "/",
-        "discovery": [
-            "/.well-known/agent.json",
-            "/.well-known/agent-card.json"
-        ]
-    }
+    "capabilities": {
+        "streaming": false,
+        "pushNotifications": false,
+        "multiTurn": true,
+        "extendedAgentCard": false
+    },
+    "skills": [
+        {
+            "name": "general-conversation",
+            "description": "General-purpose conversation, task management, and scheduling."
+        },
+        {
+            "name": "self-evolution",
+            "description": "Analyzes and improves its own source code through sandboxed evolution."
+        },
+        {
+            "name": "web-research",
+            "description": "Searches the web and fetches content for research tasks."
+        },
+        {
+            "name": "dna-exchange",
+            "description": "Exchanges sanitized technical improvements (tools/skills) with other Ori instances."
+        }
+    ]
 }

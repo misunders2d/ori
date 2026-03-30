@@ -1,101 +1,329 @@
 @echo off
-REM Ori Daemon Setup & Launch script (Windows)
+REM Ori Daemon — Setup & Launch (Windows)
 REM Usage:
 REM   start.bat [--no-sync]
 
 setlocal enabledelayedexpansion
 
 set "SCRIPT_DIR=%~dp0"
-REM Remove trailing backslash
 if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
 
-echo ==========================================
-echo     Ori Daemon — Setup ^& Launch Core
-echo ==========================================
+REM ---------------------------------------------------------------------------
+REM Colors via ANSI (Windows 10+ Terminal)
+REM ---------------------------------------------------------------------------
+for /f %%a in ('echo prompt $E ^| cmd') do set "ESC=%%a"
+set "BOLD=%ESC%[1m"
+set "DIM=%ESC%[2m"
+set "RESET=%ESC%[0m"
+set "RED=%ESC%[31m"
+set "GREEN=%ESC%[32m"
+set "YELLOW=%ESC%[33m"
+set "CYAN=%ESC%[36m"
+set "WHITE=%ESC%[97m"
+set "HR=%DIM%────────────────────────────────────────────────────────%RESET%"
+
+REM ---------------------------------------------------------------------------
+REM Banner
+REM ---------------------------------------------------------------------------
+echo.
+echo %CYAN%%BOLD%         ██████╗ ██████╗ ██╗%RESET%
+echo %CYAN%%BOLD%        ██╔═══██╗██╔══██╗██║%RESET%
+echo %CYAN%%BOLD%        ██║   ██║██████╔╝██║%RESET%
+echo %CYAN%%BOLD%        ██║   ██║██╔══██╗██║%RESET%
+echo %CYAN%%BOLD%        ╚██████╔╝██║  ██║██║%RESET%
+echo %CYAN%%BOLD%         ╚═════╝ ╚═╝  ╚═╝╚═╝%RESET%
+echo %CYAN%     Autonomous Self-Evolving Agent%RESET%
+echo.
+echo %HR%
+
+REM ---------------------------------------------------------------------------
+REM Disclaimer
+REM ---------------------------------------------------------------------------
+echo.
+echo   %YELLOW%%BOLD%DISCLAIMER%RESET%
+echo.
+echo   %DIM%Ori is an autonomous agent that can modify its own code,%RESET%
+echo   %DIM%access external APIs, and manage scheduled tasks.%RESET%
+echo.
+echo   %DIM%This system is designed for users with technical knowledge —%RESET%
+echo   %DIM%people who understand not to commit credentials to git, who%RESET%
+echo   %DIM%can read logs, and who know their way around a terminal.%RESET%
+echo.
+echo   %DIM%That said, anyone is welcome to try it out.%RESET%
+echo.
+echo   %DIM%The author(s) bear no liability for data loss, unexpected%RESET%
+echo   %DIM%behavior, or costs incurred through API usage. Every effort%RESET%
+echo   %DIM%is made to harden security and protect your privacy, but%RESET%
+echo   %DIM%this software is provided as-is, without warranty.%RESET%
+echo.
+echo   %DIM%By continuing, you accept these terms.%RESET%
+echo.
+echo %HR%
+echo.
+set /p "=  %WHITE%Press Enter to continue (or Ctrl+C to abort)...%RESET% " <nul
+pause >nul
 echo.
 
-REM --- Check Prerequisites ---
+REM ---------------------------------------------------------------------------
+REM Prerequisite checks
+REM ---------------------------------------------------------------------------
+echo.
+echo   %BOLD%Checking prerequisites%RESET%
+echo.
+
+set "prereq_ok=1"
+
 where docker >nul 2>nul
-if %errorlevel% neq 0 (
-    echo ERROR: 'docker' is not installed. Please install it on the host.
-    exit /b 1
+if %errorlevel% equ 0 (
+    echo   %GREEN%✓%RESET% docker
+) else (
+    echo   %RED%✗%RESET% docker — not found. Please install it.
+    set "prereq_ok=0"
 )
 
 where git >nul 2>nul
-if %errorlevel% neq 0 (
-    echo ERROR: 'git' is not installed. Please install it on the host.
-    exit /b 1
+if %errorlevel% equ 0 (
+    echo   %GREEN%✓%RESET% git
+) else (
+    echo   %RED%✗%RESET% git — not found. Please install it.
+    set "prereq_ok=0"
 )
 
 where python >nul 2>nul
-if %errorlevel% neq 0 (
-    echo ERROR: 'python' is not installed. Please install it on the host.
-    exit /b 1
+if %errorlevel% equ 0 (
+    echo   %GREEN%✓%RESET% python
+) else (
+    echo   %RED%✗%RESET% python — not found. Please install it.
+    set "prereq_ok=0"
 )
 
 docker compose version >nul 2>nul
-if %errorlevel% neq 0 (
-    echo ERROR: 'docker compose' (v2) not available.
-    exit /b 1
+if %errorlevel% equ 0 (
+    echo   %GREEN%✓%RESET% docker compose v2
+) else (
+    echo   %RED%✗%RESET% docker compose v2 — not available
+    set "prereq_ok=0"
 )
 
 docker info >nul 2>nul
-if %errorlevel% neq 0 (
-    echo ERROR: Docker daemon is not running, or you lack permissions.
+if %errorlevel% equ 0 (
+    echo   %GREEN%✓%RESET% docker daemon running
+) else (
+    echo   %RED%✗%RESET% docker daemon — not running or insufficient permissions
+    set "prereq_ok=0"
+)
+
+echo.
+if "!prereq_ok!"=="0" (
+    echo   %RED%✗%RESET% Missing prerequisites. Please install the above and retry.
     exit /b 1
 )
+echo %HR%
 
-REM --- Sync remote codebase ---
+REM ---------------------------------------------------------------------------
+REM Git sync
+REM ---------------------------------------------------------------------------
+echo.
 if /i "%~1"=="--no-sync" (
-    echo   [.] Skipping remote git sync...
+    echo   %CYAN%→%RESET% Skipping remote git sync (--no-sync)
 ) else (
-    echo   [+] Fetching and syncing origin master...
+    echo   %CYAN%→%RESET% Fetching and syncing origin/master...
     git fetch origin master 2>&1
     git reset --hard origin/master 2>&1
+    echo   %GREEN%✓%RESET% Codebase synced
 )
+echo.
+echo %HR%
 
-REM --- Prepare data buffers ---
+REM ---------------------------------------------------------------------------
+REM Prepare data directory
+REM ---------------------------------------------------------------------------
 if not exist "%SCRIPT_DIR%\data" mkdir "%SCRIPT_DIR%\data"
 
-REM --- First-Time Configuration Wizard ---
+REM ---------------------------------------------------------------------------
+REM First-time setup wizard
+REM ---------------------------------------------------------------------------
 set "ENV_FILE=%SCRIPT_DIR%\data\.env"
-if not exist "%ENV_FILE%" (
-    echo ==========================================
-    echo   First-Time Setup Wizard
-    echo ==========================================
-    echo Let's configure your environment keys. Press Enter to skip if adding manually later.
+set "bot_name=Ori"
 
-    set /p "google_key=Enter GOOGLE_API_KEY: "
-    set /p "tg_key=Enter TELEGRAM_BOT_TOKEN: "
+echo.
+echo   %CYAN%%BOLD%Configuration%RESET%
+echo.
 
-    REM Auto-generate a secure 16-character alphanumeric passcode via PowerShell
-    for /f "delims=" %%P in ('powershell -NoProfile -Command "$chars='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'; -join (1..16 | ForEach-Object { $chars[(Get-Random -Maximum $chars.Length)] })"') do set "admin_pass=%%P"
+REM --- Google API Key (required) ---
+call :env_get "GOOGLE_API_KEY" "%ENV_FILE%" existing_google_key
+if "!existing_google_key!"=="" (
+    echo   %WHITE%Google API Key%RESET% %RED%(required)%RESET%
+    echo   %DIM%Get one at https://aistudio.google.com/apikey%RESET%
+    set /p "google_key=    GOOGLE_API_KEY: "
+    if not "!google_key!"=="" (
+        echo GOOGLE_API_KEY="!google_key!">> "%ENV_FILE%"
+        echo   %GREEN%✓%RESET% Saved
+    ) else (
+        echo   %YELLOW%⚠%RESET% Skipped — Ori cannot function without this key.
+        echo   %YELLOW%⚠%RESET% Add it later to data\.env
+    )
+    echo.
+) else (
+    echo   %GREEN%✓%RESET% GOOGLE_API_KEY already configured
+)
 
-    echo   [+] Auto-generated SECURE ADMIN_PASSCODE: !admin_pass!
-    echo   [!] SAVE THIS PASSCODE SECURELY. IT WILL NOT BE DISPLAYED AGAIN.
+REM --- Bot Name (optional, default Ori) ---
+call :env_get "BOT_NAME" "%ENV_FILE%" existing_bot_name
+if "!existing_bot_name!"=="" (
+    echo.
+    echo   %WHITE%Bot Name%RESET% %DIM%(default: Ori)%RESET%
+    echo   %DIM%Give your agent a unique identity.%RESET%
+    set /p "bot_name=    Name: "
+    if "!bot_name!"=="" set "bot_name=Ori"
+    echo BOT_NAME="!bot_name!">> "%ENV_FILE%"
+    echo   %GREEN%✓%RESET% Named: %BOLD%!bot_name!%RESET%
+    echo.
+) else (
+    set "bot_name=!existing_bot_name!"
+    echo   %GREEN%✓%RESET% BOT_NAME already set: %BOLD%!existing_bot_name!%RESET%
+)
 
-    (
-        echo GOOGLE_API_KEY="!google_key!"
-        echo TELEGRAM_BOT_TOKEN="!tg_key!"
-        echo ADMIN_PASSCODE="!admin_pass!"
-    ) > "%ENV_FILE%"
+REM --- GitHub Repo (optional, recommended) ---
+call :env_get "GITHUB_REPO" "%ENV_FILE%" existing_github_repo
+if "!existing_github_repo!"=="" (
+    echo.
+    echo   %WHITE%GitHub Repository%RESET% %YELLOW%(recommended)%RESET%
+    echo   %DIM%Enables self-evolution commits and version control.%RESET%
+    echo   %DIM%Format: owner/repo (e.g., yourname/ori-instance)%RESET%
+    set /p "github_repo=    GITHUB_REPO: "
+    if not "!github_repo!"=="" (
+        echo GITHUB_REPO="!github_repo!">> "%ENV_FILE%"
+        echo   %GREEN%✓%RESET% Saved: !github_repo!
+    ) else (
+        echo   %CYAN%→%RESET% Skipped — you can add this later via data\.env
+    )
+    echo.
+) else (
+    echo   %GREEN%✓%RESET% GITHUB_REPO already set: !existing_github_repo!
+)
 
-    echo   [+] %ENV_FILE% generated securely.
+REM --- Telegram Bot Token (optional, recommended) ---
+call :env_get "TELEGRAM_BOT_TOKEN" "%ENV_FILE%" existing_tg_token
+if "!existing_tg_token!"=="" (
+    echo.
+    echo   %WHITE%Telegram Bot Token%RESET% %YELLOW%(recommended)%RESET%
+    echo   %DIM%Primary way to interact with your agent.%RESET%
+    echo   %DIM%Create a bot via @BotFather on Telegram.%RESET%
+    set /p "tg_token=    TELEGRAM_BOT_TOKEN: "
+    if not "!tg_token!"=="" (
+        echo TELEGRAM_BOT_TOKEN="!tg_token!">> "%ENV_FILE%"
+        echo   %GREEN%✓%RESET% Saved
+    ) else (
+        echo   %CYAN%→%RESET% Skipped — Ori will start in CLI-only mode
+    )
+    echo.
+) else (
+    echo   %GREEN%✓%RESET% TELEGRAM_BOT_TOKEN already configured
+)
+
+REM --- TOTP 2FA (optional) ---
+call :env_get "ADMIN_TOTP_SECRET" "%ENV_FILE%" existing_totp
+if "!existing_totp!"=="" (
+    echo.
+    echo   %WHITE%Two-Factor Authentication%RESET% %DIM%(optional)%RESET%
+    echo   %DIM%Add TOTP (Google Authenticator, Authy, etc.) for admin actions.%RESET%
+    set /p "enable_totp=    Enable 2FA? [y/N]: "
+    if /i "!enable_totp!"=="y" (
+        REM Generate TOTP secret via Python
+        for /f "delims=" %%S in ('python -c "import secrets, base64; print(base64.b32encode(secrets.token_bytes(20)).decode().rstrip('='))"') do set "totp_secret=%%S"
+        set "totp_issuer=!bot_name!"
+        set "totp_uri=otpauth://totp/!totp_issuer!:admin?secret=!totp_secret!^&issuer=!totp_issuer!^&digits=6^&period=30"
+
+        echo ADMIN_TOTP_SECRET="!totp_secret!">> "%ENV_FILE%"
+        echo.
+        echo   %GREEN%✓%RESET% TOTP secret generated
+        echo.
+
+        REM Try Python qrcode module for QR display
+        set "qr_displayed=0"
+        python -c "import sys; import qrcode; qr = qrcode.QRCode(version=1, box_size=1, border=2); qr.add_data(sys.argv[1]); qr.make(fit=True); qr.print_ascii(invert=True)" "!totp_uri!" 2>nul && set "qr_displayed=1"
+
+        if "!qr_displayed!"=="0" (
+            echo   %YELLOW%Could not display QR code (install qrcode: pip install qrcode).%RESET%
+            echo   %DIM%Manually add this to your authenticator app:%RESET%
+        ) else (
+            echo.
+            echo   %DIM%Or enter manually:%RESET%
+        )
+
+        echo.
+        echo   %WHITE%Account:%RESET%  !totp_issuer!:admin
+        echo   %WHITE%Secret:%RESET%   %GREEN%!totp_secret!%RESET%
+        echo   %WHITE%Type:%RESET%     TOTP  ^|  %WHITE%Digits:%RESET% 6  ^|  %WHITE%Period:%RESET% 30s
+        echo.
+        echo   %YELLOW%⚠%RESET% Save this secret now. It will not be displayed again.
+        echo.
+    ) else (
+        echo   %CYAN%→%RESET% Skipped — you can enable this later
+        echo.
+    )
+) else (
+    echo   %GREEN%✓%RESET% TOTP already configured
+)
+
+REM --- Admin Passcode (auto-generated if missing) ---
+call :env_get "ADMIN_PASSCODE" "%ENV_FILE%" existing_passcode
+if "!existing_passcode!"=="" (
+    for /f "delims=" %%P in ('python -NoProfile -c "import secrets, string; print(''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16)))"') do set "admin_pass=%%P"
+    echo ADMIN_PASSCODE="!admin_pass!">> "%ENV_FILE%"
+    echo.
+    echo   %WHITE%%BOLD%Admin Passcode (auto-generated)%RESET%
+    echo.
+    echo   %GREEN%%BOLD%  !admin_pass!%RESET%
+    echo.
+    echo   %YELLOW%⚠%RESET% Save this passcode securely. It will not be displayed again.
+    echo   %YELLOW%⚠%RESET% Needed for initial admin authentication with the bot.
     echo.
 )
 
-REM --- Migrate legacy single-database if needed ---
+echo %HR%
+
+REM ---------------------------------------------------------------------------
+REM Migrate legacy database if needed
+REM ---------------------------------------------------------------------------
 if exist "%SCRIPT_DIR%\data\ori.db" if not exist "%SCRIPT_DIR%\data\ori-sessions.db" (
-    echo   [+] Migrating ori.db into separate session/scheduler databases...
+    echo.
+    echo   %CYAN%→%RESET% Migrating legacy database...
     python "%SCRIPT_DIR%\scripts\migrate_split_db.py"
+    echo   %GREEN%✓%RESET% Database migrated
+    echo.
 )
 
-REM --- Launch Container Stack ---
-echo   [+] Tearing down old instances and rebuilding...
-docker compose down
-docker compose up --build -d
+REM ---------------------------------------------------------------------------
+REM Launch container stack
+REM ---------------------------------------------------------------------------
+echo.
+echo   %BOLD%Building ^& launching%RESET%
+echo.
 
-REM --- Stop any old watcher processes ---
+echo   %CYAN%→%RESET% Tearing down old instances...
+docker compose down 2>&1
+
+echo.
+echo   %CYAN%→%RESET% Building fresh image (no cache)...
+docker compose build --no-cache --pull 2>&1
+
+echo.
+echo   %CYAN%→%RESET% Starting container...
+docker compose up -d 2>&1
+
+echo.
+echo   %CYAN%→%RESET% Cleaning up old images...
+docker image prune -af --filter "label!=com.docker.compose.project" >nul 2>&1
+docker container prune -f >nul 2>&1
+echo   %GREEN%✓%RESET% Container stack is running
+echo.
+echo %HR%
+
+REM ---------------------------------------------------------------------------
+REM Restart host watchers
+REM ---------------------------------------------------------------------------
 set "DEPLOY_PID_FILE=%SCRIPT_DIR%\data\.deploy_watcher.pid"
 set "ROLLBACK_PID_FILE=%SCRIPT_DIR%\data\.rollback_watcher.pid"
 
@@ -107,32 +335,60 @@ for %%F in ("%DEPLOY_PID_FILE%" "%ROLLBACK_PID_FILE%") do (
     )
 )
 
-REM --- Start watcher processes in background ---
 start "" /b cmd /c ""%SCRIPT_DIR%\deploy.bat" >> "%SCRIPT_DIR%\data\deploy.log" 2>&1"
 start "" /b cmd /c ""%SCRIPT_DIR%\rollback.bat" >> "%SCRIPT_DIR%\data\rollback.log" 2>&1"
 
-REM Capture the PID of the most recently started background processes isn't trivially
-REM possible in batch. The watchers self-register their PIDs in their own scripts.
-
+REM ---------------------------------------------------------------------------
+REM Post-launch summary
+REM ---------------------------------------------------------------------------
 echo.
-echo ==========================================
-echo   Ori is Active ^& Isolated
-echo ==========================================
-echo   Logs:        docker logs -f ori-agent-daemon
-echo   Deploy:      type data\deploy.log
-echo   Rollback:    type data\rollback.log
-echo   Stop Core:   docker compose down
-echo ==========================================
-echo   [ACTION REQUIRED] ADMIN AUTHENTICATION
-echo   The system requires your Admin ID to unlock the agent.
-echo   1. Send any message to the bot on Telegram.
-echo   2. The bot will reject you and reveal your ID (e.g., tg_12345678)
-echo   3. Copy your ID exactly (including the 'tg_' prefix) and send this:
+echo   %GREEN%%BOLD%!bot_name! is alive.%RESET%
 echo.
-echo   /init "<YOUR_ADMIN_PASSCODE>" ADMIN_USER_IDS="tg_12345678"
+echo %HR%
 echo.
-echo   (If you forgot your generated passcode, check data\.env securely)
-echo ==========================================
+echo   %BOLD%Quick Reference%RESET%
+echo.
+echo   %WHITE%Logs%RESET%          docker logs -f ori-agent-daemon
+echo   %WHITE%Deploy log%RESET%    type data\deploy.log
+echo   %WHITE%Rollback log%RESET%  type data\rollback.log
+echo   %WHITE%Stop%RESET%          docker compose down
+echo   %WHITE%Config%RESET%        data\.env
+echo.
+echo %HR%
+echo.
+echo   %YELLOW%%BOLD%ADMIN AUTHENTICATION%RESET%
+echo.
+echo   %DIM%The system needs your user ID to grant admin access.%RESET%
+echo.
+echo   %WHITE%1.%RESET% Send any message to the bot on Telegram
+echo   %WHITE%2.%RESET% The bot will reject you and show your ID %DIM%(e.g., tg_12345678)%RESET%
+echo   %WHITE%3.%RESET% Send this command to the bot:
+echo.
+echo      %CYAN%/init ^<PASSCODE^> ADMIN_USER_IDS="tg_YOUR_ID"%RESET%
+echo.
+echo   %DIM%Forgot your passcode? Check data\.env (never share it).%RESET%
+echo.
+echo %HR%
 echo.
 
 endlocal
+exit /b 0
+
+REM ---------------------------------------------------------------------------
+REM Helper: read a value from .env file
+REM   call :env_get "KEY_NAME" "path\to\.env" result_var
+REM ---------------------------------------------------------------------------
+:env_get
+set "%~3="
+if not exist "%~2" exit /b 0
+for /f "usebackq tokens=1,* delims==" %%A in ("%~2") do (
+    if "%%A"=="%~1" (
+        set "tmpval=%%B"
+        REM Strip surrounding quotes
+        if defined tmpval (
+            set "tmpval=!tmpval:"=!"
+            set "%~3=!tmpval!"
+        )
+    )
+)
+exit /b 0

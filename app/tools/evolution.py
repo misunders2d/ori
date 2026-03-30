@@ -6,9 +6,6 @@ import uuid
 from datetime import datetime
 from typing import List, Optional
 
-from google.adk.auth.auth_credential import AuthCredential, OAuth2Auth
-from google.adk.auth.auth_schemes import OAuth2, OAuthGrantType
-from google.adk.auth.auth_tool import AuthConfig
 from google.adk.tools.tool_context import ToolContext
 
 

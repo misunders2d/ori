@@ -68,16 +68,17 @@ if %errorlevel% neq 0 (
 echo   [+] Revert pushed to origin/master.
 
 REM --- Step 3: Rebuild and restart ---
-echo   [+] Rebuilding daemon from reverted code...
-docker compose build 2>&1
+echo   [+] Rebuilding daemon from reverted code (no cache)...
+docker compose build --no-cache --pull 2>&1
 docker compose up -d 2>&1
 
 call :wait_for_healthy
 if %errorlevel% equ 0 (
     echo %date% %time%: Rollback Sequence completed.
     call :send_notification "!TRIGGER_CONTENT!" "✅ Rollback complete. Reverted !CURRENT_HEAD! on origin/master. Daemon rebuilt and stable."
-    echo   [+] Cleaning up dangling Docker build caches...
-    docker image prune -f --filter "dangling=true" >nul 2>nul
+    echo   [+] Cleaning up old Docker images...
+    docker image prune -af --filter "label!=com.docker.compose.project" >nul 2>nul
+    docker container prune -f >nul 2>nul
 ) else (
     echo %date% %time%: Rollback structure failed. Reverted code also crashes.
     call :send_notification "!TRIGGER_CONTENT!" "🚨 FATAL: Reverted code also crashed on boot. Manual intervention required."

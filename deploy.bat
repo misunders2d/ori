@@ -65,8 +65,8 @@ if "!PREVIOUS_COMMIT!"=="!CURRENT_COMMIT!" if !errorlevel! equ 0 (
     goto :sleep
 )
 
-echo   [+] Building fresh daemon container...
-docker compose build 2>&1
+echo   [+] Building fresh daemon container (no cache)...
+docker compose build --no-cache --pull 2>&1
 if %errorlevel% neq 0 (
     call :send_notification "!TRIGGER_CONTENT!" "⚠️ Compile Failure. Container failed to package. Initiating structural rollback..."
     call :rollback "!PREVIOUS_COMMIT!" "!TRIGGER_CONTENT!"
@@ -87,8 +87,9 @@ call :wait_for_healthy
 if %errorlevel% equ 0 (
     echo %date% %time%: Evolution sequence closed successfully.
     call :send_notification "!TRIGGER_CONTENT!" "💠 Self-Evolution Successful. Daemon rebuilt and actively polling."
-    echo   [+] Cleaning up dangling Docker build caches...
-    docker image prune -f --filter "dangling=true" >nul 2>nul
+    echo   [+] Cleaning up old Docker images...
+    docker image prune -af --filter "label!=com.docker.compose.project" >nul 2>nul
+    docker container prune -f >nul 2>nul
 ) else (
     echo %date% %time%: Core loop rejection on start! Rolling back mutations.
     call :send_notification "!TRIGGER_CONTENT!" "🚨 CRITICAL: Newly compiled code crashed daemon on boot. Triggering structural rollback..."
@@ -122,7 +123,7 @@ echo   [!] Reverting broken commit on remote to prevent re-deploy loop...
 git revert HEAD --no-edit 2>&1
 git push origin master 2>&1
 if %errorlevel% neq 0 echo   [-] WARNING: Could not push revert to remote.
-docker compose build 2>&1
+docker compose build --no-cache --pull 2>&1
 docker compose up -d 2>&1
 call :wait_for_healthy
 if %errorlevel% equ 0 (

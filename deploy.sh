@@ -50,9 +50,9 @@ wait_for_healthy() {
 cleanup_docker() {
     echo "
 [+] Decluttering Docker artifacts..."
-    # Remove dangling images (the <none> ones created during rebuilds)
-    docker image prune -f --filter "dangling=true" > /dev/null 2>&1
-    # Remove stopped containers to prevent accumulation
+    # Remove ALL unused images (not just dangling) to prevent accumulation on remote servers
+    docker image prune -af --filter "label!=com.docker.compose.project" > /dev/null 2>&1
+    # Remove stopped containers
     docker container prune -f > /dev/null 2>&1
 }
 
@@ -67,7 +67,7 @@ rollback() {
 [-] WARNING: Could not push revert to remote."
     
     chmod +x "$SCRIPT_DIR/start.sh" "$SCRIPT_DIR/deploy.sh" "$SCRIPT_DIR/rollback.sh"
-    docker compose build 2>&1
+    docker compose build --no-cache --pull 2>&1
     docker compose up -d 2>&1
     
     if wait_for_healthy; then
@@ -123,8 +123,8 @@ while true; do
         fi
         
         echo "
-[+] Building fresh daemon container..."
-        if ! docker compose build 2>&1; then
+[+] Building fresh daemon container (no cache)..."
+        if ! docker compose build --no-cache --pull 2>&1; then
             send_notification "$TRIGGER_CONTENT" "⚠️ Compile Failure. Container failed to package. Initiating structural rollback..."
             rollback "$PREVIOUS_COMMIT" "$TRIGGER_CONTENT"
             continue

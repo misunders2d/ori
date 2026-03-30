@@ -392,7 +392,7 @@ def a2a_privacy_guardrail(tool, args, tool_context, tool_response=None):
     # Get tool name
     tool_name = getattr(tool, "name", "") or (tool.__name__ if callable(tool) else "")
     
-    _A2A_RISK_TOOLS = {"call_friend", "export_dna", "add_friend", "web_fetch"}
+    _A2A_RISK_TOOLS = {"call_friend", "call_agent", "export_dna", "add_friend", "web_fetch"}
     if tool_name not in _A2A_RISK_TOOLS:
         return None
 

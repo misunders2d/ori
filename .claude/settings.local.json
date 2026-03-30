@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /media/misunderstood/DATA/projects/ori -type f \\\\\\(-name *.json -o -name *.yaml -o -name *.yml \\\\\\))",
+      "Bash(grep -r \"agent_card\\\\|to_a2a\\\\|RemoteA2aAgent\" /media/misunderstood/DATA/projects/ori --include=*.md)",
+      "WebFetch(domain:a2a-protocol.org)",
+      "Bash(python:*)",
+      "Bash(bash -n /media/misunderstood/DATA/projects/ori/start.sh)",
+      "Bash(python3:*)",
+      "Bash(grep -A 5 -B 2 \"OAuth2Auth\\\\|AuthConfig\\\\|OAuthGrantType\" /media/misunderstood/DATA/projects/ori/app/tools/*.py)",
+      "Bash(pip show:*)",
+      "Bash(ls /media/misunderstood/DATA/projects/ori/.venv/lib/*/site-packages/)",
+      "Bash(find /media/misunderstood/DATA/projects/ori/.venv -path */google/adk/auth* -type f)",
+      "Bash(grep -E \"\\(auth_credential|auth_schemes|auth_tool\\)\\\\.py$\")",
+      "Bash(find /media/misunderstood/DATA/projects/ori/.venv/lib/python3.13/site-packages/google/adk -name \"*.py\" -type f -exec grep -l \"create_auth_request\\\\|AuthToolArguments\" {})"
+    ]
+  }
+}

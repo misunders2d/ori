@@ -408,10 +408,23 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                             await adapter.send_message(chat_id, result["message"])
                         continue
 
+                    # TOTP VERIFICATION: intercept 6-digit codes for pending /init
+                    from app.app_utils.config import has_pending_totp, verify_pending_totp
+
+                    if has_pending_totp(session_id):
+                        if text:
+                            await adapter.delete_message(chat_id, message_id)
+                            success, result_msg = verify_pending_totp(session_id, text.strip())
+                            if success and "updated" in result_msg.lower():
+                                # Force runner reload to pick up new config
+                                _runner = get_runner_fn()  # noqa: F841
+                            await adapter.send_message(chat_id, result_msg)
+                        continue
+
                     # Handle /init command — delete the message since it may contain inline credentials
                     if text.strip().startswith("/init"):
                         await adapter.delete_message(chat_id, message_id)
-                        result = process_init_fn(text)
+                        result = process_init_fn(text, session_id=session_id)
                         await adapter.send_message(chat_id, result)
                         continue
 

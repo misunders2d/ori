@@ -4,7 +4,15 @@ from google.adk.models import Gemini
 from google.adk.skills import load_skill_from_dir
 from google.adk.tools import skill_toolset
 
-from app.tools.a2a import get_agent_identity, add_friend, list_friends, call_friend, export_dna, import_dna
+from app.tools.a2a import (
+    get_agent_identity,
+    add_friend,
+    list_friends,
+    call_friend,
+    call_agent,
+    export_dna,
+    import_dna,
+)
 from app.callbacks.guardrails import a2a_privacy_guardrail, prompt_injection_guardrail
 
 base_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
@@ -13,31 +21,48 @@ google_adk_a2a_skill = load_skill_from_dir(base_dir / "google-adk-a2a-skill")
 knowledge_agent = Agent(
     name="KnowledgeAgent",
     model=Gemini(model="gemini-3.1-pro-preview"),
-    description="The technical librarian and DNA-exchange specialist for Ori-Net (A2A). Handles sanitizing technical improvements for sharing and analyzing DNA from other Oris.",
+    description=(
+        "The A2A communication specialist. Handles discovery, messaging, and DNA exchange "
+        "with both registered friends and arbitrary A2A-compliant agents."
+    ),
     instruction=(
-        "You are the KnowledgeAgent, the 'DNA' specialist for Ori. "
-        "Your job is to manage technical information exchange between this Ori and its 'friends' via the A2A protocol.\n\n"
-        "1. **Identity Management:** Use the `get_agent_identity` tool to generate or update this Ori's 'Agent Card'. This is how other Oris identify us.\n"
-        "2. **Friendship (Discovery):** Use the `add_friend` tool to connect to another Ori instance. You will need their base URL. Give them a unique nickname for our local registry.\n"
-        "3. **Collaboration:** Use the `list_friends` tool to see who is in our network. Use the `call_friend` tool to send a query or a request for technical DNA to a friend.\n"
-        "4. **DNA Exchange (Collaborative Evolution):**\n"
-        "    a) Use the `export_dna` tool to sequence and sanitize our current technical improvements (tools and skills) for sharing.\n"
-        "    b) Use the `import_dna` tool to receive a DNA package from a friend and stage it in the sandbox for verification.\n"
-        "    c) Once staged, inform the `DeveloperAgent` to run the validation test suite and verify compatibility before final integration.\n"
-        "5. **Sanitization:** When sharing code or technical DNA, ensure no private data, sessions, or human-memory is included. "
-        "Focus strictly on tool schemas, agent instructions, and generic bug fixes.\n"
-        "6. **Analysis:** When receiving DNA from another Ori, compare it with our current local codebase. Identify improvements, "
-        "efficiency gains, or new capabilities that align with our Roadmap in `DEVELOPMENT.md`.\n\n"
-        "MANDATE: Never share user-specific data or long-term human memory. Technical DNA only."
+        "You are the KnowledgeAgent, the A2A communication and DNA exchange specialist for Ori.\n\n"
+
+        "A2A COMMUNICATION:\n"
+        "1. **Identity**: Use `get_agent_identity` to read (not regenerate) this agent's public Agent Card.\n"
+        "2. **Discovery**: Use `add_friend(url, friend_name)` to discover and register a remote A2A agent. "
+        "This fetches their Agent Card, validates it, and saves them for future calls.\n"
+        "3. **Friends list**: Use `list_friends` to see all registered friends and their capabilities.\n"
+        "4. **Call a friend**: Use `call_friend(friend_name, message)` to send a message to a registered friend "
+        "via the A2A JSON-RPC protocol. This is a real protocol call, not a handshake stub.\n"
+        "5. **Call any agent**: Use `call_agent(url, message)` to send a one-off message to ANY A2A-compliant agent "
+        "by URL, without registering them as a friend. Use this for scouting or one-time queries.\n\n"
+
+        "DNA EXCHANGE (Ori-specific, not A2A standard):\n"
+        "6. Use `export_dna` to package sanitized technical improvements (tools and skills) for sharing.\n"
+        "7. Use `import_dna` to receive a DNA package from a friend and stage it in the sandbox.\n"
+        "8. Once DNA is staged, inform the `DeveloperAgent` to run verification before final integration.\n\n"
+
+        "TASK STATE AWARENESS: When calling a remote agent, check the `task_state` in the response. "
+        "If it is `INPUT_REQUIRED`, the remote agent needs more information — follow up accordingly. "
+        "If it is `FAILED` or `REJECTED`, report the error to the user.\n\n"
+
+        "PRIVACY MANDATE: Never share user-specific data, long-term human memory, environment secrets, "
+        "or session data via A2A. Technical DNA only. The privacy guardrail will block violations automatically, "
+        "but you must also exercise judgment.\n\n"
+
+        "SECURITY AWARENESS: When adding a friend, check if their Agent Card declares `securitySchemes`. "
+        "If so, inform the user that an API key may be needed for authenticated communication."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[google_adk_a2a_skill]),
-        get_agent_identity, 
-        add_friend, 
-        list_friends, 
-        call_friend, 
-        export_dna, 
-        import_dna
+        get_agent_identity,
+        add_friend,
+        list_friends,
+        call_friend,
+        call_agent,
+        export_dna,
+        import_dna,
     ],
     before_tool_callback=a2a_privacy_guardrail,
     after_tool_callback=a2a_privacy_guardrail,
