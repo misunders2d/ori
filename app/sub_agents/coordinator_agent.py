@@ -6,7 +6,6 @@ from google.genai import types
 
 from app.callbacks.guardrails import (
     admin_tool_guardrail,
-    confirmation_reason_callback,
     prompt_injection_guardrail,
     state_setter,
     tool_output_injection_guardrail,
@@ -125,7 +124,7 @@ root_agent = Agent(
     ],
     before_agent_callback=[state_setter],
     before_model_callback=prompt_injection_guardrail,
-    before_tool_callback=[admin_tool_guardrail, confirmation_reason_callback, a2a_privacy_guardrail],
+    before_tool_callback=[admin_tool_guardrail, a2a_privacy_guardrail],
     after_tool_callback=[tool_output_injection_guardrail, a2a_privacy_guardrail],
     planner=BuiltInPlanner(
         thinking_config=types.ThinkingConfig(

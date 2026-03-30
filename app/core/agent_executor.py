@@ -144,12 +144,12 @@ async def extract_agent_response(
             app_name=runner.app_name, user_id=user_id, session_id=session_id
         )
         if session is None:
-            await runner.session_service.create_session(
+            session = await runner.session_service.create_session(
                 app_name=runner.app_name, user_id=user_id, session_id=session_id
             )
 
     except Exception:
-        await runner.session_service.create_session(
+        session = await runner.session_service.create_session(
             app_name=runner.app_name, user_id=user_id, session_id=session_id
         )
 
@@ -192,29 +192,7 @@ async def extract_agent_response(
             if pending_call_ids:
                 break
 
-        # In group chats, only the user who triggered the action can confirm it.
-        # The owner is persisted in ADK session state as _confirmation_owner.
-        session_state = getattr(session, "state", None) or {}
-        confirmation_owner = ""
-        try:
-            _raw_owner = session_state.get("_confirmation_owner", "")
-            confirmation_owner = _raw_owner if isinstance(_raw_owner, str) else ""
-        except (TypeError, AttributeError):
-            pass
-        caller = actual_caller_id or user_id
-        if pending_call_ids and confirmation_owner and caller != confirmation_owner:
-            logger.warning(
-                "Confirmation rejected: user %s tried to confirm action owned by %s in session %s",
-                caller, confirmation_owner, session_id,
-            )
-            pending_call_ids = []  # Treat as no pending confirmation — forward as normal message
-
         if pending_call_ids:
-            # Clear the owner now that the confirmation is consumed
-            try:
-                await update_session_state(runner, user_id, session_id, {"_confirmation_owner": ""})
-            except Exception:
-                pass
             is_confirmed = val_to_check in ("yes", "y")
             func_parts = []
             for pc_id in pending_call_ids:
@@ -311,43 +289,27 @@ async def extract_agent_response(
                         msg = f"⚠️ **Action Requires Confirmation**\n\n"
                         msg += f"**{agent_name}** wants to execute `{tool_name}`."
 
-                        # Generate a meaningful reason summary.
-                        # Priority: 1) session state _confirmation_reason (set by tool)
-                        #           2) non-generic ADK hint
-                        #           3) hardcoded fallbacks per tool name
-                        #           4) payload summary
+                        # Generate a meaningful reason summary
                         reason = ""
-                        session_reason = ""
-                        try:
-                            _ss = getattr(session, "state", None) or {}
-                            _raw = _ss.get("_confirmation_reason", "")
-                            session_reason = _raw if isinstance(_raw, str) else ""
-                        except (TypeError, AttributeError):
-                            pass
-
-                        if session_reason:
-                            reason = session_reason
-                        elif not is_generic_hint:
+                        if not is_generic_hint:
                             reason = hint_text
+                        elif tool_name == "update_self":
+                            reason = "Deploy latest code changes and restart the daemon."
+                        elif tool_name == "trigger_rollback":
+                            reason = "Revert to the previous stable git commit."
+                        elif tool_name == "session_refresh":
+                            mode = clean_payload.get('mode', 'fresh')
+                            reason = f"Clear conversation history (mode: {mode})."
+                        elif tool_name == "evolution_commit_and_push":
+                            msg_arg = clean_payload.get('commit_message', 'code changes')
+                            reason = f"Commit and push: {msg_arg}"
                         elif summary_text:
                             reason = summary_text
 
                         if reason:
                             msg += f"\n📋 **Reason:** {reason}"
-                        
-                        msg += "\n\nPlease approve or deny by explicitly responding **'yes'** or **'no'**."
 
-                        # Record who owns this confirmation and clear the consumed reason
-                        try:
-                            await update_session_state(
-                                runner, user_id, session_id,
-                                {
-                                    "_confirmation_owner": actual_caller_id or user_id,
-                                    "_confirmation_reason": "",
-                                },
-                            )
-                        except Exception:
-                            logger.debug("Could not persist confirmation state")
+                        msg += "\n\nPlease approve or deny by explicitly responding **'yes'** or **'no'**."
 
                         parts.append(msg)
 
