@@ -120,11 +120,17 @@ hr
 echo ""
 if [[ "$1" == "--no-sync" ]]; then
     info "Skipping remote git sync (--no-sync)"
+elif ! git remote get-url origin &>/dev/null; then
+    info "No remote 'origin' configured — skipping sync"
+    warn "Add a remote later: git remote add origin <url>"
 else
     info "Fetching and syncing origin/master..."
-    git fetch origin master 2>&1
-    git reset --hard origin/master 2>&1
-    ok "Codebase synced"
+    if git fetch origin master 2>&1; then
+        git reset --hard origin/master 2>&1
+        ok "Codebase synced"
+    else
+        warn "Could not fetch from origin — continuing with local code"
+    fi
 fi
 chmod +x "$SCRIPT_DIR/start.sh" "$SCRIPT_DIR/deploy.sh" "$SCRIPT_DIR/rollback.sh" 2>/dev/null || true
 echo ""

@@ -127,10 +127,20 @@ echo.
 if /i "%~1"=="--no-sync" (
     echo   %CYAN%→%RESET% Skipping remote git sync (--no-sync)
 ) else (
-    echo   %CYAN%→%RESET% Fetching and syncing origin/master...
-    git fetch origin master 2>&1
-    git reset --hard origin/master 2>&1
-    echo   %GREEN%✓%RESET% Codebase synced
+    git remote get-url origin >nul 2>nul
+    if errorlevel 1 (
+        echo   %CYAN%→%RESET% No remote 'origin' configured — skipping sync
+        echo   %YELLOW%⚠%RESET% Add a remote later: git remote add origin ^<url^>
+    ) else (
+        echo   %CYAN%→%RESET% Fetching and syncing origin/master...
+        git fetch origin master 2>&1
+        if errorlevel 1 (
+            echo   %YELLOW%⚠%RESET% Could not fetch from origin — continuing with local code
+        ) else (
+            git reset --hard origin/master 2>&1
+            echo   %GREEN%✓%RESET% Codebase synced
+        )
+    )
 )
 echo.
 echo %HR%
