@@ -47,7 +47,17 @@ def admin_tool_guardrail(*args, **kwargs) -> dict | None:
     if not tool_call or not callback_context:
         return None
 
-    if tool_call.name in ["configure_integration", "remove_integration", "schedule_system_task", "schedule_recurring_system_task"]:
+    if tool_call.name in [
+        "configure_integration", 
+        "remove_integration", 
+        "schedule_system_task", 
+        "schedule_recurring_system_task",
+        "run_system_task_now",
+        "session_refresh",
+        "update_self",
+        "trigger_rollback",
+        "set_planner_mode"
+    ]:
         import os
 
         current_state = callback_context.state.to_dict()

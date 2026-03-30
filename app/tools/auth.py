@@ -96,7 +96,12 @@ async def connect_to_platform(
         }
 
     flow = platform["flow"]
-    session_id = getattr(tool_context, "session_id", "") if tool_context else ""
+    
+    session_id = ""
+    session = getattr(tool_context, "session", None)
+    if session:
+        session_id = getattr(session, "session_id", None) or getattr(session, "id", None) or ""
+        
     effective_scopes = scopes if scopes else None
 
     try:

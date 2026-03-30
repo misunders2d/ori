@@ -46,7 +46,7 @@ def _get_session_notify_info(tool_context: ToolContext) -> dict:
     session = getattr(tool_context, "session", None)
     if not session:
         return {}
-    sid = str(getattr(session, "id", ""))
+    sid = getattr(session, "session_id", None) or getattr(session, "id", None)
     return parse_notify_from_session_id(sid)
 
 

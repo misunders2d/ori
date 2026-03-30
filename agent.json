@@ -47,5 +47,17 @@
             "description": "Exchanges sanitized technical improvements (tools/skills) with other Ori instances.",
             "tags": ["a2a", "exchange"]
         }
+    ],
+    "securitySchemes": {
+        "apiKey": {
+            "type": "apiKey",
+            "name": "x-a2a-api-key",
+            "in": "header"
+        }
+    },
+    "security": [
+        {
+            "apiKey": []
+        }
     ]
 }

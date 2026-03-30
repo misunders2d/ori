@@ -29,7 +29,7 @@ def update_self(tool_context: ToolContext) -> dict:
     notify = {}
     session = getattr(tool_context, "session", None)
     if session:
-        sid = str(getattr(session, "id", ""))
+        sid = getattr(session, "session_id", None) or getattr(session, "id", None)
         notify = parse_notify_from_session_id(sid)
 
     try:
@@ -70,7 +70,7 @@ def session_refresh(mode: str, tool_context: ToolContext) -> dict:
     if not session:
         return {"status": "error", "message": "No active session found."}
 
-    sid = str(getattr(session, "id", ""))
+    sid = getattr(session, "session_id", None) or getattr(session, "id", None)
     if not sid:
         return {"status": "error", "message": "Session ID not found."}
 
@@ -100,7 +100,7 @@ def trigger_rollback(tool_context: ToolContext) -> dict:
     notify = {}
     session = getattr(tool_context, "session", None)
     if session:
-        sid = str(getattr(session, "id", ""))
+        sid = getattr(session, "session_id", None) or getattr(session, "id", None)
         notify = parse_notify_from_session_id(sid)
             
     try:

@@ -115,13 +115,13 @@ root_agent = Agent(
         recall_human_preferences,
         recall_technical_context,
         get_agent_identity,
-        google.adk.tools.FunctionTool(run_system_task_now, require_confirmation=True),
-        google.adk.tools.FunctionTool(schedule_system_task, require_confirmation=True),
-        google.adk.tools.FunctionTool(schedule_recurring_system_task, require_confirmation=True),
-        google.adk.tools.FunctionTool(update_self, require_confirmation=True),
-        google.adk.tools.FunctionTool(session_refresh, require_confirmation=True),
-        google.adk.tools.FunctionTool(trigger_rollback, require_confirmation=True),
-        google.adk.tools.FunctionTool(set_planner_mode, require_confirmation=True),
+        run_system_task_now,
+        schedule_system_task,
+        schedule_recurring_system_task,
+        update_self,
+        session_refresh,
+        trigger_rollback,
+        set_planner_mode,
         save_user_preferences,
         get_user_preferences,
         google_search_agent_tool,
@@ -133,7 +133,7 @@ root_agent = Agent(
     after_tool_callback=[tool_output_injection_guardrail, a2a_privacy_guardrail],
     planner=BuiltInPlanner(
         thinking_config=types.ThinkingConfig(
-            include_thoughts=True, thinking_budget=-1
+            include_thoughts=True, thinking_budget=16000
         )
     ),
 )
