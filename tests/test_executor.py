@@ -215,3 +215,126 @@ async def test_extract_agent_response_evolution_confirmation_reason():
     response = await extract_agent_response(runner, "user_id", "session_id", "message")
 
     assert "📋 **Reason:** Commit and push: Add tests" in response.text
+
+
+@pytest.mark.asyncio
+async def test_natural_language_confirmation_accepted():
+    """Verifies that 'of course', 'sure', etc. are recognized as confirmations."""
+
+    runner = MagicMock()
+    runner.app_name = "ori"
+    runner.session_service = AsyncMock()
+
+    mock_confirmation = MagicMock()
+    past_event = MagicMock()
+    past_event.actions = MagicMock()
+    past_event.actions.requested_tool_confirmations = {"call_nat": mock_confirmation}
+    past_event.content = None
+
+    session = MagicMock()
+    session.id = "tg_chat_123"
+    session.events = [past_event]
+    runner.session_service.get_session.return_value = session
+
+    captured_args = {}
+
+    async def mock_run_async(*args, **kwargs):
+        captured_args.update(kwargs)
+        text_event = MagicMock()
+        text_event.content = MagicMock()
+        text_part = MagicMock()
+        text_part.text = "Update started."
+        text_part.inline_data = None
+        text_event.content.parts = [text_part]
+        text_event.actions = None
+        text_event.get_function_calls = MagicMock(return_value=[])
+        yield text_event
+
+    runner.run_async = mock_run_async
+
+    msg = types.Content(
+        role="user",
+        parts=[types.Part.from_text(text="Message from Sergey (tg_123): of course")]
+    )
+    response = await extract_agent_response(runner, "tg_123", "tg_chat_123", msg)
+
+    new_message = captured_args.get("new_message")
+    assert new_message is not None
+    fr_part = new_message.parts[0]
+    assert fr_part.function_response.id == "call_nat"
+    assert fr_part.function_response.response["confirmed"] is True
+
+
+@pytest.mark.asyncio
+async def test_already_confirmed_call_ids_are_skipped():
+    """Verifies that confirmations already responded to are not re-matched."""
+
+    runner = MagicMock()
+    runner.app_name = "ori"
+    runner.session_service = AsyncMock()
+
+    mock_confirmation = MagicMock()
+
+    # Event 1: old confirmation request (already responded to)
+    old_confirm_event = MagicMock()
+    old_confirm_event.actions = MagicMock()
+    old_confirm_event.actions.requested_tool_confirmations = {"call_old": mock_confirmation}
+    old_confirm_event.content = None
+
+    # Event 2: user's FunctionResponse that already confirmed the old request
+    old_response_event = MagicMock()
+    old_response_event.actions = None
+    old_fr = MagicMock()
+    old_fr.name = "adk_request_confirmation"
+    old_fr.id = "call_old"
+    old_fr_part = MagicMock()
+    old_fr_part.function_response = old_fr
+    old_response_event.content = MagicMock()
+    old_response_event.content.parts = [old_fr_part]
+
+    # Event 3: agent text response (LLM asking for more confirmation — the bug)
+    text_event = MagicMock()
+    text_event.actions = None
+    text_event.content = MagicMock()
+    text_part = MagicMock()
+    text_part.text = "Please confirm the reboot."
+    text_part.function_response = None
+    text_event.content.parts = [text_part]
+
+    session = MagicMock()
+    session.id = "tg_chat_123"
+    session.events = [old_confirm_event, old_response_event, text_event]
+    runner.session_service.get_session.return_value = session
+
+    captured_args = {}
+
+    async def mock_run_async(*args, **kwargs):
+        captured_args.update(kwargs)
+        resp_event = MagicMock()
+        resp_event.content = MagicMock()
+        resp_part = MagicMock()
+        resp_part.text = "Ok."
+        resp_part.inline_data = None
+        resp_event.content.parts = [resp_part]
+        resp_event.actions = None
+        resp_event.get_function_calls = MagicMock(return_value=[])
+        yield resp_event
+
+    runner.run_async = mock_run_async
+
+    # User says "yes" again, but the old confirmation is already resolved
+    msg = types.Content(
+        role="user",
+        parts=[types.Part.from_text(text="Message from Sergey (tg_123): yes")]
+    )
+    response = await extract_agent_response(runner, "tg_123", "tg_chat_123", msg)
+
+    # Should be sent as a regular message, NOT as a FunctionResponse
+    new_message = captured_args.get("new_message")
+    assert new_message is not None
+    # The message should be the original Content (not a FunctionResponse)
+    has_fr = any(
+        hasattr(p, "function_response") and p.function_response
+        for p in new_message.parts
+    )
+    assert not has_fr, "Stale confirmation was re-matched — deduplication failed"

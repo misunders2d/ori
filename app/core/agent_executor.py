@@ -176,10 +176,25 @@ async def extract_agent_response(
     else:
         val_to_check = clean_msg
 
-    if val_to_check in ("yes", "y", "no", "n") and session and getattr(session, "events", None):
+    # Accept natural affirmative/negative responses, not just "yes"/"no"
+    _AFFIRM = {"yes", "y", "yeah", "yep", "yup", "sure", "ok", "okay", "of course", "go ahead", "do it", "proceed", "confirm", "approved", "approve"}
+    _DENY = {"no", "n", "nah", "nope", "cancel", "stop", "deny", "denied", "reject", "abort"}
+    is_confirmation_reply = (val_to_check in _AFFIRM or val_to_check in _DENY)
+
+    if is_confirmation_reply and session and getattr(session, "events", None):
         pending_call_ids = []
 
-        # Scan history for the most recent confirmation request.
+        # Collect call_ids that have already been confirmed/denied via FunctionResponse
+        already_responded = set()
+        for ev in session.events:
+            if ev.content and ev.content.parts:
+                for part in (ev.content.parts or []):
+                    if hasattr(part, "function_response") and part.function_response:
+                        fr = part.function_response
+                        if getattr(fr, "name", None) == "adk_request_confirmation" and fr.id:
+                            already_responded.add(fr.id)
+
+        # Scan history for the most recent UNRESOLVED confirmation request.
         # The ADK stores pending confirmations in event.actions.requested_tool_confirmations,
         # NOT as function calls — so we must check there.
         for i in range(len(session.events) - 1, max(-1, len(session.events) - 15), -1):
@@ -187,13 +202,14 @@ async def extract_agent_response(
 
             if getattr(ev, "actions", None) and getattr(ev.actions, "requested_tool_confirmations", None):
                 for call_id in ev.actions.requested_tool_confirmations:
-                    pending_call_ids.append(call_id)
+                    if call_id not in already_responded:
+                        pending_call_ids.append(call_id)
 
             if pending_call_ids:
                 break
 
         if pending_call_ids:
-            is_confirmed = val_to_check in ("yes", "y")
+            is_confirmed = val_to_check in _AFFIRM
             func_parts = []
             for pc_id in pending_call_ids:
                 fr = types.FunctionResponse(
