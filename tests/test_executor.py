@@ -221,12 +221,17 @@ async def test_extract_agent_response_refresh_confirmation_reason():
     runner = MagicMock()
     runner.app_name = "ori"
     runner.session_service = AsyncMock()
-    runner.session_service.get_session.return_value = MagicMock(events=[])
-    
+
+    # Session state with _confirmation_reason set by the before_tool_callback
+    mock_session = MagicMock()
+    mock_session.events = []
+    mock_session.state = {"_confirmation_reason": "Clear conversation history (mode: summarize)"}
+    runner.session_service.get_session.return_value = mock_session
+
     mock_confirmation = MagicMock()
     mock_confirmation.hint = "" # Missing hint
     mock_confirmation.payload = {"tool_context": {}, "mode": "summarize"}
-    
+
     mock_event = MagicMock()
     mock_event.author = "CoordinatorAgent"
     mock_event.content = None
@@ -234,21 +239,21 @@ async def test_extract_agent_response_refresh_confirmation_reason():
     mock_event.actions.requested_tool_confirmations = {
         "call_456": mock_confirmation
     }
-    
+
     mock_fc = MagicMock()
     mock_fc.id = "call_456"
     mock_fc.name = "session_refresh"
     mock_event.get_function_calls.return_value = [mock_fc]
-    
+
     async def mock_run_async(*args, **kwargs):
         yield mock_event
-        
+
     runner.run_async = mock_run_async
-    
+
     response = await extract_agent_response(runner, "user_id", "session_id", "message")
-    
-    # Assert generated reason
-    assert "📋 **Reason:** Clear conversation history (Mode: summarize)." in response.text
+
+    # Assert reason from session state (set by confirmation_reason_callback)
+    assert "📋 **Reason:** Clear conversation history (mode: summarize)" in response.text
 
 @pytest.mark.asyncio
 async def test_extract_agent_response_evolution_confirmation_reason():
@@ -257,12 +262,17 @@ async def test_extract_agent_response_evolution_confirmation_reason():
     runner = MagicMock()
     runner.app_name = "ori"
     runner.session_service = AsyncMock()
-    runner.session_service.get_session.return_value = MagicMock(events=[])
-    
+
+    # Session state with _confirmation_reason set by the before_tool_callback
+    mock_session = MagicMock()
+    mock_session.events = []
+    mock_session.state = {"_confirmation_reason": "Commit and push: Add tests"}
+    runner.session_service.get_session.return_value = mock_session
+
     mock_confirmation = MagicMock()
-    mock_confirmation.hint = "" 
+    mock_confirmation.hint = ""
     mock_confirmation.payload = {"tool_context": {}, "commit_message": "Add tests"}
-    
+
     mock_event = MagicMock()
     mock_event.author = "DeveloperAgent"
     mock_event.content = None
@@ -270,18 +280,18 @@ async def test_extract_agent_response_evolution_confirmation_reason():
     mock_event.actions.requested_tool_confirmations = {
         "call_789": mock_confirmation
     }
-    
+
     mock_fc = MagicMock()
     mock_fc.id = "call_789"
     mock_fc.name = "evolution_commit_and_push"
     mock_event.get_function_calls.return_value = [mock_fc]
-    
+
     async def mock_run_async(*args, **kwargs):
         yield mock_event
-        
+
     runner.run_async = mock_run_async
-    
+
     response = await extract_agent_response(runner, "user_id", "session_id", "message")
-    
-    # Assert generated reason
-    assert "📋 **Reason:** Commit and push changes: Add tests" in response.text
+
+    # Assert reason from session state (set by confirmation_reason_callback)
+    assert "📋 **Reason:** Commit and push: Add tests" in response.text

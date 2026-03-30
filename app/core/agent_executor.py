@@ -329,16 +329,6 @@ async def extract_agent_response(
                             reason = session_reason
                         elif not is_generic_hint:
                             reason = hint_text
-                        elif tool_name == "update_self":
-                            reason = "Deploy latest code changes and restart the daemon."
-                        elif tool_name == "trigger_rollback":
-                            reason = "Revert to the previous stable git commit."
-                        elif tool_name == "session_refresh":
-                            mode = clean_payload.get('mode', 'fresh')
-                            reason = f"Clear conversation history (Mode: {mode})."
-                        elif tool_name == "evolution_commit_and_push":
-                            msg_arg = clean_payload.get('commit_message', 'Perform code evolution')
-                            reason = f"Commit and push changes: {msg_arg}"
                         elif summary_text:
                             reason = summary_text
 
@@ -347,14 +337,17 @@ async def extract_agent_response(
                         
                         msg += "\n\nPlease approve or deny by explicitly responding **'yes'** or **'no'**."
 
-                        # Record who owns this confirmation in session state so only they can approve/deny
+                        # Record who owns this confirmation and clear the consumed reason
                         try:
                             await update_session_state(
                                 runner, user_id, session_id,
-                                {"_confirmation_owner": actual_caller_id or user_id},
+                                {
+                                    "_confirmation_owner": actual_caller_id or user_id,
+                                    "_confirmation_reason": "",
+                                },
                             )
                         except Exception:
-                            logger.debug("Could not persist confirmation owner to session state")
+                            logger.debug("Could not persist confirmation state")
 
                         parts.append(msg)
 
