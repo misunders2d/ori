@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 # Heartbeat file for self-diagnostics
 HEARTBEAT_FILE = os.path.abspath("./data/.tg_heartbeat")
 
+
 def _update_heartbeat():
     """Updates the heartbeat file with current timestamp."""
     try:
@@ -31,8 +32,14 @@ def _update_heartbeat():
     except Exception:
         pass
 
+
 # Keys whose env values are sensitive secrets (not public identifiers like GITHUB_REPO)
-_SECRET_ENV_KEYS = {"GOOGLE_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "GITHUB_TOKEN"}
+_SECRET_ENV_KEYS = {
+    "GOOGLE_API_KEY",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_WEBHOOK_SECRET",
+    "GITHUB_TOKEN",
+}
 
 # Common token patterns as a fallback (catches secrets the env doesn't know about yet)
 _TOKEN_PATTERNS = re.compile(
@@ -59,6 +66,7 @@ def _scrub_secrets(text: str) -> str:
 
     return text
 
+
 TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
 TELEGRAM_FILE_API = "https://api.telegram.org/file/bot{token}/{path}"
 
@@ -75,15 +83,18 @@ class TelegramAdapter(TransportAdapter):
         return "telegram"
 
     def make_session_id(self, chat_id: str | int) -> str:
-        return f"tg_chat_{chat_id}"
+        return f"tg_{chat_id}"
 
     def make_user_id(self, user_id: str | int) -> str:
         return f"tg_{user_id}"
 
     def parse_notify_info(self, session_id: str) -> dict:
-        if session_id.startswith("tg_chat_"):
+        if session_id.startswith("tg_"):
             try:
-                return {"type": "telegram", "chat_id": int(session_id.replace("tg_chat_", ""))}
+                return {
+                    "type": "telegram",
+                    "chat_id": int(session_id.replace("tg_", "")),
+                }
             except ValueError:
                 pass
         return {}
@@ -93,29 +104,33 @@ class TelegramAdapter(TransportAdapter):
 
         # SECURITY: Scrub any leaked secrets before they reach the user
         text = _scrub_secrets(text)
-        
+
         # Safe chunking to handle the 4096 character limit
         limit = 4000
         chunks = []
         remaining = text
         while len(remaining) > limit:
-            split_at = remaining.rfind('\n', 0, limit)
+            split_at = remaining.rfind("\n", 0, limit)
             if split_at == -1:
                 split_at = limit
             chunks.append(remaining[:split_at])
-            remaining = remaining[split_at:].lstrip('\n')
+            remaining = remaining[split_at:].lstrip("\n")
         if remaining:
             chunks.append(remaining)
 
         for chunk in chunks:
-            if not chunk.strip(): continue
+            if not chunk.strip():
+                continue
             try:
                 resp = await self._client.post(
-                    url, json={"chat_id": chat_id, "text": chunk, "parse_mode": "Markdown"}
+                    url,
+                    json={"chat_id": chat_id, "text": chunk, "parse_mode": "Markdown"},
                 )
                 if resp.status_code != 200:
                     # Markdown was rejected — retry without it
-                    resp = await self._client.post(url, json={"chat_id": chat_id, "text": chunk})
+                    resp = await self._client.post(
+                        url, json={"chat_id": chat_id, "text": chunk}
+                    )
                     if resp.status_code != 200:
                         logger.error("Telegram sendMessage failed: %s", resp.text)
             except Exception:
@@ -131,7 +146,9 @@ class TelegramAdapter(TransportAdapter):
     async def delete_message(self, chat_id: str | int, message_id: int) -> None:
         url = TELEGRAM_API.format(token=self._token, method="deleteMessage")
         try:
-            await self._client.post(url, json={"chat_id": chat_id, "message_id": message_id})
+            await self._client.post(
+                url, json={"chat_id": chat_id, "message_id": message_id}
+            )
         except Exception:
             pass  # May fail if bot lacks permissions, non-critical
 
@@ -196,7 +213,6 @@ class TelegramAdapter(TransportAdapter):
             return None
 
 
-
 async def poll_telegram(get_runner_fn, process_init_fn):
     """Long-poll Telegram's getUpdates API and process messages."""
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -219,7 +235,9 @@ async def poll_telegram(get_runner_fn, process_init_fn):
         # Fetch bot info to get username for mention detection
         bot_username = ""
         try:
-            bot_info_resp = await setup_client.get(TELEGRAM_API.format(token=token, method="getMe"))
+            bot_info_resp = await setup_client.get(
+                TELEGRAM_API.format(token=token, method="getMe")
+            )
             bot_info = bot_info_resp.json().get("result", {})
             bot_username = bot_info.get("username", "")
             logger.info("Telegram Bot Username: %s", bot_username)
@@ -241,7 +259,7 @@ async def poll_telegram(get_runner_fn, process_init_fn):
         adapter = TelegramAdapter(client, token)
         register_adapter(adapter)
 
-        _active_tasks = {}      # session_id -> (asyncio.Task, message_content)
+        _active_tasks = {}  # session_id -> (asyncio.Task, message_content)
         _media_group_buffers = {}
         _media_group_timers = {}
         _session_locks = weakref.WeakValueDictionary()  # session_id -> asyncio.Lock
@@ -253,17 +271,24 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                 _session_locks[sid] = lock
             return lock
 
-        async def _process_and_send(_runner, _session_user_id, _session_id, _message_content, _user_id, _chat_id):
+        async def _process_and_send(
+            _runner, _session_user_id, _session_id, _message_content, _user_id, _chat_id
+        ):
             async with await _get_lock(_session_id):
+
                 async def keep_typing(__chat_id=_chat_id):
                     while True:
                         await adapter.send_typing(__chat_id)
                         await asyncio.sleep(4)
-                
+
                 typing_task = asyncio.create_task(keep_typing())
                 try:
                     response = await extract_agent_response(
-                        _runner, _session_user_id, _session_id, _message_content, _user_id
+                        _runner,
+                        _session_user_id,
+                        _session_id,
+                        _message_content,
+                        _user_id,
                     )
                     # Send text response
                     if response.text:
@@ -283,35 +308,61 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                         await typing_task
                     except asyncio.CancelledError:
                         pass
-                    if _session_id in _active_tasks and _active_tasks[_session_id][0] == asyncio.current_task():
+                    if (
+                        _session_id in _active_tasks
+                        and _active_tasks[_session_id][0] == asyncio.current_task()
+                    ):
                         del _active_tasks[_session_id]
 
-        async def _save_context(_runner, _session_user_id, _session_id, _message_content):
+        async def _save_context(
+            _runner, _session_user_id, _session_id, _message_content
+        ):
             """Helper to save a message to history sequentially."""
             async with await _get_lock(_session_id):
                 try:
-                    await process_message_for_context(_runner, _session_user_id, _session_id, _message_content)
+                    await process_message_for_context(
+                        _runner, _session_user_id, _session_id, _message_content
+                    )
                 except Exception:
-                    logger.exception("Failed to save message to context for session %s", _session_id)
+                    logger.exception(
+                        "Failed to save message to context for session %s", _session_id
+                    )
 
-        async def flush_media_group(mg_id, _runner, _session_user_id, _session_id, _user_id, _chat_id):
+        async def flush_media_group(
+            mg_id, _runner, _session_user_id, _session_id, _user_id, _chat_id
+        ):
             await asyncio.sleep(1.5)
             if mg_id not in _media_group_buffers:
                 return
-            
+
             combined_parts = _media_group_buffers.pop(mg_id)
             _media_group_timers.pop(mg_id, None)
-            
+
             combined_content = types.Content(role="user", parts=combined_parts)
-            
-            if _session_id in _active_tasks and not _active_tasks[_session_id][0].done():
+
+            if (
+                _session_id in _active_tasks
+                and not _active_tasks[_session_id][0].done()
+            ):
                 prev_task, prev_msg = _active_tasks[_session_id]
                 prev_task.cancel()
-                asyncio.create_task(_save_context(_runner, _session_user_id, _session_id, prev_msg))
-                await adapter.send_message(_chat_id, "Aborting previous task to prioritize new grouped media...")
+                asyncio.create_task(
+                    _save_context(_runner, _session_user_id, _session_id, prev_msg)
+                )
+                await adapter.send_message(
+                    _chat_id,
+                    "Aborting previous task to prioritize new grouped media...",
+                )
 
             task = asyncio.create_task(
-                _process_and_send(_runner, _session_user_id, _session_id, combined_content, _user_id, _chat_id)
+                _process_and_send(
+                    _runner,
+                    _session_user_id,
+                    _session_id,
+                    combined_content,
+                    _user_id,
+                    _chat_id,
+                )
             )
             _active_tasks[_session_id] = (task, combined_content)
 
@@ -361,20 +412,26 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                         file_info_text = "[Photo]"
                     elif "document" in msg:
                         file_id = msg["document"]["file_id"]
-                        file_info_text = f"[Document: {msg['document'].get('file_name', 'unknown')}]"
+                        file_info_text = (
+                            f"[Document: {msg['document'].get('file_name', 'unknown')}]"
+                        )
                     elif "voice" in msg:
                         file_id = msg["voice"]["file_id"]
                         file_info_text = "[Voice Message]"
                     elif "audio" in msg:
                         file_id = msg["audio"]["file_id"]
-                        file_info_text = f"[Audio: {msg['audio'].get('title', 'unknown')}]"
+                        file_info_text = (
+                            f"[Audio: {msg['audio'].get('title', 'unknown')}]"
+                        )
                     elif "video" in msg:
                         file_id = msg["video"]["file_id"]
-                        file_info_text = f"[Video: {msg['video'].get('file_name', 'unknown')}]"
+                        file_info_text = (
+                            f"[Video: {msg['video'].get('file_name', 'unknown')}]"
+                        )
                     elif "video_note" in msg:
                         file_id = msg["video_note"]["file_id"]
                         file_info_text = "[Video Message]"
-                    
+
                     # Prevent empty messages without files
                     if not text and not file_id:
                         continue
@@ -388,14 +445,20 @@ async def poll_telegram(get_runner_fn, process_init_fn):
 
                     message_content = types.Content(role="user", parts=[])
                     if enriched_text:
-                        message_content.parts.append(types.Part.from_text(text=enriched_text))
+                        message_content.parts.append(
+                            types.Part.from_text(text=enriched_text)
+                        )
 
                     if file_id:
                         file_data = await adapter.download_file(file_id)
                         if file_data:
                             blob_bytes, mime_type, filename = file_data
                             message_content.parts.append(
-                                types.Part(inline_data=types.Blob(data=blob_bytes, mime_type=mime_type))
+                                types.Part(
+                                    inline_data=types.Blob(
+                                        data=blob_bytes, mime_type=mime_type
+                                    )
+                                )
                             )
 
                     # Handle /start command — always accessible (just a welcome message)
@@ -425,17 +488,27 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                     # Enforced BEFORE /init, secure capture, TOTP, and all
                     # other handlers so unauthorized users cannot reach them.
                     allowed_users_str = os.environ.get("ALLOWED_USER_IDS", "")
-                    allowed_users = [u.strip() for u in allowed_users_str.split(",") if u.strip()]
+                    allowed_users = [
+                        u.strip() for u in allowed_users_str.split(",") if u.strip()
+                    ]
 
-                    if allowed_users and user_id not in allowed_users and session_id not in allowed_users:
-                        logger.warning("Unauthorized access attempt by %s in chat %s", user_id, session_id)
+                    if (
+                        allowed_users
+                        and user_id not in allowed_users
+                        and session_id not in allowed_users
+                    ):
+                        logger.warning(
+                            "Unauthorized access attempt by %s in chat %s",
+                            user_id,
+                            session_id,
+                        )
                         await adapter.send_message(
                             chat_id,
                             f"⛔ You are not authorized to interact with this agent.\n\n"
                             f"To allow access, add your ID to the `ALLOWED_USER_IDS` environment variable.\n"
                             f"Your User ID: `{user_id}`\n"
-                            f"This Chat ID: `{session_id}`"
-                            )
+                            f"This Chat ID: `{session_id}`",
+                        )
                         continue
 
                     # SECURE KEY CAPTURE: intercept before anything reaches the agent
@@ -449,12 +522,17 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                         continue
 
                     # TOTP VERIFICATION: intercept 6-digit codes for pending /init
-                    from app.app_utils.config import has_pending_totp, verify_pending_totp
+                    from app.app_utils.config import (
+                        has_pending_totp,
+                        verify_pending_totp,
+                    )
 
                     if has_pending_totp(session_id):
                         if text:
                             await adapter.delete_message(chat_id, message_id)
-                            success, result_msg = verify_pending_totp(session_id, text.strip())
+                            success, result_msg = verify_pending_totp(
+                                session_id, text.strip()
+                            )
                             if success and "updated" in result_msg.lower():
                                 # Force runner reload to pick up new config
                                 _runner = get_runner_fn()  # noqa: F841
@@ -475,7 +553,10 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                             from app.core.agent_executor import _perform_session_refresh
 
                             # Cancel any in-flight task for this session
-                            if session_id in _active_tasks and not _active_tasks[session_id].done():
+                            if (
+                                session_id in _active_tasks
+                                and not _active_tasks[session_id].done()
+                            ):
                                 _active_tasks[session_id].cancel()
 
                             refresh_msg = await _perform_session_refresh(
@@ -503,41 +584,76 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                         )
                         continue
 
-
                     is_group = chat_type in ["group", "supergroup", "channel"]
                     is_mentioned = bot_username and (f"@{bot_username}" in text)
                     if is_group and not is_mentioned:
-                        logger.info("Silently adding group message for context to session %s", session_id)
-                        asyncio.create_task(_save_context(runner, session_user_id, session_id, message_content))
+                        logger.info(
+                            "Silently adding group message for context to session %s",
+                            session_id,
+                        )
+                        asyncio.create_task(
+                            _save_context(
+                                runner, session_user_id, session_id, message_content
+                            )
+                        )
                         continue
-                        
+
                     if mg_id:
                         if mg_id not in _media_group_buffers:
                             _media_group_buffers[mg_id] = []
                         _media_group_buffers[mg_id].extend(message_content.parts)
-                        
+
                         if mg_id in _media_group_timers:
                             _media_group_timers[mg_id].cancel()
                         _media_group_timers[mg_id] = asyncio.create_task(
-                            flush_media_group(mg_id, runner, session_user_id, session_id, user_id, chat_id)
+                            flush_media_group(
+                                mg_id,
+                                runner,
+                                session_user_id,
+                                session_id,
+                                user_id,
+                                chat_id,
+                            )
                         )
                         continue
 
                     # Mid-flight Cancellation Logic
-                    if session_id in _active_tasks and not _active_tasks[session_id][0].done():
+                    if (
+                        session_id in _active_tasks
+                        and not _active_tasks[session_id][0].done()
+                    ):
                         prev_task, prev_msg = _active_tasks[session_id]
                         prev_task.cancel()
                         # Persist the interrupted message as context sequentially so it's not lost
-                        asyncio.create_task(_save_context(runner, session_user_id, session_id, prev_msg))
-                        if text.strip().lower() in ["cancel", "stop", "abort", "nevermind"]:
-                            await adapter.send_message(chat_id, "Aborted previous request seamlessly.")
+                        asyncio.create_task(
+                            _save_context(runner, session_user_id, session_id, prev_msg)
+                        )
+                        if text.strip().lower() in [
+                            "cancel",
+                            "stop",
+                            "abort",
+                            "nevermind",
+                        ]:
+                            await adapter.send_message(
+                                chat_id, "Aborted previous request seamlessly."
+                            )
                             continue
                         else:
-                            await adapter.send_message(chat_id, "Aborting previous task to prioritize new input...")
+                            await adapter.send_message(
+                                chat_id,
+                                "Aborting previous task to prioritize new input...",
+                            )
 
                     # Launch the agent response dynamically in the background mapping to the session
                     task = asyncio.create_task(
-                        _process_and_send(runner, session_user_id, session_id, message_content, user_id, chat_id)
+                        _process_and_send(
+                            runner,
+                            session_user_id,
+                            session_id,
+                            message_content,
+                            user_id,
+                            chat_id,
+                        )
                     )
                     _active_tasks[session_id] = (task, message_content)
 
