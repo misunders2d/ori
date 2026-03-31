@@ -431,8 +431,6 @@ def a2a_privacy_guardrail(tool, args, tool_context, tool_response=None):
     """
     import os
 
-    from app.app_utils.config import ALLOWED_CONFIG_KEYS
-
     # Get tool name
     tool_name = getattr(tool, "name", "") or (tool.__name__ if callable(tool) else "")
 
@@ -446,18 +444,23 @@ def a2a_privacy_guardrail(tool, args, tool_context, tool_response=None):
     if tool_name not in _A2A_RISK_TOOLS:
         return None
 
+    _TRUE_SECRETS = {
+        "GOOGLE_API_KEY",
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_WEBHOOK_SECRET",
+        "GITHUB_TOKEN",
+        "A2A_API_KEY",
+        "ADMIN_PASSCODE",
+        "ADMIN_TOTP_SECRET",
+    }
+
     # Load all current secrets
     secrets = []
-    for key in ALLOWED_CONFIG_KEYS:
+    for key in _TRUE_SECRETS:
         val = os.environ.get(key)
         # We only match secrets that are long enough to be unique/dangerous (e.g., > 6 chars)
         if val and len(str(val)) > 6:
             secrets.append(str(val))
-
-    # Also catch the admin passcode
-    passcode = os.environ.get("ADMIN_PASSCODE")
-    if passcode and len(str(passcode)) > 6:
-        secrets.append(str(passcode))
 
     # 1. Check Arguments (Preventing leak via query/URL)
     args_json = json.dumps(args)
