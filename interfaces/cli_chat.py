@@ -62,6 +62,21 @@ async def start_cli_chat(get_runner_fn):
                 print(f"\n{bot_name}: Closing onboarding chat. You can reach me via configured messengers!")
                 break
 
+            # SECURE KEY CAPTURE
+            from app.secure_config import capture_key, check_pending, capture_friend_key, check_pending_friend
+            
+            if check_pending(session_id):
+                result = capture_key(session_id, user_input)
+                print(" " * 30, end="\r", flush=True)
+                print(f"\n{bot_name}: {result['message']}")
+                continue
+                
+            if check_pending_friend(session_id):
+                result = capture_friend_key(session_id, user_input)
+                print(" " * 30, end="\r", flush=True)
+                print(f"\n{bot_name}: {result['message']}")
+                continue
+
             print(f"\n{bot_name} is thinking...", end="\r", flush=True)
             
             response = await extract_agent_response(

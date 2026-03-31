@@ -512,11 +512,18 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                         continue
 
                     # SECURE KEY CAPTURE: intercept before anything reaches the agent
-                    from app.secure_config import capture_key, check_pending
+                    from app.secure_config import capture_key, check_pending, capture_friend_key, check_pending_friend
 
                     if check_pending(session_id):
                         if text:
                             result = capture_key(session_id, text)
+                            await adapter.delete_message(chat_id, message_id)
+                            await adapter.send_message(chat_id, result["message"])
+                        continue
+
+                    if check_pending_friend(session_id):
+                        if text:
+                            result = capture_friend_key(session_id, text)
                             await adapter.delete_message(chat_id, message_id)
                             await adapter.send_message(chat_id, result["message"])
                         continue

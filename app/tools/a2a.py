@@ -67,6 +67,7 @@ async def _discover_agent_card(base_url: str) -> Optional[Dict[str, Any]]:
 async def add_friend(url: str, friend_name: str, tool_context: ToolContext) -> Dict[str, Any]:
     """
     Discovers and registers another A2A-compliant agent as a friend for ongoing collaboration.
+    If the remote agent requires authentication, you MUST run `update_friend_key` immediately after adding them.
 
     Args:
         url: The base URL of the remote agent (e.g., 'http://agent.example.com').
@@ -114,7 +115,7 @@ async def add_friend(url: str, friend_name: str, tool_context: ToolContext) -> D
         if required_security:
             security_note = (
                 " Note: this agent declares security requirements. "
-                "You may need to configure an API key for authenticated calls."
+                "You MUST invoke `update_friend_key` now to request the API key securely from the user."
             )
 
         return {
@@ -131,6 +132,46 @@ async def add_friend(url: str, friend_name: str, tool_context: ToolContext) -> D
     except Exception as e:
         logger.error("Failed to save friend %s: %s", friend_name, e)
         return {"status": "error", "message": f"Discovery succeeded but save failed: {e}"}
+
+
+def update_friend_key(friend_name: str, tool_context: ToolContext) -> Dict[str, Any]:
+    """
+    Initiates a secure capture flow to configure an API key for a registered A2A friend.
+    
+    Because API keys are sensitive, they MUST NOT be passed through the LLM prompt. 
+    This tool registers an interceptor. You must tell the user to provide the key in their NEXT message.
+
+    Args:
+        friend_name: The local nickname of the friend to update.
+    """
+    try:
+        if not os.path.exists(FRIENDS_FILE):
+            return {"status": "error", "message": "No friends registered yet. Use add_friend first."}
+
+        with open(FRIENDS_FILE, "r") as f:
+            friends = json.load(f)
+
+        if friend_name not in friends:
+            available = ", ".join(friends.keys()) if friends else "none"
+            return {
+                "status": "error",
+                "message": f"Friend '{friend_name}' not found. Available friends: {available}",
+            }
+
+        from app.secure_config import expect_friend_key
+        session_id = tool_context.session.session_id or str(tool_context.session.id)
+        expect_friend_key(session_id, friend_name)
+
+        return {
+            "status": "success",
+            "message": (
+                f"Secure capture armed for {friend_name}. Tell the user: 'Please reply with the API key "
+                f"for {friend_name}. I will intercept and save it securely without logging it in our chat history.'"
+            ),
+        }
+    except Exception as e:
+        logger.error("Failed to arm secure capture for %s: %s", friend_name, e)
+        return {"status": "error", "message": f"Failed to arm secure capture: {e}"}
 
 
 def list_friends(tool_context: ToolContext) -> Dict[str, Any]:
