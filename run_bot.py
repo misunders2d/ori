@@ -266,19 +266,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-     tasks.append(asyncio.create_task(start_cli_chat(get_runner)))
-        else:
-            logger.warning("No communication pollers started and no interactive TTY detected.")
-    else:
-        logger.info("Bot is fully active and listening on all configured channels!")
-
-    try:
-        await asyncio.gather(*tasks)
-    except asyncio.CancelledError:
-        logger.info("Daemon gracefully shutting down.")
-    finally:
-        scheduler.shutdown()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
