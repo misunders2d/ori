@@ -1,40 +1,47 @@
 @echo off
 rem 🧬 Ori: Windows Universal Supervisor (v3.0)
-rem Hardened for Signal-Based Updates
+rem Hardened for Signal-Based Updates and Rate Limits.
 
-echo 🧬 [Ori] Windows Universal Supervisor Initialized.
+set IMAGE_NAME=ori-ori-agent
 
 :loop
 echo 🧬 [Ori] Starting daemon...
-docker compose up
+
+rem Optimization: Only --build if the image is missing or an update was requested.
+rem This avoids hitting Rate Limits on every single crash/restart.
+set IMG=
+for /f "tokens=*" %%i in ('docker images -q %IMAGE_NAME% 2^>nul') do set IMG=%%i
+
+if "%IMG%"=="" (
+    echo 🧬 [Ori] Image missing. Building...
+    docker compose up --build
+) else (
+    docker compose up
+)
+
 set EXIT_CODE=%ERRORLEVEL%
 
-if %EXIT_CODE% equ 100 (
-    echo 🧬 [Ori] UPDATE SIGNAL RECEIVED (100).
-    git pull
-    echo 🧬 [Ori] Rebuilding container...
-    docker compose up --build -d
-    echo 🧬 [Ori] Update complete. Restarting in 5s...
-    timeout /t 5
-    goto loop
-)
-if %EXIT_CODE% equ 101 (
-    echo 🧬 [Ori] ROLLBACK SIGNAL RECEIVED (101).
-    git checkout HEAD~1
-    echo 🧬 [Ori] Rebuilding previous version...
-    docker compose up --build -d
-    timeout /t 5
-    goto loop
-)
-if %EXIT_CODE% equ 0 (
-    echo 🧬 [Ori] Clean shutdown.
-    exit /b 0
-)
-if %EXIT_CODE% equ 130 (
-    echo 🧬 [Ori] Interrupt received (Ctrl+C).
-    exit /b 0
-)
+if %EXIT_CODE% equ 100 goto update
+if %EXIT_CODE% equ 101 goto rollback
+if %EXIT_CODE% equ 0 goto clean
+if %EXIT_CODE% equ 130 goto clean
 
-echo 🧬 [Ori] Daemon crashed (Code %EXIT_CODE%). Restarting in 10s...
-timeout /t 10
+echo 🧬 [Ori] Daemon crashed (Code %EXIT_CODE%). Cool-down (30s) to avoid rate limits...
+timeout /t 30
 goto loop
+
+:update
+echo 🧬 [Ori] Update Requested (Signal 100). Pulling and Rebuilding...
+git pull
+docker compose up --build
+goto loop
+
+:rollback
+echo 🧬 [Ori] Rollback Requested (Signal 101). Reverting...
+git checkout HEAD~1
+docker compose up --build
+goto loop
+
+:clean
+echo 🧬 [Ori] Clean shutdown. Goodbye.
+exit /b 0
