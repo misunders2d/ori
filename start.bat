@@ -7,6 +7,9 @@ set IMAGE_NAME=ori-ori-agent
 :loop
 echo 🧬 [Ori] Starting daemon...
 
+rem Clean up dangling images from previous evolutionary builds to prevent disk bloat
+docker image prune -f --filter "label=project=ori" >nul 2>&1
+
 rem Optimization: Only --build if the image is missing or an update was requested.
 rem This avoids hitting Rate Limits on every single crash/restart.
 set IMG=

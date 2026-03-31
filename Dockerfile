@@ -1,5 +1,7 @@
 FROM mirror.gcr.io/library/python:3.10-slim
 
+LABEL project="ori"
+
 # Install git and gosu for least-privilege user mapping
 RUN apt-get update && apt-get install -y --no-install-recommends git gosu \
     && rm -rf /var/lib/apt/lists/*

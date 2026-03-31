@@ -7,6 +7,9 @@ IMAGE_NAME="ori-ori-agent"
 while true; do
   echo "🧬 [Ori] Starting daemon..."
   
+  # Clean up dangling images from previous evolutionary builds to prevent disk bloat
+  docker image prune -f --filter "label=project=ori" 2>/dev/null || true
+  
   # Optimization: Only --build if the image is missing or an update was requested.
   # This avoids hitting Docker Hub Rate Limits on every single crash/restart.
   if [[ "$(docker images -q $IMAGE_NAME 2> /dev/null)" == "" ]]; then
