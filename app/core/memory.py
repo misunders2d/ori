@@ -38,13 +38,13 @@ class LongTermMemory:
 
     def _get_table(self, table_name: str):
         self._init_db()
-        if table_name in self._db.list_table_names():
+        if table_name in self._db.table_names():
             return self._db.open_table(table_name)
         return None
 
     def _create_table_if_not_exists(self, table_name: str, data: List[Dict[str, Any]]):
         self._init_db()
-        if table_name not in self._db.list_table_names():
+        if table_name not in self._db.table_names():
             return self._db.create_table(table_name, data=data)
         return self._db.open_table(table_name)
 
