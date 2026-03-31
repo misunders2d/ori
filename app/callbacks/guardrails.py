@@ -1,8 +1,8 @@
 import json
 import logging
 import math
-import re
 import os
+import re
 
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models.llm_request import LlmRequest
@@ -50,8 +50,10 @@ def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
         current_state = tool_context.state.to_dict()
         user_id = current_state.get("user_id", "")
         session_id = current_state.get("session_id", "default")
-        
-        logger.info(f"DEBUG: admin_tool_guardrail(tool={tool.name}) - user_id='{user_id}', session_id='{session_id}'")
+
+        logger.info(
+            f"DEBUG: admin_tool_guardrail(tool={tool.name}) - user_id='{user_id}', session_id='{session_id}'"
+        )
 
         admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
         admin_users = [u.strip() for u in admin_users_str.split(",") if u.strip()]
@@ -66,38 +68,39 @@ def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
         # This replaces the framework-level confirmation UI with a messenger-agnostic token protocol.
         try:
             from app.core.pending_actions import stage_action
+
             token = stage_action(tool.name, args, user_id, session_id)
-            
+
             logger.info(f"Admin Guardrail: Staged {tool.name} for {user_id} -> {token}")
-            
+
             totp_secret = os.environ.get("ADMIN_TOTP_SECRET")
             if totp_secret:
                 return {
-                    "status": "error", # Abort current execution
+                    "status": "error",  # Abort current execution
                     "message": (
                         f"**CRITICAL ACTION STAGED**\n\n"
                         f"To protect the system, the `{tool.name}` command requires explicit admin confirmation.\n\n"
                         f"Please reply with your token and 2FA code:\n"
                         f"`Approve {token} <your-6-digit-code>`\n\n"
                         f"_Note: This token expires in 15 minutes and is single-use._"
-                    )
+                    ),
                 }
             else:
                 return {
-                    "status": "error", # Abort current execution
+                    "status": "error",  # Abort current execution
                     "message": (
                         f"**CRITICAL ACTION STAGED**\n\n"
                         f"To protect the system, the `{tool.name}` command requires explicit admin confirmation.\n\n"
                         f"Please reply with:\n"
                         f"`Approve {token}`\n\n"
                         f"_Note: This token expires in 15 minutes and is single-use._"
-                    )
+                    ),
                 }
         except Exception as e:
             logger.error(f"Failed to stage action in guardrail: {e}")
             return {
                 "status": "error",
-                "message": "Guardrail Error: Failed to stage your action for approval. Please check the logs."
+                "message": "Guardrail Error: Failed to stage your action for approval. Please check the logs.",
             }
 
     return None
@@ -399,7 +402,9 @@ async def state_setter(
     admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
     admin_users = [u.strip() for u in admin_users_str.split(",") if u.strip()]
 
-    logger.info(f"DEBUG: state_setter() - current_user='{current_user}', state['user_id']='{current_state.get('user_id')}'")
+    logger.info(
+        f"DEBUG: state_setter() - current_user='{current_user}', state['user_id']='{current_state.get('user_id')}'"
+    )
 
     if "master_user_id" not in current_state:
         callback_context.state["master_user_id"] = admin_users
@@ -430,6 +435,7 @@ def a2a_privacy_guardrail(tool, args, tool_context, tool_response=None):
     Blocks any tool call or response that contains sensitive environment variables.
     """
     import os
+
     from app.app_utils.config import ALLOWED_CONFIG_KEYS
 
     # Get tool name
@@ -450,7 +456,6 @@ def a2a_privacy_guardrail(tool, args, tool_context, tool_response=None):
         "BOT_NAME",
         "GITHUB_REPO",
         "APP_NAME",
-        "ADMIN_USER_IDS",
     }
 
     # Load all current secrets dynamically to support future evolution
@@ -458,7 +463,7 @@ def a2a_privacy_guardrail(tool, args, tool_context, tool_response=None):
     for key in ALLOWED_CONFIG_KEYS:
         if key in _SAFE_KEYS:
             continue
-            
+
         val = os.environ.get(key)
         # We only match secrets that are long enough to be unique/dangerous (e.g., > 6 chars)
         if val and len(str(val)) > 6:
