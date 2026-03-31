@@ -99,10 +99,36 @@ def main():
         else:
             cprint("⏭️  Skipped. Running in CLI mode.\n", "90")
 
-    # 4. Admin Passcode
+    # 4. GitHub Evolution Habitat
+    github_repo = os.environ.get("GITHUB_REPO", "").strip()
+    github_token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if not github_repo or not github_token:
+        cprint("[4] GitHub Evolution Habitat (Highly Recommended)", "93")
+        print("To truly self-evolve, the agent needs a GitHub repository to push its code changes to.")
+        print("Without this, it cannot write permanent updates to its own source code.")
+        print("\nHow to set this up:")
+        print("  1. Create a new, empty private repository on GitHub.")
+        print("  2. Create a Personal Access Token (Classic) with 'repo' scope at: https://github.com/settings/tokens")
+        
+        setup_github = input("\n\033[92mConfigure GitHub now? (y/N):\033[0m ").strip().lower()
+        if setup_github == 'y':
+            github_repo = input("\033[92mEnter your GitHub Repo (e.g., username/my-bot):\033[0m ").strip()
+            github_token = input("\033[92mEnter your GitHub PAT (ghp_...):\033[0m ").strip()
+            
+            if github_repo and github_token:
+                github_repo = github_repo.replace("https://github.com/", "").replace(".git", "")
+                set_key(ENV_FILE_PATH, "GITHUB_REPO", github_repo)
+                set_key(ENV_FILE_PATH, "GITHUB_TOKEN", github_token)
+                cprint("✅ Habitat Saved.\n", "92")
+            else:
+                cprint("❌ Missing repo or token. Skipped GitHub setup.\n", "91")
+        else:
+            cprint("⏭️  Skipped. You can configure this later via /init or editing data/.env.\n", "90")
+
+    # 5. Admin Passcode
     admin_pass = os.environ.get("ADMIN_PASSCODE", "").strip()
     if not admin_pass:
-        cprint("[4] Admin Security", "93")
+        cprint("[5] Admin Security", "93")
         admin_pass = secrets.token_urlsafe(16)
         set_key(ENV_FILE_PATH, "ADMIN_PASSCODE", admin_pass)
         print("A secure Admin Passcode has been generated for you:")
@@ -112,16 +138,16 @@ def main():
         input("Press Enter to continue...")
         print("")
 
-    # 5. A2A Network Key
+    # 6. A2A Network Key
     a2a_key = os.environ.get("A2A_API_KEY", "").strip()
     if not a2a_key:
         a2a_key = "ori-" + secrets.token_urlsafe(24)
         set_key(ENV_FILE_PATH, "A2A_API_KEY", a2a_key)
 
-    # 6. TOTP 2FA
+    # 7. TOTP 2FA
     totp_secret = os.environ.get("ADMIN_TOTP_SECRET", "").strip()
     if not totp_secret:
-        cprint("[5] Two-Factor Authentication (TOTP)", "93")
+        cprint("[6] Two-Factor Authentication (TOTP)", "93")
         print("For maximum security during evolution, you can require a 6-digit")
         print("authenticator code (Google Auth, Authy, etc.) for admin actions.")
         enable_totp = input("\033[92mEnable TOTP 2FA? (y/N):\033[0m ").strip().lower()
