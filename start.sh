@@ -2,7 +2,7 @@
 # 🧬 Ori: Host-side Supervisor Loop (Signal-Based) - v2.1
 # Optimized for NTFS mounts and Docker Hub Rate Limits.
 
-IMAGE_NAME="ori-ori-agent"
+IMAGE_NAME="ori-agent-image"
 
 while true; do
   echo "🧬 [Ori] Starting daemon..."

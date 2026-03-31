@@ -2,7 +2,7 @@
 rem 🧬 Ori: Windows Universal Supervisor (v3.0)
 rem Hardened for Signal-Based Updates and Rate Limits.
 
-set IMAGE_NAME=ori-ori-agent
+set IMAGE_NAME=ori-agent-image
 
 :loop
 echo 🧬 [Ori] Starting daemon...

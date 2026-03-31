@@ -1,5 +1,6 @@
 services:
   ori-agent:
+    image: ori-agent-image
     build: .
     container_name: ori-agent-daemon
     init: true
