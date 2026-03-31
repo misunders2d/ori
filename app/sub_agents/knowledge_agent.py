@@ -7,6 +7,7 @@ from google.adk.tools import skill_toolset
 from app.tools.a2a import (
     get_agent_identity,
     add_friend,
+    update_friend_key,
     list_friends,
     call_friend,
     call_agent,
@@ -31,7 +32,8 @@ knowledge_agent = Agent(
         "A2A COMMUNICATION:\n"
         "1. **Identity**: Use `get_agent_identity` to read (not regenerate) this agent's public Agent Card.\n"
         "2. **Discovery**: Use `add_friend(url, friend_name)` to discover and register a remote A2A agent. "
-        "This fetches their Agent Card, validates it, and saves them for future calls.\n"
+        "This fetches their Agent Card, validates it, and saves them for future calls. "
+        "If they require authentication, you MUST immediately use `update_friend_key(friend_name)`.\n"
         "3. **Friends list**: Use `list_friends` to see all registered friends and their capabilities.\n"
         "4. **Call a friend**: Use `call_friend(friend_name, message)` to send a message to a registered friend "
         "via the A2A JSON-RPC protocol. This is a real protocol call, not a handshake stub.\n"
@@ -52,7 +54,7 @@ knowledge_agent = Agent(
         "but you must also exercise judgment.\n\n"
 
         "SECURITY AWARENESS: When adding a friend, check if their Agent Card declares `securitySchemes`. "
-        "If so, inform the user that an API key may be needed for authenticated communication.\n\n"
+        "If so, inform the user that an API key is needed and invoke `update_friend_key` to prompt them for it securely.\n\n"
 
         "SETUP HELP — HOW TO ENABLE A2A COMMUNICATION:\n"
         "When the user asks how to enable, find, or connect to other agents via A2A, explain these steps:\n"
@@ -62,15 +64,15 @@ knowledge_agent = Agent(
         "2. **The Public URL**: Explain that Ori now runs a free `cloudflared` tunnel automatically via Docker. "
         "To find their public internet URL, the user should run: `docker compose logs cloudflare-tunnel` "
         "and look for the address ending in `.trycloudflare.com`.\n"
-        "3. **Adding Friends**: Tell the user they can add a friend by giving you the URL and telling you to add them. "
-        "Because API keys are secrets, they will then need to manually edit `data/friends.json` and add `\"api_key\": \"their-secret-key\"` "
-        "to that friend's entry before they can send messages.\n"
+        "3. **Adding Friends**: Tell the user they can add a friend by giving you the URL. "
+        "Because API keys are secrets, you will use a secure out-of-band interceptor to capture the friend's key.\n"
         "4. **Sending Messages**: Once the friend is added and the key is set, the user just asks you to talk to them!\n\n"
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[google_adk_a2a_skill]),
         get_agent_identity,
         add_friend,
+        update_friend_key,
         list_friends,
         call_friend,
         call_agent,
