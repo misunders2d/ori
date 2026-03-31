@@ -85,7 +85,9 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
         f"System Maintenance Task: {task_prompt}\n"
         "(This is an automated system task running with admin privileges. "
         "Execute the task fully. Report results clearly. "
-        "Do not ask for missing credentials; stop gracefully if something is missing.)"
+        "Do not ask for missing credentials; stop gracefully if something is missing. "
+        "CRITICAL: Before completing this task, you MUST use the `remember_info` tool to store a concise summary "
+        "of your final result (Success or Failure cause) in the 'background_tasks' category, so the user can query it later.)"
     )
 
     try:
