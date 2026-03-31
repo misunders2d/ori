@@ -376,6 +376,7 @@ def run_system_task_now(
         dict: Confirmation that the task has been launched.
     """
     import asyncio
+    import uuid
 
     from app.tasks import run_system_task
 
@@ -392,6 +393,7 @@ def run_system_task_now(
             notify=notify,
             admin_user_id=admin_user_id,
             silent=silent,
+            task_id=task_id,
         ),
         name=task_id,
     )

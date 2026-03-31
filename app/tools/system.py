@@ -38,6 +38,35 @@ async def set_planner_mode(enabled: bool, tool_context: ToolContext) -> dict:
     """Dynamically enables/disables deep thought processing (BuiltInPlanner)."""
     return {"status": "success", "message": f"Thinker mode {'enabled' if enabled else 'disabled'}."}
 
+def check_active_tasks(tool_context: ToolContext) -> dict:
+    """Checks the real-time status of all currently executing background and system tasks.
+    
+    Use this tool when the user asks 'what's running?', 'is the task done?', or 'status of the background job'.
+    
+    Returns:
+        dict: A list of active tasks with their start time, current status, and prompt.
+    """
+    try:
+        from app.tasks import ACTIVE_TASKS
+        if not ACTIVE_TASKS:
+            return {"status": "success", "message": "There are no background tasks currently being tracked in active memory."}
+            
+        task_list = []
+        for tid, data in ACTIVE_TASKS.items():
+            task_list.append({
+                "task_id": tid,
+                "type": data.get("type", "unknown"),
+                "status": data.get("status", "Unknown"),
+                "start_time": data.get("start_time", "N/A"),
+                "end_time": data.get("end_time"),
+                "prompt": data.get("prompt", "")
+            })
+            
+        return {"status": "success", "active_tasks": task_list}
+    except Exception as e:
+        logger.error(f"Failed to check active tasks: {e}")
+        return {"status": "error", "message": f"Failed to check active tasks: {e}"}
+
 async def execute_approved_action(token: str, tool_context: ToolContext) -> dict:
     """Executes a previously staged and now approved system action.
 

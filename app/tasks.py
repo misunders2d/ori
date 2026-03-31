@@ -1,10 +1,14 @@
 import logging
 import os
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+# In-memory registry for tracking real-time status of background tasks
+ACTIVE_TASKS = {}
 
-async def run_scheduled_task(task_prompt: str, notify: dict, is_actionable: bool = False):
+
+async def run_scheduled_task(task_prompt: str, notify: dict, is_actionable: bool = False, task_id: str = None):
     """
     Executed by APScheduler when a scheduled task fires.
     Runs the agent with the task prompt and delivers the response
@@ -12,12 +16,27 @@ async def run_scheduled_task(task_prompt: str, notify: dict, is_actionable: bool
     """
     from app.core.agent_executor import extract_agent_response
     from run_bot import get_runner
+    import uuid
+
+    if not task_id:
+        task_id = f"sched_{uuid.uuid4().hex[:8]}"
+
+    ACTIVE_TASKS[task_id] = {
+        "prompt": task_prompt,
+        "type": "scheduled",
+        "status": "Running",
+        "start_time": datetime.now().isoformat(),
+        "end_time": None,
+        "error": None
+    }
 
     runner = get_runner()
 
     # Build the response — either from the agent or just the raw prompt for simple reminders
     if not is_actionable:
         response = f"Reminder: {task_prompt}"
+        ACTIVE_TASKS[task_id]["status"] = "Completed"
+        ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
     elif runner:
         user_id = "system_scheduler"
         session_id = "scheduled_task"
@@ -45,17 +64,24 @@ async def run_scheduled_task(task_prompt: str, notify: dict, is_actionable: bool
             response = await extract_agent_response(runner, user_id, session_id, query)
             if "Guardrail Intervention:" in response:
                 response = f"Reminder: {task_prompt}\n\n[Warning]: {response}"
-        except Exception:
+            ACTIVE_TASKS[task_id]["status"] = "Completed"
+            ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
+        except Exception as e:
             logger.exception("Scheduled task agent execution failed")
             response = f"Reminder: {task_prompt}"
+            ACTIVE_TASKS[task_id]["status"] = "Failed"
+            ACTIVE_TASKS[task_id]["error"] = str(e)
+            ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
     else:
         response = f"Reminder: {task_prompt}"
+        ACTIVE_TASKS[task_id]["status"] = "Completed"
+        ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
 
     # Deliver to the user's channel
     await _deliver_message(notify, response)
 
 
-async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, silent: bool = False):
+async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, silent: bool = False, task_id: str = None):
     """
     Executed by APScheduler for admin-only system maintenance tasks.
     Runs the agent with full privileges in an isolated session, then cleans up.
@@ -71,9 +97,24 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
     from app.core.agent_executor import extract_agent_response, update_session_state
     from run_bot import get_runner
 
+    if not task_id:
+        task_id = f"sys_{uuid.uuid4().hex[:8]}"
+
+    ACTIVE_TASKS[task_id] = {
+        "prompt": task_prompt,
+        "type": "system",
+        "status": "Running",
+        "start_time": datetime.now().isoformat(),
+        "end_time": None,
+        "error": None
+    }
+
     runner = get_runner()
     if not runner:
         logger.error("System task failed: runner not available. Task: %s", task_prompt)
+        ACTIVE_TASKS[task_id]["status"] = "Failed"
+        ACTIVE_TASKS[task_id]["error"] = "Runner not available"
+        ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
         await _deliver_message(notify, f"System Task Failed: Runner not available.\nTask: {task_prompt}")
         return
 
@@ -117,8 +158,14 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
             prefix = "System Task Report" if not is_failure else "System Task Warning"
             await _deliver_message(notify, f"{prefix}:\n{response}")
 
-    except Exception:
+        ACTIVE_TASKS[task_id]["status"] = "Completed" if not is_failure else "Completed (With Warnings)"
+        ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
+
+    except Exception as e:
         logger.exception("System task execution failed: %s", task_prompt)
+        ACTIVE_TASKS[task_id]["status"] = "Failed"
+        ACTIVE_TASKS[task_id]["error"] = str(e)
+        ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
         await _deliver_message(notify, f"System Task Failed:\nTask: {task_prompt}\nCheck logs for details.")
     finally:
         # Clean up the ephemeral session
