@@ -4,12 +4,24 @@ import subprocess
 import sys
 import uuid
 import logging
+import threading
 from datetime import datetime
 
 from google.adk.tools.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
+# System Exit Codes for the Host Supervisor (Signal-Based Architecture)
+# These allow the agent to request actions from the host without filesystem permissions.
+EXIT_CODE_UPDATE = 100
+EXIT_CODE_ROLLBACK = 101
+
+def _schedule_restart(exit_code: int, delay: float = 2.0):
+    """Schedules a process exit after a short delay to allow the response to be sent."""
+    logger.info(f"SYSTEM: Scheduling process exit with code {exit_code} in {delay}s")
+    timer = threading.Timer(delay, sys.exit, [exit_code])
+    timer.daemon = True
+    timer.start()
 
 def update_self(tool_context: ToolContext) -> dict:
     """Triggers a self-update: pulls the latest code from git and rebuilds the Docker container.
@@ -37,21 +49,36 @@ def update_self(tool_context: ToolContext) -> dict:
 
     logger.info("TRIGGER: update_self called. Notify info: %s", notify)
 
+    # 1. Best-effort metadata persistence (for the bot to know who to notify on restart)
+    # This is a fallback/logging mechanism. The EXIT_CODE is the primary signal.
     try:
+        if os.path.exists(trigger_path):
+            try:
+                os.remove(trigger_path)
+            except Exception:
+                pass
+
         with open(trigger_path, "w") as f:
             _json.dump({
                 "requested_at": datetime.now().isoformat(),
                 "notify": notify,
             }, f)
-        return {
-            "status": "success",
-            "message": "Update triggered. The bot will pull the latest code, rebuild, and restart. "
-                       "I'll notify you when the update is complete.",
-        }
+        
+        try:
+            os.chmod(trigger_path, 0o666)
+        except Exception:
+            pass
     except Exception as e:
-        logger.error("TRIGGER: update_self failed: %s", e)
-        return {"status": "error", "message": f"Failed to trigger update: {e}"}
+        logger.warning(f"Could not write .update_trigger metadata: {e}. Proceeding with signal-based restart.")
 
+    # 2. Trigger the signal-based restart via exit code
+    _schedule_restart(EXIT_CODE_UPDATE)
+
+    return {
+        "status": "success",
+        "message": "Update request received. I am signaling the host supervisor to pull latest code and rebuild. "
+                   "I will be back online in a few moments once the new container starts.",
+    }
 
 
 def session_refresh(mode: str, tool_context: ToolContext) -> dict:
@@ -113,15 +140,29 @@ def trigger_rollback(tool_context: ToolContext) -> dict:
     logger.info("TRIGGER: trigger_rollback called. Notify info: %s", notify)
 
     try:
+        if os.path.exists(trigger_path):
+            try:
+                os.remove(trigger_path)
+            except Exception:
+                pass
+
         with open(trigger_path, "w") as f:
             _json.dump({"notify": notify}, f)
-        return {
-            "status": "success", 
-            "message": "Rollback triggered. The system will revert and restart. I'll notify you when I'm back online."
-        }
+            
+        try:
+            os.chmod(trigger_path, 0o666)
+        except Exception:
+            pass
     except Exception as e:
-        logger.error("TRIGGER: trigger_rollback failed: %s", e)
-        return {"status": "error", "message": f"Failed to trigger rollback: {e}"}
+        logger.warning(f"Could not write .rollback_trigger metadata: {e}. Proceeding with signal-based restart.")
+
+    # Trigger the signal-based restart via exit code
+    _schedule_restart(EXIT_CODE_ROLLBACK)
+
+    return {
+        "status": "success", 
+        "message": "Rollback request received. I am signaling the host to revert and restart. I'll be back shortly."
+    }
 
 
 async def set_planner_mode(enabled: bool, tool_context: ToolContext) -> dict:
