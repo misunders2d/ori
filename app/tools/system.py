@@ -3,7 +3,7 @@ import os
 import sys
 import threading
 import logging
-import asyncio
+import inspect
 from google.adk.tools.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -15,82 +15,61 @@ def _schedule_restart(exit_code: int):
     threading.Timer(1.0, sys.exit, [exit_code]).start()
 
 def update_self(tool_context: ToolContext) -> dict:
-    logger.info("========================================")
-    logger.info("🧬 [Ori System] UPDATE STARTED: Dispatched Exit Code 100.")
-    logger.info("========================================")
+    """Pulls the latest code, rebuilds the Docker daemon, and restarts the agent."""
     _schedule_restart(EXIT_CODE_UPDATE)
-    return {"status": "success", "message": "Update signal dispatched. The daemon is restarting to pull new DNA..."}
+    return {"status": "success", "message": "Updating system. The agent will be offline for a moment..."}
 
 def trigger_rollback(tool_context: ToolContext) -> dict:
-    logger.info("========================================")
-    logger.info("🧬 [Ori System] ROLLBACK STARTED: Dispatched Exit Code 101.")
-    logger.info("========================================")
+    """Reverts the git commit to the previous state and reboots the active container."""
     _schedule_restart(EXIT_CODE_ROLLBACK)
-    return {"status": "success", "message": "Rollback signal dispatched. Reverting to previous DNA..."}
+    return {"status": "success", "message": "Rolling back system. Reverting to previous stable state..."}
 
 def session_refresh(mode: str, tool_context: ToolContext) -> dict:
-    return {"status": "success", "message": f"Session refreshed with mode: {mode}."}
+    """Wipes or summarizes active user conversation histories to free context space."""
+    return {"status": "success", "message": "Session refreshed."}
 
 async def set_planner_mode(enabled: bool, tool_context: ToolContext) -> dict:
-    return {"status": "success", "message": f"Planner (Thinker) mode set to {enabled}."}
+    """Dynamically enables/disables deep thought processing (BuiltInPlanner)."""
+    return {"status": "success", "message": f"Thinker mode {'enabled' if enabled else 'disabled'}."}
 
 async def execute_approved_action(token: str, tool_context: ToolContext) -> dict:
-    """
-    Executes a highly privileged system action that was previously staged and has now been approved.
-    
+    """Executes a previously staged and now approved system action.
+
+    This tool is called when the user provides an approval token (e.g., ACT-XXXXXX)
+    for a sensitive operation like a system update or integration change.
+
     Args:
-        token (str): The unique approval token (e.g., 'ACT-8A4F9X').
+        token (str): The unique approval token provided by the guardrail.
+
+    Returns:
+        dict: The result of the executed tool.
     """
     from app.core.pending_actions import get_and_delete_action
-    
-    # 1. Fetch and validate the token
+    import app.tools as tools_module
+
     action = get_and_delete_action(token)
     if not action:
-        return {
-            "status": "error", 
-            "message": f"Invalid or expired token: {token}. You may need to request the action again."
-        }
-        
+        logger.warning(f"Failed approval attempt with token: {token}")
+        return {"status": "error", "message": "Invalid or expired approval token."}
+
     tool_name = action["tool_name"]
     args = action["args"]
-    
-    logger.info(f"Executing approved action: {tool_name} with args: {args}")
 
-    # 2. Dynamically locate the target tool
-    # Check this module first (system tasks)
-    target_func = globals().get(tool_name)
-    
-    if not target_func:
-        # Check integrations module (for configure_integration, etc.)
-        import app.tools.integrations as integrations_module
-        target_func = getattr(integrations_module, tool_name, None)
-        
-    if not target_func:
-        # Check scheduling module (for schedule_system_task, etc.)
-        import app.tools.scheduling as scheduling_module
-        target_func = getattr(scheduling_module, tool_name, None)
+    # Get the tool function from the central tools module
+    tool_func = getattr(tools_module, tool_name, None)
 
-    if not target_func:
-        return {
-            "status": "error",
-            "message": f"Critical Error: Approved tool '{tool_name}' could not be located in the registry."
-        }
-        
-    # 3. Execute the tool
+    if not tool_func:
+        logger.error(f"Approved tool '{tool_name}' not found in app.tools")
+        return {"status": "error", "message": f"Critical Error: Approved tool '{tool_name}' is missing."}
+
+    logger.info(f"Executing approved action: {tool_name} with args {args}")
+
     try:
-        if asyncio.iscoroutinefunction(target_func):
-            result = await target_func(tool_context=tool_context, **args)
+        # Check if tool_func is async
+        if inspect.iscoroutinefunction(tool_func):
+            return await tool_func(**args, tool_context=tool_context)
         else:
-            result = target_func(tool_context=tool_context, **args)
-            
-        return {
-            "status": "success",
-            "message": f"Action `{tool_name}` successfully executed.",
-            "tool_result": result
-        }
+            return tool_func(**args, tool_context=tool_context)
     except Exception as e:
-        logger.exception(f"Failed to execute approved action {tool_name}")
-        return {
-            "status": "error",
-            "message": f"Action `{tool_name}` crashed during execution: {str(e)}"
-        }
+        logger.exception(f"Error executing approved action {tool_name}")
+        return {"status": "error", "message": f"Execution failed: {str(e)}"}

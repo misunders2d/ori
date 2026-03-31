@@ -8,7 +8,7 @@ from google.adk.tools import skill_toolset
 
 from app.tools.google_search import google_search_agent_tool
 from app.tools.origins import analyze_upstream_file
-from app.tools.memory import remember_info, search_memory, recall_technical_context
+from app.tools.memory import remember_info, search_memory, recall_technical_context, update_memory, delete_memory
 from app.callbacks.guardrails import (
     admin_only_guardrail,
     prompt_injection_guardrail,
@@ -153,7 +153,16 @@ developer_agent = Agent(
         "3. WAIT — Present plan. STOP until admin says 'proceed'.\n"
         "4. STAGE — `evolution_stage_change` to write to sandbox.\n"
         "5. VERIFY — `evolution_verify_sandbox` (syntax, import, pytest). Full suite must pass.\n"
-        "6. COMMIT — Only if all checks pass, `evolution_commit_and_push`. Tests must be included."
+        "6. COMMIT — Only if all checks pass, `evolution_commit_and_push`. Tests must be included.\n\n"
+        
+        "=== BACKGROUND EXECUTION MANDATE ===\n\n"
+        "BACKGROUND PRIORITY: All development and evolution tasks (fixing bugs, implementing features, analyzing large logs) "
+        "MUST be prioritized for background execution to ensure system availability in the primary interaction channel.\n\n"
+        "ENFORCEMENT:\n"
+        "1. If you are ALREADY running as a background task (your prompt starts with 'System Maintenance Task:'), proceed normally.\n"
+        "2. If you are in an INTERACTIVE session: Do NOT execute modifications. Instead, analyze the request, provide a plan, "
+        "and instruct the user to authorize the background run. Request the CoordinatorAgent to use `run_system_task_now` with "
+        "the specific task prompt you formulated. Never block a live user session with long-running evolution cycles."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[google_adk_skill, google_adk_a2a_skill, skill_creator_skill, log_maintenance_skill, system_management_skill, external_research_skill]),
@@ -164,6 +173,8 @@ developer_agent = Agent(
         remember_info,
         search_memory,
         recall_technical_context,
+        update_memory,
+        delete_memory,
         evolution_commit_and_push,
         search_github_issues,
         check_installed_package,

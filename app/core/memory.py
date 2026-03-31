@@ -1,5 +1,6 @@
 import os
 import logging
+import uuid
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -47,17 +48,19 @@ class LongTermMemory:
             return self._db.create_table(table_name, data=data)
         return self._db.open_table(table_name)
 
-    async def remember(self, category: str, text: str, metadata: Dict[str, Any] = None):
-        """Stores a piece of information in the specified memory category."""
+    async def remember(self, category: str, text: str, metadata: Dict[str, Any] = None) -> str:
+        """Stores a piece of information with a unique ID."""
         self._init_db()
         metadata = metadata or {}
         metadata["timestamp"] = datetime.now().isoformat()
+        record_id = str(uuid.uuid4())
         
         # Generate embedding locally
         embeddings = list(self._embedding_model.embed([text]))
         vector = embeddings[0].tolist()
         
         record = {
+            "id": record_id,
             "vector": vector,
             "text": text,
             "metadata": metadata
@@ -66,6 +69,7 @@ class LongTermMemory:
         table = self._create_table_if_not_exists(category, [record])
         if table:
             table.add([record])
+        return record_id
 
     async def search(self, category: str, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Performs a semantic search in the specified memory category."""
@@ -79,13 +83,35 @@ class LongTermMemory:
         query_vector = query_embeddings[0].tolist()
         
         results = table.search(query_vector).limit(limit).to_list()
+        # Ensure 'id' is present (older records might lack it)
+        for r in results:
+            if "id" not in r:
+                r["id"] = "legacy"
         return results
 
-    async def forget(self, category: str, filter_expr: str):
-        """Deletes records from memory based on a SQL-like filter expression."""
+    async def update(self, category: str, record_id: str, text: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None):
+        """Updates an existing memory record by its ID."""
+        table = self._get_table(category)
+        if not table:
+            raise ValueError(f"Category '{category}' does not exist.")
+            
+        updates = {}
+        if text:
+            embeddings = list(self._embedding_model.embed([text]))
+            updates["vector"] = embeddings[0].tolist()
+            updates["text"] = text
+        if metadata:
+            updates["metadata"] = metadata
+            
+        if updates:
+            # LanceDB update uses SQL-like syntax for the filter
+            table.update(where=f"id = '{record_id}'", values=updates)
+
+    async def forget(self, category: str, record_id: str):
+        """Deletes a specific memory record by its ID."""
         table = self._get_table(category)
         if table:
-            table.delete(filter_expr)
+            table.delete(f"id = '{record_id}'")
 
 # Global instance
 memory = LongTermMemory()

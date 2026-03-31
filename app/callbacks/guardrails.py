@@ -76,7 +76,7 @@ def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
                     f"**CRITICAL ACTION STAGED**\n\n"
                     f"To protect the system, the `{tool.name}` command requires explicit admin confirmation.\n\n"
                     f"Please reply with:\n"
-                    f"**Approve {token}**\n\n"
+                    f"`Approve {token}`\n\n"
                     f"_Note: This token expires in 15 minutes and is single-use._"
                 )
             }
