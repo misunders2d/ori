@@ -20,11 +20,9 @@ if [ "$TARGET_UID" != "$(id -u agentuser)" ]; then
     usermod -o -u "$TARGET_UID" agentuser || true
 fi
 
-# Fix ownership of any files previously created as root or UID 999
+# Fix ownership of all files so the newly mapped user can read/write them
 echo "🧬 [Ori Setup] Securing internal directories and fixing host permissions..."
-chown -R agentuser:agentgroup /code/.cache 2>/dev/null || true
-chown -R agentuser:agentgroup /code/data 2>/dev/null || true
-chown -R agentuser:agentgroup /code/.git 2>/dev/null || true
+chown -R agentuser:agentgroup /code 2>/dev/null || true
 
 # Configure git for the unprivileged user
 gosu agentuser git config --global --add safe.directory /code || true
