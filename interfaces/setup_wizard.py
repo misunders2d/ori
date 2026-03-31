@@ -158,7 +158,7 @@ def main():
             print("\nYour TOTP Secret Key is:")
             cprint(f"  {totp_secret}\n", "92")
             
-            uri = f"otpauth://totp/Ori:Admin?secret={totp_secret}&issuer=Ori"
+            uri = f"otpauth://totp/{bot_name}:Admin?secret={totp_secret}&issuer={bot_name}"
             qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=250x250&data={urllib.parse.quote(uri)}"
             print(f"Scan this QR Code URL in your browser: \n\033[94m{qr_url}\033[0m\n")
             print("Or enter the Secret Key manually into your authenticator app.\n")
@@ -174,7 +174,7 @@ def main():
         else:
             cprint("⏭️  Skipped TOTP.\n", "90")
 
-    cprint("🎉 Incubation Complete! Ori is waking up...", "92")
+    cprint(f"🎉 Incubation Complete! {bot_name} is waking up...", "92")
     time.sleep(1)
 
 if __name__ == "__main__":
