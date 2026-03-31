@@ -6,11 +6,23 @@ services:
     init: true
     stdin_open: true
     tty: true
-    volumes:
-      - ./data:/code/data
-      - ./.git:/code/.git
     environment:
       - DOTENV_PATH=/code/data/.env
     ports:
       - "${AGENT_PORT:-8000}:8000"
     restart: unless-stopped
+    volumes:
+      - type: bind
+        source: ./data
+        target: /code/data
+      - type: bind
+        source: ./.git
+        target: /code/.git
+
+  cloudflare-tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: ori-cloudflare-tunnel
+    command: tunnel --url http://ori-agent:8000
+    restart: unless-stopped
+    depends_on:
+      - ori-agent

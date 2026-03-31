@@ -136,11 +136,16 @@ def create_a2a_app():
 
         # Layer API key middleware if configured
         api_key = os.environ.get("A2A_API_KEY")
-        if api_key:
-            app = A2AApiKeyMiddleware(app, api_key)
-            logger.info("A2A API key authentication enabled.")
-        else:
-            logger.warning("A2A_API_KEY not set - A2A endpoint is unauthenticated.")
+        if not api_key:
+            logger.error(
+                "CRITICAL: A2A_API_KEY is missing from your .env file! "
+                "The A2A server will NOT start. This key is strictly required "
+                "to secure your agent from unauthorized internet access and quota drain."
+            )
+            return None
+            
+        app = A2AApiKeyMiddleware(app, api_key)
+        logger.info("A2A API key authentication strictly enforced.")
 
         logger.info("A2A Server application initialized successfully.")
         return app

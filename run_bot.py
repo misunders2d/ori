@@ -13,11 +13,16 @@ if not os.path.exists(ENV_FILE_PATH):
         f.write("# Ori Daemon Configuration\n")
 load_dotenv(ENV_FILE_PATH, override=True)
 
-# Generate a random ADMIN_PASSCODE on first start if none exists
+# Generate random keys on first start if none exist
 if not os.environ.get("ADMIN_PASSCODE"):
     _generated_passcode = secrets.token_urlsafe(16)
     set_key(ENV_FILE_PATH, "ADMIN_PASSCODE", _generated_passcode)
     os.environ["ADMIN_PASSCODE"] = _generated_passcode
+
+if not os.environ.get("A2A_API_KEY"):
+    _generated_a2a = "ori-" + secrets.token_urlsafe(24)
+    set_key(ENV_FILE_PATH, "A2A_API_KEY", _generated_a2a)
+    os.environ["A2A_API_KEY"] = _generated_a2a
 
 from logging.handlers import RotatingFileHandler
 import logging
@@ -132,6 +137,10 @@ async def run_a2a_server():
         import uvicorn
         from app.a2a_server import a2a_app
         
+        if not a2a_app:
+            logger.warning("A2A Native Server aborted: A2A_API_KEY is missing. Evolution game network is offline.")
+            return
+
         # Default to port 8000 for A2A communication
         port = int(os.environ.get("A2A_PORT", 8000))
         
@@ -165,6 +174,7 @@ async def main():
     runner = get_runner()
     if not runner:
         passcode = os.environ.get("ADMIN_PASSCODE", "SETUP")
+        a2a_key = os.environ.get("A2A_API_KEY", "MISSING")
         bot_name = os.environ.get("BOT_NAME", "Ori")
         
         telegram_warning = ""
@@ -185,8 +195,16 @@ async def main():
             "  process messages until you configure it.\n"
             "%s"
             "\n"
-            "  Your admin passcode: %s\n"
+            "  [SECURITY IDENTITIES]\n"
+            "  Your Admin Passcode: %s\n"
+            "  Your A2A Network Key: %s\n"
             "\n"
+            "  What is the A2A Network Key?\n"
+            "  This allows your Ori to safely communicate with other Oris\n"
+            "  in the 'Evolution Game' without strangers draining your\n"
+            "  API quota. Share it ONLY with trusted agent peers!\n"
+            "\n"
+            "  [ACTIVATION]\n"
             "  Once your Telegram bot is running, send:\n"
             "    /init %s GOOGLE_API_KEY=your-key-here\n"
             "\n"
@@ -196,10 +214,10 @@ async def main():
             "  Give your bot a custom name:\n"
             "    /init %s BOT_NAME=MyBot\n"
             "\n"
-            "  Your passcode is stored in: %s\n"
-            "  If you lose it, edit that file to reset ADMIN_PASSCODE.\n"
+            "  Your secrets are stored in: %s\n"
+            "  If you lose them, edit that file to reset them.\n"
             "============================================================",
-            bot_name, telegram_warning, passcode, passcode, passcode, passcode,
+            bot_name, telegram_warning, passcode, a2a_key, passcode, passcode, passcode,
             os.path.abspath(ENV_FILE_PATH),
         )
 
