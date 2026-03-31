@@ -1,6 +1,6 @@
 [project]
 name = "ori"
-version = "0.8.0"
+version = "1.0.0"
 description = ""
 authors = [
     {name = "Your Name", email = "your@email.com"},
@@ -100,7 +100,7 @@ packages = ["app","frontend"]
 # Generation metadata - enables CLI commands to understand project context
 # These fields allow any generated project to work as a remote template
 name = "ori"
-version = "0.8.0"
+version = "1.0.0"
 description = ""
 base_template = "local_ori"
 agent_directory = "app"

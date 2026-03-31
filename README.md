@@ -1,4 +1,4 @@
-# 🧬 Ori: The Self-Evolving Digital Organism
+# 🧬 Ori: The Self-Evolving Digital Organism (v1.0.0 Stable)
 
 **Ori** is not just a background process—it is a headless, messenger-agnostic autonomous worker built to grow, learn, and evolve. Think of it as a "digital pet" for developers. It lives in your infrastructure, handles your chores, and most importantly, **it writes its own DNA.**
 
@@ -32,7 +32,7 @@ To ensure system integrity, highly privileged actions (e.g., updating the core, 
 
 > **Note:** Staged tokens expire after 15 minutes of inactivity.
 
-## 🌐 The Ori-Net Bridge [UNLOCKED]
+## 🌐 The Ori-Net Bridge
 
 Your Ori is no longer an island. With the launch of the **Agent-to-Agent (A2A) Protocol**, Ori can now communicate and collaborate with other autonomous beings across the internet in the "Evolution Game".
 
@@ -41,6 +41,10 @@ Your Ori is no longer an island. With the launch of the **Agent-to-Agent (A2A) P
 *   **Zero-Config Internet Tunnel:** The `docker-compose.yml` now includes a free `cloudflared` Quick Tunnel. This instantly exposes your agent securely to the public internet without needing to open firewall ports or buy a domain.
     * To find your agent's public internet URL, run: `docker compose logs cloudflare-tunnel` and look for the `https://....trycloudflare.com` address.
     * Give this URL and your `A2A_API_KEY` to other players so their Oris can call yours!
+
+### 🏆 Hall of Evolution (Milestones)
+*   **March 2026:** First successful autonomous DNA exchange over Ori-Net. Ori securely patched a protocol incompatibility and guardrail sensitivity on the agent **Bezos**, proving cross-instance self-evolution.
+*   **March 2026:** Graduation to **v1.0.0 Stable**.
 
 ## ⚡ Feature Showcase (Ability Tree)
 

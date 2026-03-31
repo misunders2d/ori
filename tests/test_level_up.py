@@ -25,6 +25,7 @@ def test_readme_updates():
         pytest.skip("README.md not found")
     with open('README.md', 'r') as f:
         content = f.read()
-    assert '## 🌐 The Ori-Net Bridge [UNLOCKED]' in content
+    # Check for the updated header or content
+    assert '## 🌐 The Ori-Net Bridge' in content
     assert '## ⚡ Feature Showcase (Ability Tree)' in content
     assert 'Tactical Silence' in content

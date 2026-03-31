@@ -47,7 +47,7 @@ def _build_agent_card() -> dict:
     card = {
         "id": os.environ.get("A2A_AGENT_ID", f"ori-{bot_name.lower()}"),
         "name": bot_name,
-        "version": "0.7.0",
+        "version": "1.0.0",
         "description": "An autonomous self-evolving digital organism.",
         "url": base_url,
         "provider": {

@@ -1,11 +1,8 @@
-# standard ignore
-.env
-data/*.db
-data/*.json
-data/memory_db/
-data/preferences/
-data/sandbox/
+data/friends.json
 data/agent.log
-app/.adk/
+data/agent.json
+data/.env
+data/sandbox/
 __pycache__/
-.venv/
+*.pyc
+.pytest_cache/
