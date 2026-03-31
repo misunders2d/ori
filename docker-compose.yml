@@ -18,6 +18,15 @@ services:
       - type: bind
         source: ./.git
         target: /code/.git
+      - type: bind
+        source: ./app
+        target: /code/app
+      - type: bind
+        source: ./skills
+        target: /code/skills
+      - type: bind
+        source: ./interfaces
+        target: /code/interfaces
 
   cloudflare-tunnel:
     image: cloudflare/cloudflared:latest
