@@ -38,22 +38,22 @@ class LongTermMemory:
 
     def _get_table(self, table_name: str):
         self._init_db()
-        if table_name in self._db.table_names():
+        if table_name in self._db.list_table_names():
             return self._db.open_table(table_name)
         return None
 
     def _create_table_if_not_exists(self, table_name: str, data: List[Dict[str, Any]]):
         self._init_db()
-        if table_name not in self._db.table_names():
+        if table_name not in self._db.list_table_names():
             return self._db.create_table(table_name, data=data)
         return self._db.open_table(table_name)
 
     async def remember(self, category: str, text: str, metadata: Dict[str, Any] = None) -> str:
-        """Stores a piece of information with a unique ID."""
+        """Stores a piece of information in the specified memory category and returns its ID."""
         self._init_db()
+        record_id = str(uuid.uuid4())
         metadata = metadata or {}
         metadata["timestamp"] = datetime.now().isoformat()
-        record_id = str(uuid.uuid4())
         
         # Generate embedding locally
         embeddings = list(self._embedding_model.embed([text]))
@@ -82,6 +82,7 @@ class LongTermMemory:
         query_embeddings = list(self._embedding_model.embed([query]))
         query_vector = query_embeddings[0].tolist()
         
+        # search() in lancedb returns a QueryBuilder. to_list() returns a list of dicts.
         results = table.search(query_vector).limit(limit).to_list()
         # Ensure 'id' is present (older records might lack it)
         for r in results:
@@ -91,6 +92,7 @@ class LongTermMemory:
 
     async def update(self, category: str, record_id: str, text: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None):
         """Updates an existing memory record by its ID."""
+        self._init_db()
         table = self._get_table(category)
         if not table:
             raise ValueError(f"Category '{category}' does not exist.")
@@ -109,6 +111,7 @@ class LongTermMemory:
 
     async def forget(self, category: str, record_id: str):
         """Deletes a specific memory record by its ID."""
+        self._init_db()
         table = self._get_table(category)
         if table:
             table.delete(f"id = '{record_id}'")

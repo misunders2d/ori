@@ -51,6 +51,8 @@ from app.tools.memory import (
     recall_technical_context,
     remember_info,
     search_memory,
+    modify_memory,
+    delete_memory,
 )
 from app.tools.origins import analyze_upstream_file, check_upstream
 from app.tools.system import execute_approved_action
@@ -72,10 +74,11 @@ root_agent = Agent(
         "and `disconnect_platform` or `remove_platform_registration` to clean up. "
         "7. For Origins Protocol: Use `check_upstream` to see new features/fixes. "
         "8. For Long-Term Memory: Use `remember_info` to store facts, preferences, or technical notes. "
-        "Use `search_memory`, `recall_human_preferences`, or `recall_technical_context` to retrieve information from previous sessions.\n\n"
+        "Use `search_memory`, `recall_human_preferences`, or `recall_technical_context` to retrieve information from previous sessions. "
+        "To update or delete a specific memory, search for it first to get its unique record ID, then use `modify_memory` or `delete_memory`.\n\n"
         "TOKEN APPROVAL PROTOCOL: Highly privileged system actions (updates, restarts, integration changes) "
         "are protected by a staging mechanism. When you attempt such an action, the system will return a token (e.g., ACT-XXXXXX). "
-        "The user must then provide this token to you. When the user says 'Approve `ACT-XXXXXX`' or similar, "
+        "The user must then provide this token to you. When the user says 'Approve ACT-XXXXXX' or similar, "
         "you MUST call the `execute_approved_action` tool with that token. Do NOT try to call the original tool again.\n\n"
         "GUARDRAIL PROTECTION MANDATE: The guardrails (event callbacks like `before_agent_callback`, `before_model_callback`, etc.) "
         "are critical for system safety and security. You MUST NOT remove, modify, or try to bypass these guardrails "
@@ -115,6 +118,8 @@ root_agent = Agent(
         analyze_upstream_file,
         remember_info,
         search_memory,
+        modify_memory,
+        delete_memory,
         recall_human_preferences,
         recall_technical_context,
         get_agent_identity,
