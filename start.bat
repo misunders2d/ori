@@ -1,5 +1,11 @@
 @echo off
-rem 🧬 Ori: Windows Universal Supervisor (v3.0)
+
+set BOT_NAME=Ori
+if exist "data\.env" (
+    for /f "tokens=1,* delims==" %%A in ('type "data\.env" ^| findstr "^BOT_NAME="') do set BOT_NAME=%%B
+)
+set BOT_NAME=%BOT_NAME:"=%
+rem 🧬 %BOT_NAME%: Windows Universal Supervisor (v3.0)
 rem Hardened for Signal-Based Updates and Rate Limits.
 
 set IMAGE_NAME=ori-agent-image
@@ -11,12 +17,12 @@ if %ERRORLEVEL% neq 0 goto run_wizard
 goto skip_wizard
 
 :run_wizard
-echo 🧬 [Ori] First-time setup detected. Launching interactive wizard...
+echo 🧬 [%BOT_NAME%] First-time setup detected. Launching interactive wizard...
 docker compose run --rm -it ori-agent uv run python interfaces/setup_wizard.py
 
 :skip_wizard
 :loop
-echo 🧬 [Ori] Starting daemon...
+echo 🧬 [%BOT_NAME%] Starting daemon...
 
 rem Clean up dangling images from previous evolutionary builds to prevent disk bloat
 docker image prune -f --filter "label=project=ori" >nul 2>&1
@@ -27,7 +33,7 @@ set IMG=
 for /f "tokens=*" %%i in ('docker images -q %IMAGE_NAME% 2^>nul') do set IMG=%%i
 
 if "%IMG%"=="" (
-    echo 🧬 [Ori] Image missing. Building...
+    echo 🧬 [%BOT_NAME%] Image missing. Building...
     docker compose up --build
 ) else (
     docker compose up
@@ -40,22 +46,22 @@ if %EXIT_CODE% equ 101 goto rollback
 if %EXIT_CODE% equ 0 goto clean
 if %EXIT_CODE% equ 130 goto clean
 
-echo 🧬 [Ori] Daemon crashed (Code %EXIT_CODE%). Cool-down (30s) to avoid rate limits...
+echo 🧬 [%BOT_NAME%] Daemon crashed (Code %EXIT_CODE%). Cool-down (30s) to avoid rate limits...
 timeout /t 30
 goto loop
 
 :update
-echo 🧬 [Ori] Update Requested (Signal 100). Pulling and Rebuilding...
+echo 🧬 [%BOT_NAME%] Update Requested (Signal 100). Pulling and Rebuilding...
 git pull
 docker compose up --build
 goto loop
 
 :rollback
-echo 🧬 [Ori] Rollback Requested (Signal 101). Reverting...
+echo 🧬 [%BOT_NAME%] Rollback Requested (Signal 101). Reverting...
 git checkout HEAD~1
 docker compose up --build
 goto loop
 
 :clean
-echo 🧬 [Ori] Clean shutdown. Goodbye.
+echo 🧬 [%BOT_NAME%] Clean shutdown. Goodbye.
 exit /b 0
