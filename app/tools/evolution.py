@@ -288,13 +288,11 @@ def evolution_commit_and_push(
         subprocess.run(["git", "config", "user.name", f"{bot_name} (Agent)"], cwd=tmp_repo_dir, check=True)
 
         if staged_files:
-            rel_paths = [rel for _, rel in staged_files]
-            chunk_size = 50
-            for i in range(0, len(rel_paths), chunk_size):
-                subprocess.run(["git", "add"] + rel_paths[i:i+chunk_size], cwd=tmp_repo_dir, check=True)
+            # Rely on git's native behavior to add all copied files while strictly respecting .gitignore
+            subprocess.run(["git", "add", "."], cwd=tmp_repo_dir, check=True)
             
-        # Append "evolved by {bot_name}" to the commit message
-        signed_message = f"{commit_message}\n\enevolved by {bot_name}"
+        # Append "evolved by {bot_name}" to the commit message securely without invalid escape sequences
+        signed_message = f"{commit_message}\n\nevolved by {bot_name}"
         subprocess.run(["git", "commit", "-m", signed_message], cwd=tmp_repo_dir, check=True)
 
         result = subprocess.run(
