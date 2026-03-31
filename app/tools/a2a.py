@@ -214,20 +214,25 @@ async def _send_a2a_message(
     if api_key:
         headers["x-a2a-api-key"] = api_key
 
-    params: Dict[str, Any] = {
-        "message": {
-            "role": "user",
-            "parts": [{"text": message_text}],
-        },
+    # Construct the A2A message object.
+    # Note: v1.0 uses 'ROLE_USER', but we use 'user' for v0.3.0 compatibility.
+    # messageId is required by many implementations (including Bezos) for tracking.
+    message_obj: Dict[str, Any] = {
+        "messageId": str(uuid.uuid4()),
+        "role": "user",
+        "parts": [{"text": message_text}],
     }
+    
     if task_id:
-        params["message"]["taskId"] = task_id
+        message_obj["taskId"] = task_id
 
     payload = {
         "jsonrpc": "2.0",
         "id": str(uuid.uuid4()),
         "method": "message/send",
-        "params": params,
+        "params": {
+            "message": message_obj,
+        },
     }
 
     async with httpx.AsyncClient(timeout=60.0) as client:
