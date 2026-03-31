@@ -64,10 +64,21 @@ def main():
     """, "96")
     cprint(" Welcome to the Ori Incubation Wizard.\n", "96")
 
-    # 1. Google API Key
+    # 1. Agent Name
+    bot_name = os.environ.get("BOT_NAME", "").strip()
+    if not bot_name:
+        cprint("[1] Agent Name", "93")
+        print("What would you like to call your autonomous agent?")
+        bot_name = input("\033[92mEnter a name (default: Ori):\033[0m ").strip()
+        if not bot_name:
+            bot_name = "Ori"
+        set_key(ENV_FILE_PATH, "BOT_NAME", bot_name)
+        cprint(f"✅ Hello, {bot_name}.\n", "92")
+
+    # 2. Google API Key
     google_key = os.environ.get("GOOGLE_API_KEY", "").strip()
     if not google_key:
-        cprint("[1] Google AI Studio API Key", "93")
+        cprint("[2] Google AI Studio API Key", "93")
         print("Ori requires a Gemini API key to think and evolve.")
         print("You can get a free one here: https://aistudio.google.com/app/apikey")
         while not google_key:
@@ -75,23 +86,23 @@ def main():
         set_key(ENV_FILE_PATH, "GOOGLE_API_KEY", google_key)
         cprint("✅ Saved.\n", "92")
 
-    # 2. Telegram Token
+    # 3. Telegram Token
     tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     if not tg_token:
-        cprint("[2] Telegram Bot Token (Optional)", "93")
-        print("To control Ori from your phone, create a bot via @BotFather on Telegram.")
-        print("If you skip this, Ori will run in local CLI mode.")
+        cprint("[3] Telegram Bot Token (Optional)", "93")
+        print("To control your agent from your phone, create a bot via @BotFather on Telegram.")
+        print("If you skip this, the agent will run in local CLI mode.")
         tg_token = input("\033[92mEnter your TELEGRAM_BOT_TOKEN (or press Enter to skip):\033[0m ").strip()
         if tg_token:
             set_key(ENV_FILE_PATH, "TELEGRAM_BOT_TOKEN", tg_token)
             cprint("✅ Saved.\n", "92")
         else:
-            cprint("⏭️  Skipped. Ori will run in CLI mode.\n", "90")
+            cprint("⏭️  Skipped. Running in CLI mode.\n", "90")
 
-    # 3. Admin Passcode
+    # 4. Admin Passcode
     admin_pass = os.environ.get("ADMIN_PASSCODE", "").strip()
     if not admin_pass:
-        cprint("[3] Admin Security", "93")
+        cprint("[4] Admin Security", "93")
         admin_pass = secrets.token_urlsafe(16)
         set_key(ENV_FILE_PATH, "ADMIN_PASSCODE", admin_pass)
         print("A secure Admin Passcode has been generated for you:")
@@ -101,16 +112,16 @@ def main():
         input("Press Enter to continue...")
         print("")
 
-    # 4. A2A Network Key
+    # 5. A2A Network Key
     a2a_key = os.environ.get("A2A_API_KEY", "").strip()
     if not a2a_key:
         a2a_key = "ori-" + secrets.token_urlsafe(24)
         set_key(ENV_FILE_PATH, "A2A_API_KEY", a2a_key)
 
-    # 5. TOTP 2FA
+    # 6. TOTP 2FA
     totp_secret = os.environ.get("ADMIN_TOTP_SECRET", "").strip()
     if not totp_secret:
-        cprint("[4] Two-Factor Authentication (TOTP)", "93")
+        cprint("[5] Two-Factor Authentication (TOTP)", "93")
         print("For maximum security during evolution, you can require a 6-digit")
         print("authenticator code (Google Auth, Authy, etc.) for admin actions.")
         enable_totp = input("\033[92mEnable TOTP 2FA? (y/N):\033[0m ").strip().lower()

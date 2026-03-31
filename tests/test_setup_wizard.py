@@ -27,6 +27,7 @@ def test_setup_wizard_main_all_inputs(mock_clear, mock_print, mock_input, mock_l
     
     with patch("interfaces.setup_wizard.verify_totp", return_value=True):
         mock_input.side_effect = [
+            "MyCustomBot",    # Bot Name
             "AIzaSyTestKey",  # Google Key
             "12345:ABCDE",    # Telegram Token
             "",               # Enter to continue Admin Passcode
@@ -37,8 +38,8 @@ def test_setup_wizard_main_all_inputs(mock_clear, mock_print, mock_input, mock_l
         with patch("interfaces.setup_wizard.os.path.abspath", return_value=str(env_file)):
             main()
             
-    # set_key should be called for: GOOGLE_API_KEY, TELEGRAM_BOT_TOKEN, ADMIN_PASSCODE, A2A_API_KEY, ADMIN_TOTP_SECRET
-    assert mock_set_key.call_count == 5
+    # set_key should be called for: BOT_NAME, GOOGLE_API_KEY, TELEGRAM_BOT_TOKEN, ADMIN_PASSCODE, A2A_API_KEY, ADMIN_TOTP_SECRET
+    assert mock_set_key.call_count == 6
 
 @patch("dotenv.set_key")
 @patch("dotenv.load_dotenv")
@@ -52,6 +53,7 @@ def test_setup_wizard_main_skip_optional(mock_clear, mock_print, mock_input, moc
     env_file = tmp_path / ".env"
     
     mock_input.side_effect = [
+        "",               # Skip Bot Name (defaults to Ori)
         "AIzaSyTestKey",  # Google Key
         "",               # Skip Telegram
         "",               # Enter to continue Admin Passcode
@@ -61,5 +63,5 @@ def test_setup_wizard_main_skip_optional(mock_clear, mock_print, mock_input, moc
     with patch("interfaces.setup_wizard.os.path.abspath", return_value=str(env_file)):
         main()
         
-    # set_key should be called for: GOOGLE_API_KEY, ADMIN_PASSCODE, A2A_API_KEY
-    assert mock_set_key.call_count == 3
+    # set_key should be called for: BOT_NAME, GOOGLE_API_KEY, ADMIN_PASSCODE, A2A_API_KEY
+    assert mock_set_key.call_count == 4
