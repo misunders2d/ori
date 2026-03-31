@@ -9,7 +9,7 @@ goto skip_wizard
 
 :run_wizard
 echo 🧬 [Ori] First-time setup detected. Launching interactive wizard...
-docker compose run --rm -it ori-agent python interfaces/setup_wizard.py
+docker compose run --rm -it ori-agent uv run python interfaces/setup_wizard.py
 
 :skip_wizard
 echo 🧬 [Ori] Forcing manual update...

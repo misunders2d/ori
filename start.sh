@@ -7,7 +7,7 @@ IMAGE_NAME="ori-agent-image"
 # First-time interactive setup wizard
 if [ ! -f "data/.env" ] || ! grep -q "GOOGLE_API_KEY=" "data/.env"; then
   echo "🧬 [Ori] First-time setup detected. Launching interactive wizard..."
-  docker compose run --rm -it ori-agent python interfaces/setup_wizard.py
+  docker compose run --rm -it ori-agent uv run python interfaces/setup_wizard.py
 fi
 
 while true; do
