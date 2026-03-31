@@ -1,7 +1,7 @@
 FROM python:3.10-slim
 
-# Install git so the agent can safely check its own footprints during self-evolution
-RUN apt-get update && apt-get install -y --no-install-recommends git \
+# Install git and gosu for least-privilege user mapping
+RUN apt-get update && apt-get install -y --no-install-recommends git gosu \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir uv==0.5.10
@@ -27,8 +27,7 @@ ENV PYTHONUNBUFFERED=1
 # Force non-interactive git commands
 ENV GIT_TERMINAL_PROMPT=0
 
-# Create non-root user and set permissions. 
-# Explicitly ensuring /code/data exists before mounting
+# Create non-root user and set default permissions
 RUN groupadd -r agentgroup && useradd -m -r -g agentgroup agentuser \
     && mkdir -p /code/data \
     && chown -R agentuser:agentgroup /code 
@@ -37,11 +36,12 @@ RUN groupadd -r agentgroup && useradd -m -r -g agentgroup agentuser \
 ENV UV_CACHE_DIR=/code/.cache/uv
 RUN mkdir -p $UV_CACHE_DIR && chown -R agentuser:agentgroup /code/.cache
 
-USER agentuser
+# Add and configure entrypoint
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# Self evolution git requirements
-RUN git config --global user.name "Ori Autonomous Daemon" \
-    && git config --global user.email "bot@ori-agent.local" \
-    && git config --global --add safe.directory /code
+# Note: We do NOT use "USER agentuser" here so the container starts as root, 
+# runs entrypoint.sh to map the UID/GID, and then drops to agentuser via gosu.
 
-ENTRYPOINT ["uv", "run", "python", "run_bot.py"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["uv", "run", "python", "run_bot.py"]
