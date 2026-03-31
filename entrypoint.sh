@@ -22,7 +22,7 @@ fi
 
 # Fix ownership of all files so the newly mapped user can read/write them
 echo "🧬 [Ori Setup] Securing internal directories and fixing host permissions..."
-chown -R agentuser:agentgroup /code 2>/dev/null || true
+chown -R agentuser:agentgroup /code
 
 # Configure git for the unprivileged user
 gosu agentuser git config --global --add safe.directory /code || true
