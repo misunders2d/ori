@@ -166,6 +166,16 @@ async def main():
     if not runner:
         passcode = os.environ.get("ADMIN_PASSCODE", "SETUP")
         bot_name = os.environ.get("BOT_NAME", "Ori")
+        
+        telegram_warning = ""
+        if not os.environ.get("TELEGRAM_BOT_TOKEN"):
+            telegram_warning = (
+                "\n  CRITICAL: No TELEGRAM_BOT_TOKEN detected either.\n"
+                "  You must manually add it to your .env file before\n"
+                "  you can send the /init commands below.\n"
+                f"  Edit: {os.path.abspath(ENV_FILE_PATH)}\n"
+            )
+            
         logger.warning(
             "\n"
             "============================================================\n"
@@ -173,10 +183,11 @@ async def main():
             "============================================================\n"
             "  No GOOGLE_API_KEY detected. The bot is running but cannot\n"
             "  process messages until you configure it.\n"
+            "%s"
             "\n"
             "  Your admin passcode: %s\n"
             "\n"
-            "  Open your Telegram bot and send:\n"
+            "  Once your Telegram bot is running, send:\n"
             "    /init %s GOOGLE_API_KEY=your-key-here\n"
             "\n"
             "  You can also set multiple keys at once:\n"
@@ -188,7 +199,7 @@ async def main():
             "  Your passcode is stored in: %s\n"
             "  If you lose it, edit that file to reset ADMIN_PASSCODE.\n"
             "============================================================",
-            bot_name, passcode, passcode, passcode, passcode,
+            bot_name, telegram_warning, passcode, passcode, passcode, passcode,
             os.path.abspath(ENV_FILE_PATH),
         )
 
