@@ -18,6 +18,7 @@ from app.callbacks.guardrails import (
 from app.tools import (
     evolution_commit_and_push,
     evolution_read_file,
+    evolution_list_directory,
     evolution_stage_change,
     evolution_verify_sandbox,
     search_github_issues,
@@ -158,6 +159,7 @@ developer_agent = Agent(
     tools=[
         skill_toolset.SkillToolset(skills=[google_adk_skill, google_adk_a2a_skill, skill_creator_skill, log_maintenance_skill, system_management_skill, external_research_skill]),
         evolution_read_file,
+        evolution_list_directory,
         evolution_stage_change,
         evolution_verify_sandbox,
         analyze_upstream_file,

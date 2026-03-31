@@ -44,6 +44,50 @@ def evolution_read_file(file_path: str, tool_context: ToolContext) -> dict:
         return {"status": "error", "message": str(e)}
 
 
+def evolution_list_directory(dir_path: str, tool_context: ToolContext) -> dict:
+    """Lists the files and folders inside a specific directory of the agent's source code.
+
+    Use this to explore the project structure (e.g., passing '.' for the root directory, or 'app/tools' for the tools folder).
+
+    Args:
+        dir_path (str): The relative path to the directory (e.g., '.', 'app', 'skills').
+
+    Returns:
+        dict: A list of files and folders in the directory, or an error message.
+    """
+    resolved = _safe_resolve_path(dir_path, PROJECT_ROOT)
+    if resolved is None:
+        return {"status": "error", "message": "Path traversal denied. Use relative paths within the project."}
+    
+    try:
+        if not os.path.isdir(resolved):
+            return {"status": "error", "message": f"Path is not a directory: {dir_path}"}
+            
+        items = os.listdir(resolved)
+        # Sort for deterministic output: folders first, then files
+        items.sort(key=lambda x: (not os.path.isdir(os.path.join(resolved, x)), x.lower()))
+        
+        output = []
+        for item in items:
+            # Skip noise
+            if item in {".git", "__pycache__", ".pytest_cache"}:
+                continue
+                
+            item_path = os.path.join(resolved, item)
+            if os.path.isdir(item_path):
+                output.append(f"📁 {item}/")
+            else:
+                output.append(f"📄 {item}")
+                
+        return {
+            "status": "success",
+            "directory": dir_path,
+            "contents": output
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 
 def evolution_stage_change(
     file_path: str, new_content: str, tool_context: ToolContext
