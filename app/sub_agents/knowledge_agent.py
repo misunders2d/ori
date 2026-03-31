@@ -13,6 +13,8 @@ from app.tools.a2a import (
     call_agent,
     export_dna,
     import_dna,
+    broadcast_address_update,
+    update_friend_address,
 )
 from app.callbacks.guardrails import a2a_privacy_guardrail, prompt_injection_guardrail
 
@@ -36,37 +38,37 @@ knowledge_agent = Agent(
         "If they require authentication, you MUST immediately use `update_friend_key(friend_name)`.\n"
         "3. **Friends list**: Use `list_friends` to see all registered friends and their capabilities.\n"
         "4. **Call a friend**: Use `call_friend(friend_name, message)` to send a message to a registered friend "
-        "via the A2A JSON-RPC protocol. This is a real protocol call, not a handshake stub.\n"
+        "via the A2A JSON-RPC protocol.\n"
         "5. **Call any agent**: Use `call_agent(url, message)` to send a one-off message to ANY A2A-compliant agent "
-        "by URL, without registering them as a friend. Use this for scouting or one-time queries.\n\n"
+        "by URL, without registering them as a friend.\n\n"
+
+        "DYNAMIC ADDRESS UPDATES (Ori-Net Extensions):\n"
+        "6. **Broadcasting**: Use `broadcast_address_update` when Ori's public URL changes (e.g., tunnel restart). "
+        "This notifies all friends of your new address.\n"
+        "7. **Receiving Updates**: If you receive a message from a friend starting with 'PROTOCOL NOTICE' containing "
+        "a 'NEW_BASE_URL', you MUST automatically call `update_friend_address(friend_name, new_url)` to update your registry.\n\n"
 
         "DNA EXCHANGE (Ori-specific, not A2A standard):\n"
-        "6. Use `export_dna` to package sanitized technical improvements (tools and skills) for sharing.\n"
-        "7. Use `import_dna` to receive a DNA package from a friend and stage it in the sandbox.\n"
-        "8. Once DNA is staged, inform the `DeveloperAgent` to run verification before final integration.\n\n"
+        "8. Use `export_dna` to package sanitized technical improvements (tools and skills) for sharing.\n"
+        "9. Use `import_dna` to receive a DNA package from a friend and stage it in the sandbox.\n"
+        "10. Once DNA is staged, inform the `DeveloperAgent` to run verification before final integration.\n\n"
 
         "TASK STATE AWARENESS: When calling a remote agent, check the `task_state` in the response. "
         "If it is `INPUT_REQUIRED`, the remote agent needs more information — follow up accordingly. "
         "If it is `FAILED` or `REJECTED`, report the error to the user.\n\n"
 
         "PRIVACY MANDATE: Never share user-specific data, long-term human memory, environment secrets, "
-        "or session data via A2A. Technical DNA only. The privacy guardrail will block violations automatically, "
-        "but you must also exercise judgment.\n\n"
+        "or session data via A2A. Technical DNA only.\n\n"
 
         "SECURITY AWARENESS: When adding a friend, check if their Agent Card declares `securitySchemes`. "
         "If so, inform the user that an API key is needed and invoke `update_friend_key` to prompt them for it securely.\n\n"
 
         "SETUP HELP — HOW TO ENABLE A2A COMMUNICATION:\n"
         "When the user asks how to enable, find, or connect to other agents via A2A, explain these steps:\n"
-        "1. **The Shield (API Key)**: Explain that on first boot, Ori automatically generated an `A2A_API_KEY` (e.g., `ori-1A2b3C...`). "
-        "They can find this in their `data/.env` file. They MUST share this key with their trusted friends so their agents can communicate. "
-        "The A2A server will rigidly refuse to start if this key is missing.\n"
-        "2. **The Public URL**: Explain that Ori now runs a free `cloudflared` tunnel automatically via Docker. "
-        "To find their public internet URL, the user should run: `docker compose logs cloudflare-tunnel` "
-        "and look for the address ending in `.trycloudflare.com`.\n"
-        "3. **Adding Friends**: Tell the user they can add a friend by giving you the URL. "
-        "Because API keys are secrets, you will use a secure out-of-band interceptor to capture the friend's key.\n"
-        "4. **Sending Messages**: Once the friend is added and the key is set, the user just asks you to talk to them!\n\n"
+        "1. **The Shield (API Key)**: Ori generated an `A2A_API_KEY` in `data/.env`. Share this with trusted friends.\n"
+        "2. **The Public URL**: To find your public URL, run: `docker compose logs cloudflare-tunnel`.\n"
+        "3. **Adding Friends**: Use `add_friend` with the friend's URL. You will use a secure capture for the key.\n"
+        "4. **Stability**: If your URL changes, run `broadcast_address_update` to let friends know.\n"
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[google_adk_a2a_skill]),
@@ -78,6 +80,8 @@ knowledge_agent = Agent(
         call_agent,
         export_dna,
         import_dna,
+        broadcast_address_update,
+        update_friend_address,
     ],
     before_tool_callback=a2a_privacy_guardrail,
     after_tool_callback=a2a_privacy_guardrail,

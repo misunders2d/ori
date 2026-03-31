@@ -6,7 +6,8 @@ from unittest.mock import patch, MagicMock
 async def test_execute_approved_action_invalid_token():
     from app.tools.system import execute_approved_action
     
-    with patch("app.core.pending_actions.get_and_delete_action", return_value=None):
+    # Patch where it is imported (inside the function in app.tools.system)
+    with patch("app.tools.system.get_and_delete_action", return_value=None):
         result = await execute_approved_action("BAD-TOKEN")
         assert result["status"] == "error"
         assert "Invalid or expired" in result["message"]
@@ -36,7 +37,8 @@ async def test_execute_approved_action_totp_valid():
     }
     
     with patch("app.app_utils.totp.verify_totp", return_value=True):
-        with patch("app.core.pending_actions.get_and_delete_action", return_value=mock_action):
+        # Using correct patch target for local import
+        with patch("app.tools.system.get_and_delete_action", return_value=mock_action):
             result = await execute_approved_action("ACT-VALID", totp_code="123456", tool_context=MagicMock())
             assert result["status"] == "success"
             assert "Session refreshed" in result["message"]

@@ -11,6 +11,7 @@ The key never touches the AI, session history, or logs.
 
 import logging
 import os
+import json
 
 from dotenv import set_key
 
@@ -18,13 +19,12 @@ from app.app_utils.config import ALLOWED_CONFIG_KEYS, ENV_FILE_PATH
 
 logger = logging.getLogger(__name__)
 
-import json
-
 # Pending captures: session_id -> key_name
 _pending: dict[str, str] = {}
 # Pending friend keys: session_id -> friend_name
 _pending_friend: dict[str, str] = {}
 
+KEYS_FILE = os.path.abspath("./data/a2a_keys.json")
 
 def expect_key(session_id: str, key_name: str):
     """Register that the next message from this session should be captured as a config key."""
@@ -80,7 +80,7 @@ def capture_key(session_id: str, value: str) -> dict:
 
 
 def capture_friend_key(session_id: str, value: str) -> dict:
-    """Consume the pending friend key capture and save it to friends.json. Returns a status dict."""
+    """Consume the pending friend key capture and save it to a2a_keys.json. Returns a status dict."""
     friend_name = _pending_friend.pop(session_id, None)
     if not friend_name:
         return {"status": "error", "message": "No pending friend key capture for this session."}
@@ -90,21 +90,17 @@ def capture_friend_key(session_id: str, value: str) -> dict:
         _pending_friend[session_id] = friend_name
         return {"status": "retry", "friend_name": friend_name, "message": "Empty value. Please send the API key again."}
 
-    friends_file = os.path.abspath("./data/friends.json")
     try:
-        if not os.path.exists(friends_file):
-            return {"status": "error", "message": f"Friends file not found. Cannot save key for {friend_name}."}
+        keys = {}
+        if os.path.exists(KEYS_FILE):
+            with open(KEYS_FILE, "r") as f:
+                keys = json.load(f)
             
-        with open(friends_file, "r") as f:
-            friends = json.load(f)
-            
-        if friend_name not in friends:
-            return {"status": "error", "message": f"Friend '{friend_name}' not found in registry."}
-            
-        friends[friend_name]["api_key"] = value
+        keys[friend_name] = value
         
-        with open(friends_file, "w") as f:
-            json.dump(friends, f, indent=4)
+        os.makedirs(os.path.dirname(KEYS_FILE), exist_ok=True)
+        with open(KEYS_FILE, "w") as f:
+            json.dump(keys, f, indent=4)
             
         return {
             "status": "success",

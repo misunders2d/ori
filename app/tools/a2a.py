@@ -4,14 +4,32 @@ import logging
 import uuid
 import httpx
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from google.adk.tools.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
 FRIENDS_FILE = os.path.abspath("./data/friends.json")
+KEYS_FILE = os.path.abspath("./data/a2a_keys.json")
 AGENT_CARD_PATH = os.path.abspath("./data/agent.json")
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+
+# ---------------------------------------------------------------------------
+# Key Management (Private Helpers)
+# ---------------------------------------------------------------------------
+
+def _load_friend_key(friend_name: str) -> Optional[str]:
+    """Retrieves a stored API key for a friend from the secure keys file."""
+    try:
+        if not os.path.exists(KEYS_FILE):
+            return None
+        with open(KEYS_FILE, "r") as f:
+            keys = json.load(f)
+        return keys.get(friend_name)
+    except Exception as e:
+        logger.error("Failed to load keys: %s", e)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +85,7 @@ async def _discover_agent_card(base_url: str) -> Optional[Dict[str, Any]]:
 async def add_friend(url: str, friend_name: str, tool_context: ToolContext) -> Dict[str, Any]:
     """
     Discovers and registers another A2A-compliant agent as a friend for ongoing collaboration.
-    If the remote agent requires authentication, you MUST run `update_friend_key` immediately after adding them.
+    API keys are stored separately and preserved across updates.
 
     Args:
         url: The base URL of the remote agent (e.g., 'http://agent.example.com').
@@ -104,29 +122,28 @@ async def add_friend(url: str, friend_name: str, tool_context: ToolContext) -> D
             "endpoint_url": endpoint_url,
             "card": card,
             "required_security": required_security,
-            "added_at": datetime.now().isoformat(),
+            "last_discovered_at": datetime.now().isoformat(),
         }
 
         os.makedirs(os.path.dirname(FRIENDS_FILE), exist_ok=True)
         with open(FRIENDS_FILE, "w") as f:
             json.dump(friends, f, indent=4)
 
+        has_key = bool(_load_friend_key(friend_name))
         security_note = ""
-        if required_security:
+        if required_security and not has_key:
             security_note = (
-                " Note: this agent declares security requirements. "
+                " Note: this agent declares security requirements and no key is stored. "
                 "You MUST invoke `update_friend_key` now to request the API key securely from the user."
             )
 
         return {
             "status": "success",
-            "message": f"Added '{friend_name}' ({card.get('name')}) as a friend.{security_note}",
+            "message": f"Registered '{friend_name}' ({card.get('name')}) as a friend.{security_note}",
             "friend": {
                 "name": card.get("name"),
-                "description": card.get("description", ""),
                 "endpoint_url": endpoint_url,
                 "capabilities": card.get("capabilities", {}),
-                "skills": [s.get("name") for s in card.get("skills", [])],
             },
         }
     except Exception as e:
@@ -138,7 +155,7 @@ def update_friend_key(friend_name: str, tool_context: ToolContext) -> Dict[str, 
     """
     Initiates a secure capture flow to configure an API key for a registered A2A friend.
     
-    Because API keys are sensitive, they MUST NOT be passed through the LLM prompt. 
+    API keys are sensitive and stored in data/a2a_keys.json (git-ignored).
     This tool registers an interceptor. You must tell the user to provide the key in their NEXT message.
 
     Args:
@@ -152,11 +169,7 @@ def update_friend_key(friend_name: str, tool_context: ToolContext) -> Dict[str, 
             friends = json.load(f)
 
         if friend_name not in friends:
-            available = ", ".join(friends.keys()) if friends else "none"
-            return {
-                "status": "error",
-                "message": f"Friend '{friend_name}' not found. Available friends: {available}",
-            }
+            return {"status": "error", "message": f"Friend '{friend_name}' not found."}
 
         from app.secure_config import expect_friend_key
         
@@ -173,7 +186,7 @@ def update_friend_key(friend_name: str, tool_context: ToolContext) -> Dict[str, 
             ),
         }
     except Exception as e:
-        logger.error("Failed to arm secure capture for %s: %s", friend_name, e)
+        logger.error("Failed to arm secure capture: %s", e)
         return {"status": "error", "message": f"Failed to arm secure capture: {e}"}
 
 
@@ -184,14 +197,13 @@ def list_friends(tool_context: ToolContext) -> Dict[str, Any]:
             return {"status": "success", "message": "No friends registered yet.", "friends": {}}
         with open(FRIENDS_FILE, "r") as f:
             friends = json.load(f)
-        # Return a summary (not the full stored cards)
         summary = {}
         for nickname, data in friends.items():
             summary[nickname] = {
                 "name": data.get("name"),
-                "description": data.get("description", ""),
+                "base_url": data.get("base_url"),
                 "endpoint_url": data.get("endpoint_url"),
-                "added_at": data.get("added_at"),
+                "last_active": data.get("last_discovered_at"),
             }
         return {"status": "success", "friends": summary}
     except Exception as e:
@@ -214,9 +226,6 @@ async def _send_a2a_message(
     if api_key:
         headers["x-a2a-api-key"] = api_key
 
-    # Construct the A2A message object.
-    # Note: v1.0 uses 'ROLE_USER', but we use 'user' for v0.3.0 compatibility.
-    # messageId is required by many implementations (including Bezos) for tracking.
     message_obj: Dict[str, Any] = {
         "messageId": str(uuid.uuid4()),
         "role": "user",
@@ -244,14 +253,11 @@ async def _send_a2a_message(
 def _extract_response_text(task: Dict[str, Any]) -> str:
     """Extract human-readable text from an A2A Task response object."""
     texts = []
-
-    # Check artifacts first (generated outputs)
     for artifact in task.get("artifacts", []):
         for part in artifact.get("parts", []):
             if "text" in part:
                 texts.append(part["text"])
 
-    # Fall back to agent messages in history
     if not texts:
         for msg in task.get("messages", []):
             if msg.get("role") == "agent":
@@ -259,7 +265,6 @@ def _extract_response_text(task: Dict[str, Any]) -> str:
                     if "text" in part:
                         texts.append(part["text"])
 
-    # Last resort: status message
     if not texts:
         status = task.get("status", {})
         if isinstance(status, dict):
@@ -280,21 +285,17 @@ async def call_friend(friend_name: str, message: str, tool_context: ToolContext)
     """
     try:
         if not os.path.exists(FRIENDS_FILE):
-            return {"status": "error", "message": "No friends registered yet. Use add_friend first."}
+            return {"status": "error", "message": "No friends registered yet."}
 
         with open(FRIENDS_FILE, "r") as f:
             friends = json.load(f)
 
         if friend_name not in friends:
-            available = ", ".join(friends.keys()) if friends else "none"
-            return {
-                "status": "error",
-                "message": f"Friend '{friend_name}' not found. Available friends: {available}",
-            }
+            return {"status": "error", "message": f"Friend '{friend_name}' not found."}
 
         friend = friends[friend_name]
         endpoint_url = friend.get("endpoint_url", friend.get("base_url"))
-        api_key = friend.get("api_key")  # Optional stored key for authenticated friends
+        api_key = _load_friend_key(friend_name)
 
         result = await _send_a2a_message(endpoint_url, message, api_key=api_key)
 
@@ -307,24 +308,16 @@ async def call_friend(friend_name: str, message: str, tool_context: ToolContext)
         return {
             "status": "success",
             "friend": friend_name,
-            "remote_agent": friend.get("name"),
             "task_id": task.get("id"),
-            "task_state": task.get("status", {}).get("state", "unknown") if isinstance(task.get("status"), dict) else "unknown",
             "response": response_text,
         }
-    except httpx.HTTPStatusError as e:
-        return {"status": "error", "message": f"HTTP {e.response.status_code} from {friend_name}: {e.response.text[:200]}"}
-    except httpx.ConnectError:
-        return {"status": "error", "message": f"Could not connect to {friend_name}. Is the remote agent online?"}
     except Exception as e:
-        logger.error("Failed to call friend '%s': %s", friend_name, e)
-        return {"status": "error", "message": f"Failed to call friend: {e}"}
+        return {"status": "error", "message": str(e)}
 
 
 async def call_agent(url: str, message: str, tool_context: ToolContext) -> Dict[str, Any]:
     """
     Sends a one-off message to any A2A-compliant agent by URL.
-    Discovers the agent's card first, then sends the message via JSON-RPC.
     Use this for agents NOT in the friends list.
 
     Args:
@@ -334,12 +327,8 @@ async def call_agent(url: str, message: str, tool_context: ToolContext) -> Dict[
     try:
         card = await _discover_agent_card(url)
         if not card:
-            return {
-                "status": "error",
-                "message": f"No valid Agent Card found at {url}. Is the remote agent online and A2A-compliant?",
-            }
+            return {"status": "error", "message": "No valid Agent Card found."}
 
-        # Resolve the A2A endpoint from the card
         endpoint_url = url.rstrip("/")
         for ep in card.get("endpoints", []):
             if ep.get("type") in ("json-rpc", "http+json"):
@@ -352,23 +341,85 @@ async def call_agent(url: str, message: str, tool_context: ToolContext) -> Dict[
             return {"status": "error", "message": f"Remote agent error: {result['error']}"}
 
         task = result.get("result", {})
-        response_text = _extract_response_text(task)
-
         return {
             "status": "success",
             "agent_name": card.get("name", "unknown"),
-            "agent_id": card.get("id", "unknown"),
-            "task_id": task.get("id"),
-            "task_state": task.get("status", {}).get("state", "unknown") if isinstance(task.get("status"), dict) else "unknown",
-            "response": response_text,
+            "response": _extract_response_text(task),
         }
-    except httpx.HTTPStatusError as e:
-        return {"status": "error", "message": f"HTTP {e.response.status_code}: {e.response.text[:200]}"}
-    except httpx.ConnectError:
-        return {"status": "error", "message": f"Could not connect to {url}. Is the remote agent online?"}
     except Exception as e:
-        logger.error("Failed to call agent at %s: %s", url, e)
-        return {"status": "error", "message": f"Failed to call agent: {e}"}
+        return {"status": "error", "message": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Ori-Net Protocol Extensions: Presence & Address Updates
+# ---------------------------------------------------------------------------
+
+async def broadcast_address_update(tool_context: ToolContext) -> Dict[str, Any]:
+    """
+    Broadcasts this agent's current A2A_BASE_URL to all registered friends.
+    Use this when Ori's public URL changes (e.g., tunnel restart).
+    """
+    my_url = os.environ.get("A2A_BASE_URL")
+    if not my_url:
+        return {"status": "error", "message": "A2A_BASE_URL not set in environment."}
+
+    if not os.path.exists(FRIENDS_FILE):
+        return {"status": "success", "message": "No friends to notify."}
+
+    with open(FRIENDS_FILE, "r") as f:
+        friends = json.load(f)
+
+    results = {}
+    msg = f"PROTOCOL NOTICE: My base address has changed. Please update your registry for me. NEW_BASE_URL={my_url}"
+
+    for nickname in friends:
+        try:
+            # We use call_friend logic but with a structured update message
+            res = await call_friend(nickname, msg, tool_context)
+            results[nickname] = res.get("status")
+        except Exception as e:
+            results[nickname] = f"failed: {e}"
+
+    return {
+        "status": "success",
+        "message": f"Broadcasted address update to {len(friends)} friends.",
+        "details": results
+    }
+
+
+def update_friend_address(friend_name: str, new_url: str, tool_context: ToolContext) -> Dict[str, Any]:
+    """
+    Updates the registered address for a friend. 
+    Use this when a friend notifies you that they have moved.
+
+    Args:
+        friend_name: The local nickname of the friend.
+        new_url: The new base URL for the friend.
+    """
+    try:
+        if not os.path.exists(FRIENDS_FILE):
+            return {"status": "error", "message": "Registry not found."}
+
+        with open(FRIENDS_FILE, "r") as f:
+            friends = json.load(f)
+
+        if friend_name not in friends:
+            return {"status": "error", "message": f"Friend '{friend_name}' not found."}
+
+        friends[friend_name]["base_url"] = new_url.rstrip("/")
+        # We also reset the endpoint URL to the base for re-discovery on next call
+        friends[friend_name]["endpoint_url"] = new_url.rstrip("/")
+        friends[friend_name]["last_address_update"] = datetime.now().isoformat()
+
+        with open(FRIENDS_FILE, "w") as f:
+            json.dump(friends, f, indent=4)
+
+        return {
+            "status": "success",
+            "message": f"Updated address for '{friend_name}' to {new_url}."
+        }
+    except Exception as e:
+        return {"status": "error", "message": f"Update failed: {e}"}
 
 
 # ---------------------------------------------------------------------------
@@ -378,8 +429,6 @@ async def call_agent(url: str, message: str, tool_context: ToolContext) -> Dict[
 def export_dna(tool_context: ToolContext) -> Dict[str, Any]:
     """
     Packages sanitized technical improvements (DNA) from this Ori instance.
-    DNA includes tool definitions and skill logic, but NEVER private data or memory.
-    This is an Ori-specific extension, not part of the A2A standard.
     """
     try:
         dna_package = {
@@ -388,7 +437,6 @@ def export_dna(tool_context: ToolContext) -> Dict[str, Any]:
             "skills": {},
         }
 
-        # Package sanitized tools
         tools_dir = os.path.join(PROJECT_ROOT, "app", "tools")
         if os.path.isdir(tools_dir):
             for filename in os.listdir(tools_dir):
@@ -396,7 +444,6 @@ def export_dna(tool_context: ToolContext) -> Dict[str, Any]:
                     with open(os.path.join(tools_dir, filename), "r") as f:
                         dna_package["tools"][filename] = f.read()
 
-        # Package sanitized skills
         skills_dir = os.path.join(PROJECT_ROOT, "skills")
         if os.path.isdir(skills_dir):
             for skill_name in os.listdir(skills_dir):
@@ -420,20 +467,17 @@ def export_dna(tool_context: ToolContext) -> Dict[str, Any]:
 def import_dna(dna_package: Dict[str, Any], tool_context: ToolContext) -> Dict[str, Any]:
     """
     Receives a technical DNA package from a friend and stages it in the sandbox for verification.
-    This is an Ori-specific extension, not part of the A2A standard.
     """
     try:
         sandbox_dir = os.path.abspath("./data/sandbox")
         os.makedirs(sandbox_dir, exist_ok=True)
 
-        # Stage the tools
         for filename, content in dna_package.get("tools", {}).items():
             tool_path = os.path.join(sandbox_dir, "app", "tools", filename)
             os.makedirs(os.path.dirname(tool_path), exist_ok=True)
             with open(tool_path, "w") as f:
                 f.write(content)
 
-        # Stage the skills
         for skill_name, content in dna_package.get("skills", {}).items():
             skill_path = os.path.join(sandbox_dir, "skills", skill_name, "SKILL.md")
             os.makedirs(os.path.dirname(skill_path), exist_ok=True)
