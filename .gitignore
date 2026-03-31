@@ -2,5 +2,10 @@
 .env
 data/*.db
 data/*.json
+data/memory_db/
+data/preferences/
+data/sandbox/
+data/agent.log
+app/.adk/
 __pycache__/
 .venv/
