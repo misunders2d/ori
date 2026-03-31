@@ -159,7 +159,10 @@ def update_friend_key(friend_name: str, tool_context: ToolContext) -> Dict[str, 
             }
 
         from app.secure_config import expect_friend_key
-        session_id = tool_context.session.session_id or str(tool_context.session.id)
+        
+        current_state = tool_context.state.to_dict() if tool_context and hasattr(tool_context, "state") else {}
+        session_id = current_state.get("session_id") or str(getattr(tool_context.session, "id", "default"))
+        
         expect_friend_key(session_id, friend_name)
 
         return {
