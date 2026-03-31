@@ -430,6 +430,7 @@ def a2a_privacy_guardrail(tool, args, tool_context, tool_response=None):
     Blocks any tool call or response that contains sensitive environment variables.
     """
     import os
+    from app.app_utils.config import ALLOWED_CONFIG_KEYS
 
     # Get tool name
     tool_name = getattr(tool, "name", "") or (tool.__name__ if callable(tool) else "")
@@ -444,21 +445,28 @@ def a2a_privacy_guardrail(tool, args, tool_context, tool_response=None):
     if tool_name not in _A2A_RISK_TOOLS:
         return None
 
-    _TRUE_SECRETS = {
-        "GOOGLE_API_KEY",
-        "TELEGRAM_BOT_TOKEN",
-        "TELEGRAM_WEBHOOK_SECRET",
-        "GITHUB_TOKEN",
-        "A2A_API_KEY",
-        "ADMIN_PASSCODE",
-        "ADMIN_TOTP_SECRET",
+    # Safe keys that are publicly known or not sensitive enough to block DNA exports
+    _SAFE_KEYS = {
+        "BOT_NAME",
+        "GITHUB_REPO",
+        "APP_NAME",
+        "ADMIN_USER_IDS",
     }
 
-    # Load all current secrets
+    # Load all current secrets dynamically to support future evolution
     secrets = []
-    for key in _TRUE_SECRETS:
+    for key in ALLOWED_CONFIG_KEYS:
+        if key in _SAFE_KEYS:
+            continue
+            
         val = os.environ.get(key)
         # We only match secrets that are long enough to be unique/dangerous (e.g., > 6 chars)
+        if val and len(str(val)) > 6:
+            secrets.append(str(val))
+
+    # Also catch the admin passcode and TOTP secret
+    for extra_key in ["ADMIN_PASSCODE", "ADMIN_TOTP_SECRET"]:
+        val = os.environ.get(extra_key)
         if val and len(str(val)) > 6:
             secrets.append(str(val))
 
