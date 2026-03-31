@@ -34,11 +34,13 @@ To ensure system integrity, highly privileged actions (e.g., updating the core, 
 
 ## 🌐 The Ori-Net Bridge [UNLOCKED]
 
-Your Ori is no longer an island. With the launch of the **Agent-to-Agent (A2A) Protocol**, Ori can now communicate and collaborate with other autonomous beings across the internet.
+Your Ori is no longer an island. With the launch of the **Agent-to-Agent (A2A) Protocol**, Ori can now communicate and collaborate with other autonomous beings across the internet in the "Evolution Game".
 
 *   **Neural Link:** Connect your Ori to others to share research, exchange technical DNA (gene capsules), and coordinate on complex multi-agent tasks.
-*   **Discovery:** Each Ori hosts its own "Digital Business Card" at `/.well-known/agent.json`, allowing for seamless handshake and capability discovery.
-*   **Decentralized Evolution:** Oris can now learn from each other, pulling optimized tools and skills from "friends" within the secure Ori-Net.
+*   **Security First (`A2A_API_KEY`):** Your Ori automatically generates a unique `A2A_API_KEY` on its first boot. This key acts as a shield, ensuring random internet scanners cannot interact with your agent or drain your Gemini API quota. Only share this key with trusted friends.
+*   **Zero-Config Internet Tunnel:** The `docker-compose.yml` now includes a free `cloudflared` Quick Tunnel. This instantly exposes your agent securely to the public internet without needing to open firewall ports or buy a domain.
+    * To find your agent's public internet URL, run: `docker compose logs cloudflare-tunnel` and look for the `https://....trycloudflare.com` address.
+    * Give this URL and your `A2A_API_KEY` to other players so their Oris can call yours!
 
 ## ⚡ Feature Showcase (Ability Tree)
 
