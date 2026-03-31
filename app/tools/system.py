@@ -15,10 +15,16 @@ def _schedule_restart(exit_code: int):
     threading.Timer(1.0, sys.exit, [exit_code]).start()
 
 def update_self(tool_context: ToolContext) -> dict:
+    logger.info("========================================")
+    logger.info("🧬 [Ori System] UPDATE STARTED: Dispatched Exit Code 100.")
+    logger.info("========================================")
     _schedule_restart(EXIT_CODE_UPDATE)
     return {"status": "success", "message": "Update signal dispatched. The daemon is restarting to pull new DNA..."}
 
 def trigger_rollback(tool_context: ToolContext) -> dict:
+    logger.info("========================================")
+    logger.info("🧬 [Ori System] ROLLBACK STARTED: Dispatched Exit Code 101.")
+    logger.info("========================================")
     _schedule_restart(EXIT_CODE_ROLLBACK)
     return {"status": "success", "message": "Rollback signal dispatched. Reverting to previous DNA..."}
 
