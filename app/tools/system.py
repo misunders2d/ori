@@ -16,11 +16,17 @@ def _schedule_restart(exit_code: int):
 
 def update_self(tool_context: ToolContext) -> dict:
     """Pulls the latest code, rebuilds the Docker daemon, and restarts the agent."""
+    logger.info("========================================")
+    logger.info("🧬 [Ori System] UPDATE STARTED: Dispatched Exit Code 100.")
+    logger.info("========================================")
     _schedule_restart(EXIT_CODE_UPDATE)
     return {"status": "success", "message": "Updating system. The agent will be offline for a moment..."}
 
 def trigger_rollback(tool_context: ToolContext) -> dict:
     """Reverts the git commit to the previous state and reboots the active container."""
+    logger.info("========================================")
+    logger.info("🧬 [Ori System] ROLLBACK STARTED: Dispatched Exit Code 101.")
+    logger.info("========================================")
     _schedule_restart(EXIT_CODE_ROLLBACK)
     return {"status": "success", "message": "Rolling back system. Reverting to previous stable state..."}
 
