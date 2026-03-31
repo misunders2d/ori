@@ -67,7 +67,7 @@ def check_active_tasks(tool_context: ToolContext) -> dict:
         logger.error(f"Failed to check active tasks: {e}")
         return {"status": "error", "message": f"Failed to check active tasks: {e}"}
 
-async def execute_approved_action(token: str, tool_context: ToolContext) -> dict:
+async def execute_approved_action(token: str, totp_code: str = "", tool_context: ToolContext = None) -> dict:
     """Executes a previously staged and now approved system action.
 
     This tool is called when the user provides an approval token (e.g., ACT-XXXXXX)
@@ -75,12 +75,20 @@ async def execute_approved_action(token: str, tool_context: ToolContext) -> dict
 
     Args:
         token (str): The unique approval token provided by the guardrail.
+        totp_code (str): The 6-digit TOTP authenticator code (required if 2FA is enabled).
 
     Returns:
         dict: The result of the executed tool.
     """
     from app.core.pending_actions import get_and_delete_action
     import app.tools as tools_module
+    import os
+    
+    totp_secret = os.environ.get("ADMIN_TOTP_SECRET")
+    if totp_secret:
+        from app.app_utils.totp import verify_totp
+        if not totp_code or not verify_totp(totp_secret, str(totp_code)):
+            return {"status": "error", "message": "Invalid or missing TOTP 2FA code. Please request the action again and provide a valid code."}
 
     action = get_and_delete_action(token)
     if not action:

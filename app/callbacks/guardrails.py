@@ -70,16 +70,29 @@ def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
             
             logger.info(f"Admin Guardrail: Staged {tool.name} for {user_id} -> {token}")
             
-            return {
-                "status": "error", # Abort current execution
-                "message": (
-                    f"**CRITICAL ACTION STAGED**\n\n"
-                    f"To protect the system, the `{tool.name}` command requires explicit admin confirmation.\n\n"
-                    f"Please reply with:\n"
-                    f"`Approve {token}`\n\n"
-                    f"_Note: This token expires in 15 minutes and is single-use._"
-                )
-            }
+            totp_secret = os.environ.get("ADMIN_TOTP_SECRET")
+            if totp_secret:
+                return {
+                    "status": "error", # Abort current execution
+                    "message": (
+                        f"**CRITICAL ACTION STAGED**\n\n"
+                        f"To protect the system, the `{tool.name}` command requires explicit admin confirmation.\n\n"
+                        f"Please reply with your token and 2FA code:\n"
+                        f"`Approve {token} <your-6-digit-code>`\n\n"
+                        f"_Note: This token expires in 15 minutes and is single-use._"
+                    )
+                }
+            else:
+                return {
+                    "status": "error", # Abort current execution
+                    "message": (
+                        f"**CRITICAL ACTION STAGED**\n\n"
+                        f"To protect the system, the `{tool.name}` command requires explicit admin confirmation.\n\n"
+                        f"Please reply with:\n"
+                        f"`Approve {token}`\n\n"
+                        f"_Note: This token expires in 15 minutes and is single-use._"
+                    )
+                }
         except Exception as e:
             logger.error(f"Failed to stage action in guardrail: {e}")
             return {

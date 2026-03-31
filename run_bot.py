@@ -180,44 +180,24 @@ async def main():
         telegram_warning = ""
         if not os.environ.get("TELEGRAM_BOT_TOKEN"):
             telegram_warning = (
-                "\n  CRITICAL: No TELEGRAM_BOT_TOKEN detected either.\n"
-                "  You must manually add it to your .env file before\n"
-                "  you can send the /init commands below.\n"
-                f"  Edit: {os.path.abspath(ENV_FILE_PATH)}\n"
+                "\n  CRITICAL: No TELEGRAM_BOT_TOKEN detected. "
+                "You must run the setup wizard or edit data/.env to connect a messenger."
             )
             
         logger.warning(
             "\n"
             "============================================================\n"
-            "  %s — FIRST-TIME SETUP REQUIRED\n"
+            "  %s — SETUP INCOMPLETE\n"
             "============================================================\n"
             "  No GOOGLE_API_KEY detected. The bot is running but cannot\n"
             "  process messages until you configure it.\n"
-            "%s"
+            "%s\n"
             "\n"
-            "  [SECURITY IDENTITIES]\n"
-            "  Your Admin Passcode: %s\n"
-            "  Your A2A Network Key: %s\n"
-            "\n"
-            "  What is the A2A Network Key?\n"
-            "  This allows your Ori to safely communicate with other Oris\n"
-            "  in the 'Evolution Game' without strangers draining your\n"
-            "  API quota. Share it ONLY with trusted agent peers!\n"
-            "\n"
-            "  [ACTIVATION]\n"
-            "  Once your Telegram bot is running, send:\n"
-            "    /init %s GOOGLE_API_KEY=your-key-here\n"
-            "\n"
-            "  You can also set multiple keys at once:\n"
-            "    /init %s GOOGLE_API_KEY=xxx GITHUB_TOKEN=yyy\n"
-            "\n"
-            "  Give your bot a custom name:\n"
-            "    /init %s BOT_NAME=MyBot\n"
-            "\n"
-            "  Your secrets are stored in: %s\n"
-            "  If you lose them, edit that file to reset them.\n"
+            "  If you bypassed the setup wizard, please restart the script\n"
+            "  or manually edit your secrets at:\n"
+            "  %s\n"
             "============================================================",
-            bot_name, telegram_warning, passcode, a2a_key, passcode, passcode, passcode,
+            bot_name, telegram_warning,
             os.path.abspath(ENV_FILE_PATH),
         )
 
@@ -271,6 +251,22 @@ async def main():
             from interfaces.cli_chat import start_cli_chat
             logger.info("No communication pollers started. Launching interactive CLI onboarding...")
             tasks.append(asyncio.create_task(start_cli_chat(get_runner)))
+        else:
+            logger.warning("No communication pollers started and no interactive TTY detected.")
+    else:
+        logger.info("Bot is fully active and listening on all configured channels!")
+
+    try:
+        await asyncio.gather(*tasks)
+    except asyncio.CancelledError:
+        logger.info("Daemon gracefully shutting down.")
+    finally:
+        scheduler.shutdown()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+     tasks.append(asyncio.create_task(start_cli_chat(get_runner)))
         else:
             logger.warning("No communication pollers started and no interactive TTY detected.")
     else:

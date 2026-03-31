@@ -4,6 +4,17 @@ rem Hardened for Signal-Based Updates and Rate Limits.
 
 set IMAGE_NAME=ori-agent-image
 
+rem First-time interactive setup wizard
+if not exist "data\.env" goto run_wizard
+findstr "GOOGLE_API_KEY=" "data\.env" >nul
+if %ERRORLEVEL% neq 0 goto run_wizard
+goto skip_wizard
+
+:run_wizard
+echo 🧬 [Ori] First-time setup detected. Launching interactive wizard...
+docker compose run --rm -it ori-agent python interfaces/setup_wizard.py
+
+:skip_wizard
 :loop
 echo 🧬 [Ori] Starting daemon...
 
