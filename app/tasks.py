@@ -85,12 +85,6 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
     """
     Executed by APScheduler for admin-only system maintenance tasks.
     Runs the agent with full privileges in an isolated session, then cleans up.
-
-    Unlike run_scheduled_task, this:
-      - Creates a fresh session per execution (no cross-task contamination)
-      - Injects the admin's identity so guardrails pass
-      - Supports silent mode (only notifies on failure/warnings)
-      - Always runs the agent (no plain-text reminder path)
     """
     import uuid
 
@@ -99,6 +93,8 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
 
     if not task_id:
         task_id = f"sys_{uuid.uuid4().hex[:8]}"
+
+    logger.info("System Task: Starting %s (%s)", task_id, task_prompt)
 
     ACTIVE_TASKS[task_id] = {
         "prompt": task_prompt,
@@ -145,6 +141,7 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
             state_delta={"user_id": admin_user_id},
         )
 
+        logger.info("System Task: Executing agent for %s", task_id)
         response = await extract_agent_response(runner, user_id, session_id, query)
 
         is_failure = any(
@@ -156,10 +153,13 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
             logger.info("System task completed silently: %s", task_prompt)
         else:
             prefix = "System Task Report" if not is_failure else "System Task Warning"
-            await _deliver_message(notify, f"{prefix}:\n{response}")
+            msg = f"{prefix}:\n{response}"
+            logger.info("System Task: Delivering report for %s", task_id)
+            await _deliver_message(notify, msg)
 
         ACTIVE_TASKS[task_id]["status"] = "Completed" if not is_failure else "Completed (With Warnings)"
         ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
+        logger.info("System Task: Finished %s", task_id)
 
     except Exception as e:
         logger.exception("System task execution failed: %s", task_prompt)
@@ -182,13 +182,17 @@ async def _deliver_message(notify: dict, message: str):
     from app.core.transport import get_adapter
 
     if not notify:
-        logger.warning("Scheduled task fired but no notification channel configured")
+        logger.warning("Notification delivery skipped: no notification info (notify={})", notify)
         return
 
     channel_type = notify.get("type")
     adapter = get_adapter(channel_type)
     if adapter:
         target = notify.get("chat_id") or notify.get("channel")
-        await adapter.send_message(target, message)
+        logger.info("Delivering message to %s channel, target: %s", channel_type, target)
+        try:
+            await adapter.send_message(target, message)
+        except Exception as e:
+            logger.error("Failed to deliver message via adapter: %s", e)
     else:
         logger.warning("No adapter registered for channel type: %s", channel_type)
