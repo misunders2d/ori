@@ -33,7 +33,6 @@ from google.adk.runners import Runner
 from google.adk.sessions import DatabaseSessionService
 from app.agent import app as ori_app
 from app.scheduler_instance import scheduler
-from interfaces.telegram_poller import poll_telegram
 
 _global_runner = None
 
@@ -87,10 +86,9 @@ async def main():
     ensure_writable_data()
     runner = get_runner()
     scheduler.start()
-    from app.core.backup import backup_database
     tasks = []
     
-    # A2A Server
+    # 1. A2A Native Server
     try:
         import uvicorn
         from app.a2a_server import a2a_app
@@ -98,23 +96,48 @@ async def main():
             port = int(os.environ.get("A2A_PORT", 8000))
             config = uvicorn.Config(a2a_app, host="0.0.0.0", port=port, log_level="info", proxy_headers=True, forwarded_allow_ips="*")
             tasks.append(asyncio.create_task(uvicorn.Server(config).serve()))
-    except Exception: pass
+    except Exception as e:
+        logger.warning(f"A2A Server failed to start: {e}")
 
-    # Broadcast
+    # 2. Automatic A2A Broadcast
     async def broadcast_later():
         await asyncio.sleep(5)
-        from app.tools.a2a import perform_a2a_broadcast
-        try: await perform_a2a_broadcast()
+        try:
+            from app.tools.a2a import perform_a2a_broadcast
+            await perform_a2a_broadcast()
         except Exception: pass
     tasks.append(asyncio.create_task(broadcast_later()))
 
-    # Telegram
+    # 3. Telegram Interface (Core)
     if os.environ.get("TELEGRAM_BOT_TOKEN"):
-        tasks.append(asyncio.create_task(poll_telegram(get_runner, process_init_command)))
-    
-    if tasks: logger.info("Bot is active and listening.")
-    try: await asyncio.gather(*tasks)
-    except asyncio.CancelledError: logger.info("Daemon shutting down.")
-    finally: scheduler.shutdown()
+        try:
+            from interfaces.telegram_poller import poll_telegram
+            tasks.append(asyncio.create_task(poll_telegram(get_runner, process_init_command)))
+        except (ImportError, ModuleNotFoundError) as e:
+            logger.error(f"Telegram dependencies missing: {e}")
 
-if __name__ == "__main__": asyncio.run(main())
+    # 4. Slack Interface (Optional Integration)
+    if os.environ.get("SLACK_BOT_TOKEN"):
+        try:
+            # Lazy load Slack poller to prevent bricking if slack-bolt is missing
+            from interfaces.slack_poller import poll_slack
+            tasks.append(asyncio.create_task(poll_slack(get_runner, process_init_command)))
+        except (ImportError, ModuleNotFoundError) as e:
+            logger.warning(f"Slack dependencies (slack-bolt) not found. Slack integration disabled. Error: {e}")
+        except Exception as e:
+            logger.error(f"Slack poller failed to initialize: {e}")
+
+    if tasks:
+        logger.info("Bot is active and listening on configured channels.")
+    else:
+        logger.warning("No messaging interfaces active. Bot is effectively silent.")
+
+    try:
+        await asyncio.gather(*tasks)
+    except asyncio.CancelledError:
+        logger.info("Daemon shutting down.")
+    finally:
+        scheduler.shutdown()
+
+if __name__ == "__main__":
+    asyncio.run(main())

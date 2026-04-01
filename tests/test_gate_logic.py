@@ -15,7 +15,7 @@ def test_gate_logic_user_vs_chat():
     user_id = "tg_user_456"
     admin_id = "tg_admin_789"
     
-    with patch.dict(os.environ, {"ALLOWED_USER_IDS": admin_id, "ADMIN_USER_IDS": ""}):
+    with patch.dict(os.environ, {"ADMIN_USER_IDS": admin_id}):
         reload()
         # Clean state for test
         from app.core.whitelist import _whitelist, WHITELIST_PATH
@@ -27,23 +27,20 @@ def test_gate_logic_user_vs_chat():
         whitelist_chat(group_id)
         
         # In the core whitelist module, IDs are just strings.
-        # The logic for combining user+group is now in the poller.
         assert is_allowed(admin_id) is True
         assert is_allowed(group_id) is True
         assert is_allowed(user_id) is False
         
-        # This test confirms that the group IS whitelisted, even if the user isn't.
-        # The poller logic will now permit 'user_id' because 'group_id' is whitelisted.
-        
 def test_whitelist_reload_after_env_change():
     from app.core.whitelist import is_allowed, reload
     
-    with patch.dict(os.environ, {"ALLOWED_USER_IDS": "tg_a", "ADMIN_USER_IDS": ""}):
+    # Note: ALLOWED_USER_IDS is now ignored for security. We use ADMIN_USER_IDS.
+    with patch.dict(os.environ, {"ADMIN_USER_IDS": "tg_a"}):
         reload()
         assert is_allowed("tg_a") is True
         assert is_allowed("tg_b") is False
         
-    with patch.dict(os.environ, {"ALLOWED_USER_IDS": "tg_b", "ADMIN_USER_IDS": ""}):
+    with patch.dict(os.environ, {"ADMIN_USER_IDS": "tg_b"}):
         reload()
         assert is_allowed("tg_a") is False
         assert is_allowed("tg_b") is True

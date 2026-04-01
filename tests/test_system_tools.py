@@ -6,7 +6,6 @@ from unittest.mock import patch, MagicMock
 async def test_execute_approved_action_invalid_token():
     from app.tools.system import execute_approved_action
     
-    # Use a clean environment to avoid interference from ADMIN_TOTP_SECRET
     with patch.dict(os.environ, {}, clear=False):
         if "ADMIN_TOTP_SECRET" in os.environ:
             del os.environ["ADMIN_TOTP_SECRET"]
@@ -14,7 +13,7 @@ async def test_execute_approved_action_invalid_token():
         with patch("app.core.pending_actions.get_and_delete_action", return_value=None):
             result = await execute_approved_action("BAD-TOKEN")
             assert result["status"] == "error"
-            assert "Invalid or expired" in result["message"]
+            assert "Invalid token" in result["message"]
 
 @pytest.mark.asyncio
 async def test_execute_approved_action_totp_required_but_missing():
@@ -23,7 +22,7 @@ async def test_execute_approved_action_totp_required_but_missing():
     os.environ["ADMIN_TOTP_SECRET"] = "A" * 16
     result = await execute_approved_action("ACT-VALID")
     assert result["status"] == "error"
-    assert "Invalid or missing TOTP 2FA code" in result["message"]
+    assert "Invalid 2FA code" in result["message"]
     del os.environ["ADMIN_TOTP_SECRET"]
 
 @pytest.mark.asyncio
@@ -52,12 +51,11 @@ def test_check_active_tasks():
     from app.tools.system import check_active_tasks
     from app.tasks import ACTIVE_TASKS
     
-    # Ensure registry is empty for this test
     ACTIVE_TASKS.clear()
     
     result = check_active_tasks(tool_context=MagicMock())
     assert result["status"] == "success"
-    assert "no background tasks currently being tracked" in result["message"]
+    assert "No active tasks" in result["message"]
     
     # Add a mock task
     ACTIVE_TASKS["mock_id"] = {
