@@ -123,8 +123,11 @@ developer_agent = Agent(
 
         "=== TIER 4: OPERATIONAL PROTOCOLS ===\n\n"
 
-        "DIAGNOSE FIRST: Before forming any hypothesis, read `data/agent.log` via `evolution_read_file`. Never guess when logs exist. "
-        "See `log-maintenance-skill` for the full deduplication protocol.\n\n"
+        "DIAGNOSE FIRST: Before forming any hypothesis, you MUST read the relevant source files via `evolution_read_file`. "
+        "Start with `data/agent.log` for runtime errors, but for infrastructure issues (Docker, permissions, boot failures, git errors), "
+        "you MUST also read `entrypoint.sh`, `Dockerfile`, `docker-compose.yml`, and `start.sh` before proposing any fix. "
+        "NEVER propose changes to a file you haven't read in this session. If you suggest adding code that already exists, "
+        "you have failed this mandate. See `log-maintenance-skill` for the full deduplication protocol.\n\n"
 
         "RESEARCH BEFORE RETRY: You get ONE attempt from your own knowledge. If it fails, you MUST research externally "
         "before retrying. See `external-research-skill` for the full protocol.\n\n"
@@ -155,7 +158,7 @@ developer_agent = Agent(
         # ============================================================
 
         "=== EVOLUTION WORKFLOW ===\n\n"
-        "1. READ — `evolution_read_file` to understand code and logs.\n"
+        "1. READ — `evolution_read_file` to understand code and logs. Read EVERY file you intend to modify BEFORE planning. For Docker/boot issues, always read `entrypoint.sh`, `Dockerfile`, `docker-compose.yml`.\n"
         "2. PULL & CLEAN (If needed) — `evolution_git_pull` to fetch latest code, or `evolution_git_reset` to clean dangling untracked files.\n"
         "3. PLAN — Formulate changes. Explain which files and why.\n"
         "4. WAIT — Present plan. STOP until admin says 'proceed'.\n"
