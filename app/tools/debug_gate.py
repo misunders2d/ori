@@ -1,15 +1,17 @@
-from app.core.whitelist import get_whitelist, get_blacklist
-import json
 import os
+import json
+from app.core.whitelist import get_whitelist, get_blacklist
 
-def check_gate():
+def dump_gate():
     data = {
         "whitelist": get_whitelist(),
-        "blacklist": get_blacklist()
+        "blacklist": get_blacklist(),
+        "ALLOWED_USER_IDS": os.environ.get("ALLOWED_USER_IDS"),
+        "ADMIN_USER_IDS": os.environ.get("ADMIN_USER_IDS")
     }
-    with open("data/gate_debug.json", "w") as f:
+    with open("data/gate_dump.json", "w") as f:
         json.dump(data, f, indent=2)
-    return f"Debug data written to data/gate_debug.json. Whitelist size: {len(data['whitelist'])}"
+    return "Done"
 
 if __name__ == "__main__":
-    print(check_gate())
+    dump_gate()
