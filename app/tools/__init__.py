@@ -3,8 +3,9 @@ from .scheduling import get_current_time, schedule_one_off_task, schedule_recurr
 from .system import update_self, session_refresh, trigger_rollback, set_planner_mode
 from .evolution import evolution_read_file, evolution_list_directory, evolution_stage_change, evolution_verify_sandbox, evolution_commit_and_push, evolution_git_pull, evolution_git_reset, evolution_sync_local_to_upstream
 from .preferences import save_user_preferences, get_user_preferences
-from .research import search_github_issues, check_installed_package
+from .research import check_installed_package
 from .web import web_fetch
+from .mcp_github import github_mcp_toolset
 
 __all__ = [
     "configure_integration",
@@ -33,7 +34,7 @@ __all__ = [
     "evolution_sync_local_to_upstream",
     "save_user_preferences",
     "get_user_preferences",
-    "search_github_issues",
     "check_installed_package",
     "web_fetch",
+    "github_mcp_toolset",
 ]

@@ -1,4 +1,3 @@
-import google.adk.tools
 import pathlib
 from google.adk.agents import Agent
 from google.adk.models import Gemini
@@ -24,9 +23,9 @@ from app.tools import (
     evolution_git_pull,
     evolution_git_reset,
     evolution_sync_local_to_upstream,
-    search_github_issues,
     check_installed_package,
     web_fetch,
+    github_mcp_toolset,
 )
 
 base_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
@@ -180,10 +179,10 @@ developer_agent = Agent(
         evolution_git_pull,
         evolution_git_reset,
         evolution_sync_local_to_upstream,
-        search_github_issues,
         check_installed_package,
         google_search_agent_tool,
         web_fetch,
+        github_mcp_toolset,
     ],
     before_agent_callback=admin_only_guardrail,
     before_model_callback=prompt_injection_guardrail,
