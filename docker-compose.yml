@@ -2,7 +2,6 @@ services:
   ori-agent:
     image: ori-agent-image
     build: .
-    container_name: ori-agent-daemon
     init: true
     stdin_open: true
     tty: true
@@ -30,7 +29,6 @@ services:
 
   cloudflare-tunnel:
     image: cloudflare/cloudflared:latest
-    container_name: ori-cloudflare-tunnel
     command: tunnel --url http://ori-agent:8000
     restart: unless-stopped
     depends_on:
