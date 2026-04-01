@@ -26,6 +26,11 @@ gosu agentuser git config --global --add safe.directory /code || true
 gosu agentuser git config --global user.name "$BOT_NAME Autonomous Daemon" || true
 gosu agentuser git config --global user.email "bot@$BOT_NAME-agent.local" || true
 
+# Fix ownership of ALL code files before any git operations.
+# Root-owned files (from prior boots or docker layer caching) block git checkout and uv.
+echo "🧬 [$BOT_NAME Setup] Fixing file ownership..."
+chown -R agentuser:agentgroup /code
+
 # --- AUTO-ROLLBACK WATCHDOG ---
 CRASH_FILE="/code/data/.crash_count"
 MAX_CRASHES=3
@@ -45,10 +50,8 @@ if [ "$CRASHES" -ge "$MAX_CRASHES" ]; then
     CRASHES=0
 fi
 
-# Write crash counter and fix all permissions as the LAST step before starting daemon
-# This ensures no root-owned files linger in the data directory
 echo "$((CRASHES + 1))" > "$CRASH_FILE"
-chown -R agentuser:agentgroup /code/data
+chown agentuser:agentgroup "$CRASH_FILE"
 
 echo "🧬 [$BOT_NAME Setup] Dropping privileges and starting daemon..."
 
