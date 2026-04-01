@@ -55,16 +55,20 @@ def process_init_command(text: str, session_id: str = "") -> str:
     return result
 
 def ensure_writable_data():
-    """Corrects file permissions in the data directory at startup."""
+    """Aggressively corrects file permissions in the data directory at startup to prevent 'readonly' errors."""
     data_dir = os.path.abspath("./data")
     if not os.path.exists(data_dir): return
     try:
+        # Recursive chmod to ensure SQLite can always write journals and wal files
         os.chmod(data_dir, 0o777)
-        for item in os.listdir(data_dir):
-            path = os.path.join(data_dir, item)
-            try: os.chmod(path, 0o666 if not os.path.isdir(path) else 0o777)
-            except Exception: pass
-        logger.info("FileSystem: Permissions self-healed.")
+        for root, dirs, files in os.walk(data_dir):
+            for d in dirs:
+                try: os.chmod(os.path.join(root, d), 0o777)
+                except Exception: pass
+            for f in files:
+                try: os.chmod(os.path.join(root, f), 0o666)
+                except Exception: pass
+        logger.info("FileSystem: Permissions self-healed and locked.")
     except Exception as e: logger.warning(f"FileSystem: Self-heal limited: {e}")
 
 async def run_proactive_diagnostics():
@@ -123,7 +127,7 @@ async def main():
             from interfaces.slack_poller import poll_slack
             tasks.append(asyncio.create_task(poll_slack(get_runner, process_init_command)))
         except (ImportError, ModuleNotFoundError) as e:
-            logger.warning(f"Slack dependencies (slack-bolt) not found. Slack integration disabled. Error: {e}")
+            logger.warning("Slack dependencies (slack-bolt) not found. Slack integration disabled.")
         except Exception as e:
             logger.error(f"Slack poller failed to initialize: {e}")
 
