@@ -26,6 +26,16 @@ If you need the exact syntax for setting up loop agents, attaching callbacks, fo
 
 Only read the full cheatsheet if you are confused about the syntax or need exactly the right parameter string for an `Agent(...)` class invocation.
 
+## External Protocols (MCP, A2A, UCP)
+
+ADK has built-in support for connecting to external data and peer agents via standard protocols.
+
+**You must use the `agent-protocol-skill`** when implementing:
+- **MCP**: Connecting to databases, Notion, Slack, etc. via `McpToolset`.
+- **A2A**: Communicating with remote peer agents.
+- **UCP**: Universal Commerce and checkout flows.
+- **A2UI**: Rendering rich, interactive user interfaces.
+
 ## Transport Adapter Pattern
 
 The application supports multiple messaging platforms via the `TransportAdapter` ABC in `app/core/transport.py`. When adding a new platform (Discord, Slack, etc.), you implement this interface and register it — scheduled tasks, notifications, and key capture route automatically.
