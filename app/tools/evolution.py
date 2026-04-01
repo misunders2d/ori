@@ -255,7 +255,7 @@ def evolution_verify_sandbox(
 
 
 def evolution_commit_and_push(
-    commit_message: str, tool_context: ToolContext, delete_files: Optional[List[str]] = None
+    commit_message: str, tool_context: ToolContext, delete_files: Optional[List[str]] = None, skip_local_update: bool = False
 ) -> dict:
     """Commits and pushes verified changes and handles deletions in the GitHub repository.
 
@@ -268,9 +268,9 @@ def evolution_commit_and_push(
     Args:
         commit_message (str): A descriptive message explaining the improvement.
         delete_files (Optional[List[str]]): List of relative paths to files that should be deleted.
-
-    Returns:
-        dict: Status of the commit and push operation.
+        skip_local_update (bool): If True, pushes to GitHub but does NOT update the local filesystem.
+            Use this for system-critical files (pyproject.toml, config.py) to avoid hot-reload crashes.
+            A hard reboot (exit 100) will be required afterward to apply changes.
     """
     sandbox_dir = os.path.abspath("./data/sandbox")
     # If no staged files AND no deletions, return error
@@ -352,16 +352,18 @@ def evolution_commit_and_push(
             err_msg = (result.stderr or result.stdout)[-500:].replace(github_token, "***")
             return {"status": "error", "message": f"git push failed: {err_msg}"}
 
-        if delete_files:
-            for rel_path in delete_files:
-                live_target = os.path.join(PROJECT_ROOT, rel_path)
-                if os.path.exists(live_target):
-                    os.remove(live_target)
+        # HARDENED LOGIC: Only update local files if safe to do so
+        if not skip_local_update:
+            if delete_files:
+                for rel_path in delete_files:
+                    live_target = os.path.join(PROJECT_ROOT, rel_path)
+                    if os.path.exists(live_target):
+                        os.remove(live_target)
 
-        for src, rel in staged_files:
-            live_dst = os.path.join(PROJECT_ROOT, rel)
-            os.makedirs(os.path.dirname(live_dst), exist_ok=True)
-            shutil.copy2(src, live_dst)
+            for src, rel in staged_files:
+                live_dst = os.path.join(PROJECT_ROOT, rel)
+                os.makedirs(os.path.dirname(live_dst), exist_ok=True)
+                shutil.copy2(src, live_dst)
 
     except subprocess.CalledProcessError as e:
         err_msg = (e.stderr or e.stdout or str(e))[-500:].replace(github_token, "***")
@@ -381,9 +383,13 @@ def evolution_commit_and_push(
     if delete_files:
         summary.append(f"deleted {len(delete_files)} file(s)")
 
+    msg = f"Successfully {' and '.join(summary)} via temporary clone."
+    if skip_local_update:
+        msg += " Local update skipped. A hard reboot (exit 100) is required to apply changes."
+
     return {
         "status": "success",
-        "message": f"Successfully {' and '.join(summary)} via temporary clone.",
+        "message": msg,
     }
 
 
