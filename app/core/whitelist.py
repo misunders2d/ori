@@ -21,7 +21,10 @@ def _load_data():
     
     # Combined set of all allowed IDs from environment
     all_env_ids = set(env_allowed) | set(env_admins)
-    _whitelist = {u.strip() for u in all_env_ids if u.strip()}
+    
+    # Use clear() and update() to avoid stale references in other modules
+    _whitelist.clear()
+    _whitelist.update({u.strip() for u in all_env_ids if u.strip()})
 
     if os.path.exists(WHITELIST_PATH):
         try:
@@ -40,9 +43,11 @@ def _load_data():
             with open(BLACKLIST_PATH, "r") as f:
                 data = json.load(f)
                 if isinstance(data, list):
-                    _blacklist = set(data)
+                    _blacklist.clear()
+                    _blacklist.update(data)
                 elif isinstance(data, dict):
-                    _blacklist = set(data.keys())
+                    _blacklist.clear()
+                    _blacklist.update(data.keys())
         except Exception:
             logger.error("Failed to load blacklist from %s", BLACKLIST_PATH)
 

@@ -397,6 +397,7 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                     chat = msg.get("chat", {})
                     chat_id = chat.get("id")
                     chat_type = chat.get("type", "private")
+                    is_group = chat_type in ["group", "supergroup"]
                     message_id = msg["message_id"]
                     from_user = msg.get("from", {})
 
@@ -415,11 +416,15 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                         continue
 
                     # ── ACCESS CONTROL GATE ──────────────────────────────────
-                    # Requirement: Only whitelisted users can interact with the bot.
-                    # Whitelisting a group allows the bot to BE there, but interaction
-                    # is restricted to authorized individuals to prevent token drain.
+                    # Requirement: Only whitelisted users OR whitelisted groups can interact.
+                    # 1. In a Group Chat: If Group ID (session_id) is whitelisted, anyone can talk.
+                    # 2. In a Private Chat: The individual User ID must be whitelisted.
+                    # 3. Admins/Whitelisted users are ALWAYS allowed regardless of chat type.
                     
-                    if not is_allowed(user_id):
+                    user_authorized = is_allowed(user_id)
+                    group_authorized = is_group and is_allowed(session_id)
+                    
+                    if not (user_authorized or group_authorized):
                         if is_blacklisted(user_id) or is_blacklisted(session_id):
                             continue
                         
@@ -627,7 +632,6 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                         )
                         continue
 
-                    is_group = chat_type in ["group", "supergroup"]
                     is_mentioned = bot_username and (f"@{bot_username}" in text)
                     if is_group and not is_mentioned:
                         logger.info(

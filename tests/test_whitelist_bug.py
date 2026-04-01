@@ -2,13 +2,17 @@ import os
 import sys
 from unittest.mock import patch
 
-# Mock the environment BEFORE importing the module
-with patch.dict(os.environ, {"ALLOWED_USER_IDS": "tg_admin"}):
-    from app.core.whitelist import is_allowed, _whitelist, _load_data
-    
-    def test_is_allowed_bug():
-        # Force reload with current env
-        _load_data()
+# Force clear sys.modules for app.core.whitelist to ensure a fresh load
+if "app.core.whitelist" in sys.modules:
+    del sys.modules["app.core.whitelist"]
+
+def test_is_allowed_bug():
+    # Mock the environment BEFORE importing the module
+    with patch.dict(os.environ, {"ALLOWED_USER_IDS": "tg_admin", "ADMIN_USER_IDS": ""}):
+        from app.core.whitelist import is_allowed, reload
+        
+        # Ensure fresh state
+        reload()
         
         assert is_allowed("tg_admin") is True
         assert is_allowed("tg_random") is False

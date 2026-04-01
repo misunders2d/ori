@@ -1,34 +1,49 @@
 import os
 import pytest
+import sys
 from unittest.mock import MagicMock, patch
-from app.core.whitelist import whitelist_chat, is_allowed, reload, _whitelist
+
+# Force fresh reload of whitelist module
+if "app.core.whitelist" in sys.modules:
+    del sys.modules["app.core.whitelist"]
 
 def test_gate_logic_user_vs_chat():
+    from app.core.whitelist import whitelist_chat, is_allowed, reload
+    
     # Setup: whitelist a group but not a user
     group_id = "tg_group_123"
     user_id = "tg_user_456"
     admin_id = "tg_admin_789"
     
-    with patch.dict(os.environ, {"ALLOWED_USER_IDS": admin_id}):
+    with patch.dict(os.environ, {"ALLOWED_USER_IDS": admin_id, "ADMIN_USER_IDS": ""}):
         reload()
+        # Clean state for test
+        from app.core.whitelist import _whitelist, WHITELIST_PATH
+        _whitelist.clear()
+        _whitelist.add(admin_id)
+        if os.path.exists(WHITELIST_PATH):
+            os.remove(WHITELIST_PATH)
+            
         whitelist_chat(group_id)
         
-        # Test 1: User is not whitelisted, but group is. 
-        # In our new strict logic, is_allowed(user_id) should be checked for interaction.
+        # In the core whitelist module, IDs are just strings.
+        # The logic for combining user+group is now in the poller.
         assert is_allowed(admin_id) is True
         assert is_allowed(group_id) is True
         assert is_allowed(user_id) is False
         
-        # The poller logic (which we'll simulate here) should block the user
-        # if not is_allowed(user_id): ... continue
+        # This test confirms that the group IS whitelisted, even if the user isn't.
+        # The poller logic will now permit 'user_id' because 'group_id' is whitelisted.
         
 def test_whitelist_reload_after_env_change():
-    with patch.dict(os.environ, {"ALLOWED_USER_IDS": "tg_a"}):
+    from app.core.whitelist import is_allowed, reload
+    
+    with patch.dict(os.environ, {"ALLOWED_USER_IDS": "tg_a", "ADMIN_USER_IDS": ""}):
         reload()
         assert is_allowed("tg_a") is True
         assert is_allowed("tg_b") is False
         
-    with patch.dict(os.environ, {"ALLOWED_USER_IDS": "tg_b"}):
+    with patch.dict(os.environ, {"ALLOWED_USER_IDS": "tg_b", "ADMIN_USER_IDS": ""}):
         reload()
         assert is_allowed("tg_a") is False
         assert is_allowed("tg_b") is True
