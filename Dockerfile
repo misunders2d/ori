@@ -3,8 +3,8 @@ FROM mirror.gcr.io/library/python:3.10-slim
 LABEL project="ori"
 
 # --- 1. SYSTEM DEPENDENCIES ---
-# Install git, gosu, curl and Node.js (for potential MCP or web tasks)
-RUN apt-get update && apt-get install -y --no-install-recommends git gosu curl \
+# Install git, gosu, curl, sqlite3, and Node.js
+RUN apt-get update && apt-get install -y --no-install-recommends git gosu curl sqlite3 \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*

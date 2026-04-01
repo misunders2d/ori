@@ -42,10 +42,20 @@ fi
 echo "🧬 [$BOT_NAME Setup] Ensuring file ownership..."
 chown -R agentuser:agentgroup /code /home/agentuser
 
-# Targeted permissions fix for data directory to resolve SQLite lockouts
+# Targeted permissions fix for data directory to resolve SQLite lockouts (using 777/666 for Docker sync reliability)
 echo "🧬 [$BOT_NAME Setup] Hardening data permissions..."
-chmod 775 /code/data || true
-find /code/data -name "*.db" -exec chmod 664 {} + || true
+chmod 777 /code/data || true
+find /code/data -maxdepth 2 -type f -exec chmod 666 {} + || true
+
+# Enable SQLite WAL mode for better concurrency and fewer read-only locks
+if command -v sqlite3 >/dev/null 2>&1; then
+    echo "🧬 [$BOT_NAME Setup] Optimizing database concurrency (WAL mode)..."
+    for db in /code/data/*.db; do
+        if [ -f "$db" ]; then
+            sqlite3 "$db" "PRAGMA journal_mode=WAL;" || true
+        fi
+    done
+fi
 
 # Git configuration for the agent user
 gosu agentuser git config --global --add safe.directory /code || true
