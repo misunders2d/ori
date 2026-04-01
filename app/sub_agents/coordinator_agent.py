@@ -44,6 +44,7 @@ from app.tools.auth import (
     register_platform,
     remove_platform_registration,
 )
+from app.tools.channel_summarizer import summarize_channel
 from app.tools.google_search import google_search_agent_tool
 from app.tools.health import report_health
 from app.tools.memory import (
@@ -56,6 +57,7 @@ from app.tools.memory import (
 )
 from app.tools.origins import analyze_upstream_file, check_upstream
 from app.tools.system import check_active_tasks, execute_approved_action
+from app.tools.whitelist import blacklist_chat, list_access_control, unwhitelist_chat, whitelist_chat
 
 root_agent = Agent(
     name="CoordinatorAgent",
@@ -75,8 +77,9 @@ root_agent = Agent(
         "7. For Origins Protocol: Use `check_upstream` to see new features/fixes. "
         "8. For Long-Term Memory: Use `remember_info` to store facts, preferences, or technical notes. "
         "Use `search_memory`, `recall_human_preferences`, or `recall_technical_context` to retrieve information from previous sessions. "
-        "To update or delete a specific memory, search for it first to get its unique record ID, then use `modify_memory` or `delete_memory`. "
-        "To check the real-time execution status of a background task running right now, use `check_active_tasks`.\n\n"
+        "9. For Access Control: Use `whitelist_chat` to authorize users/groups/channels, `blacklist_chat` to block them, "
+        "`unwhitelist_chat` to revoke access, and `list_access_control` to review current permissions. "
+        "10. For Channel Intelligence: Use `summarize_channel` to read local logs from whitelisted channels and generate summaries.\n\n"
         "TOKEN APPROVAL PROTOCOL: Highly privileged system actions (updates, restarts, integration changes) "
         "are protected by a staging mechanism. When you attempt such an action, the system will return a token (e.g., ACT-XXXXXX). "
         "The user must then provide this token to you. When the user says 'Approve ACT-XXXXXX' or similar, "
@@ -139,6 +142,11 @@ root_agent = Agent(
         web_fetch,
         check_active_tasks,
         execute_approved_action,
+        whitelist_chat,
+        blacklist_chat,
+        unwhitelist_chat,
+        list_access_control,
+        summarize_channel,
     ],
     before_agent_callback=[state_setter],
     before_model_callback=prompt_injection_guardrail,

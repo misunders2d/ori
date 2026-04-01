@@ -42,15 +42,18 @@ async def _summarize_session(session) -> str:
     # Take the last 80 exchanges max to stay within model limits
     conversation = "\n".join(texts[-80:])
     client = genai.Client()
-    response = await client.aio.models.generate_content(
-        model="gemini-3-flash-preview",
-        contents=(
-            "Summarize the following conversation into a concise context briefing. "
-            "Preserve key facts, decisions, ongoing tasks, and user preferences. "
-            "Keep it under 500 words.\n\n" + conversation
-        ),
-    )
-    return response.text or ""
+    try:
+        response = await client.aio.models.generate_content(
+            model="gemini-2.0-flash-lite-preview-02-05",
+            contents=(
+                "Summarize the following conversation into a concise context briefing. "
+                "Preserve key facts, decisions, ongoing tasks, and user preferences. "
+                "Keep it under 500 words.\n\n" + conversation
+            ),
+        )
+        return response.text or ""
+    except Exception:
+        return ""
 
 
 async def _perform_session_refresh(
@@ -156,6 +159,12 @@ async def extract_agent_response(
         session = await runner.session_service.create_session(
             app_name=runner.app_name, user_id=user_id, session_id=session_id
         )
+
+    # Prune session if it exceeds 200 events (approx 100 exchanges)
+    if session and len(session.events) > 200:
+        logger.info("Pruning large session %s", session_id)
+        # We keep the last 100 events to ensure we don't lose immediate context
+        session.events = session.events[-100:]
 
     MAX_RETRIES = 2
 
@@ -283,6 +292,10 @@ async def process_message_for_context(runner, user_id: str, session_id: str, mes
         session = await runner.session_service.create_session(
             app_name=runner.app_name, user_id=user_id, session_id=session_id
         )
+
+    # Hard truncate if it exceeds 100 messages (approx 200 events)
+    if session and len(session.events) > 200:
+        session.events = session.events[-100:]
 
     if isinstance(message, str):
         content = types.Content(role="user", parts=[types.Part.from_text(text=message)])

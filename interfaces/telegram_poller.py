@@ -17,6 +17,10 @@ from app.core.agent_executor import (
 )
 from app.core.transport import TransportAdapter, register_adapter
 
+# New imports for whitelist and logging
+from app.core.whitelist import is_allowed, is_blacklisted, should_notify_admin, whitelist_chat
+from app.core.channel_logger import log_message
+
 logger = logging.getLogger(__name__)
 
 # Heartbeat file for self-diagnostics
@@ -385,7 +389,7 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                             f.write(str(offset))
                     except OSError:
                         pass
-                    msg = update.get("message")
+                    msg = update.get("message") or update.get("channel_post")
                     if not msg:
                         continue
 
@@ -401,8 +405,47 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                         display_name += f" {from_user['last_name']}"
 
                     user_id = adapter.make_user_id(from_user.get("id", "unknown"))
-                    session_user_id = adapter.make_session_id(chat_id)
                     session_id = adapter.make_session_id(chat_id)
+                    session_user_id = session_id  # Use chat_id for session context isolation
+
+                    # ── ACCESS CONTROL GATE ──────────────────────────────────
+                    if not is_allowed(session_id) and not is_allowed(user_id):
+                        if is_blacklisted(session_id) or is_blacklisted(user_id):
+                            continue
+                        
+                        # Handle /start command — always accessible for ID discovery
+                        if text.strip() == "/start":
+                            await adapter.send_message(
+                                chat_id,
+                                f"⛔ You are not authorized.\n\n"
+                                f"Your User ID: `{user_id}`\n"
+                                f"This Chat ID: `{session_id}`\n\n"
+                                f"Please provide these IDs to the bot owner for access."
+                            )
+                            continue
+
+                        # Notify admin if not blacklisted and within cooldown
+                        if should_notify_admin(session_id):
+                            admin_ids_str = os.environ.get("ALLOWED_USER_IDS", "")
+                            admin_ids = [u.strip() for u in admin_ids_str.split(",") if u.strip()]
+                            for admin_id in admin_ids:
+                                if admin_id.startswith("tg_"):
+                                    admin_chat_id = admin_id.replace("tg_", "")
+                                    await adapter.send_message(
+                                        admin_chat_id,
+                                        f"📢 **Unauthorized Access Attempt**\n\n"
+                                        f"**User:** {display_name} ({user_id})\n"
+                                        f"**Chat:** {chat_type} ({session_id})\n"
+                                        f"**Message:** {text}\n\n"
+                                        f"To allow, reply with: `Whitelist {session_id}`\n"
+                                        f"To block, reply with: `Blacklist {session_id}`"
+                                    )
+                        continue
+
+                    # ── CHANNEL LOGGING ──────────────────────────────────────
+                    if chat_type == "channel":
+                        log_message(session_id, user_id, display_name, text)
+                        continue
 
                     # File handling
                     file_id = None
@@ -461,7 +504,21 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                                 )
                             )
 
-                    # Handle /start command — always accessible (just a welcome message)
+                    # Handle whitelist/blacklist shortcuts from admin
+                    if user_id in os.environ.get("ALLOWED_USER_IDS", "").split(","):
+                        if text.lower().startswith("whitelist "):
+                            target_id = text.split(" ")[1].strip()
+                            whitelist_chat(target_id)
+                            await adapter.send_message(chat_id, f"✅ Added `{target_id}` to whitelist.")
+                            continue
+                        elif text.lower().startswith("blacklist "):
+                            target_id = text.split(" ")[1].strip()
+                            from app.core.whitelist import blacklist_chat as _bl
+                            _bl(target_id)
+                            await adapter.send_message(chat_id, f"🌑 Added `{target_id}` to blacklist.")
+                            continue
+
+                    # Handle /start command — welcome message
                     bot_name = os.environ.get("BOT_NAME", "Ori")
                     if text.strip() == "/start":
                         runner_check = get_runner_fn()
@@ -477,38 +534,8 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                                 "The bot needs a Google API key before it can respond.\n\n"
                                 "Send the following command to configure it:\n"
                                 "`/init YOUR_PASSCODE GOOGLE_API_KEY=your-key-here`\n\n"
-                                "You can also give me a custom name:\n"
-                                "`/init YOUR_PASSCODE BOT_NAME=MyBot`\n\n"
-                                "Your admin passcode was printed to the server console on first start. "
-                                "You can also find it in the `.env` file on the server.",
+                                "Your admin passcode was printed to the server console on first start."
                             )
-                        continue
-
-                    # ── ACCESS CONTROL GATE ──────────────────────────────────
-                    # Enforced BEFORE /init, secure capture, TOTP, and all
-                    # other handlers so unauthorized users cannot reach them.
-                    allowed_users_str = os.environ.get("ALLOWED_USER_IDS", "")
-                    allowed_users = [
-                        u.strip() for u in allowed_users_str.split(",") if u.strip()
-                    ]
-
-                    if (
-                        allowed_users
-                        and user_id not in allowed_users
-                        and session_id not in allowed_users
-                    ):
-                        logger.warning(
-                            "Unauthorized access attempt by %s in chat %s",
-                            user_id,
-                            session_id,
-                        )
-                        await adapter.send_message(
-                            chat_id,
-                            f"⛔ You are not authorized to interact with this agent.\n\n"
-                            f"To allow access, add your ID to the `ALLOWED_USER_IDS` environment variable.\n"
-                            f"Your User ID: `{user_id}`\n"
-                            f"This Chat ID: `{session_id}`",
-                        )
                         continue
 
                     # SECURE KEY CAPTURE: intercept before anything reaches the agent
@@ -586,12 +613,11 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                             chat_id,
                             f"{bot_name} is not configured yet.\n\n"
                             "To set up, send:\n"
-                            "`/init YOUR_PASSCODE GOOGLE_API_KEY=your-key-here`\n\n"
-                            "Check the server console or `.env` file for your admin passcode.",
+                            "`/init YOUR_PASSCODE GOOGLE_API_KEY=your-key-here`"
                         )
                         continue
 
-                    is_group = chat_type in ["group", "supergroup", "channel"]
+                    is_group = chat_type in ["group", "supergroup"]
                     is_mentioned = bot_username and (f"@{bot_username}" in text)
                     if is_group and not is_mentioned:
                         logger.info(
