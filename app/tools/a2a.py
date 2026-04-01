@@ -253,27 +253,52 @@ async def _send_a2a_message(
         return resp.json()
 
 
+def _to_string(val: Any) -> str:
+    """Helper to convert any A2A part value to a string."""
+    if isinstance(val, str):
+        return val
+    if val is None:
+        return ""
+    if isinstance(val, (dict, list)):
+        return json.dumps(val, separators=(",", ":"))
+    return str(val)
+
+
 def _extract_response_text(task: Dict[str, Any]) -> str:
     """Extract human-readable text from an A2A Task response object."""
     texts = []
-    for artifact in task.get("artifacts", []):
-        for part in artifact.get("parts", []):
-            if "text" in part:
-                texts.append(part["text"])
 
+    # 1. Look for artifacts (A2A v1.0 standard)
+    artifacts = task.get("artifacts")
+    if isinstance(artifacts, list):
+        for artifact in artifacts:
+            if not isinstance(artifact, dict):
+                continue
+            parts = artifact.get("parts")
+            if isinstance(parts, list):
+                for part in parts:
+                    if isinstance(part, dict) and "text" in part:
+                        texts.append(_to_string(part["text"]))
+
+    # 2. Look for explicit messages (legacy/fallback)
     if not texts:
-        for msg in task.get("messages", []):
-            if msg.get("role") == "agent":
-                for part in msg.get("parts", []):
-                    if "text" in part:
-                        texts.append(part["text"])
+        messages = task.get("messages")
+        if isinstance(messages, list):
+            for msg in messages:
+                if isinstance(msg, dict) and msg.get("role") == "agent":
+                    parts = msg.get("parts")
+                    if isinstance(parts, list):
+                        for part in parts:
+                            if isinstance(part, dict) and "text" in part:
+                                texts.append(_to_string(part["text"]))
 
+    # 3. Look for status message
     if not texts:
         status = task.get("status", {})
         if isinstance(status, dict):
             status_msg = status.get("message")
             if status_msg:
-                texts.append(status_msg)
+                texts.append(_to_string(status_msg))
 
     return "\n".join(texts) if texts else "(no text in response)"
 
@@ -315,10 +340,11 @@ async def call_friend(friend_name: str, message: str, tool_context: ToolContext 
             "response": response_text,
         }
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        logger.error("A2A call to %s failed: %s", friend_name, e)
+        return {"status": "error", "message": f"A2A call failed: {e}"}
 
 
-async def call_agent(url: str, message: str, tool_context: ToolContext) -> Dict[str, Any]:
+async def call_agent(url: str, message: str, tool_context: ToolContext, api_key: Optional[str] = None) -> Dict[str, Any]:
     """
     Sends a one-off message to any A2A-compliant agent by URL.
     Use this for agents NOT in the friends list.
@@ -326,6 +352,7 @@ async def call_agent(url: str, message: str, tool_context: ToolContext) -> Dict[
     Args:
         url: The base URL of the remote A2A agent (e.g., 'https://agent.example.com').
         message: The message to send to the remote agent.
+        api_key: Optional API key for authentication.
     """
     try:
         card = await _discover_agent_card(url)
@@ -338,7 +365,16 @@ async def call_agent(url: str, message: str, tool_context: ToolContext) -> Dict[
                 endpoint_url = ep["url"]
                 break
 
-        result = await _send_a2a_message(endpoint_url, message)
+        # If no key provided, check if we have a friend registered for this URL
+        if not api_key and os.path.exists(FRIENDS_FILE):
+            with open(FRIENDS_FILE, "r") as f:
+                friends = json.load(f)
+            for nick, data in friends.items():
+                if data.get("base_url") == url.rstrip("/") or data.get("endpoint_url") == endpoint_url:
+                    api_key = _load_friend_key(nick)
+                    break
+
+        result = await _send_a2a_message(endpoint_url, message, api_key=api_key)
 
         if "error" in result:
             return {"status": "error", "message": f"Remote agent error: {result['error']}"}
@@ -350,7 +386,8 @@ async def call_agent(url: str, message: str, tool_context: ToolContext) -> Dict[
             "response": _extract_response_text(task),
         }
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        logger.error("A2A one-off call to %s failed: %s", url, e)
+        return {"status": "error", "message": f"A2A call failed: {e}"}
 
 
 # ---------------------------------------------------------------------------
