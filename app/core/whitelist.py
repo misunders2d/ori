@@ -15,15 +15,23 @@ _last_notified = {}  # chat_id -> timestamp
 
 def _load_data():
     global _whitelist, _blacklist
-    # Load environment variables first
+    # Load from multiple environment variables for redundancy
     env_allowed = os.environ.get("ALLOWED_USER_IDS", "").split(",")
-    _whitelist = {u.strip() for u in env_allowed if u.strip()}
+    env_admins = os.environ.get("ADMIN_USER_IDS", "").split(",")
+    
+    # Combined set of all allowed IDs from environment
+    all_env_ids = set(env_allowed) | set(env_admins)
+    _whitelist = {u.strip() for u in all_env_ids if u.strip()}
 
     if os.path.exists(WHITELIST_PATH):
         try:
             with open(WHITELIST_PATH, "r") as f:
                 data = json.load(f)
-                _whitelist.update(data)
+                if isinstance(data, list):
+                    _whitelist.update(data)
+                elif isinstance(data, dict):
+                    # Handle legacy or alternative formats
+                    _whitelist.update(data.keys())
         except Exception:
             logger.error("Failed to load whitelist from %s", WHITELIST_PATH)
 
@@ -31,9 +39,17 @@ def _load_data():
         try:
             with open(BLACKLIST_PATH, "r") as f:
                 data = json.load(f)
-                _blacklist = set(data)
+                if isinstance(data, list):
+                    _blacklist = set(data)
+                elif isinstance(data, dict):
+                    _blacklist = set(data.keys())
         except Exception:
             logger.error("Failed to load blacklist from %s", BLACKLIST_PATH)
+
+def reload():
+    """Manually trigger a reload of the whitelist and blacklist from disk/env."""
+    _load_data()
+    logger.info("Whitelist reloaded. Current size: %d", len(_whitelist))
 
 def _save_whitelist():
     os.makedirs(os.path.dirname(WHITELIST_PATH), exist_ok=True)
@@ -50,14 +66,19 @@ _load_data()
 
 def is_allowed(chat_id: str) -> bool:
     """Check if a chat/user ID is whitelisted."""
-    return chat_id in _whitelist
+    if not chat_id:
+        return False
+    return str(chat_id) in _whitelist
 
 def is_blacklisted(chat_id: str) -> bool:
     """Check if a chat/user ID is explicitly blacklisted."""
-    return chat_id in _blacklist
+    if not chat_id:
+        return False
+    return str(chat_id) in _blacklist
 
 def whitelist_chat(chat_id: str):
     """Add a chat/user ID to the whitelist."""
+    if not chat_id: return
     _whitelist.add(chat_id)
     if chat_id in _blacklist:
         _blacklist.remove(chat_id)
@@ -66,6 +87,7 @@ def whitelist_chat(chat_id: str):
 
 def blacklist_chat(chat_id: str):
     """Add a chat/user ID to the blacklist (stops notifications)."""
+    if not chat_id: return
     _blacklist.add(chat_id)
     if chat_id in _whitelist:
         _whitelist.remove(chat_id)

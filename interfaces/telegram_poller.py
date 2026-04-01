@@ -18,7 +18,7 @@ from app.core.agent_executor import (
 from app.core.transport import TransportAdapter, register_adapter
 
 # New imports for whitelist and logging
-from app.core.whitelist import is_allowed, is_blacklisted, should_notify_admin, whitelist_chat
+from app.core.whitelist import is_allowed, is_blacklisted, should_notify_admin, whitelist_chat, reload as reload_whitelist
 from app.core.channel_logger import log_message
 
 logger = logging.getLogger(__name__)
@@ -408,9 +408,19 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                     session_id = adapter.make_session_id(chat_id)
                     session_user_id = session_id  # Use chat_id for session context isolation
 
+                    # ── CHANNEL LOGGING (Moved before gate) ──────────────────
+                    if chat_type == "channel":
+                        if is_allowed(session_id):
+                            log_message(session_id, user_id, display_name, text)
+                        continue
+
                     # ── ACCESS CONTROL GATE ──────────────────────────────────
-                    if not is_allowed(session_id) and not is_allowed(user_id):
-                        if is_blacklisted(session_id) or is_blacklisted(user_id):
+                    # Requirement: Only whitelisted users can interact with the bot.
+                    # Whitelisting a group allows the bot to BE there, but interaction
+                    # is restricted to authorized individuals to prevent token drain.
+                    
+                    if not is_allowed(user_id):
+                        if is_blacklisted(user_id) or is_blacklisted(session_id):
                             continue
                         
                         # Handle /start command — always accessible for ID discovery
@@ -425,8 +435,9 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                             continue
 
                         # Notify admin if not blacklisted and within cooldown
-                        if should_notify_admin(session_id):
-                            admin_ids_str = os.environ.get("ALLOWED_USER_IDS", "")
+                        if should_notify_admin(user_id):
+                            # Try both ALLOWED and ADMIN env vars for notify targets
+                            admin_ids_str = os.environ.get("ADMIN_USER_IDS", "") or os.environ.get("ALLOWED_USER_IDS", "")
                             admin_ids = [u.strip() for u in admin_ids_str.split(",") if u.strip()]
                             for admin_id in admin_ids:
                                 if admin_id.startswith("tg_"):
@@ -437,14 +448,9 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                                         f"**User:** {display_name} ({user_id})\n"
                                         f"**Chat:** {chat_type} ({session_id})\n"
                                         f"**Message:** {text}\n\n"
-                                        f"To allow, reply with: `Whitelist {session_id}`\n"
-                                        f"To block, reply with: `Blacklist {session_id}`"
+                                        f"To allow, reply with: `Whitelist {user_id}`\n"
+                                        f"To block, reply with: `Blacklist {user_id}`"
                                     )
-                        continue
-
-                    # ── CHANNEL LOGGING ──────────────────────────────────────
-                    if chat_type == "channel":
-                        log_message(session_id, user_id, display_name, text)
                         continue
 
                     # File handling
@@ -504,8 +510,9 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                                 )
                             )
 
-                    # Handle whitelist/blacklist shortcuts from admin
-                    if user_id in os.environ.get("ALLOWED_USER_IDS", "").split(","):
+                    # Handle whitelist/blacklist shortcuts from authorized users
+                    # Check against the cache which is more robust than raw env split
+                    if is_allowed(user_id):
                         if text.lower().startswith("whitelist "):
                             target_id = text.split(" ")[1].strip()
                             whitelist_chat(target_id)
@@ -570,6 +577,7 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                             if success and "updated" in result_msg.lower():
                                 # Force runner reload to pick up new config
                                 _runner = get_runner_fn()  # noqa: F841
+                                reload_whitelist() # Also reload whitelist in case env changed
                             await adapter.send_message(chat_id, result_msg)
                         continue
 
@@ -577,6 +585,8 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                     if text.strip().startswith("/init"):
                         await adapter.delete_message(chat_id, message_id)
                         result = process_init_fn(text, session_id=session_id)
+                        if "updated" in result.lower():
+                            reload_whitelist() # Reload whitelist if env updated
                         await adapter.send_message(chat_id, result)
                         continue
 
