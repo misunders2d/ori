@@ -14,7 +14,7 @@ github_mcp_toolset = McpToolset(
             env={
                 "GITHUB_PERSONAL_ACCESS_TOKEN": os.environ.get("GITHUB_TOKEN", "")
             },
-        )
-    ),
-    timeout=60,  # GitHub API can be slow sometimes
+        ),
+        timeout=60,  # GitHub API can be slow sometimes
+    )
 )

@@ -5,7 +5,7 @@ from .evolution import evolution_read_file, evolution_list_directory, evolution_
 from .preferences import save_user_preferences, get_user_preferences
 from .research import check_installed_package
 from .web import web_fetch
-from .mcp_github import github_mcp_toolset
+# from .mcp_github import github_mcp_toolset
 
 __all__ = [
     "configure_integration",
@@ -36,5 +36,5 @@ __all__ = [
     "get_user_preferences",
     "check_installed_package",
     "web_fetch",
-    "github_mcp_toolset",
+    # "github_mcp_toolset",
 ]
