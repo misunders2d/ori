@@ -58,12 +58,19 @@ def repair_data_permissions(tool_context: ToolContext = None) -> dict:
     """Fixes 'readonly database' by recursively correcting permissions in data/."""
     data_dir = os.path.abspath("./data")
     try:
-        os.chmod(data_dir, 0o777)
+        # 775 for directories, 664 for files
+        os.chmod(data_dir, 0o775)
         count = 0
         for root, dirs, files in os.walk(data_dir):
-            for d in dirs: os.chmod(os.path.join(root, d), 0o777)
+            for d in dirs: 
+                os.chmod(os.path.join(root, d), 0o775)
             for f in files:
-                os.chmod(os.path.join(root, f), 0o666)
+                f_path = os.path.join(root, f)
+                # Specific handling for DB files
+                if f.endswith(".db"):
+                    os.chmod(f_path, 0o664)
+                else:
+                    os.chmod(f_path, 0o664)
                 count += 1
         return {"status": "success", "message": f"Repaired {count} files in data/."}
     except Exception as e: return {"status": "error", "message": str(e)}

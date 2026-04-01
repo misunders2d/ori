@@ -11,8 +11,11 @@ fi
 
 echo "🧬 [$BOT_NAME Setup] Aligning container permissions with host..."
 
-# Improved UID/GID detection: Check .git (best), then data/ (owner of state), then root
-if [ -d "/code/.git" ]; then
+# Improved UID/GID detection: Check ENV (best), then .git, then data/, then current directory
+if [ ! -z "$AGENT_UID" ] && [ ! -z "$AGENT_GID" ]; then
+    TARGET_UID="$AGENT_UID"
+    TARGET_GID="$AGENT_GID"
+elif [ -d "/code/.git" ]; then
     TARGET_UID=$(stat -c "%u" /code/.git)
     TARGET_GID=$(stat -c "%g" /code/.git)
 elif [ -d "/code/data" ]; then
@@ -23,7 +26,7 @@ else
     TARGET_GID=$(stat -c "%g" /code)
 fi
 
-# Fallback for root-cloned repos to ensure we don't run as root internally
+# Fallback for root-cloned repos or misconfigured ENV to ensure we don't run as root internally
 if [ "$TARGET_UID" = "0" ]; then TARGET_UID=1000; fi
 if [ "$TARGET_GID" = "0" ]; then TARGET_GID=1000; fi
 
@@ -38,6 +41,11 @@ fi
 # Only chown if we actually changed something to save boot time
 echo "🧬 [$BOT_NAME Setup] Ensuring file ownership..."
 chown -R agentuser:agentgroup /code /home/agentuser
+
+# Targeted permissions fix for data directory to resolve SQLite lockouts
+echo "🧬 [$BOT_NAME Setup] Hardening data permissions..."
+chmod 775 /code/data || true
+find /code/data -name "*.db" -exec chmod 664 {} + || true
 
 # Git configuration for the agent user
 gosu agentuser git config --global --add safe.directory /code || true
@@ -56,7 +64,13 @@ CRASH_FILE="/code/data/.crash_count"
 MAX_CRASHES=3
 
 if [ -f "$CRASH_FILE" ]; then
-    CRASHES=$(cat "$CRASH_FILE")
+    CRASH_FILE_CONTENT=$(cat "$CRASH_FILE")
+    # Basic numeric validation
+    if [[ "$CRASH_FILE_CONTENT" =~ ^[0-9]+$ ]]; then
+        CRASHES=$CRASH_FILE_CONTENT
+    else
+        CRASHES=0
+    fi
 else
     CRASHES=0
 fi

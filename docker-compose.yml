@@ -7,6 +7,8 @@ services:
     tty: true
     environment:
       - DOTENV_PATH=/code/data/.env
+      - AGENT_UID=${AGENT_UID:-1000}
+      - AGENT_GID=${AGENT_GID:-1000}
     ports:
       - "${AGENT_PORT:-0}:8000"
     restart: unless-stopped

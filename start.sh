@@ -8,6 +8,10 @@ if [ -f "data/.env" ]; then
   if [ ! -z "$ENV_BOT_NAME" ]; then BOT_NAME="$ENV_BOT_NAME"; fi
 fi
 
+# Export host IDs for container permission alignment
+export AGENT_UID=$(id -u)
+export AGENT_GID=$(id -g)
+
 # 🧬 $BOT_NAME: Host-side Supervisor Loop (Signal-Based) - v3.0
 # Hardened for detached repos and permission stability across reboots.
 
