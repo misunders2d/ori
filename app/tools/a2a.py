@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 FRIENDS_FILE = os.path.abspath("./data/friends.json")
 KEYS_FILE = os.path.abspath("./data/a2a_keys.json")
+A2A_STATE_FILE = os.path.abspath("./data/a2a_state.json")
 AGENT_CARD_PATH = os.path.abspath("./data/agent.json")
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -275,7 +276,7 @@ def _extract_response_text(task: Dict[str, Any]) -> str:
     return "\n".join(texts) if texts else "(no text in response)"
 
 
-async def call_friend(friend_name: str, message: str, tool_context: ToolContext) -> Dict[str, Any]:
+async def call_friend(friend_name: str, message: str, tool_context: ToolContext = None) -> Dict[str, Any]:
     """
     Sends a message to a registered friend via the A2A protocol and returns their response.
 
@@ -354,14 +355,28 @@ async def call_agent(url: str, message: str, tool_context: ToolContext) -> Dict[
 # Ori-Net Protocol Extensions: Presence & Address Updates
 # ---------------------------------------------------------------------------
 
-async def broadcast_address_update(tool_context: ToolContext) -> Dict[str, Any]:
+async def perform_a2a_broadcast(force: bool = False) -> Dict[str, Any]:
     """
-    Broadcasts this agent's current A2A_BASE_URL to all registered friends.
-    Use this when Ori's public URL changes (e.g., tunnel restart).
+    System helper to broadcast the current A2A_BASE_URL to all friends.
+    Stores state in data/a2a_state.json to prevent redundant broadcasts.
     """
     my_url = os.environ.get("A2A_BASE_URL")
     if not my_url:
-        return {"status": "error", "message": "A2A_BASE_URL not set in environment."}
+        logger.debug("A2A broadcast skipped: A2A_BASE_URL not set.")
+        return {"status": "skipped", "reason": "A2A_BASE_URL not set"}
+
+    # Check if address actually changed
+    last_url = None
+    if os.path.exists(A2A_STATE_FILE):
+        try:
+            with open(A2A_STATE_FILE, "r") as f:
+                last_url = json.load(f).get("last_broadcast_url")
+        except Exception:
+            pass
+
+    if not force and last_url == my_url:
+        logger.debug("A2A broadcast skipped: URL unchanged (%s)", my_url)
+        return {"status": "skipped", "reason": "URL unchanged"}
 
     if not os.path.exists(FRIENDS_FILE):
         return {"status": "success", "message": "No friends to notify."}
@@ -372,19 +387,34 @@ async def broadcast_address_update(tool_context: ToolContext) -> Dict[str, Any]:
     results = {}
     msg = f"PROTOCOL NOTICE: My base address has changed. Please update your registry for me. NEW_BASE_URL={my_url}"
 
+    logger.info("Broadcasting A2A address update to %d friends...", len(friends))
     for nickname in friends:
         try:
-            # We use call_friend logic but with a structured update message
-            res = await call_friend(nickname, msg, tool_context)
+            res = await call_friend(nickname, msg)
             results[nickname] = res.get("status")
         except Exception as e:
             results[nickname] = f"failed: {e}"
+
+    # Update state
+    try:
+        with open(A2A_STATE_FILE, "w") as f:
+            json.dump({"last_broadcast_url": my_url, "last_broadcast_at": datetime.now().isoformat()}, f)
+    except Exception as e:
+        logger.error("Failed to save A2A state: %s", e)
 
     return {
         "status": "success",
         "message": f"Broadcasted address update to {len(friends)} friends.",
         "details": results
     }
+
+
+async def broadcast_address_update(tool_context: ToolContext) -> Dict[str, Any]:
+    """
+    Manually triggers a broadcast of this agent's current A2A_BASE_URL to all registered friends.
+    Use this when Ori's public URL changes (e.g., tunnel restart).
+    """
+    return await perform_a2a_broadcast(force=True)
 
 
 def update_friend_address(friend_name: str, new_url: str, tool_context: ToolContext) -> Dict[str, Any]:

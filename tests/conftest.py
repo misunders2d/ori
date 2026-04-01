@@ -30,6 +30,9 @@ def restrict_live_http_calls(monkeypatch):
         async def __aexit__(self, exc_type, exc_val, exc_tb):
             pass
 
+        async def aclose(self):
+            pass
+
         async def get(self, *args, **kwargs):
             raise RuntimeError(_BLOCK_MSG.format(method="GET"))
 
@@ -56,6 +59,9 @@ def restrict_live_http_calls(monkeypatch):
             return self
 
         def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+        def close(self):
             pass
 
         def get(self, *args, **kwargs):

@@ -162,6 +162,18 @@ async def run_a2a_server():
         import traceback
         traceback.print_exc()
 
+async def run_a2a_broadcast_on_start():
+    """
+    Delayed task to broadcast this agent's URL to friends on startup.
+    Waiting 5 seconds ensures the network/A2A server is stabilized.
+    """
+    await asyncio.sleep(5)
+    from app.tools.a2a import perform_a2a_broadcast
+    try:
+        await perform_a2a_broadcast()
+    except Exception as e:
+        logger.error("Automatic A2A broadcast failed: %s", e)
+
 async def main():
     """
     The Master Entrypoint for the Docker application daemon.
@@ -234,6 +246,9 @@ async def main():
     
     # A2A Native Server (The Ori-Net Bridge)
     tasks.append(asyncio.create_task(run_a2a_server()))
+    
+    # Automatic A2A Broadcast
+    tasks.append(asyncio.create_task(run_a2a_broadcast_on_start()))
 
     # Telegram
     if os.environ.get("TELEGRAM_BOT_TOKEN"):
