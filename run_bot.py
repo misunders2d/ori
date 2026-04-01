@@ -5,306 +5,116 @@ import secrets
 import sys
 from dotenv import load_dotenv, set_key
 
-# Load env variables safely before starting Google API integrations
+# Load env variables safely
 ENV_FILE_PATH = os.environ.get("DOTENV_PATH", "./data/.env")
 os.makedirs(os.path.dirname(ENV_FILE_PATH), exist_ok=True)
 if not os.path.exists(ENV_FILE_PATH):
-    with open(ENV_FILE_PATH, "w") as f:
-        f.write("# Ori Daemon Configuration\n")
+    with open(ENV_FILE_PATH, "w") as f: f.write("# Ori Daemon Configuration\n")
 load_dotenv(ENV_FILE_PATH, override=True)
 
-# Generate random keys on first start if none exist
+# Generate keys
 if not os.environ.get("ADMIN_PASSCODE"):
-    _generated_passcode = secrets.token_urlsafe(16)
-    set_key(ENV_FILE_PATH, "ADMIN_PASSCODE", _generated_passcode)
-    os.environ["ADMIN_PASSCODE"] = _generated_passcode
-
+    set_key(ENV_FILE_PATH, "ADMIN_PASSCODE", secrets.token_urlsafe(16))
 if not os.environ.get("A2A_API_KEY"):
-    _generated_a2a = "ori-" + secrets.token_urlsafe(24)
-    set_key(ENV_FILE_PATH, "A2A_API_KEY", _generated_a2a)
-    os.environ["A2A_API_KEY"] = _generated_a2a
+    set_key(ENV_FILE_PATH, "A2A_API_KEY", "ori-" + secrets.token_urlsafe(24))
 
 from logging.handlers import RotatingFileHandler
-import logging
-
 LOG_FILE_PATH = os.path.abspath("./data/agent.log")
 os.makedirs(os.path.dirname(LOG_FILE_PATH), exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(levelname)s: %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        RotatingFileHandler(LOG_FILE_PATH, maxBytes=100_000, backupCount=1)
-    ]
+    handlers=[logging.StreamHandler(), RotatingFileHandler(LOG_FILE_PATH, maxBytes=100_000, backupCount=1)]
 )
 logger = logging.getLogger(__name__)
 
-# Integrate Uvicorn logs into our rotating file handler
-logging.getLogger("uvicorn").handlers = [
-    logging.StreamHandler(),
-    RotatingFileHandler(LOG_FILE_PATH, maxBytes=100_000, backupCount=1)
-]
-logging.getLogger("uvicorn.access").handlers = [
-    logging.StreamHandler(),
-    RotatingFileHandler(LOG_FILE_PATH, maxBytes=100_000, backupCount=1)
-]
-
 from google.adk.runners import Runner
 from google.adk.sessions import DatabaseSessionService
-
-# Fix: correctly import app from app/agent.py (moved from app.core.agent_app)
 from app.agent import app as ori_app
 from app.scheduler_instance import scheduler
 from interfaces.telegram_poller import poll_telegram
 
 _global_runner = None
 
-
 def get_runner():
-    """Lazily initializes and returns the primary global ADK Runner."""
     global _global_runner
     if not _global_runner:
-        if not os.environ.get("GOOGLE_API_KEY"):
-            return None
-
+        if not os.environ.get("GOOGLE_API_KEY"): return None
         db_path = os.path.abspath("./data/ori-sessions.db")
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
         database_url = f"sqlite+aiosqlite:///{db_path}"
-
         session_service = DatabaseSessionService(db_url=database_url)
-
-        _global_runner = Runner(
-            app=ori_app,
-            session_service=session_service,
-        )
+        _global_runner = Runner(app=ori_app, session_service=session_service)
     return _global_runner
 
-
 def process_init_command(text: str, session_id: str = "") -> str:
-    """
-    Parses the `/init <passcode>` command intercept from communication channels.
-    Validates against the `.env` ADMIN_PASSCODE and unlocks agent routing.
-    If TOTP is enabled, returns a prompt for the authenticator code before applying.
-    Forces an asynchronous runner reload on a successful auth to capture new keys.
-    """
     from app.app_utils.config import update_config
-
-    ADMIN_PASSCODE = os.environ.get("ADMIN_PASSCODE", "SETUP")
-    result = update_config(text, admin_passcode=ADMIN_PASSCODE, session_id=session_id)
+    result = update_config(text, admin_passcode=os.environ.get("ADMIN_PASSCODE", "SETUP"), session_id=session_id)
     if "updated" in result.lower():
         global _global_runner
-        _global_runner = None  # Force a reload of environments on next tick
+        _global_runner = None
     return result
 
+def ensure_writable_data():
+    """Corrects file permissions in the data directory at startup."""
+    data_dir = os.path.abspath("./data")
+    if not os.path.exists(data_dir): return
+    try:
+        os.chmod(data_dir, 0o777)
+        for item in os.listdir(data_dir):
+            path = os.path.join(data_dir, item)
+            try: os.chmod(path, 0o666 if not os.path.isdir(path) else 0o777)
+            except Exception: pass
+        logger.info("FileSystem: Permissions self-healed.")
+    except Exception as e: logger.warning(f"FileSystem: Self-heal limited: {e}")
+
 async def run_proactive_diagnostics():
-    """Background task that checks system health and alerts the admin if degraded."""
     from app.core.health import get_system_health
     from app.core.transport import get_adapter
-    
-    # We only alert if status is degraded
     try:
         report = await get_system_health()
         if report["status"] != "healthy":
-            logger.warning("Proactive Diagnostics: System is %s. Vitals: %s", report["status"], report["vitals"])
-            
-            # Try to notify admin via Telegram if configured
-            admin_ids = os.environ.get("ADMIN_USER_IDS", "").split(",")
+            admin_ids = [i.strip() for i in os.environ.get("ADMIN_USER_IDS", "").split(",") if i.strip()]
             adapter = get_adapter("telegram")
             if adapter and admin_ids:
                 for aid in admin_ids:
-                    aid = aid.strip()
-                    if not aid: continue
-                    # Clean the raw ID if it starts with 'tg_'
-                    raw_id = aid.replace("tg_", "")
-                    try:
-                        await adapter.send_message(
-                            raw_id, 
-                            f"🚨 **Proactive Alert: System Health {report['status'].upper()}**\n\n"
-                            f"Vitals:\n" + "\n".join([f"- {k}: `{v}`" for k, v in report["vitals"].items()])
-                        )
-                    except Exception:
-                        pass
-    except Exception as e:
-        logger.error("Proactive diagnostics task failed: %s", e)
+                    if aid.startswith("tg_"):
+                        await adapter.send_message(aid.replace("tg_", ""), f"🚨 **Health Alert: {report['status'].upper()}**")
+    except Exception: pass
 
-async def run_a2a_server():
-    """
-    Dynamically runs the A2A Native Server (FastAPI) via uvicorn if dependencies are met.
-    This allows this Ori instance to be called by other Oris in the network.
-    """
-    logger.info("Initializing A2A Native Server task...")
+async def main():
+    logger.info("Initializing Autonomous Worker Daemon...")
+    ensure_writable_data()
+    runner = get_runner()
+    scheduler.start()
+    from app.core.backup import backup_database
+    tasks = []
+    
+    # A2A Server
     try:
         import uvicorn
         from app.a2a_server import a2a_app
-        
-        if not a2a_app:
-            logger.warning("A2A Native Server aborted: A2A_API_KEY is missing. Evolution game network is offline.")
-            return
+        if a2a_app:
+            port = int(os.environ.get("A2A_PORT", 8000))
+            config = uvicorn.Config(a2a_app, host="0.0.0.0", port=port, log_level="info", proxy_headers=True, forwarded_allow_ips="*")
+            tasks.append(asyncio.create_task(uvicorn.Server(config).serve()))
+    except Exception: pass
 
-        # Default to port 8000 for A2A communication
-        port = int(os.environ.get("A2A_PORT", 8000))
-        
-        logger.info(f"Launching A2A Native Server on port {port}...")
-        config = uvicorn.Config(
-            a2a_app, 
-            host="0.0.0.0", 
-            port=port, 
-            log_level="info",
-            proxy_headers=True, # Important for reverse proxy detection
-            forwarded_allow_ips="*"
-        )
-        server = uvicorn.Server(config)
-        await server.serve()
-    except (ImportError, ModuleNotFoundError) as e:
-        logger.warning(f"Uvicorn or FastAPI not found. A2A Native Server is currently disabled. Error: {e}")
-    except Exception as e:
-        logger.error(f"Failed to start A2A Native Server: {e}")
-        import traceback
-        traceback.print_exc()
-
-async def run_a2a_broadcast_on_start():
-    """
-    Delayed task to broadcast this agent's URL to friends on startup.
-    Waiting 5 seconds ensures the network/A2A server is stabilized.
-    """
-    await asyncio.sleep(5)
-    from app.tools.a2a import perform_a2a_broadcast
-    try:
-        await perform_a2a_broadcast()
-    except Exception as e:
-        logger.error("Automatic A2A broadcast failed: %s", e)
-
-def ensure_writable_data():
-    """Corrects file permissions in the data directory at startup to prevent 'readonly database' errors."""
-    data_dir = os.path.abspath("./data")
-    if not os.path.exists(data_dir):
-        return
-
-    logger.info("Verifying filesystem permissions for data directory...")
-    try:
-        # 1. Ensure data directory is writable (rwxrwxrwx)
-        # This allows SQLite to create -journal and -wal files
-        os.chmod(data_dir, 0o777)
-        
-        # 2. Ensure existing database and log files are writable
-        for item in os.listdir(data_dir):
-            path = os.path.join(data_dir, item)
-            if item.endswith(".db") or item == "agent.log" or item == ".env":
-                try:
-                    os.chmod(path, 0o666)
-                except Exception:
-                    pass
-    except Exception as e:
-        logger.warning(f"Startup permission correction limited: {e}")
-
-async def main():
-    """
-    The Master Entrypoint for the Docker application daemon.
-    Initializes the SQLite Database session, launches the APScheduler background thread,
-    and concurrently maps all polling interfaces (Telegram, Slack, etc.) to the ADK `Runner`.
-    """
-    logger.info("Initializing Autonomous Worker Daemon...")
-    
-    # 0. Repair permissions before any DB activity
-    ensure_writable_data()
-
-    # 1. Warm up the runner
-    runner = get_runner()
-    if not runner:
-        passcode = os.environ.get("ADMIN_PASSCODE", "SETUP")
-        a2a_key = os.environ.get("A2A_API_KEY", "MISSING")
-        bot_name = os.environ.get("BOT_NAME", "Ori")
-        
-        telegram_warning = ""
-        if not os.environ.get("TELEGRAM_BOT_TOKEN"):
-            telegram_warning = (
-                "\n  CRITICAL: No TELEGRAM_BOT_TOKEN detected. "
-                "You must run the setup wizard or edit data/.env to connect a messenger."
-            )
-            
-        logger.warning(
-            "\n"
-            "============================================================\n"
-            "  %s — SETUP INCOMPLETE\n"
-            "============================================================\n"
-            "  No GOOGLE_API_KEY detected. The bot is running but cannot\n"
-            "  process messages until you configure it.\n"
-            "%s\n"
-            "\n"
-            "  If you bypassed the setup wizard, please restart the script\n"
-            "  or manually edit your secrets at:\n"
-            "  %s\n"
-            "============================================================",
-            bot_name, telegram_warning,
-            os.path.abspath(ENV_FILE_PATH),
-        )
-
-    # 2. Start the isolated APScheduler engine exactly once
-    logger.info("Starting APScheduler engine...")
-    scheduler.start()
-
-    # 3. Register periodic jobs
-    from app.core.backup import backup_database
-
-    sessions_db = os.path.abspath("./data/ori-sessions.db")
-    scheduler_db = os.path.abspath("./data/ori-scheduler.db")
-    
-    # Backups
-    scheduler.add_job(
-        backup_database, "interval", hours=12,
-        kwargs={"db_path": sessions_db, "label": "sessions"},
-        id="backup_sessions", replace_existing=True,
-    )
-    scheduler.add_job(
-        backup_database, "interval", hours=12,
-        kwargs={"db_path": scheduler_db, "label": "scheduler"},
-        id="backup_scheduler", replace_existing=True,
-    )
-    
-    # Self-Diagnostics (every 10 minutes)
-    scheduler.add_job(
-        run_proactive_diagnostics, "interval", minutes=10,
-        id="self_diagnostics", replace_existing=True,
-    )
-
-    # 4. Collect and spin up all polling interfaces
-    tasks = []
-    
-    # A2A Native Server (The Ori-Net Bridge)
-    tasks.append(asyncio.create_task(run_a2a_server()))
-    
-    # Automatic A2A Broadcast
-    tasks.append(asyncio.create_task(run_a2a_broadcast_on_start()))
+    # Broadcast
+    async def broadcast_later():
+        await asyncio.sleep(5)
+        from app.tools.a2a import perform_a2a_broadcast
+        try: await perform_a2a_broadcast()
+        except Exception: pass
+    tasks.append(asyncio.create_task(broadcast_later()))
 
     # Telegram
     if os.environ.get("TELEGRAM_BOT_TOKEN"):
-        tasks.append(
-            asyncio.create_task(poll_telegram(get_runner, process_init_command))
-        )
-    else:
-        logger.warning("TELEGRAM_BOT_TOKEN missing. Telegram poller skipped.")
+        tasks.append(asyncio.create_task(poll_telegram(get_runner, process_init_command)))
+    
+    if tasks: logger.info("Bot is active and listening.")
+    try: await asyncio.gather(*tasks)
+    except asyncio.CancelledError: logger.info("Daemon shutting down.")
+    finally: scheduler.shutdown()
 
-    # Future: Slack/Discord/Webex pollers can be added here identically.
-
-    if not tasks:
-        # If no messengers are configured AND we are in an interactive terminal, start CLI onboarding
-        if sys.stdin.isatty():
-            from interfaces.cli_chat import start_cli_chat
-            logger.info("No communication pollers started. Launching interactive CLI onboarding...")
-            tasks.append(asyncio.create_task(start_cli_chat(get_runner)))
-        else:
-            logger.warning("No communication pollers started and no interactive TTY detected.")
-    else:
-        logger.info("Bot is fully active and listening on all configured channels!")
-
-    try:
-        await asyncio.gather(*tasks)
-    except asyncio.CancelledError:
-        logger.info("Daemon gracefully shutting down.")
-    finally:
-        scheduler.shutdown()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+if __name__ == "__main__": asyncio.run(main())
