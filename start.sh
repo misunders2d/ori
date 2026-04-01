@@ -35,10 +35,19 @@ while true; do
 
   if [ $EXIT_CODE -eq 100 ]; then
     echo "🧬 [$BOT_NAME] Update Requested (Signal 100). Pulling and Rebuilding..."
-    git pull
+    # Fix root-owned .git objects left by container commits before host git pull
+    if [ -d ".git" ]; then
+      sudo chown -R "$(id -u):$(id -g)" .git 2>/dev/null || true
+    fi
+    if ! git pull; then
+      echo "🚨 [$BOT_NAME] git pull failed! Rebuilding with local files."
+    fi
     docker compose up --build
   elif [ $EXIT_CODE -eq 101 ]; then
     echo "🧬 [$BOT_NAME] Rollback Requested (Signal 101). Reverting..."
+    if [ -d ".git" ]; then
+      sudo chown -R "$(id -u):$(id -g)" .git 2>/dev/null || true
+    fi
     git checkout HEAD~1
     docker compose up --build
   elif [ $EXIT_CODE -eq 0 ] || [ $EXIT_CODE -eq 130 ]; then

@@ -7,6 +7,10 @@ if [ -f "data/.env" ]; then
 fi
 # 🧬 $BOT_NAME: Manual Rollback Override (v3.0)
 echo "🧬 [$BOT_NAME] Rolling back to previous version..."
+# Fix root-owned .git objects left by container commits
+if [ -d ".git" ]; then
+  sudo chown -R "$(id -u):$(id -g)" .git 2>/dev/null || true
+fi
 git checkout HEAD~1
 docker compose up -d --build
 echo "🧬 [$BOT_NAME] Done."
