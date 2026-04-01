@@ -2,8 +2,10 @@ FROM mirror.gcr.io/library/python:3.10-slim
 
 LABEL project="ori"
 
-# Install git and gosu for least-privilege user mapping
-RUN apt-get update && apt-get install -y --no-install-recommends git gosu \
+# Install git, gosu, curl and Node.js
+RUN apt-get update && apt-get install -y --no-install-recommends git gosu curl \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir uv==0.5.10
