@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import Annotated
 
 from app.core.whitelist import (
@@ -33,8 +34,14 @@ async def unwhitelist_chat(
     return f"Successfully removed `{chat_id}` from the whitelist."
 
 async def list_access_control() -> dict:
-    """List all whitelisted and blacklisted IDs."""
+    """List all whitelisted and blacklisted IDs, including those from environment variables."""
+    # Also log the environment for debugging
+    logger.info("DEBUG: list_access_control called. Env ALLOWED_USER_IDS: %s", os.environ.get("ALLOWED_USER_IDS"))
+    logger.info("DEBUG: list_access_control called. Env ADMIN_USER_IDS: %s", os.environ.get("ADMIN_USER_IDS"))
+    
     return {
         "whitelisted": get_whitelist(),
-        "blacklisted": get_blacklist()
+        "blacklisted": get_blacklist(),
+        "env_allowed": [i.strip() for i in os.environ.get("ALLOWED_USER_IDS", "").split(",") if i.strip()],
+        "env_admins": [i.strip() for i in os.environ.get("ADMIN_USER_IDS", "").split(",") if i.strip()]
     }

@@ -50,6 +50,9 @@ def _load_data():
                     _blacklist.update(data.keys())
         except Exception:
             logger.error("Failed to load blacklist from %s", BLACKLIST_PATH)
+            
+    logger.info("Whitelist loaded. Total unique IDs: %d", len(_whitelist))
+    logger.debug("Whitelist IDs: %s", _whitelist)
 
 def reload():
     """Manually trigger a reload of the whitelist and blacklist from disk/env."""
@@ -73,7 +76,13 @@ def is_allowed(chat_id: str) -> bool:
     """Check if a chat/user ID is whitelisted."""
     if not chat_id:
         return False
-    return str(chat_id) in _whitelist
+    
+    result = str(chat_id) in _whitelist
+    if not result:
+        logger.debug("Gate: Access DENIED for %s (not in whitelist)", chat_id)
+    else:
+        logger.debug("Gate: Access GRANTED for %s", chat_id)
+    return result
 
 def is_blacklisted(chat_id: str) -> bool:
     """Check if a chat/user ID is explicitly blacklisted."""

@@ -6,6 +6,7 @@ from .preferences import save_user_preferences, get_user_preferences
 from .research import check_installed_package
 from .web import web_fetch
 from .mcp_github import github_mcp_toolset
+from .whitelist import whitelist_chat, blacklist_chat, unwhitelist_chat, list_access_control
 
 __all__ = [
     "configure_integration",
@@ -37,4 +38,8 @@ __all__ = [
     "check_installed_package",
     "web_fetch",
     "github_mcp_toolset",
+    "whitelist_chat",
+    "blacklist_chat",
+    "unwhitelist_chat",
+    "list_access_control",
 ]
