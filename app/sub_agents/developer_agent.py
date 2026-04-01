@@ -21,6 +21,8 @@ from app.tools import (
     evolution_list_directory,
     evolution_stage_change,
     evolution_verify_sandbox,
+    evolution_git_pull,
+    evolution_git_reset,
     search_github_issues,
     check_installed_package,
     web_fetch,

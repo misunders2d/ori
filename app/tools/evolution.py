@@ -413,9 +413,7 @@ def evolution_git_pull(tool_context: ToolContext) -> dict:
             err_msg = (result.stderr or result.stdout)[-500:].replace(github_token, "***")
             return {"status": "error", "message": f"Git pull failed: {err_msg}"}
             
-        return {"status": "success", "message": f"Successfully pulled latest code:
-{result.stdout}
-Run system update (exit 100) to apply."}
+        return {"status": "success", "message": f"Successfully pulled latest code:\n{result.stdout}\nRun system update (exit 100) to apply."}
     except Exception as e:
         err_msg = str(e).replace(github_token, "***")
         return {"status": "error", "message": f"Error during git pull: {err_msg}"}
@@ -438,9 +436,7 @@ def evolution_git_reset(tool_context: ToolContext) -> dict:
         
         return {
             "status": "success", 
-            "message": f"Workspace reset successfully.
-Clean output: {clean_res.stdout.strip()}
-Reset output: {reset_res.stdout.strip()}"
+            "message": f"Workspace reset successfully.\nClean output: {clean_res.stdout.strip()}\nReset output: {reset_res.stdout.strip()}"
         }
     except Exception as e:
         return {"status": "error", "message": f"Error during git reset: {e!s}"}
