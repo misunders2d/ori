@@ -22,8 +22,6 @@ if [ "$TARGET_UID" != "$(id -u agentuser)" ]; then
     usermod -o -u "$TARGET_UID" agentuser || true
 fi
 
-chown -R agentuser:agentgroup /code
-
 gosu agentuser git config --global --add safe.directory /code || true
 gosu agentuser git config --global user.name "$BOT_NAME Autonomous Daemon" || true
 gosu agentuser git config --global user.email "bot@$BOT_NAME-agent.local" || true
@@ -40,14 +38,17 @@ fi
 
 if [ "$CRASHES" -ge "$MAX_CRASHES" ]; then
     echo "🚨 [$BOT_NAME Watchdog] Detected $CRASHES consecutive crashes! Initiating auto-rollback..."
-    gosu agentuser git clean -fd || true
+    # Preserve data directory (not tracked by git, contains .env and databases)
+    gosu agentuser git clean -fd --exclude=data/ || true
     gosu agentuser git reset --hard HEAD~1 || true
-    echo "0" > "$CRASH_FILE"
     echo "🧬 [$BOT_NAME Watchdog] Rollback complete. Proceeding with safe boot."
-else
-    NEW_CRASHES=$((CRASHES + 1))
-    echo "$NEW_CRASHES" > "$CRASH_FILE"
+    CRASHES=0
 fi
+
+# Write crash counter and fix all permissions as the LAST step before starting daemon
+# This ensures no root-owned files linger in the data directory
+echo "$((CRASHES + 1))" > "$CRASH_FILE"
+chown -R agentuser:agentgroup /code/data
 
 echo "🧬 [$BOT_NAME Setup] Dropping privileges and starting daemon..."
 
@@ -58,7 +59,7 @@ DAEMON_PID=$!
     sleep 30
     if kill -0 $DAEMON_PID 2>/dev/null; then
         echo "🧬 [$BOT_NAME Watchdog] Boot stable for 30s. Resetting crash counter."
-        echo "0" > "$CRASH_FILE"
+        gosu agentuser sh -c "echo 0 > $CRASH_FILE"
     fi
 ) &
 
@@ -68,7 +69,7 @@ EXIT_CODE=$?
 set -e
 
 if [ "$EXIT_CODE" = "0" ] || [ "$EXIT_CODE" = "100" ] || [ "$EXIT_CODE" = "101" ]; then
-    echo "0" > "$CRASH_FILE"
+    gosu agentuser sh -c "echo 0 > $CRASH_FILE"
 fi
 
 exit $EXIT_CODE

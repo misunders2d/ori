@@ -8,7 +8,7 @@ services:
     environment:
       - DOTENV_PATH=/code/data/.env
     ports:
-      - "${AGENT_PORT:-8000}:8000"
+      - "${AGENT_PORT:-0}:8000"
     restart: unless-stopped
     volumes:
       - type: bind
