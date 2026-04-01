@@ -76,6 +76,43 @@ This daemon is designed to be copied, deployed independently, and evolved as a s
 2. **Never overwrite local customizations blindly.** When adopting upstream changes, reconcile them with local modifications — the user's evolution takes priority over upstream defaults.
 3. **Always verify upstream code in the sandbox** before committing, just like any other change.
 
+## Docker & Container Architecture
+
+The daemon runs inside a Docker container with a non-root user (`agentuser`) and bind-mounted host directories. This architecture creates subtle permission pitfalls that you MUST understand before modifying `Dockerfile`, `entrypoint.sh`, or `docker-compose.yml`.
+
+### Bind-Mount vs Overlay Layers
+
+The container's `/code` directory is a **mix** of two filesystem types:
+- **Bind-mounted dirs** (from `docker-compose.yml` `volumes:`): `./data`, `./.git`, `./app`, `./skills`, `./interfaces` — these are real host files, owned by the host user's UID/GID.
+- **Image overlay dirs** (everything else in `/code`): `.venv`, `tests`, `run_bot.py`, etc. — these come from the Docker image layers and are copy-on-write.
+
+**Critical rule:** `chown -R` on `/code` does NOT reliably propagate across this boundary. Files in the overlay layer may silently retain root ownership even after a recursive chown that covers bind-mounted dirs. This is a known Docker overlay filesystem behavior.
+
+### Cache Directories Must Live Outside `/code`
+
+Writable cache directories (`UV_CACHE_DIR`, `NPM_CONFIG_CACHE`) **MUST** be placed in `/home/agentuser/` — never under `/code`. The overlay/bind-mount boundary under `/code` causes persistent `Permission denied` errors when the container writes to image-layer paths like `/code/.cache/`.
+
+Current locations (set in `Dockerfile`):
+- `UV_CACHE_DIR=/home/agentuser/.cache/uv`
+- `NPM_CONFIG_CACHE=/home/agentuser/.cache/npm`
+
+**If you ever add a new tool or dependency that needs a writable cache, place it under `/home/agentuser/`, not `/code/`.**
+
+### UID/GID Remapping
+
+The `entrypoint.sh` remaps `agentuser`'s UID/GID to match the host's `.git` directory owner. After remapping, it runs `chown -R agentuser:agentgroup /code /home/agentuser` to fix ownership. This is necessary because:
+- The Docker image builds files as root
+- Bind-mounted host files have the host user's UID
+- After `usermod`/`groupmod`, the agentuser's UID changes but existing files retain the old UID
+
+### Rules for Dockerfile/Entrypoint Changes
+
+1. **Never move caches back under `/code/`.** This was tried and caused crash loops.
+2. **Any new `RUN` command in `Dockerfile` that creates files under `/code/` runs as root.** If those files need to be writable by `agentuser`, they must be chowned — but prefer placing writable dirs outside `/code/` entirely.
+3. **Never add a `USER agentuser` directive to the Dockerfile.** The container must start as root so `entrypoint.sh` can remap UIDs and fix permissions before dropping privileges via `gosu`.
+4. **The `entrypoint.sh` chown must cover both `/code` and `/home/agentuser`** after UID remapping. If you add new writable paths outside these trees, add them to the chown line.
+5. **Test container startup after any Dockerfile or entrypoint change.** Permission errors often only surface at runtime, not build time. The crash-loop watchdog masks the root cause after 3 restarts by rolling back code — which makes debugging harder.
+
 ## Sandbox Hygiene Rules
 
 The sandbox (`./data/sandbox/`) uses **symlinks** as bootstrap artifacts during `evolution_verify_sandbox` pytest runs. These symlinks point back to live project files (`pyproject.toml`, `uv.lock`, existing test files) so `uv run pytest` can resolve dependencies.
