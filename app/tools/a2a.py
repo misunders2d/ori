@@ -192,7 +192,7 @@ def update_friend_key(friend_name: str, tool_context: ToolContext) -> Dict[str, 
 
 
 def list_friends(tool_context: ToolContext) -> Dict[str, Any]:
-    """Returns all registered friends in the network with their capabilities."""
+    """Returns all registered friends in the network with their capabilities and key status."""
     try:
         if not os.path.exists(FRIENDS_FILE):
             return {"status": "success", "message": "No friends registered yet.", "friends": {}}
@@ -200,11 +200,13 @@ def list_friends(tool_context: ToolContext) -> Dict[str, Any]:
             friends = json.load(f)
         summary = {}
         for nickname, data in friends.items():
+            has_key = bool(_load_friend_key(nickname))
             summary[nickname] = {
                 "name": data.get("name"),
                 "base_url": data.get("base_url"),
                 "endpoint_url": data.get("endpoint_url"),
                 "last_active": data.get("last_discovered_at"),
+                "auth_status": "key_configured" if has_key else "key_missing",
             }
         return {"status": "success", "friends": summary}
     except Exception as e:

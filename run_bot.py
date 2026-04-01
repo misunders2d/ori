@@ -53,6 +53,7 @@ logging.getLogger("uvicorn.access").handlers = [
 from google.adk.runners import Runner
 from google.adk.sessions import DatabaseSessionService
 
+# Fix: correctly import app from app/agent.py (moved from app.core.agent_app)
 from app.agent import app as ori_app
 from app.scheduler_instance import scheduler
 from interfaces.telegram_poller import poll_telegram
