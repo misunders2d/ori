@@ -1,20 +1,33 @@
 #!/bin/bash
 set -e
 
+# --- 1. SYSTEM IDENTITY & PERMISSIONS ---
 BOT_NAME="Ori"
 if [ -f "/code/data/.env" ]; then
+  # Extract BOT_NAME from .env if present
   ENV_BOT_NAME=$(grep -v '^#' /code/data/.env | grep -E '^BOT_NAME=' | cut -d '=' -f2- | tr -d '"'\''\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
   if [ ! -z "$ENV_BOT_NAME" ]; then BOT_NAME="$ENV_BOT_NAME"; fi
 fi
 
 echo "🧬 [$BOT_NAME Setup] Aligning container permissions with host..."
 
-TARGET_UID=$(stat -c "%u" /code/.git 2>/dev/null || echo "1000")
-TARGET_GID=$(stat -c "%g" /code/.git 2>/dev/null || echo "1000")
+# Improved UID/GID detection: Check .git (best), then data/ (owner of state), then root
+if [ -d "/code/.git" ]; then
+    TARGET_UID=$(stat -c "%u" /code/.git)
+    TARGET_GID=$(stat -c "%g" /code/.git)
+elif [ -d "/code/data" ]; then
+    TARGET_UID=$(stat -c "%u" /code/data)
+    TARGET_GID=$(stat -c "%g" /code/data)
+else
+    TARGET_UID=$(stat -c "%u" /code)
+    TARGET_GID=$(stat -c "%g" /code)
+fi
 
+# Fallback for root-cloned repos to ensure we don't run as root internally
 if [ "$TARGET_UID" = "0" ]; then TARGET_UID=1000; fi
 if [ "$TARGET_GID" = "0" ]; then TARGET_GID=1000; fi
 
+# Remap internal agentuser to match host UID/GID for seamless bind-mount access
 if [ "$TARGET_GID" != "$(id -g agentuser)" ]; then
     groupmod -o -g "$TARGET_GID" agentgroup || true
 fi
@@ -22,15 +35,23 @@ if [ "$TARGET_UID" != "$(id -u agentuser)" ]; then
     usermod -o -u "$TARGET_UID" agentuser || true
 fi
 
+# Only chown if we actually changed something to save boot time
+echo "🧬 [$BOT_NAME Setup] Ensuring file ownership..."
+chown -R agentuser:agentgroup /code /home/agentuser
+
+# Git configuration for the agent user
 gosu agentuser git config --global --add safe.directory /code || true
 gosu agentuser git config --global user.name "$BOT_NAME Autonomous Daemon" || true
 gosu agentuser git config --global user.email "bot@$BOT_NAME-agent.local" || true
 
-# Fix ownership after UID/GID remap — covers code tree, caches, and home dir
-echo "🧬 [$BOT_NAME Setup] Fixing file ownership..."
-chown -R agentuser:agentgroup /code /home/agentuser
+# --- 2. DATABASE HYGIENE (Reboot Protection) ---
+# Remove stale SQLite lock files that can cause 'Read-only database' errors after a crash/reboot
+echo "🧬 [$BOT_NAME Setup] Clearing stale database locks..."
+find /code/data -maxdepth 2 -name "*.db-journal" -delete || true
+find /code/data -maxdepth 2 -name "*.db-wal" -delete || true
+find /code/data -maxdepth 2 -name "*.db-shm" -delete || true
 
-# --- AUTO-ROLLBACK WATCHDOG ---
+# --- 3. AUTO-ROLLBACK WATCHDOG ---
 CRASH_FILE="/code/data/.crash_count"
 MAX_CRASHES=3
 
@@ -52,11 +73,14 @@ fi
 echo "$((CRASHES + 1))" > "$CRASH_FILE"
 chown agentuser:agentgroup "$CRASH_FILE"
 
+# --- 4. DAEMON STARTUP ---
 echo "🧬 [$BOT_NAME Setup] Dropping privileges and starting daemon..."
 
+# Run the command passed to the entrypoint (usually the bot startup)
 gosu agentuser "$@" &
 DAEMON_PID=$!
 
+# Background stability check: if we survive 30s, reset the crash counter
 (
     sleep 30
     if kill -0 $DAEMON_PID 2>/dev/null; then
@@ -70,6 +94,7 @@ wait $DAEMON_PID
 EXIT_CODE=$?
 set -e
 
+# Handle specific exit codes (100=Update, 101=Rollback) as clean shutdowns
 if [ "$EXIT_CODE" = "0" ] || [ "$EXIT_CODE" = "100" ] || [ "$EXIT_CODE" = "101" ]; then
     gosu agentuser sh -c "echo 0 > $CRASH_FILE"
 fi

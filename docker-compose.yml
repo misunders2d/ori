@@ -11,21 +11,19 @@ services:
       - "${AGENT_PORT:-0}:8000"
     restart: unless-stopped
     volumes:
-      - type: bind
-        source: ./data
-        target: /code/data
-      - type: bind
-        source: ./.git
-        target: /code/.git
-      - type: bind
-        source: ./app
-        target: /code/app
-      - type: bind
-        source: ./skills
-        target: /code/skills
-      - type: bind
-        source: ./interfaces
-        target: /code/interfaces
+      # Use :z to ensure SELinux relabeling (cross-distribution compatibility)
+      - ./data:/code/data:z
+      - ./.git:/code/.git:z
+      - ./app:/code/app:z
+      - ./skills:/code/skills:z
+      - ./interfaces:/code/interfaces:z
+      - ./tests:/code/tests:z
+      - ./run_bot.py:/code/run_bot.py:z
+      # Mounting system files as well so the agent can self-evolve them
+      - ./Dockerfile:/code/Dockerfile:z
+      - ./docker-compose.yml:/code/docker-compose.yml:z
+      - ./entrypoint.sh:/code/entrypoint.sh:z
+      - ./start.sh:/code/start.sh:z
 
   cloudflare-tunnel:
     image: cloudflare/cloudflared:latest
