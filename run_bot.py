@@ -175,6 +175,29 @@ async def run_a2a_broadcast_on_start():
     except Exception as e:
         logger.error("Automatic A2A broadcast failed: %s", e)
 
+def ensure_writable_data():
+    """Corrects file permissions in the data directory at startup to prevent 'readonly database' errors."""
+    data_dir = os.path.abspath("./data")
+    if not os.path.exists(data_dir):
+        return
+
+    logger.info("Verifying filesystem permissions for data directory...")
+    try:
+        # 1. Ensure data directory is writable (rwxrwxrwx)
+        # This allows SQLite to create -journal and -wal files
+        os.chmod(data_dir, 0o777)
+        
+        # 2. Ensure existing database and log files are writable
+        for item in os.listdir(data_dir):
+            path = os.path.join(data_dir, item)
+            if item.endswith(".db") or item == "agent.log" or item == ".env":
+                try:
+                    os.chmod(path, 0o666)
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.warning(f"Startup permission correction limited: {e}")
+
 async def main():
     """
     The Master Entrypoint for the Docker application daemon.
@@ -182,6 +205,9 @@ async def main():
     and concurrently maps all polling interfaces (Telegram, Slack, etc.) to the ADK `Runner`.
     """
     logger.info("Initializing Autonomous Worker Daemon...")
+    
+    # 0. Repair permissions before any DB activity
+    ensure_writable_data()
 
     # 1. Warm up the runner
     runner = get_runner()

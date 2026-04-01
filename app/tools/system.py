@@ -67,6 +67,34 @@ def check_active_tasks(tool_context: ToolContext) -> dict:
         logger.error(f"Failed to check active tasks: {e}")
         return {"status": "error", "message": f"Failed to check active tasks: {e}"}
 
+def repair_data_permissions(tool_context: ToolContext = None) -> dict:
+    """Attempts to fix 'readonly database' errors by correcting file permissions in the data directory.
+    
+    This tool recursively sets the data directory to be writable by the current process.
+    """
+    data_dir = os.path.abspath("./data")
+    if not os.path.exists(data_dir):
+        return {"status": "error", "message": f"Data directory not found at {data_dir}"}
+
+    try:
+        count = 0
+        # 1. Fix directory permissions (777)
+        os.chmod(data_dir, 0o777)
+        
+        # 2. Fix file permissions (666)
+        for root, dirs, files in os.walk(data_dir):
+            for d in dirs:
+                os.chmod(os.path.join(root, d), 0o777)
+            for f in files:
+                os.chmod(os.path.join(root, f), 0o666)
+                count += 1
+        
+        logger.info(f"FileSystem Repair: Corrected permissions for {count} files in {data_dir}")
+        return {"status": "success", "message": f"Successfully repaired permissions for {count} items in the data directory."}
+    except Exception as e:
+        logger.error(f"FileSystem Repair Failed: {e}")
+        return {"status": "error", "message": f"Failed to repair permissions: {e}"}
+
 async def execute_approved_action(token: str, totp_code: str = "", tool_context: ToolContext = None) -> dict:
     """Executes a previously staged and now approved system action.
 
