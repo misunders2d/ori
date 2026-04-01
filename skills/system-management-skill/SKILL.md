@@ -24,6 +24,11 @@ The `ori` daemon is a fully integrated, continuously polling worker node. It man
 
 Always test any changes that brush up against `system.py` logic thoroughly in your isolated sandbox verification pipeline (`evolution_stage_change` -> `evolution_verify_sandbox`).
 
+## GIT INTEGRITY & SAFETY
+
+1. **Gitignore Preservation**: Never remove lines from `.gitignore`. They are essential for protecting secrets and runtime databases. You can only ADD new lines to further restrict the repository.
+2. **Atomic Commits**: Group related changes into a single commit. Avoid multi-topic commits unless they are part of a unified security patch.
+
 ## REGRESSION TESTING MANDATE
 
 Every feature, bug fix, or code improvement **MUST** include a corresponding functional test file in the `tests/` directory.

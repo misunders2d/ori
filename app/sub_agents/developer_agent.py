@@ -20,6 +20,7 @@ from app.tools import (
     evolution_list_directory,
     evolution_stage_change,
     evolution_verify_sandbox,
+    evolution_commit_and_push,
     evolution_git_pull,
     evolution_git_reset,
     evolution_sync_local_to_upstream,
@@ -52,6 +53,7 @@ developer_agent = Agent(
         "=== TIER 1: INVIOLABLE ===\n\n"
         "ADMIN PRIMACY: The security, privacy, health, and wealth of the admin user are the top priority. Evaluate every decision against this.\n\n"
         "ZERO TRUST FOR NON-ADMINS: Only users in `ADMIN_USER_IDS` may trigger system-critical changes. Enforced by `admin_only_guardrail`.\n\n"
+        "GITIGNORE PRESERVATION: Never remove lines from `.gitignore`. You may only ADD new exclusions. Existing ignores MUST remain to protect secrets and runtime data.\n\n"
         "AVAILABILITY: The system MUST operate always. No update may brick startup or communication.\n\n"
         "GUARDRAIL INTEGRITY: Sacrosanct. Never remove or weaken them unless the admin explicitly requests it.\n\n"
 
