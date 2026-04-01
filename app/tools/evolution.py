@@ -336,7 +336,11 @@ def evolution_commit_and_push(
             subprocess.run(["git", "add", "."], cwd=tmp_repo_dir, check=True)
             
         # Append "evolved by {bot_name}" to the commit message securely without invalid escape sequences
-        signed_message = f"{commit_message}\n\nevolved by {bot_name}"
+        signature = f"evolved by {bot_name}"
+        if not commit_message.strip().endswith(signature):
+            signed_message = f"{commit_message.strip()}\n\n{signature}"
+        else:
+            signed_message = commit_message.strip()
         subprocess.run(["git", "commit", "-m", signed_message], cwd=tmp_repo_dir, check=True)
 
         result = subprocess.run(
@@ -381,3 +385,62 @@ def evolution_commit_and_push(
         "status": "success",
         "message": f"Successfully {' and '.join(summary)} via temporary clone.",
     }
+
+
+def evolution_git_pull(tool_context: ToolContext) -> dict:
+    """Pulls the latest code from the GitHub remote repository into the current container and restarts.
+    
+    Use this when you want to fetch fresh code pushed by human administrators or other agents.
+    
+    Returns:
+        dict: Status of the pull operation.
+    """
+    github_token = os.environ.get("GITHUB_TOKEN", "")
+    github_repo = os.environ.get("GITHUB_REPO", "")
+    if not github_token or not github_repo:
+        # Fallback to standard git pull if it's a public repo or host has auth
+        pull_url = "origin"
+    else:
+        pull_url = f"https://x-access-token:{github_token}@github.com/{github_repo}.git"
+
+    try:
+        subprocess.run(["git", "config", "pull.rebase", "false"], cwd=PROJECT_ROOT, check=True)
+        result = subprocess.run(
+            ["git", "pull", pull_url, "master"],
+            cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=60,
+        )
+        if result.returncode != 0:
+            err_msg = (result.stderr or result.stdout)[-500:].replace(github_token, "***")
+            return {"status": "error", "message": f"Git pull failed: {err_msg}"}
+            
+        return {"status": "success", "message": f"Successfully pulled latest code:
+{result.stdout}
+Run system update (exit 100) to apply."}
+    except Exception as e:
+        err_msg = str(e).replace(github_token, "***")
+        return {"status": "error", "message": f"Error during git pull: {err_msg}"}
+
+
+def evolution_git_reset(tool_context: ToolContext) -> dict:
+    """Resets the local workspace to match the last commit, deleting untracked 'dangling' files.
+    
+    Use this to clean up your workspace if you got stuck with leftover artifacts, 
+    merge conflicts, or uncommitted files that prevent you from working.
+    
+    Returns:
+        dict: Status of the reset operation.
+    """
+    try:
+        # First clean untracked files (ignored files like /data/ are safe due to .gitignore)
+        clean_res = subprocess.run(["git", "clean", "-fd"], cwd=PROJECT_ROOT, capture_output=True, text=True, check=True)
+        # Then reset tracked files
+        reset_res = subprocess.run(["git", "reset", "--hard", "HEAD"], cwd=PROJECT_ROOT, capture_output=True, text=True, check=True)
+        
+        return {
+            "status": "success", 
+            "message": f"Workspace reset successfully.
+Clean output: {clean_res.stdout.strip()}
+Reset output: {reset_res.stdout.strip()}"
+        }
+    except Exception as e:
+        return {"status": "error", "message": f"Error during git reset: {e!s}"}

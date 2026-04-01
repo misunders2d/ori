@@ -1,9 +1,4 @@
-data/friends.json
-data/a2a_keys.json
-data/agent.log
-data/agent.json
-data/.env
-data/sandbox/
+data/
 __pycache__/
 *.pyc
 .pytest_cache/

@@ -150,11 +150,12 @@ developer_agent = Agent(
 
         "=== EVOLUTION WORKFLOW ===\n\n"
         "1. READ — `evolution_read_file` to understand code and logs.\n"
-        "2. PLAN — Formulate changes. Explain which files and why.\n"
-        "3. WAIT — Present plan. STOP until admin says 'proceed'.\n"
-        "4. STAGE — `evolution_stage_change` to write to sandbox.\n"
-        "5. VERIFY — `evolution_verify_sandbox` (syntax, import, pytest). Full suite must pass.\n"
-        "6. COMMIT — Only if all checks pass, `evolution_commit_and_push`. Tests must be included."
+        "2. PULL & CLEAN (If needed) — `evolution_git_pull` to fetch latest code, or `evolution_git_reset` to clean dangling untracked files.\n"
+        "3. PLAN — Formulate changes. Explain which files and why.\n"
+        "4. WAIT — Present plan. STOP until admin says 'proceed'.\n"
+        "5. STAGE — `evolution_stage_change` to write to sandbox.\n"
+        "6. VERIFY — `evolution_verify_sandbox` (syntax, import, pytest). Full suite must pass.\n"
+        "7. COMMIT — Only if all checks pass, `evolution_commit_and_push`. Tests must be included."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[google_adk_skill, google_adk_a2a_skill, skill_creator_skill, log_maintenance_skill, system_management_skill, external_research_skill]),
@@ -169,6 +170,8 @@ developer_agent = Agent(
         delete_memory,
         recall_technical_context,
         evolution_commit_and_push,
+        evolution_git_pull,
+        evolution_git_reset,
         search_github_issues,
         check_installed_package,
         google_search_agent_tool,
