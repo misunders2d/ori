@@ -440,3 +440,57 @@ def evolution_git_reset(tool_context: ToolContext) -> dict:
         }
     except Exception as e:
         return {"status": "error", "message": f"Error during git reset: {e!s}"}
+
+
+def evolution_sync_local_to_upstream(tool_context: ToolContext) -> dict:
+    """Connects a detached local workspace to a remote GitHub repository and populates it.
+    
+    Use this on a first-time start when the agent lives in a fresh/empty repository
+    or was cloned without its .git history.
+    
+    Returns:
+        dict: Status of the synchronization.
+    """
+    github_token = os.environ.get("GITHUB_TOKEN", "")
+    github_repo = os.environ.get("GITHUB_REPO", "")
+    if not github_token or not github_repo:
+        return {"status": "error", "message": "GITHUB_TOKEN and GITHUB_REPO must be configured first."}
+
+    push_url = f"https://x-access-token:{github_token}@github.com/{github_repo}.git"
+
+    try:
+        # 1. Initialize git if not already present
+        if not os.path.exists(os.path.join(PROJECT_ROOT, ".git")):
+            subprocess.run(["git", "init"], cwd=PROJECT_ROOT, check=True)
+        
+        # 2. Configure remote 'origin'
+        # Check if origin already exists
+        remotes = subprocess.run(["git", "remote"], cwd=PROJECT_ROOT, capture_output=True, text=True).stdout
+        if "origin" in remotes:
+            subprocess.run(["git", "remote", "set-url", "origin", push_url], cwd=PROJECT_ROOT, check=True)
+        else:
+            subprocess.run(["git", "remote", "add", "origin", push_url], cwd=PROJECT_ROOT, check=True)
+
+        # 3. Identity configuration
+        bot_name = os.environ.get("BOT_NAME", "Ori")
+        subprocess.run(["git", "config", "user.email", "agent@evolution.local"], cwd=PROJECT_ROOT, check=True)
+        subprocess.run(["git", "config", "user.name", f"{bot_name} (Agent)"], cwd=PROJECT_ROOT, check=True)
+
+        # 4. Populate repository
+        subprocess.run(["git", "add", "."], cwd=PROJECT_ROOT, check=True)
+        # Try to commit, but ignore if nothing changed
+        try:
+            subprocess.run(["git", "commit", "-m", f"Initial synchronization by {bot_name}"], cwd=PROJECT_ROOT, check=True)
+        except subprocess.CalledProcessError:
+            pass # No changes to commit
+        
+        # 5. Push to master
+        result = subprocess.run(["git", "push", "-u", "origin", "master"], cwd=PROJECT_ROOT, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+             return {"status": "error", "message": f"Git push failed: {result.stderr.replace(github_token, '***')}"}
+
+        return {"status": "success", "message": f"Workspace successfully connected and pushed to {github_repo}."}
+        
+    except Exception as e:
+        return {"status": "error", "message": f"Synchronization failed: {str(e).replace(github_token, '***')}"}

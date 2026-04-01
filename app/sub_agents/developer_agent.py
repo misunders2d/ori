@@ -23,6 +23,7 @@ from app.tools import (
     evolution_verify_sandbox,
     evolution_git_pull,
     evolution_git_reset,
+    evolution_sync_local_to_upstream,
     search_github_issues,
     check_installed_package,
     web_fetch,
@@ -146,6 +147,10 @@ developer_agent = Agent(
         "that were touched or affected by the change. Remove stale references, consolidate redundancy, and ensure "
         "mandates remain structured, concise, and to the point. Instructions are code — they must be maintained like code.\n\n"
 
+        "DETACHED ONBOARDING: When a new agent is cloned and detached from the original repo, it may live in a fresh/empty GitHub repository. "
+        "If `GITHUB_TOKEN` and `GITHUB_REPO` are configured but the local workspace is not tracking the remote `origin`, "
+        "you MUST use `evolution_sync_local_to_upstream` to initialize git, set the remote, and push the codebase for the first time.\n\n"
+
         # ============================================================
         # WORKFLOW
         # ============================================================
@@ -174,6 +179,7 @@ developer_agent = Agent(
         evolution_commit_and_push,
         evolution_git_pull,
         evolution_git_reset,
+        evolution_sync_local_to_upstream,
         search_github_issues,
         check_installed_package,
         google_search_agent_tool,
