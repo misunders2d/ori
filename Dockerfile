@@ -36,13 +36,11 @@ RUN groupadd -r agentgroup && useradd -m -r -g agentgroup agentuser \
     && mkdir -p /code/data \
     && chown -R agentuser:agentgroup /code 
 
-# Ensure uv has a writable cache directory
-ENV UV_CACHE_DIR=/code/.cache/uv
-RUN mkdir -p $UV_CACHE_DIR && chown -R agentuser:agentgroup /code/.cache
-
-# Ensure npm/npx has a writable cache directory for agentuser
-ENV NPM_CONFIG_CACHE=/code/.cache/npm
-RUN mkdir -p $NPM_CONFIG_CACHE && chown -R agentuser:agentgroup $NPM_CONFIG_CACHE
+# Place caches in agentuser's home dir — outside /code to avoid bind-mount overlay issues
+ENV UV_CACHE_DIR=/home/agentuser/.cache/uv
+ENV NPM_CONFIG_CACHE=/home/agentuser/.cache/npm
+RUN mkdir -p $UV_CACHE_DIR $NPM_CONFIG_CACHE \
+    && chown -R agentuser:agentgroup /home/agentuser/.cache
 
 # Add and configure entrypoint
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
