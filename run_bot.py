@@ -23,12 +23,25 @@ from logging.handlers import RotatingFileHandler
 LOG_FILE_PATH = os.path.abspath("./data/agent.log")
 os.makedirs(os.path.dirname(LOG_FILE_PATH), exist_ok=True)
 
+is_cli_mode = not any(key in os.environ for key in ["TELEGRAM_BOT_TOKEN", "SLACK_BOT_TOKEN"])
+
+# Send clean warnings to console in CLI mode, but keep full INFO in the log file
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.WARNING if is_cli_mode else logging.INFO)
+
+file_handler = RotatingFileHandler(LOG_FILE_PATH, maxBytes=100_000, backupCount=1)
+file_handler.setLevel(logging.INFO)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(levelname)s: %(message)s",
-    handlers=[logging.StreamHandler(), RotatingFileHandler(LOG_FILE_PATH, maxBytes=100_000, backupCount=1)]
+    handlers=[console_handler, file_handler]
 )
 logger = logging.getLogger(__name__)
+
+if is_cli_mode:
+    logging.getLogger("google.adk").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 from google.adk.runners import Runner
 from google.adk.sessions import DatabaseSessionService
