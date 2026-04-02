@@ -65,7 +65,7 @@ while true; do
     # Start dependencies in background
     docker compose up -d cloudflare-tunnel 2>/dev/null
     # Run agent service interactively
-    docker compose run --rm --service-ports ori-agent
+    docker compose run --rm -it --service-ports ori-agent
   else
     if [ "$REBUILD" = true ]; then
       echo "🧬 [$BOT_NAME] Image missing or update required. Building..."

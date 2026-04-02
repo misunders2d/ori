@@ -56,7 +56,7 @@ if exist "data\.env" (
 if "%USE_CLI%"=="true" (
     echo 🧬 [%BOT_NAME%] No messenger configured. Launching in interactive CLI mode...
     docker compose up -d cloudflare-tunnel >nul 2>&1
-    docker compose run --rm --service-ports ori-agent
+    docker compose run --rm -it --service-ports ori-agent
 ) else (
     if "%REBUILD%"=="true" (
         echo 🧬 [%BOT_NAME%] Image missing. Building...
