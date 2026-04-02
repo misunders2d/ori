@@ -33,6 +33,15 @@ After exit 100, the host runs: `git fetch origin master && git reset --hard orig
 
 **System-critical files** (`pyproject.toml`, `config.py`, `Dockerfile`): Use `skip_local_update=True` — the auto-reboot triggers automatically.
 
+## Sandbox Dependency Resolution (Auto-Bootstrap)
+
+When evolving the agent's code, the `evolution_verify_sandbox` tool uses a **virtualized project structure**.
+
+1.  **Isolation**: The sandbox only physically contains files created via `evolution_stage_change`.
+2.  **Bootstrap**: To prevent `ModuleNotFoundError`, the system automatically creates symlinks to the existing project structure (`app/`, `skills/`, etc.) *around* your staged changes.
+3.  **Conflict Handling**: If you stage a file (e.g., `app/tools/new_tool.py`), the system symlinks all other files in `app/tools/` individually so that the staged file takes precedence.
+4.  **Requirement**: Always ensure that any existing local dependency (like `app/app_utils/models.py`) is either staged OR correctly symlinked by the tool. If verification fails with a missing module, verify the "Auto-Bootstrap" logic in `app/tools/evolution.py`.
+
 ## Security Constraints
 
 1. **Read-Only DNA**: Cannot write to `/code`. Evolution MUST go via remote push.

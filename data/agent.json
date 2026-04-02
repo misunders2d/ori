@@ -3,10 +3,10 @@
     "name": "Ori",
     "version": "1.0.0",
     "description": "An autonomous self-evolving digital organism.",
-    "url": "http://localhost:8000",
+    "url": "https://beer-sisters-mae-table.trycloudflare.com",
     "provider": {
         "organization": "Ori Project",
-        "url": "http://localhost:8000"
+        "url": "https://beer-sisters-mae-table.trycloudflare.com"
     },
     "defaultInputModes": [
         "text/plain"
@@ -17,7 +17,7 @@
     "endpoints": [
         {
             "type": "json-rpc",
-            "url": "http://localhost:8000"
+            "url": "https://beer-sisters-mae-table.trycloudflare.com"
         }
     ],
     "capabilities": {

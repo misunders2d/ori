@@ -46,6 +46,8 @@ evolution_commit_and_push(commit_message="feat: added new ADK tool")
 # Then request update_self from CoordinatorAgent
 ```
 
+For complex cross-module dependencies in the sandbox, refer to the **"Sandbox Dependency Resolution"** section in `system-management-skill`.
+
 ## Gotchas
 
 - **`SequentialAgent` vs `Agent` for pipelines**: Use `SequentialAgent` only for deterministic step-by-step flows. For anything requiring LLM routing decisions, use a flat `Agent` with tools. We tried a loop-based `SequentialAgent` for the developer agent — it caused infinite retries.
