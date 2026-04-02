@@ -5,68 +5,73 @@ description: Critical execution rules for the Core Lifecycle Tools that govern t
 
 # System Management Constraints (Rootless Mode)
 
-The `ori` daemon is a fully integrated, continuously polling worker node operating in a **Rootless Architecture**. The local source code directory (`/code`) is mounted as **Read-Only**.
+The `ori` daemon is a fully integrated, continuously polling worker node operating in a **Rootless Architecture**. The local source code directory (`/code`) is mounted as **Read-Only**. It manages its own persistent execution via four system-critical tools defined in `app/tools/system.py`.
 
 ## Core System Tools
 
-1.  **`update_self`**: Signals the host supervisor (Exit 100) to pull the latest codebase from GitHub and rebuild/restart the container.
-2.  **`session_refresh`**: Wipes or summarizes SQLite DB context blocks in the writeable `data/` directory.
-3.  **`trigger_rollback`**: Signals the host supervisor (Exit 101) to revert to the previous git commit and restart.
-4.  **`set_planner_mode`**: Dynamically toggles deep-thinking inference (`BuiltInPlanner`) execution for the current session.
+1. **`update_self`**: Signals the host supervisor (Exit 100) to pull the latest codebase from GitHub and rebuild/restart the container.
+2. **`session_refresh`**: Wipes or summarizes SQLite DB context blocks in the writeable `data/` directory.
+3. **`trigger_rollback`**: Signals the host supervisor (Exit 101) to revert to the previous git commit and restart.
+4. **`set_planner_mode`**: Dynamically toggles deep-thinking inference (`BuiltInPlanner`) execution for the current session.
 
-## MANDATORY Security & Privilege Constraints
+## MANDATORY Security Constraints
 
-1.  **Read-Only Project DNA**: You CANNOT write to `/code`. Any attempt to modify files directly in the project root or subdirectories (except `data/`) will fail. 
-2.  **Evolution via Remote**: All code changes MUST be pushed to the remote GitHub repository using `evolution_commit_and_push`. 
-3.  **Host-Side Enforcement**: The host-side script (`start.sh`) is the only entity that can modify the local source code by performing a `git pull` after receiving an **Exit 100** signal.
-4.  **Admin-Only Execution**: These tools are permanently bound to the `CoordinatorAgent` and protected by the `admin_only_guardrail`. Only users in `ADMIN_USER_IDS` may invoke them.
-5.  **Guardrail Integrity**: You MUST NOT remove, modify, or try to bypass guardrails (event callbacks) under any circumstances. They are the constitutional limit on your autonomy.
-6.  **Runner Lifecycle**: DO NOT attempt to rewrite `run_bot.py`'s daemon lifecycle. The async loop handles complex APScheduler and Messenger state interactions precisely.
+1. **Read-Only Project DNA**: You CANNOT write to `/code`. Any attempt to modify files directly in the project root or subdirectories (except `data/`) will fail. Evolution must occur via Remote.
+2. **Admin-Only Execution:** These four tools are mapped to the `CoordinatorAgent` and protected by the `admin_only_guardrail` callback. Only users in `ADMIN_USER_IDS` may invoke them.
+3. **Never Remove From Root Agent:** These tools belong permanently bound to the `CoordinatorAgent`. Do NOT attempt to mount them internally into sub-agents unless explicitly architecting a new confirmation matrix.
+4. **Runner Lifecycle:** DO NOT attempt to rewrite `run_bot.py`'s daemon lifecycle or memory references without explicit user permission. The async loop handles complex APScheduler and Messenger state interactions precisely.
+5. **Guardrail Protection:** The guardrails (event callbacks like `before_agent_callback`, `before_model_callback`, `before_tool_callback`, and `after_tool_callback`) are critical for system safety and security. You MUST NOT remove, modify, or try to bypass these guardrails under any circumstances.
 
-## The Evolution Lifecycle (Rootless Workflow)
+Always test any changes thoroughly in your isolated sandbox verification pipeline (`evolution_stage_change` -> `evolution_verify_sandbox`).
 
-When the `DeveloperAgent` needs to evolve the codebase, it must follow this sequence:
+## GIT INTEGRITY & SAFETY
 
-1.  **Stage**: Use `evolution_stage_change` to write the new content into the writeable `data/sandbox/` directory.
-2.  **Verify**: Use `evolution_verify_sandbox` to run syntax checks and the full `pytest` suite within that sandbox.
-3.  **Push**: Use `evolution_commit_and_push` to commit the verified changes and push them to GitHub.
-4.  **Rebirth**: Inform the `CoordinatorAgent` that changes are pushed. The Coordinator must then call `update_self` to trigger the host-side pull and rebuild.
+1. **Gitignore Preservation**: Never remove lines from `.gitignore`. They are essential for protecting secrets and runtime databases. 
+2. **Evolution via Remote**: All code changes MUST be pushed to the remote GitHub repository using `evolution_commit_and_push`. The host-side script (`start.sh`) is the only entity that can modify the local source code by performing a `git pull` after receiving an **Exit 100** signal.
 
 ## REGRESSION TESTING MANDATE
 
 Every feature, bug fix, or code improvement **MUST** include a corresponding functional test file in the `tests/` directory.
 
-1.  **Develop Real Tests**: No code change is complete until its corresponding test file is staged and verified.
-2.  **Full Suite Runs**: Every `evolution_verify_sandbox` cycle must invoke the entire existing test suite (`uv run pytest tests`). Any failure must block the commit.
+**Testing Protocol:**
+1. **Develop Real Tests:** No code change is complete until its corresponding test file (e.g., `tests/test_feature_name.py`) is staged and verified.
+2. **Persistence:** These tests must be saved permanently to the repository. 
+3. **Full Suite Runs:** Every `evolution_verify_sandbox` cycle must invoke the entire existing test suite (`uv run pytest tests`). Any failure in any test must block the push.
 
 ## First-Start Setup Flow
 
-On first start with no `ADMIN_PASSCODE`, `run_bot.py` generates a random passcode and prints a setup banner to the console.
+On first start with no `ADMIN_PASSCODE` in `.env`, `run_bot.py` auto-generates a random passcode, writes it to `.env`, and prints a setup banner to the console.
 
-1.  **Passcode Preservation**: Never change the passcode generation logic.
-2.  **Privacy**: Never expose the passcode in Telegram messages.
-3.  **Self-Deletion**: The `/init` command deletes itself from chat to protect credentials. Do not remove this.
+**Critical constraints:**
+1. **Never change the passcode generation logic** without explicit user permission.
+2. **Never expose the passcode in Telegram messages.**
+3. **The `/init` command deletes itself from chat** (line 373 in `telegram_poller.py`) since it may contain inline credentials. Do not remove this behavior.
 
 ## Origins Protocol
 
-Every Ori instance is a fork of: `https://github.com/misunders2d/ori`
+Every Ori instance is a fork of the original upstream repository: `https://github.com/misunders2d/ori`
 
-1.  **Upstream Check**: Use `web_fetch` to check the original repo for updates or security fixes.
-2.  **Selective Adoption**: Present upstream changes as proposals. Never auto-sync.
-3.  **Signature Mandate**: All git commits and `CHANGELOG.md` entries authored by the agent **MUST** be signed with the phrase "evolved by {bot_name}".
+**Capabilities:**
+1. **Upstream check:** Use `web_fetch` to read the upstream repository. Compare upstream changes against the local codebase via `evolution_read_file`.
+2. **Selective adoption:** Present upstream changes to the user as proposals — never auto-merge.
+3. **Signature Mandate**: All git commits authored by the agent **MUST** be signed with the phrase "evolved by {bot_name}". The `evolution_commit_and_push` tool handles the git commit signature automatically.
 
 ## Docker & Container Architecture
 
+### Bind-Mount vs Overlay Layers
+The container's `/code` directory is mounted as Read-Only. Only `./data/` and `/home/agentuser/` are writeable bind-mounts. Overlay layers are copy-on-write but will not persist across container restarts.
+
 ### UID/GID Remapping
-`entrypoint.sh` remaps `agentuser` to match host IDs. Only `./data/` and `/home/agentuser/` are writeable. Do not attempt to modify ownership or permissions inside `/code`.
+The `entrypoint.sh` remaps `agentuser`'s UID/GID to match the host. It runs `chown -R agentuser:agentgroup /home/agentuser` and fixes permissions for the writeable `data/` directory.
 
 ### Host-Side Watchdog
 The host supervisor monitors `data/.crash_count`. If the bot crashes 3 times consecutively, the host will automatically perform an emergency rollback (`git reset --hard HEAD~1`) and rebuild the image.
 
 ## Sandbox Hygiene Rules
 
-The sandbox (`./data/sandbox/`) uses **symlinks** for bootstrap artifacts.
+The sandbox (`./data/sandbox/`) uses **symlinks** as bootstrap artifacts during verification.
 
-1.  **Never stage symlinked files**. Only files written via `evolution_stage_change` are real changes.
-2.  **Ignore build artifacts**: Ensure `.venv`, `.pytest_cache`, and `__pycache__` never leak into the permanent project structure.
-3.  **Clean-Before-Push**: Before invoking `evolution_commit_and_push`, ensure only intended code changes are present in the sandbox.
+**Critical constraints:**
+1. **Never stage symlinked files.** Only files written via `evolution_stage_change` are real changes.
+2. **Ignore transient build artifacts:** Ensure `.venv`, `.pytest_cache`, and `__pycache__` never leak into the permanent project structure.
+3. **Clean-Before-Push Protocol:** Before invoking `evolution_commit_and_push`, ensure only intended code changes are present in the sandbox.

@@ -34,6 +34,8 @@ skills/<skill-name>/
 │   └── Markdown instructions
 └── references/ (optional, for extensive documentation)
     └── docs.md
+└── scripts/ (optional, for reusable executable python tools)
+    └── helper.py
 ```
 
 ### Progressive Disclosure
