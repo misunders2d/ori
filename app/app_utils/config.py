@@ -19,10 +19,11 @@ ALLOWED_CONFIG_KEYS = frozenset({
     "BOT_NAME",
     "APP_NAME",
     "REQUIRE_2FA",
+    "OTP_ENABLED",
 })
 
 # Keys the agent can set via configure_integration (conversational flow).
-# ADMIN_USER_IDS and REQUIRE_2FA are excluded — they must only be set via /init (requires passcode).
+# ADMIN_USER_IDS is excluded — it must only be set via /init (requires passcode).
 AGENT_CONFIG_KEYS = frozenset({
     "GOOGLE_API_KEY",
     "TELEGRAM_BOT_TOKEN",
@@ -31,6 +32,8 @@ AGENT_CONFIG_KEYS = frozenset({
     "GITHUB_REPO",
     "BOT_NAME",
     "APP_NAME",
+    "REQUIRE_2FA",
+    "OTP_ENABLED",
 })
 
 
@@ -44,7 +47,11 @@ _MAX_TOTP_ATTEMPTS = 3
 
 
 def totp_enabled() -> bool:
-    """Check if TOTP 2FA is configured."""
+    """Check if TOTP 2FA is configured and enabled."""
+    if os.environ.get("REQUIRE_2FA", "true").lower() == "false":
+        return False
+    if os.environ.get("OTP_ENABLED", "true").lower() == "false":
+        return False
     return bool(os.environ.get("ADMIN_TOTP_SECRET", "").strip())
 
 
