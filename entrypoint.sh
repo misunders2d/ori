@@ -124,8 +124,3 @@ if [ "$EXIT_CODE" = "0" ] || [ "$EXIT_CODE" = "100" ] || [ "$EXIT_CODE" = "101" 
 fi
 
 exit $EXIT_CODE
-then
-    gosu agentuser sh -c "echo 0 > $CRASH_FILE"
-fi
-
-exit $EXIT_CODE
