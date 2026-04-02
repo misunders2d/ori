@@ -53,4 +53,4 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Starts as root, drops to agentuser via gosu in entrypoint.sh after UID/GID sync
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["uv", "run", "python", "run_bot.py"]
+CMD ["/code/.venv/bin/python", "run_bot.py"]
