@@ -107,6 +107,18 @@ def _build_agent_card() -> dict:
     return card
 
 
+def refresh_agent_card():
+    """Rebuild and persist the Agent Card (e.g. after tunnel URL detection)."""
+    agent_card_path = os.path.abspath("data/agent.json")
+    card = _build_agent_card()
+    try:
+        with open(agent_card_path, "w") as f:
+            json.dump(card, f, indent=4)
+        logger.info("Agent Card refreshed with URL: %s", card.get("url"))
+    except Exception as e:
+        logger.error("Failed to refresh Agent Card: %s", e)
+
+
 def create_a2a_app():
     """Initialize the A2A server with a v1.0-compliant Agent Card and optional API key auth."""
     logger.info("Initializing A2A Server application...")

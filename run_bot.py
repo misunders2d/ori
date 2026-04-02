@@ -97,6 +97,32 @@ def ensure_db_concurrency():
             except Exception as e:
                 logger.warning(f"Database: Could not optimize {f}: {e}")
 
+async def detect_tunnel_url(timeout=30) -> str | None:
+    """Poll cloudflared metrics endpoint to discover the quick tunnel URL."""
+    import re
+    try:
+        import httpx
+    except ImportError:
+        logger.warning("httpx not available, cannot detect tunnel URL")
+        return None
+
+    metrics_url = "http://cloudflare-tunnel:2000/metrics"
+    for attempt in range(timeout):
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(metrics_url, timeout=2)
+                match = re.search(r'([a-z0-9-]+\.trycloudflare\.com)', resp.text)
+                if match:
+                    url = f"https://{match.group(1)}"
+                    logger.info("Tunnel URL detected: %s", url)
+                    return url
+        except Exception:
+            pass
+        await asyncio.sleep(1)
+    logger.warning("Could not detect tunnel URL after %ds", timeout)
+    return None
+
+
 async def run_proactive_diagnostics():
     from app.core.health import get_system_health
     from app.core.transport import get_adapter
@@ -141,14 +167,24 @@ async def main():
     except Exception as e:
         logger.warning(f"A2A Server failed to start: {e}")
 
-    # 2. Automatic A2A Broadcast
-    async def broadcast_later():
-        await asyncio.sleep(5)
+    # 2. Automatic tunnel detection + A2A Broadcast
+    async def detect_and_broadcast():
+        # Give cloudflared a moment to establish the tunnel
+        await asyncio.sleep(3)
+        tunnel_url = await detect_tunnel_url(timeout=30)
+        if tunnel_url:
+            os.environ["A2A_BASE_URL"] = tunnel_url
+            # Regenerate agent card with the real public URL
+            try:
+                from app.a2a_server import refresh_agent_card
+                refresh_agent_card()
+            except Exception as e:
+                logger.warning("Could not refresh agent card: %s", e)
         try:
             from app.tools.a2a import perform_a2a_broadcast
             await perform_a2a_broadcast()
         except Exception: pass
-    tasks.append(asyncio.create_task(broadcast_later()))
+    tasks.append(asyncio.create_task(detect_and_broadcast()))
 
     # 3. Telegram Interface (Core)
     if os.environ.get("TELEGRAM_BOT_TOKEN"):
