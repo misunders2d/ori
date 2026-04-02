@@ -46,22 +46,35 @@ set IMG=
 for /f "tokens=*" %%i in ('docker images -q %IMAGE_NAME% 2^>nul') do set IMG=%%i
 if "%IMG%"=="" set REBUILD=true
 
-if "%REBUILD%"=="true" (
-    echo 🧬 [%BOT_NAME%] Image missing. Building...
-    docker compose up --build
+rem Determine if we should run in interactive CLI mode (no messenger tokens found)
+set USE_CLI=true
+if exist "data\.env" (
+    findstr /R "^TELEGRAM_BOT_TOKEN= ^SLACK_BOT_TOKEN=" "data\.env" >nul
+    if !ERRORLEVEL! equ 0 set USE_CLI=false
+)
+
+if "%USE_CLI%"=="true" (
+    echo 🧬 [%BOT_NAME%] No messenger configured. Launching in interactive CLI mode...
+    docker compose up -d cloudflare-tunnel >nul 2>&1
+    docker compose run --rm --service-ports ori-agent
 ) else (
-    rem Basic check for pyproject.toml changes if 'data\.last_build' exists
-    set DO_BUILD=
-    if exist "data\.last_build" (
-        for /f "tokens=*" %%i in ('xcopy /d /y "pyproject.toml" "data\.last_build" 2^>nul ^| findstr /c:"1 File(s) copied"') do set DO_BUILD=true
-    )
-    
-    if "!DO_BUILD!"=="true" (
-        echo 🧬 [%BOT_NAME%] Dependencies changed. Rebuilding...
+    if "%REBUILD%"=="true" (
+        echo 🧬 [%BOT_NAME%] Image missing. Building...
         docker compose up --build
-        echo. > "data\.last_build"
     ) else (
-        docker compose up
+        rem Basic check for pyproject.toml changes if 'data\.last_build' exists
+        set DO_BUILD=
+        if exist "data\.last_build" (
+            for /f "tokens=*" %%i in ('xcopy /d /y "pyproject.toml" "data\.last_build" 2^>nul ^| findstr /c:"1 File(s) copied"') do set DO_BUILD=true
+        )
+        
+        if "!DO_BUILD!"=="true" (
+            echo 🧬 [%BOT_NAME%] Dependencies changed. Rebuilding...
+            docker compose up --build
+            echo. > "data\.last_build"
+        ) else (
+            docker compose up
+        )
     )
 )
 

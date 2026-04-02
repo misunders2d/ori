@@ -54,17 +54,31 @@ while true; do
     REBUILD=true
   fi
   
-  if [ "$REBUILD" = true ]; then
-    echo "🧬 [$BOT_NAME] Image missing or update required. Building..."
-    docker compose up --build
+  # Determine if we should run in interactive CLI mode (no messenger tokens found)
+  USE_CLI=true
+  if grep -qE "^(TELEGRAM_BOT_TOKEN|SLACK_BOT_TOKEN)=" data/.env 2>/dev/null; then
+    USE_CLI=false
+  fi
+
+  if [ "$USE_CLI" = true ]; then
+    echo "🧬 [$BOT_NAME] No messenger configured. Launching in interactive CLI mode..."
+    # Start dependencies in background
+    docker compose up -d cloudflare-tunnel 2>/dev/null
+    # Run agent service interactively
+    docker compose run --rm --service-ports ori-agent
   else
-    # Check if pyproject.toml or Dockerfile is newer than data/.last_build
-    if [ "pyproject.toml" -nt "data/.last_build" ] || [ "Dockerfile" -nt "data/.last_build" ]; then
-        echo "🧬 [$BOT_NAME] Dependencies or Dockerfile changed. Rebuilding..."
-        docker compose up --build
-        touch data/.last_build
+    if [ "$REBUILD" = true ]; then
+      echo "🧬 [$BOT_NAME] Image missing or update required. Building..."
+      docker compose up --build
     else
-        docker compose up
+      # Check if pyproject.toml or Dockerfile is newer than data/.last_build
+      if [ "pyproject.toml" -nt "data/.last_build" ] || [ "Dockerfile" -nt "data/.last_build" ]; then
+          echo "🧬 [$BOT_NAME] Dependencies or Dockerfile changed. Rebuilding..."
+          docker compose up --build
+          touch data/.last_build
+      else
+          docker compose up
+      fi
     fi
   fi
   
