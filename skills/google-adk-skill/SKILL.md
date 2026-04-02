@@ -5,19 +5,30 @@ description: "Reference material for the Google Advanced Agentic Development Kit
 
 # Google ADK Workflow & Patterns (Rootless Edition)
 
-This skill serves as the foundational knowledge base for modifying or adding ADK functionality to this repository. In this project, the framework is governed by a **Read-Only Root** constraint.
+This skill serves as the foundational knowledge base for modifying or adding ADK functionality. 
+- **Official Docs**: [google.github.io/adk-docs/](https://google.github.io/adk-docs/)
+- **Repository**: [github.com/google/adk-python](https://github.com/google/adk-python)
 
 ## Core Hierarchy
 
 The Google ADK breaks down into standard primitives:
-*   **`Agent`**: The core execution wrapper (LLM or Sequential routing).
-*   **`Tool`**: Handlers that interact with external data or side-effects.
-*   **`Session` & `State`**: Stateful variables isolated correctly per-user or globally (stored in writeable `./data/`).
-*   **`Event`**: Actions pushed into the history log.
+*   **`Agent`**: The "brain" (e.g., `LlmAgent`, `SequentialAgent`).
+*   **`Tool`**: Function or API handlers.
+*   **`Session` & `State`**: Persistent variables stored in `./data/`.
+*   **`Runner`**: The execution engine that orchestrates user queries.
 
-**CRITICAL**: DO NOT assume standard Python script models. When building for ADK, tools must follow specific type-hint bounds and return strictly string/dict objects, wrapped appropriately.
+## Advanced Orchestration Patterns
 
-**ROOTLESS CONSTRAINT**: You cannot use standard Python `open(..., 'w')` on files in `app/`, `skills/`, or the root directory. You MUST use the Evolution tools to stage changes in `data/sandbox` and push them to GitHub via `evolution_commit_and_push`.
+### 1. Multi-Agent Systems (MAS)
+- **Specialization over Monoliths**: Build a team of focused specialists (e.g., `FlightAgent`, `HotelAgent`) instead of one large agent.
+- **Sequential Pipeline**: Agent A -> Agent B -> Agent C.
+- **Parallel Execution**: Use `ParallelAgent` to fetch data from multiple sources simultaneously to reduce latency.
+
+### 2. Human-in-the-Loop (HITL)
+- **Tool Confirmation**: For sensitive actions (destructive writes, payments), use confirmation flows where the runner pauses and waits for admin approval.
+
+### 3. Vibe Coding & Evaluators
+- Use the built-in evaluation tools to run "Agent vs. Agent" benchmarks against a Golden Dataset.
 
 ## Evolution Workflow Reference
 
@@ -25,64 +36,26 @@ To add or modify an ADK component in a Rootless environment:
 
 ```python
 # 1. Stage the new tool in the writeable sandbox
-evolution_stage_change(
-    file_path="app/tools/my_new_tool.py",
-    new_content="import google.adk.tools\n..."
-)
+evolution_stage_change(file_path="app/tools/my_new_tool.py", ...)
 
 # 2. Verify syntax and imports
 evolution_verify_sandbox(check="syntax", target="app/tools/my_new_tool.py")
-evolution_verify_sandbox(check="import", target="app.tools.my_new_tool")
 
 # 3. Commit and push to Remote
 evolution_commit_and_push(commit_message="feat: added new ADK tool")
-
-# 4. Finalize via Coordinator
-# Inform Coordinator to call update_self() to pull changes and restart.
 ```
 
 ## Deep Reference
-
-If you need the exact syntax for setting up loop agents, attaching callbacks, forcing human confirmation on tools, binding structured pydantic models to `output_schema`, or injecting parameters dynamically into prompts:
-
-**You must read the official documentation sources, examples using your github toolset or webfetch:
-
-comprehensive ADK cheatsheet located at**:  
-`references/adk-cheatsheet.md`
-
-## External Protocols (MCP, A2A, UCP)
-
-**You must use the `agent-protocol-skill`** when implementing:
-- **MCP**: Connecting to databases, Notion, Slack, etc. via `McpToolset`.
-- **A2A**: Communicating with remote peer agents.
-- **UCP**: Universal Commerce and checkout flows.
-- **A2UI**: Rendering rich, interactive user interfaces.
-
-## Transport Adapter Pattern
-
-The application supports multiple messaging platforms via the `TransportAdapter` ABC in `app/core/transport.py`. 
-
-**You must read the full implementation guide at**:
-`examples/transport_adapter.md`
-
-For the security-critical group chat identity isolation pattern, see:
-`examples/communication_channel.md`
-
-## Headless Integration Patterns
-
-Building integrations for platforms like Google Drive, Facebook, or GitHub requires handling authentication in a server-side, browser-less environment without exposing inbound ports.
-
-**You must read the approved "Dark Server" strategy at**:
-`references/headless-auth-patterns.md`
+- **Comprehensive ADK cheatsheet**: `references/adk-cheatsheet.md`
+- **MCP/A2A/UCP**: Use the `agent-protocol-skill`.
+- **Transport Adapter Pattern**: See `examples/transport_adapter.md`.
+- **Dark Server Strategy**: See `references/headless-auth-patterns.md`.
 
 ## System Critical Tools & Guardrails
+The ADK framework natively offloads system-level mutations to:
+1. `session_refresh`: Wipes/summarizes history.
+2. `trigger_rollback`: Git revert and reboot.
+3. `set_planner_mode`: Toggles deep thought.
+4. `update_self`: Git pull and restart.
 
-The ADK framework natively offloads system-level mutations to standard Tool definitions rather than relying on clunky hardcoded Python intercepts.
-
-**The 4 System-Critical Tools are:**
-1. `session_refresh`: Wipes or summarizes active user conversation histories.
-2. `trigger_rollback`: Reverts the git commit and reboots the active container.
-3. `set_planner_mode`: Dynamically enables/disables deep thought processing.
-4. `update_self`: Pulls the latest code from Remote, rebuilds the Docker daemon, and restarts.
-
-**MANDATORY RULE:** Because these tools are highly destructive or state-altering, they are protected by the `admin_only_guardrail` callback which ensures only admin users can invoke them. They are registered as plain functions on the `CoordinatorAgent`.
+**MANDATORY RULE:** Protected by the `admin_only_guardrail`. Only admin users can invoke them.

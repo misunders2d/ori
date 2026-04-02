@@ -1,11 +1,12 @@
 ---
 name: google-adk-a2a-skill
-description: Reference for the A2A v1.0 protocol (Agent-to-Agent). Covers agent discovery, communication with friends and arbitrary agents, and DNA exchange via the Ori-Net.
+description: "Reference for the A2A v1.0 protocol (Agent-to-Agent). Covers agent discovery, communication with friends and arbitrary agents, and DNA exchange via the Ori-Net."
 ---
 
 # A2A v1.0 Protocol Reference (Ori-Net)
 
 This skill covers the A2A protocol implementation for inter-agent communication.
+- **Official Docs**: [agent2agent.info](https://agent2agent.info)
 
 ## Agent Card (v1.0 Schema)
 
@@ -34,24 +35,31 @@ Finding and registering other agents for ongoing collaboration.
 - **Discovery paths**: `/.well-known/agent.json`, `/.well-known/agent-card.json`
 - **Compatibility**: Tolerates pre-v1.0 cards that lack `endpoints` (falls back to base URL).
 
-## Communication
+## Communication Patterns (v1.0)
 
-### With registered friends
-- **Tool**: `call_friend(friend_name, message)` — sends a JSON-RPC `message/send` request to a registered friend and returns the parsed response.
-- Supports stored API keys for authenticated friends.
+### 1. Task Delegation (Request-Response)
+- **Tool**: `call_friend(friend_name, message)` — sends a JSON-RPC `message/send` request.
+- **Task IDs**: Strictly server-generated UUIDs.
+- **Flow**: Client sends `SendMessage` -> Remote acknowledges with `Task` -> Client polls `GetTask`.
 
-### With any A2A agent (one-off)
-- **Tool**: `call_agent(url, message)` — discovers an agent by URL and sends a single message. No registration required.
-- Use this for one-off queries to agents not in the friends list.
+### 2. Streaming (Real-Time Progress)
+- Used for tasks that generate long content.
+- **Mechanism**: Server-Sent Events (SSE) or gRPC Streams.
+- **Tool**: `call_agent(url, message)` with streaming enabled.
+
+### 3. Push Notifications (Long-Running)
+- For tasks taking hours/days.
+- **Mechanism**: Secure callback URL provided by the Client.
 
 ### Protocol details
 - **Transport**: JSON-RPC 2.0 over HTTP POST
 - **Method**: `message/send`
 - **Message format**: `{role: "user", parts: [{text: "..."}]}`
 - **Response**: A2A Task object with `id`, `status.state`, `artifacts`, `messages`
+- **Errors**: Standardized using `google.rpc.Status` taxonomy.
 
 ### Task states (A2A v1.0)
-`WORKING` | `COMPLETED` | `FAILED` | `CANCELED` | `REJECTED` | `INPUT_REQUIRED` | `AUTH_REQUIRED`
+`QUEUED` | `WORKING` | `COMPLETED` | `FAILED` | `CANCELED` | `REJECTED` | `INPUT_REQUIRED` | `AUTH_REQUIRED`
 
 ## Security
 
@@ -66,11 +74,11 @@ Sharing technical improvements between Ori instances. **Not part of the A2A v1.0
 - **Export**: `export_dna()` — packages local `app/tools/*.py` and `skills/*/SKILL.md`.
 - **Import**: `import_dna(package)` — stages inbound DNA in `data/sandbox/`.
 - **Verification**: Inbound DNA MUST be verified with `evolution_verify_sandbox` before integration.
-- **Privacy**: Never shares `.env`, memory, or session data. Only technical code and skill definitions.
 
 ## Best Practices
 
 - **Read-only identity**: Never regenerate the Agent Card from a tool call. It is built at startup.
 - **Prefer friends for repeat contacts**: Use `add_friend` for agents you'll communicate with regularly.
 - **Use `call_agent` for scouting**: One-off queries to unknown agents don't require friendship.
+- **Semantic Versioning**: Use versioning in Agent Cards to prevent breaking changes.
 - **Always check task state**: A response with `state: "INPUT_REQUIRED"` means the remote agent needs more info.

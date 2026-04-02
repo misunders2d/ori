@@ -17,29 +17,30 @@ When tasked with adding a new external capability, use this guide to choose the 
 | **Render UI/Dashboards** | **A2UI** / **AG-UI** | `AG-UI` components |
 
 ## 2. Model Context Protocol (MCP)
-Use MCP to eliminate custom API integration code. servers advertise tools, and Ori discovers them.
-
-- **Implementation**: Load specific instructions from `references/mcp.md`.
-- **Key Class**: `google.adk.tools.mcp_tool.McpToolset`
-- **Connection**: Usually via `StdioConnectionParams`.
+Use MCP to eliminate custom API integration code. Servers advertise tools, and Ori discovers them.
+- **Official Docs**: [modelcontextprotocol.io](https://modelcontextprotocol.io)
+- **Best Practice**: **Single Responsibility**. Each MCP server should handle one specific domain.
+- **Security**: Run local MCP servers in restricted environments. Use explicit allowlists for file system access.
+- **Prompting**: Include clear "Server Instructions" in your server’s metadata so the LLM knows *when* and *how* to use the provided tools.
 
 ## 3. Agent2Agent (A2A)
 Use A2A when you need expertise from a remote agent that might be built on a different framework.
-
-- **Discovery**: Agents serve cards at `/.well-known/agent-card.json`.
-- **Key Class**: `google.adk.a2a.utils.agent_to_a2a.to_a2a` (to expose) or `RemoteA2aAgent` (to call).
+- **Official Docs**: [agent2agent.info](https://agent2agent.info)
+- **Standard**: A2A v1.0 (Linux Foundation).
+- **Best Practice**: **Discovery First**. Always fetch the remote agent's "Agent Card" before sending a task to verify compatibility and input/output modalities.
+- **Async by Default**: Implement the `POST /tasks` endpoint to acknowledge requests immediately and process them asynchronously.
 
 ## 4. Universal Commerce Protocol (UCP)
 Standardizes the shopping lifecycle (catalog, cart, checkout) across any transport.
-
-- **Discovery**: Supplier profiles at `/.well-known/ucp`.
-- **Implementation**: See `references/ucp.md` for request/response schemas.
+- **Official Docs**: [ucp.dev](https://ucp.dev)
+- **Best Practice**: **Merchant of Record**. Ensure the business retains control of the customer relationship and remains the Merchant of Record.
+- **Implementation**: Leverage existing Google Merchant Center or Shopify feeds to populate the UCP discovery layer.
 
 ## 5. Agent-to-User Interface (A2UI)
 Enables agents to render interactive, streaming dashboards and components.
-
-- **AG-UI**: First-class support in ADK for building chat UIs with state sync.
-- **Reference**: See `references/ui.md`.
+- **Official Docs**: [a2aprotocol.ai](https://a2aprotocol.ai) | [ag-ui.com](https://ag-ui.com)
+- **Best Practice**: **Declarative, Not Executable**. Never allow agents to send raw JavaScript. Send JSON descriptions of UI components that the client-side renderer translates into native UI.
+- **State Separation**: Keep the "UI Structure" (the layout) separate from the "Application State" (the data).
 
 ## 🛡️ Security Mandate
 - **No Direct `.env`**: Never hardcode credentials in a protocol tool. 
