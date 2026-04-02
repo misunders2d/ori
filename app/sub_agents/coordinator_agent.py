@@ -1,7 +1,5 @@
-import google.adk.tools
 from google.adk.agents import Agent
 from google.adk.models import Gemini
-from google.adk.planners import BuiltInPlanner
 from google.genai import types
 
 from app.callbacks.guardrails import (
@@ -13,56 +11,19 @@ from app.callbacks.guardrails import (
 )
 from app.sub_agents.developer_agent import developer_agent
 from app.sub_agents.knowledge_agent import knowledge_agent
-from app.tools import (
-    blacklist_chat,
-    check_active_tasks,
-    configure_integration,
-    delete_scheduled_task,
-    edit_scheduled_task,
-    execute_approved_action,
-    get_current_time,
-    get_user_preferences,
-    inspect_secure_env,
-    list_access_control,
-    list_integrations,
-    list_scheduled_tasks,
-    remove_integration,
-    report_health,
-    run_system_task_now,
-    save_user_preferences,
-    schedule_one_off_task,
-    schedule_recurring_system_task,
-    schedule_recurring_task,
-    schedule_system_task,
-    session_refresh,
-    set_planner_mode,
-    trigger_rollback,
-    unwhitelist_chat,
-    update_self,
-    web_fetch,
-    whitelist_chat,
+from app.toolsets import (
+    AccessControlToolset,
+    IntegrationToolset,
+    MemoryToolset,
+    OAuthToolset,
+    SchedulingToolset,
+    SystemToolset,
 )
 from app.tools.a2a import get_agent_identity
-from app.tools.auth import (
-    check_connection,
-    complete_auth_code,
-    connect_to_platform,
-    disconnect_platform,
-    list_platforms,
-    register_platform,
-    remove_platform_registration,
-)
 from app.tools.channel_summarizer import summarize_channel
 from app.tools.google_search import google_search_agent_tool
-from app.tools.memory import (
-    recall_human_preferences,
-    recall_technical_context,
-    remember_info,
-    search_memory,
-    modify_memory,
-    delete_memory,
-)
 from app.tools.origins import analyze_upstream_file, check_upstream
+from app.tools.web import web_fetch
 
 root_agent = Agent(
     name="CoordinatorAgent",
@@ -99,51 +60,20 @@ root_agent = Agent(
         knowledge_agent,
     ],
     tools=[
-        get_current_time,
-        schedule_one_off_task,
-        schedule_recurring_task,
-        list_scheduled_tasks,
-        edit_scheduled_task,
-        delete_scheduled_task,
-        configure_integration,
-        remove_integration,
-        list_integrations,
-        list_platforms,
-        register_platform,
-        connect_to_platform,
-        complete_auth_code,
-        check_connection,
-        disconnect_platform,
-        remove_platform_registration,
-        report_health,
-        check_upstream,
-        analyze_upstream_file,
-        remember_info,
-        search_memory,
-        modify_memory,
-        delete_memory,
-        recall_human_preferences,
-        recall_technical_context,
-        get_agent_identity,
-        run_system_task_now,
-        schedule_system_task,
-        schedule_recurring_system_task,
-        update_self,
-        session_refresh,
-        trigger_rollback,
-        set_planner_mode,
-        save_user_preferences,
-        get_user_preferences,
+        # Toolsets (grouped by domain)
+        SchedulingToolset(),
+        IntegrationToolset(),
+        OAuthToolset(),
+        MemoryToolset(),
+        SystemToolset(),
+        AccessControlToolset(),
+        # Individual tools (no natural group)
         google_search_agent_tool,
         web_fetch,
-        check_active_tasks,
-        execute_approved_action,
-        whitelist_chat,
-        blacklist_chat,
-        unwhitelist_chat,
-        list_access_control,
+        check_upstream,
+        analyze_upstream_file,
+        get_agent_identity,
         summarize_channel,
-        inspect_secure_env,
     ],
     before_agent_callback=[state_setter],
     before_model_callback=prompt_injection_guardrail,

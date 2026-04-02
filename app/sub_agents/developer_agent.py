@@ -5,9 +5,6 @@ from google.genai import types
 from google.adk.skills import load_skill_from_dir
 from google.adk.tools import skill_toolset
 
-from app.tools.google_search import google_search_agent_tool
-from app.tools.origins import analyze_upstream_file
-from app.tools.memory import remember_info, search_memory, recall_technical_context, modify_memory, delete_memory
 from app.callbacks.guardrails import (
     admin_only_guardrail,
     admin_tool_guardrail,
@@ -15,19 +12,11 @@ from app.callbacks.guardrails import (
     tool_output_injection_guardrail,
     verify_retry_guardrail,
 )
-from app.tools import (
-    evolution_read_file,
-    evolution_list_directory,
-    evolution_stage_change,
-    evolution_verify_sandbox,
-    evolution_commit_and_push,
-    evolution_git_pull,
-    evolution_git_reset,
-    evolution_sync_local_to_upstream,
-    check_installed_package,
-    web_fetch,
-    github_mcp_toolset,
-)
+from app.toolsets import EvolutionToolset, MemoryToolset
+from app.tools.google_search import google_search_agent_tool
+from app.tools.origins import analyze_upstream_file
+from app.tools.web import web_fetch
+from app.tools.mcp_github import github_mcp_toolset
 
 base_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 google_adk_skill = load_skill_from_dir(base_dir / "google-adk-skill")
@@ -60,7 +49,7 @@ developer_agent = Agent(
         "=== TIER 2: ARCHITECTURE ===\n\n"
         "NATIVE TOOLS FIRST: Prefer Python stdlib, ADK builtins, and existing utilities over external libraries.\n\n"
         "LEAST-PRIVILEGE LLM: Use deterministic code for parsing, I/O, validation. AI is for language only.\n\n"
-        "CLEAN MODULES: Single responsibility. Tools in `app/tools/`, agents in `app/sub_agents/`, etc.\n\n"
+        "CLEAN MODULES: Single responsibility. Tools in `app/tools/`, toolsets in `app/toolsets/`, agents in `app/sub_agents/`.\n\n"
         "MCP DISCIPLINE: Read-only stateless bridges only. Mutating MCP tools must be replaced with native tools.\n\n"
 
         "=== TIER 3: SAFETY & PROCESS ===\n\n"
@@ -94,22 +83,12 @@ developer_agent = Agent(
         "this is a system integrity violation."
     ),
     tools=[
+        # Toolsets (grouped by domain)
         skill_toolset.SkillToolset(skills=[google_adk_skill, google_adk_a2a_skill, skill_creator_skill, log_maintenance_skill, system_management_skill, external_research_skill]),
-        evolution_read_file,
-        evolution_list_directory,
-        evolution_stage_change,
-        evolution_verify_sandbox,
+        EvolutionToolset(),
+        MemoryToolset(),
+        # Individual tools (no natural group)
         analyze_upstream_file,
-        remember_info,
-        search_memory,
-        modify_memory,
-        delete_memory,
-        recall_technical_context,
-        evolution_commit_and_push,
-        evolution_git_pull,
-        evolution_git_reset,
-        evolution_sync_local_to_upstream,
-        check_installed_package,
         google_search_agent_tool,
         web_fetch,
         github_mcp_toolset,
