@@ -2,15 +2,26 @@ import asyncio
 import logging
 import os
 import secrets
+import shutil
 import sqlite3
 import sys
 from dotenv import load_dotenv, set_key
 
 # Load env variables safely
 ENV_FILE_PATH = os.environ.get("DOTENV_PATH", "./data/.env")
+ENV_BACKUP_PATH = ENV_FILE_PATH + ".backup"
 os.makedirs(os.path.dirname(ENV_FILE_PATH), exist_ok=True)
 if not os.path.exists(ENV_FILE_PATH):
     with open(ENV_FILE_PATH, "w") as f: f.write("# Ori Daemon Configuration\n")
+
+# Protect against partial-write corruption: if .env is suspiciously small but a
+# backup exists with more content, restore the backup before loading.
+if os.path.exists(ENV_BACKUP_PATH):
+    env_size = os.path.getsize(ENV_FILE_PATH)
+    backup_size = os.path.getsize(ENV_BACKUP_PATH)
+    if backup_size > env_size + 50:
+        shutil.copy2(ENV_BACKUP_PATH, ENV_FILE_PATH)
+
 load_dotenv(ENV_FILE_PATH, override=True)
 
 # Generate keys
@@ -18,6 +29,9 @@ if not os.environ.get("ADMIN_PASSCODE"):
     set_key(ENV_FILE_PATH, "ADMIN_PASSCODE", secrets.token_urlsafe(16))
 if not os.environ.get("A2A_API_KEY"):
     set_key(ENV_FILE_PATH, "A2A_API_KEY", "ori-" + secrets.token_urlsafe(24))
+
+# Snapshot a backup after successful env loading for crash recovery
+shutil.copy2(ENV_FILE_PATH, ENV_BACKUP_PATH)
 
 from logging.handlers import RotatingFileHandler
 LOG_FILE_PATH = os.path.abspath("./data/agent.log")
