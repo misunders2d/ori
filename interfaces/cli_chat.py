@@ -11,7 +11,10 @@ async def start_cli_chat(get_runner_fn):
     """
     bot_name = os.environ.get("BOT_NAME", "Ori")
     user_id = "terminal_user"
-    session_id = "cli_onboarding"
+    
+    # Use a unique session ID to avoid ADK compaction conflicts from previous runs
+    import time
+    session_id = f"cli_onboarding_{int(time.time())}"
     
     print(f"\n[ {bot_name} Onboarding Console ]")
     print("-----------------------------------")
@@ -43,6 +46,8 @@ async def start_cli_chat(get_runner_fn):
         print(f"{bot_name}: I'm not fully configured yet. I need a GOOGLE_API_KEY to start the onboarding chat.")
         print(f"Please enter your GOOGLE_API_KEY in the .env file or use the /init command if you have a messenger.")
 
+    empty_reads = 0
+
     while True:
         runner = get_runner_fn()
         if not runner:
@@ -62,10 +67,15 @@ async def start_cli_chat(get_runner_fn):
                     
             raw_input = await asyncio.to_thread(get_user_input)
             
-            if not raw_input: # EOF
-                await asyncio.sleep(0.1)
+            if not raw_input: # EOF or disconnected terminal
+                empty_reads += 1
+                if empty_reads > 5:
+                    print("\nTerminal disconnected. Exiting CLI chat.")
+                    break
+                await asyncio.sleep(1)
                 continue
                 
+            empty_reads = 0
             user_input = raw_input.strip()
             
             if not user_input:
