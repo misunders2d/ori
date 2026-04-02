@@ -36,7 +36,6 @@ AGENT_CONFIG_KEYS = frozenset({
     "OTP_ENABLED",
 })
 
-
 # ---------------------------------------------------------------------------
 # Pending TOTP verification state
 # Maps session_id -> {"command_text": str, "attempts": int}
