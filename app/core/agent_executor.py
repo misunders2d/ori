@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from google import genai
 from google.genai import types
 
+from app.app_utils.models import get_model_name
 from app.session_signals import get_pending_refresh
 
 
@@ -44,7 +45,7 @@ async def _summarize_session(session) -> str:
     client = genai.Client()
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-2.0-flash-lite-preview-02-05",
+            model=get_model_name("session_summarizer"),
             contents=(
                 "Summarize the following conversation into a concise context briefing. "
                 "Preserve key facts, decisions, ongoing tasks, and user preferences. "

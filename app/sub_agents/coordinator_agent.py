@@ -1,6 +1,7 @@
 from google.adk.agents import Agent
-from google.adk.models import Gemini
 from google.genai import types
+
+from app.app_utils.models import get_model
 
 from app.callbacks.guardrails import (
     a2a_privacy_guardrail,
@@ -27,7 +28,7 @@ from app.tools.web import web_fetch
 
 root_agent = Agent(
     name="CoordinatorAgent",
-    model=Gemini(model="gemini-3-flash-preview"),
+    model=get_model("CoordinatorAgent"),
     description="The primary interface for the autonomous daemon. Receives intent and commands, and delegates to specialized sub-agents.",
     instruction=(
         "You are {bot_name}, an autonomous self-evolving agent. "

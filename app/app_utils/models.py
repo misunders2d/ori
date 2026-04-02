@@ -1,0 +1,181 @@
+"""Centralized model registry and factory.
+
+Every agent/component resolves its model through this module.
+Call sites never import provider-specific classes (e.g. Gemini) directly.
+
+Format: "provider/model_name"  (e.g. "google/gemini-3-flash-preview")
+Bare strings without '/' default to the "google" provider.
+"""
+
+import logging
+import os
+
+from dotenv import set_key
+
+logger = logging.getLogger(__name__)
+
+ENV_FILE_PATH = os.environ.get("DOTENV_PATH", "./data/.env")
+
+# ---------------------------------------------------------------------------
+# Default model assignments per component
+# ---------------------------------------------------------------------------
+MODEL_DEFAULTS: dict[str, str] = {
+    "CoordinatorAgent":   "google/gemini-3-flash-preview",
+    "DeveloperAgent":     "google/gemini-3-flash-preview",
+    "KnowledgeAgent":     "google/gemini-3-flash-preview",
+    "google_search":      "google/gemini-3-flash-preview",
+    "summarizer":         "google/gemini-3.1-flash-lite-preview",
+    "session_summarizer": "google/gemini-2.0-flash-lite-preview-02-05",
+    "channel_summarizer": "google/gemini-2.0-flash-lite-preview-02-05",
+    "embedding":          "google/gemini-embedding-001",
+}
+
+VALID_COMPONENTS = frozenset(MODEL_DEFAULTS.keys())
+
+
+# ---------------------------------------------------------------------------
+# Parsing
+# ---------------------------------------------------------------------------
+
+def _parse_model_str(model_str: str) -> tuple[str, str]:
+    """Split "provider/model_name" into (provider, model_name).
+
+    Bare strings (no '/') default to the "google" provider.
+    """
+    if "/" in model_str:
+        provider, model_name = model_str.split("/", 1)
+        return provider.lower(), model_name
+    return "google", model_str
+
+
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
+
+def _build_model(provider: str, model_name: str, **kwargs):
+    """Construct a provider-specific LLM model object.
+
+    Returns a BaseLlm instance (e.g. Gemini).
+    Raises ValueError for unsupported providers.
+    """
+    if provider == "google":
+        from google.adk.models import Gemini
+        return Gemini(model=model_name, **kwargs)
+    raise ValueError(
+        f"Unsupported model provider: '{provider}'. Currently supported: google"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def get_model_string(component: str) -> str:
+    """Return the effective "provider/model" string for a component."""
+    env_key = f"MODEL_{component.upper()}"
+    return os.environ.get(env_key, MODEL_DEFAULTS.get(component, ""))
+
+
+def get_model_name(component: str) -> str:
+    """Return just the model name (no provider prefix) for direct API calls."""
+    _, model_name = _parse_model_str(get_model_string(component))
+    return model_name
+
+
+def get_model(component: str, **kwargs):
+    """Return a fully constructed model object for the given component.
+
+    Resolves env override -> default, parses provider, builds model.
+    Extra kwargs (e.g. retry_options) are forwarded to the provider constructor.
+    """
+    model_str = get_model_string(component)
+    if not model_str:
+        raise ValueError(f"Unknown model component: '{component}'")
+    provider, model_name = _parse_model_str(model_str)
+    return _build_model(provider, model_name, **kwargs)
+
+
+def set_model(component: str, model_str: str) -> None:
+    """Persist a model assignment to env var and .env file."""
+    if component not in VALID_COMPONENTS:
+        raise ValueError(f"Invalid component: '{component}'. Valid: {sorted(VALID_COMPONENTS)}")
+
+    env_key = f"MODEL_{component.upper()}"
+
+    os.makedirs(os.path.dirname(os.path.abspath(ENV_FILE_PATH)), exist_ok=True)
+    if not os.path.exists(ENV_FILE_PATH):
+        with open(ENV_FILE_PATH, "w") as f:
+            f.write("# Autonomous Ori Daemon Configuration\n")
+
+    set_key(ENV_FILE_PATH, env_key, model_str)
+    os.environ[env_key] = model_str
+    logger.info("Model for %s set to %s", component, model_str)
+
+
+def get_all_assignments() -> dict[str, str]:
+    """Return {component: "provider/model"} for all components."""
+    return {c: get_model_string(c) for c in MODEL_DEFAULTS}
+
+
+# ---------------------------------------------------------------------------
+# Live provider validation & discovery
+# ---------------------------------------------------------------------------
+
+async def validate_model(model_str: str) -> dict | None:
+    """Validate that a model exists on the provider's API.
+
+    Returns a dict with model info on success, None on failure.
+    """
+    provider, model_name = _parse_model_str(model_str)
+
+    if provider == "google":
+        from google import genai
+        client = genai.Client()
+        try:
+            model = await client.aio.models.get(model=model_name)
+            return {
+                "name": model.name,
+                "display_name": getattr(model, "display_name", ""),
+                "description": getattr(model, "description", ""),
+                "input_token_limit": getattr(model, "input_token_limit", None),
+                "output_token_limit": getattr(model, "output_token_limit", None),
+                "supported_actions": getattr(model, "supported_actions", []),
+            }
+        except Exception as e:
+            logger.warning("Model validation failed for '%s': %s", model_str, e)
+            return None
+
+    logger.warning("Cannot validate model for unsupported provider: %s", provider)
+    return None
+
+
+async def list_provider_models(provider: str = "google", filter_str: str = "") -> list[dict]:
+    """List available models from a provider's API.
+
+    Returns a list of dicts with model metadata.
+    """
+    results = []
+
+    if provider == "google":
+        from google import genai
+        client = genai.Client()
+        try:
+            async for model in await client.aio.models.list():
+                name = getattr(model, "name", "")
+                display = getattr(model, "display_name", "")
+                if filter_str and filter_str.lower() not in (name + display).lower():
+                    continue
+                results.append({
+                    "name": name,
+                    "display_name": display,
+                    "input_token_limit": getattr(model, "input_token_limit", None),
+                    "output_token_limit": getattr(model, "output_token_limit", None),
+                    "supported_actions": getattr(model, "supported_actions", []),
+                })
+        except Exception as e:
+            logger.error("Failed to list models from %s: %s", provider, e)
+            return [{"error": str(e)}]
+    else:
+        return [{"error": f"Unsupported provider: {provider}"}]
+
+    return results

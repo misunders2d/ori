@@ -9,6 +9,8 @@ from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.genai import types
 
+from app.app_utils.models import get_model_name
+
 logger = logging.getLogger(__name__)
 
 
@@ -138,6 +140,14 @@ def prompt_injection_guardrail(
         if hasattr(llm_request.config, "thinking_config"):
             llm_request.config.thinking_config = None
 
+    # Hot-swap model override from session state
+    model_key = f"model:{callback_context.agent_name}"
+    model_override = callback_context.state.to_dict().get(model_key)
+    if model_override:
+        from app.app_utils.models import _parse_model_str
+        _provider, override_model_name = _parse_model_str(model_override)
+        llm_request.model = override_model_name
+
     if llm_request.contents:
         last_msg = llm_request.contents[-1]
         if last_msg.parts:
@@ -157,7 +167,7 @@ def prompt_injection_guardrail(
                     client = Client(api_key=os.environ.get("GOOGLE_API_KEY"))
                     try:
                         emb_response = client.models.embed_content(
-                            model="gemini-embedding-001", contents=[text_to_check]
+                            model=get_model_name("embedding"), contents=[text_to_check]
                         )
                         if not emb_response or not emb_response.embeddings:
                             return
@@ -408,6 +418,13 @@ async def state_setter(
     effective_user = current_state.get("user_id", current_user)
     prefs = load_user_preferences(effective_user)
     callback_context.state["user_preferences"] = prefs
+
+    # Load persisted model overrides into session state
+    from app.app_utils.models import MODEL_DEFAULTS, get_model_string
+    for component in MODEL_DEFAULTS:
+        effective = get_model_string(component)
+        if effective != MODEL_DEFAULTS[component]:
+            callback_context.state[f"model:{component}"] = effective
 
     return None
 

@@ -14,6 +14,7 @@ class SystemToolset(BaseToolset):
             execute_approved_action,
         )
         from app.tools.diagnostics import report_health, inspect_secure_env
+        from app.tools.model_tools import list_available_models, set_agent_model
 
         return [
             FunctionTool(func=update_self),
@@ -23,4 +24,6 @@ class SystemToolset(BaseToolset):
             FunctionTool(func=execute_approved_action),
             FunctionTool(func=report_health),
             FunctionTool(func=inspect_secure_env),
+            FunctionTool(func=list_available_models),
+            FunctionTool(func=set_agent_model),
         ]

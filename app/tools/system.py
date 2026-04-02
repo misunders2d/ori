@@ -38,6 +38,7 @@ def session_refresh(mode: str, tool_context: ToolContext) -> dict:
 
 async def set_planner_mode(enabled: bool, tool_context: ToolContext) -> dict:
     """Toggle deep thought."""
+    tool_context.state["use_planner"] = enabled
     return {"status": "success", "message": f"Thinker mode {'enabled' if enabled else 'disabled'}."}
 
 async def execute_approved_action(token: str, totp_code: str = "", tool_context: ToolContext = None) -> dict:

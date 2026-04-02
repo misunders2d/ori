@@ -1,7 +1,8 @@
 import pathlib
 from google.adk.agents import Agent
-from google.adk.models import Gemini
 from google.adk.skills import load_skill_from_dir
+
+from app.app_utils.models import get_model
 from google.adk.tools import skill_toolset
 
 from app.tools.a2a import (
@@ -23,7 +24,7 @@ google_adk_a2a_skill = load_skill_from_dir(base_dir / "google-adk-a2a-skill")
 
 knowledge_agent = Agent(
     name="KnowledgeAgent",
-    model=Gemini(model="gemini-3-flash-preview"),
+    model=get_model("KnowledgeAgent"),
     description=(
         "The A2A communication specialist. Handles discovery, messaging, and DNA exchange "
         "with both registered friends and arbitrary A2A-compliant agents."

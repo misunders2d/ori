@@ -2,6 +2,8 @@ import logging
 from typing import Annotated
 from datetime import datetime
 from google import genai
+
+from app.app_utils.models import get_model_name
 from app.core.channel_logger import get_logs
 
 logger = logging.getLogger(__name__)
@@ -29,7 +31,7 @@ async def summarize_channel(
     client = genai.Client()
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-2.0-flash-lite-preview-02-05",
+            model=get_model_name("channel_summarizer"),
             contents=(
                 f"You are a threat analyst and news aggregator. Summarize the following messages from channel '{channel_id}' "
                 f"covering the last {hours} hours. Focus on key news, potential threats, and significant events. "

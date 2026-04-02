@@ -2,8 +2,8 @@ import os
 from google.adk.apps import App
 from google.adk.apps.app import EventsCompactionConfig
 from google.adk.apps.llm_event_summarizer import LlmEventSummarizer
-from google.adk.models import Gemini
 
+from app.app_utils.models import get_model
 from app.sub_agents.coordinator_agent import root_agent
 
 # The internal application name used for session isolation
@@ -18,6 +18,6 @@ app = App(
         compaction_interval=10,
         # Keep the last 3 events raw to preserve immediate conversational context.
         overlap_size=3,
-        summarizer=LlmEventSummarizer(llm=Gemini(model="gemini-3.1-flash-lite-preview")),
+        summarizer=LlmEventSummarizer(llm=get_model("summarizer")),
     ),
 )

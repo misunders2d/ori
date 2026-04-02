@@ -1,7 +1,8 @@
 import pathlib
 from google.adk.agents import Agent
-from google.adk.models import Gemini
 from google.genai import types
+
+from app.app_utils.models import get_model
 from google.adk.skills import load_skill_from_dir
 from google.adk.tools import skill_toolset
 
@@ -26,10 +27,7 @@ log_maintenance_skill = load_skill_from_dir(base_dir / "log-maintenance-skill")
 system_management_skill = load_skill_from_dir(base_dir / "system-management-skill")
 external_research_skill = load_skill_from_dir(base_dir / "external-research-skill")
 
-model_config = Gemini(
-    model="gemini-3-flash-preview",
-    retry_options=types.HttpRetryOptions(attempts=3),
-)
+model_config = get_model("DeveloperAgent", retry_options=types.HttpRetryOptions(attempts=3))
 
 developer_agent = Agent(
     name="DeveloperAgent",
