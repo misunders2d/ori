@@ -100,27 +100,16 @@ chown agentuser:agentgroup "$CRASH_FILE"
 # --- 4. DAEMON STARTUP ---
 echo "🧬 [$BOT_NAME Setup] Dropping privileges and starting daemon..."
 
-# Run the command passed to the entrypoint (usually the bot startup)
-gosu agentuser "$@" &
-DAEMON_PID=$!
-
-# Background stability check: if we survive 30s, reset the crash counter
+# Background stability check: if the main daemon survives 30s, reset the crash counter
 (
     sleep 30
-    if kill -0 $DAEMON_PID 2>/dev/null; then
+    if kill -0 $$ 2>/dev/null; then
         echo "🧬 [$BOT_NAME Watchdog] Boot stable for 30s. Resetting crash counter."
         gosu agentuser sh -c "echo 0 > $CRASH_FILE"
     fi
 ) &
 
-set +e
-wait $DAEMON_PID
-EXIT_CODE=$?
-set -e
-
-# Handle specific exit codes (100=Update, 101=Rollback) as clean shutdowns
-if [ "$EXIT_CODE" = "0" ] || [ "$EXIT_CODE" = "100" ] || [ "$EXIT_CODE" = "101" ]; then
-    gosu agentuser sh -c "echo 0 > $CRASH_FILE"
-fi
-
-exit $EXIT_CODE
+# Run the command passed to the entrypoint (usually the bot startup) IN THE FOREGROUND
+# This is required so interactive standard input (stdin) works for the CLI fallback.
+export CRASH_FILE
+exec gosu agentuser "$@"

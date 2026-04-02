@@ -170,6 +170,14 @@ async def main():
         logger.info("Daemon shutting down.")
     finally:
         scheduler.shutdown()
+        
+        # Clear crash file on clean exit (0), update (100) or rollback (101)
+        crash_file = os.environ.get("CRASH_FILE", "./data/.crash_count")
+        try:
+            with open(crash_file, "w") as f:
+                f.write("0\n")
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     asyncio.run(main())
