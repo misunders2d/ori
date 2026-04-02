@@ -9,22 +9,25 @@ DB_PATH = os.path.abspath("./data/channel_logs.db")
 
 def _init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS channel_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id TEXT NOT NULL,
-            user_id TEXT,
-            display_name TEXT,
-            text TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_id ON channel_logs(chat_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON channel_logs(timestamp)")
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS channel_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id TEXT NOT NULL,
+                user_id TEXT,
+                display_name TEXT,
+                text TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_id ON channel_logs(chat_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON channel_logs(timestamp)")
+        conn.commit()
+        conn.close()
+    except sqlite3.OperationalError as e:
+        logger.warning("channel_logs DB init failed: %s", e)
 
 # Initialize on import
 _init_db()

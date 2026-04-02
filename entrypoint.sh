@@ -39,12 +39,16 @@ if [ "$TARGET_UID" != "$(id -u agentuser)" ]; then
 fi
 
 # --- 2. DATABASE HYGIENE (Reboot Protection) ---
-# Remove stale SQLite lock files that can cause 'Read-only database' errors after a crash/reboot
-# This MUST run before any SQLite operations to avoid ownership/state conflicts
-echo "🧬 [$BOT_NAME Setup] Clearing stale database locks..."
+# Checkpoint WAL databases and remove stale locks safely.
+# IMPORTANT: Never delete .db-wal files blindly — un-checkpointed WAL data
+# would be lost, leaving the main .db corrupt/read-only.
+echo "🧬 [$BOT_NAME Setup] Checkpointing databases..."
 find /code/data -maxdepth 2 -name "*.db-journal" -delete 2>/dev/null || true
-find /code/data -maxdepth 2 -name "*.db-wal" -delete 2>/dev/null || true
-find /code/data -maxdepth 2 -name "*.db-shm" -delete 2>/dev/null || true
+for db in /code/data/*.db /code/data/**/*.db; do
+    [ -f "$db" ] || continue
+    # Checkpoint flushes WAL into the main DB, then TRUNCATE clears the WAL file
+    sqlite3 "$db" "PRAGMA wal_checkpoint(TRUNCATE);" 2>/dev/null || true
+done
 
 # Ensure file ownership (after cleanup so no root-owned lock files linger)
 echo "🧬 [$BOT_NAME Setup] Ensuring file ownership..."

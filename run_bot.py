@@ -69,6 +69,26 @@ def get_runner():
     if not _global_runner:
         if not os.environ.get("GOOGLE_API_KEY"): return None
         db_path = os.path.abspath("./data/ori-sessions.db")
+        # Verify the session DB directory is writable
+        db_dir = os.path.dirname(db_path)
+        os.makedirs(db_dir, exist_ok=True)
+        if os.path.exists(db_path):
+            conn = None
+            try:
+                conn = sqlite3.connect(db_path)
+                conn.execute("CREATE TABLE IF NOT EXISTS _health_check (id INTEGER PRIMARY KEY)")
+                conn.execute("DELETE FROM _health_check")
+                conn.commit()
+            except sqlite3.OperationalError:
+                logger.warning("Session DB is readonly — removing for fresh start.")
+                for suffix in ("", "-wal", "-shm", "-journal"):
+                    try:
+                        os.remove(db_path + suffix)
+                    except FileNotFoundError:
+                        pass
+            finally:
+                if conn:
+                    conn.close()
         database_url = f"sqlite+aiosqlite:///{db_path}"
         session_service = DatabaseSessionService(db_url=database_url)
         _global_runner = Runner(app=ori_app, session_service=session_service)
@@ -89,13 +109,30 @@ def ensure_db_concurrency():
     for f in os.listdir(data_dir):
         if f.endswith(".db"):
             db_path = os.path.join(data_dir, f)
+            conn = None
             try:
-                # Use a standard sync connection to set the journal mode
-                with sqlite3.connect(db_path) as conn:
-                    conn.execute("PRAGMA journal_mode=WAL;")
+                conn = sqlite3.connect(db_path)
+                conn.execute("PRAGMA journal_mode=WAL;")
+                # Write-test: catch readonly databases early
+                conn.execute("CREATE TABLE IF NOT EXISTS _health_check (id INTEGER PRIMARY KEY)")
+                conn.execute("DELETE FROM _health_check")
+                conn.commit()
                 logger.info(f"Database: Concurrency optimized for {f} (WAL mode).")
+            except sqlite3.OperationalError as e:
+                if "readonly" in str(e).lower():
+                    logger.warning(f"Database: {f} is readonly — deleting for fresh start.")
+                    for suffix in ("", "-wal", "-shm", "-journal"):
+                        try:
+                            os.remove(db_path + suffix)
+                        except FileNotFoundError:
+                            pass
+                else:
+                    logger.warning(f"Database: Could not optimize {f}: {e}")
             except Exception as e:
                 logger.warning(f"Database: Could not optimize {f}: {e}")
+            finally:
+                if conn:
+                    conn.close()
 
 async def detect_tunnel_url(timeout=30) -> str | None:
     """Poll cloudflared metrics endpoint to discover the quick tunnel URL."""

@@ -261,6 +261,29 @@ async def extract_agent_response(
                 error_msg,
             )
 
+            # Catch readonly database — self-heal by nuking the session DB
+            if "readonly database" in error_msg.lower():
+                logger.error("Session DB is readonly — attempting self-heal.")
+                try:
+                    import os, sqlite3 as _sqlite3
+                    db_path = os.path.abspath("./data/ori-sessions.db")
+                    for suffix in ("", "-wal", "-shm", "-journal"):
+                        try:
+                            os.remove(db_path + suffix)
+                        except FileNotFoundError:
+                            pass
+                    # Force runner recreation on next message
+                    import run_bot
+                    run_bot._global_runner = None
+                    logger.info("Session DB deleted and runner reset — next message will recover.")
+                except Exception as heal_err:
+                    logger.error("Self-heal failed: %s", heal_err)
+                return AgentResponse(
+                    text="⚠️ **Database Error**\n\n"
+                    "I hit a database issue but have auto-repaired it. "
+                    "Please resend your message."
+                )
+
             # Catch rate limit / quota errors gracefully
             if (
                 "429" in error_msg
