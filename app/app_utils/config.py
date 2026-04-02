@@ -18,10 +18,11 @@ ALLOWED_CONFIG_KEYS = frozenset({
     "ADMIN_USER_IDS",
     "BOT_NAME",
     "APP_NAME",
+    "REQUIRE_2FA",
 })
 
 # Keys the agent can set via configure_integration (conversational flow).
-# ADMIN_USER_IDS is excluded — it must only be set via /init (requires passcode).
+# ADMIN_USER_IDS and REQUIRE_2FA are excluded — they must only be set via /init (requires passcode).
 AGENT_CONFIG_KEYS = frozenset({
     "GOOGLE_API_KEY",
     "TELEGRAM_BOT_TOKEN",

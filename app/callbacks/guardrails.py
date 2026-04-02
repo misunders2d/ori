@@ -73,7 +73,10 @@ def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
             logger.info(f"Admin Guardrail: Staged {tool.name} for {user_id} -> {token}")
 
             totp_secret = os.environ.get("ADMIN_TOTP_SECRET")
-            if totp_secret:
+            # 2FA Requirement: Required if ADMIN_TOTP_SECRET is set AND REQUIRE_2FA is true (default)
+            require_2fa = os.environ.get("REQUIRE_2FA", "true").lower() == "true"
+
+            if totp_secret and require_2fa:
                 return {
                     "status": "error",  # Abort current execution
                     "message": (
@@ -319,7 +322,7 @@ def tool_output_injection_guardrail(tool, args, tool_context, tool_response):
                     ),
                 }
     except Exception:
-        logger.exception("Error in tool output injection check for %s", tool_name)
+        logger.exception("Error in tool_output_injection_check for %s", tool_name)
 
     return None
 

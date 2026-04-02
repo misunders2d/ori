@@ -78,7 +78,9 @@ async def execute_approved_action(token: str, totp_code: str = "", tool_context:
     import app.tools as tools_module
     
     totp_secret = os.environ.get("ADMIN_TOTP_SECRET")
-    if totp_secret:
+    require_2fa = os.environ.get("REQUIRE_2FA", "true").lower() == "true"
+    
+    if totp_secret and require_2fa:
         from app.app_utils.totp import verify_totp
         if not totp_code or not verify_totp(totp_secret, str(totp_code)):
             return {"status": "error", "message": "Invalid 2FA code."}

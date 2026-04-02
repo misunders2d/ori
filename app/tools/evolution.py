@@ -173,12 +173,25 @@ def evolution_verify_sandbox(
                     continue
                 src = os.path.join(PROJECT_ROOT, item)
                 dst = os.path.join(sandbox_dir, item)
-                if not os.path.exists(dst):
+                
+                # IMPROVED BOOTSTRAP: If directory exists (due to staging), symlink contents individually
+                if os.path.isdir(src):
+                    os.makedirs(dst, exist_ok=True)
+                    for subitem in os.listdir(src):
+                        sub_src = os.path.join(src, subitem)
+                        sub_dst = os.path.join(dst, subitem)
+                        if not os.path.exists(sub_dst):
+                            try:
+                                if os.path.isdir(sub_src):
+                                    os.symlink(sub_src, sub_dst, target_is_directory=True)
+                                else:
+                                    os.symlink(sub_src, sub_dst)
+                                links_created.append(sub_dst)
+                            except Exception:
+                                pass
+                elif not os.path.exists(dst):
                     try:
-                        if os.path.isdir(src):
-                            os.symlink(src, dst, target_is_directory=True)
-                        else:
-                            os.symlink(src, dst)
+                        os.symlink(src, dst)
                         links_created.append(dst)
                     except Exception:
                         pass
