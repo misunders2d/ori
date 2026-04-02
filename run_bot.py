@@ -114,18 +114,20 @@ async def main():
     try:
         import uvicorn
         from app.a2a_server import a2a_app
-        if a2a_app:
+        
+        # Determine if we are in CLI mode (no messengers configured)
+        is_cli = not any(key in os.environ for key in ["TELEGRAM_BOT_TOKEN", "SLACK_BOT_TOKEN"])
+        
+        # Only start Uvicorn if not in CLI mode to prevent TTY hijacking and config errors
+        if a2a_app and not is_cli:
             port = int(os.environ.get("A2A_PORT", 8000))
-            # Determine if we need signal handlers (disable in interactive CLI mode to prevent TTY hijacking)
-            is_cli = not any(key in os.environ for key in ["TELEGRAM_BOT_TOKEN", "SLACK_BOT_TOKEN"])
             config = uvicorn.Config(
                 a2a_app, 
                 host="0.0.0.0", 
                 port=port, 
                 log_level="info", 
                 proxy_headers=True, 
-                forwarded_allow_ips="*",
-                install_handlers=not is_cli
+                forwarded_allow_ips="*"
             )
             tasks.append(asyncio.create_task(uvicorn.Server(config).serve()))
     except Exception as e:

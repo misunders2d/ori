@@ -58,8 +58,18 @@ async def start_cli_chat(get_runner_fn):
         # Get user input safely
         try:
             def get_user_input():
+                # Attempt to read directly from the TTY device to bypass
+                # Docker/gosu stdin detachment or EOF loops.
+                if os.path.exists("/dev/tty"):
+                    try:
+                        with open("/dev/tty", "r") as tty:
+                            print("You: ", end="", flush=True)
+                            return tty.readline()
+                    except Exception:
+                        pass
+                
+                # Fallback for Windows or systems without /dev/tty
                 try:
-                    # input() correctly handles the TTY buffer and prompt
                     return input("You: ")
                 except EOFError:
                     return None
@@ -70,7 +80,7 @@ async def start_cli_chat(get_runner_fn):
                     
             raw_input = await asyncio.to_thread(get_user_input)
             
-            if raw_input is None: # EOF or error
+            if raw_input is None or raw_input == "": # EOF or empty read
                 empty_reads += 1
                 if empty_reads > 5:
                     print("\nTerminal disconnected. Exiting CLI chat.")
