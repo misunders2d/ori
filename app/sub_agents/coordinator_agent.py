@@ -61,7 +61,7 @@ from app.tools.whitelist import blacklist_chat, list_access_control, unwhitelist
 
 root_agent = Agent(
     name="CoordinatorAgent",
-    model=Gemini(model="gemini-3.1-pro-preview"),
+    model=Gemini(model="gemini-3-flash-preview"),
     description="The primary interface for the autonomous daemon. Receives intent and commands, and delegates to specialized sub-agents.",
     instruction=(
         "You are {bot_name}, an autonomous self-evolving agent. "

@@ -23,7 +23,7 @@ google_adk_a2a_skill = load_skill_from_dir(base_dir / "google-adk-a2a-skill")
 
 knowledge_agent = Agent(
     name="KnowledgeAgent",
-    model=Gemini(model="gemini-3.1-pro-preview"),
+    model=Gemini(model="gemini-3-flash-preview"),
     description=(
         "The A2A communication specialist. Handles discovery, messaging, and DNA exchange "
         "with both registered friends and arbitrary A2A-compliant agents."

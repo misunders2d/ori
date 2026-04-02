@@ -1,0 +1,2 @@
+Status: 200
+Response: {"ok":true,"result":{"message_id":5087,"from":{"id":8632692288,"is_bot":true,"first_name":"ori","username":"amz_mgr_mtd_bot"},"chat":{"id":185625742,"first_name":"Maria","username":"Bykfa","type":"private"},"date":1775109522,"text":"Hi! Sergey asked me to ping you and say hello!"}}
