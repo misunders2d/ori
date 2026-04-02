@@ -43,14 +43,14 @@ async def start_cli_chat(get_runner_fn):
     while True:
         runner = get_runner_fn()
         if not runner:
-            # We already warned once, just wait for key or exit
+            print(f"\r{bot_name}: I'm not fully configured yet. I need a GOOGLE_API_KEY to start.", end="", flush=True)
             await asyncio.sleep(5)
             continue
 
         # Get user input
         try:
-            # In a container, sys.stdin.readline is safer than input()
-            print("\nYou: ", end="", flush=True)
+            print(f"\r" + " " * 60 + "\r", end="", flush=True) # Clear line
+            print("You: ", end="", flush=True)
             # Use run_in_executor to avoid blocking the event loop for stdin
             user_input = await asyncio.get_event_loop().run_in_executor(None, sys.stdin.readline)
             user_input = user_input.strip()

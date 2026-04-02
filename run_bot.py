@@ -149,6 +149,16 @@ async def main():
         except Exception as e:
             logger.error(f"Slack poller failed to initialize: {e}")
 
+    # 5. CLI Chat Interface (Fallback)
+    # If no messaging interfaces are active, start the CLI interface.
+    # This allows the user to interact with the bot directly from the terminal.
+    if not any(key in os.environ for key in ["TELEGRAM_BOT_TOKEN", "SLACK_BOT_TOKEN"]):
+        try:
+            from interfaces.cli_chat import start_cli_chat
+            tasks.append(asyncio.create_task(start_cli_chat(get_runner)))
+        except (ImportError, ModuleNotFoundError) as e:
+            logger.error(f"CLI Chat dependencies missing: {e}")
+
     if tasks:
         logger.info("Bot is active and listening on configured channels.")
     else:

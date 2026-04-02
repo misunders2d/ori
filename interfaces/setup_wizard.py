@@ -99,6 +99,58 @@ def main():
         else:
             cprint("⏭️  Skipped. Running in CLI mode.\n", "90")
 
+    # 3.5 Admin User ID (Telegram Verification)
+    if tg_token:
+        admin_ids = os.environ.get("ADMIN_USER_IDS", "").strip()
+        if not admin_ids:
+            cprint("[3.5] Secure Telegram Binding", "93")
+            print("To secure your bot, we need to link it to your Telegram account.")
+            verification_code = secrets.token_hex(3).upper()
+            print(f"Please open your bot on Telegram and send this exact code: \033[96m{verification_code}\033[0m")
+            print("Waiting for message... (Press Ctrl+C to skip)")
+            
+            try:
+                import json
+                import urllib.request
+                import urllib.error
+                
+                offset = 0
+                chat_id_found = None
+                while not chat_id_found:
+                    try:
+                        url = f"https://api.telegram.org/bot{tg_token}/getUpdates?offset={offset}&timeout=5"
+                        req = urllib.request.Request(url)
+                        with urllib.request.urlopen(req, timeout=10) as response:
+                            data = json.loads(response.read().decode())
+                            
+                            if not data.get("ok"):
+                                time.sleep(2)
+                                continue
+                                
+                            for result in data.get("result", []):
+                                offset = result["update_id"] + 1
+                                message = result.get("message", {})
+                                text = message.get("text", "").strip()
+                                
+                                if text == verification_code:
+                                    chat_id_found = str(message["from"]["id"])
+                                    break
+                                    
+                        if not chat_id_found:
+                            time.sleep(1)
+                            
+                    except Exception as e:
+                        time.sleep(2)
+                        continue
+                        
+                if chat_id_found:
+                    set_key(ENV_FILE_PATH, "ADMIN_USER_IDS", chat_id_found)
+                    cprint(f"✅ Verified! Chat ID {chat_id_found} saved as Admin.\n", "92")
+                    
+            except KeyboardInterrupt:
+                print("\n")
+                cprint("⏭️  Skipped Telegram verification. Remember to set ADMIN_USER_IDS manually in data/.env\n", "90")
+
     # 4. GitHub Evolution Habitat
     github_repo = os.environ.get("GITHUB_REPO", "").strip()
     github_token = os.environ.get("GITHUB_TOKEN", "").strip()
