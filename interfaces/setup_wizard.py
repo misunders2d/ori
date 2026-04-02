@@ -3,6 +3,9 @@ import sys
 import secrets
 import base64
 import urllib.parse
+import urllib.request
+import urllib.error
+import json
 import time
 import hashlib
 import hmac
@@ -110,42 +113,34 @@ def main():
             print("Waiting for message... (Press Ctrl+C to skip)")
             
             try:
-                import json
-                import urllib.request
-                import urllib.error
-                
                 offset = 0
                 chat_id_found = None
-                while not chat_id_found:
+                # Polling loop with safety timeout for non-interactive environments
+                start_time = time.time()
+                while not chat_id_found and (time.time() - start_time) < 300: # 5 min timeout
                     try:
                         url = f"https://api.telegram.org/bot{tg_token}/getUpdates?offset={offset}&timeout=5"
                         req = urllib.request.Request(url)
                         with urllib.request.urlopen(req, timeout=10) as response:
                             data = json.loads(response.read().decode())
-                            
-                            if not data.get("ok"):
-                                time.sleep(2)
-                                continue
-                                
-                            for result in data.get("result", []):
-                                offset = result["update_id"] + 1
-                                message = result.get("message", {})
-                                text = message.get("text", "").strip()
-                                
-                                if text == verification_code:
-                                    chat_id_found = str(message["from"]["id"])
-                                    break
-                                    
-                        if not chat_id_found:
-                            time.sleep(1)
-                            
-                    except Exception as e:
+                            if data.get("ok"):
+                                for result in data.get("result", []):
+                                    offset = result["update_id"] + 1
+                                    message = result.get("message", {})
+                                    if message.get("text", "").strip() == verification_code:
+                                        chat_id_found = str(message["from"]["id"])
+                                        break
+                        if chat_id_found: break
+                        time.sleep(1)
+                    except Exception:
                         time.sleep(2)
                         continue
                         
                 if chat_id_found:
                     set_key(ENV_FILE_PATH, "ADMIN_USER_IDS", chat_id_found)
                     cprint(f"✅ Verified! Chat ID {chat_id_found} saved as Admin.\n", "92")
+                else:
+                    cprint("⚠️  Verification timed out. Set ADMIN_USER_IDS manually in data/.env\n", "93")
                     
             except KeyboardInterrupt:
                 print("\n")

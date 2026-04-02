@@ -17,14 +17,12 @@ def test_check_permissions():
             res += f"Error: {e}\n"
         return res
 
+    # Use relative paths so it works on both host and container
     paths = [
-        "/code",
-        "/code/.gitignore",
-        "/code/data",
-        "/code/data/agent.log",
-        "/code/.git",
-        "/home/agentuser",
-        "/home/agentuser/.cache",
+        ".",
+        ".gitignore",
+        "data",
+        ".git",
     ]
 
     content = ""
@@ -38,7 +36,7 @@ def test_check_permissions():
 
     content += "\nGit Config:\n"
     try:
-        content += subprocess.check_output(["git", "config", "--global", "--list"], text=True)
+        content += subprocess.check_output(["git", "config", "--list"], text=True)
     except Exception as e:
         content += f"Error checking git config: {e}\n"
 
@@ -48,7 +46,9 @@ def test_check_permissions():
     except Exception as e:
         content += f"Error checking git status: {e}\n"
     
-    with open("/code/data/debug_perms.log", "w") as f:
+    log_path = os.path.join("data", "debug_perms.log")
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    with open(log_path, "w") as f:
         f.write(content)
     
     assert True
