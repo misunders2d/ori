@@ -36,6 +36,9 @@ async def start_cli_chat(get_runner_fn):
         )
         print(" " * 30, end="\r", flush=True)
         print(f"{bot_name}: {response.text}")
+        
+        # Give the ADK session storage a moment to settle its state before accepting new input
+        await asyncio.sleep(1.0)
     else:
         print(f"{bot_name}: I'm not fully configured yet. I need a GOOGLE_API_KEY to start the onboarding chat.")
         print(f"Please enter your GOOGLE_API_KEY in the .env file or use the /init command if you have a messenger.")
@@ -47,19 +50,25 @@ async def start_cli_chat(get_runner_fn):
             await asyncio.sleep(5)
             continue
 
-        # Get user input
+        # Get user input safely
         try:
-            # Use input() instead of sys.stdin.readline for better TTY handling
-            # run_in_executor allows us to wait for input without blocking the event loop
+            print("You: ", end="", flush=True)
+            
             def get_user_input():
-                return input("You: ")
+                try:
+                    return sys.stdin.readline()
+                except Exception:
+                    return ""
+                    
+            raw_input = await asyncio.to_thread(get_user_input)
+            
+            if not raw_input: # EOF
+                await asyncio.sleep(0.1)
+                continue
                 
-            user_input = await asyncio.get_event_loop().run_in_executor(None, get_user_input)
-            user_input = user_input.strip()
+            user_input = raw_input.strip()
             
             if not user_input:
-                # Add a small sleep to prevent spinning if stdin is acting up
-                await asyncio.sleep(0.1)
                 continue
                 
             if user_input.lower() in ["exit", "quit", "/exit"]:
