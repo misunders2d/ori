@@ -9,5 +9,4 @@ def run(cmd):
     print("-" * 20)
 
 run("git status")
-run("git diff --name-only")
-run("git log -n 5 --oneline")
+run("git rev-parse HEAD")

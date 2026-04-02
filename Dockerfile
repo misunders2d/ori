@@ -1,4 +1,4 @@
-FROM mirror.gcr.io/library/python:3.10-slim
+FROM mirror.gcr.io/library/python:3.11-slim
 
 LABEL project="ori"
 
