@@ -8,33 +8,53 @@ description: "Critical execution rules for the Core Lifecycle Tools that govern 
 The `ori` daemon operates in a **Rootless Architecture**. Local source code is **Read-Only**.
 
 ## Core System Tools
-1. **`update_self`**: Exit 100 -> Git pull and restart.
-2. **`session_refresh`**: Wipe/summarize SQLite DB context.
-3. **`trigger_rollback`**: Exit 101 -> Revert to previous commit.
-4. **`set_planner_mode`**: Toggles deep-thinking inference.
 
-## Rootless Runtime & Persistence
-- **UID/GID Mapping**: Matches `agentuser` inside the container to the host UID (usually 1000) to avoid "Permission Denied" errors on writeable volumes.
-- **`systemd --user`**: Use systemd user units with `loginctl enable-linger` to ensure the daemon stays active after user logout.
-- **Auto-Restart**: Rely on `systemd` user units with `Restart=on-failure` for higher reliability than Docker `--restart`.
+| Tool | Exit Code | What Happens |
+|------|-----------|--------------|
+| `update_self` | 100 | Host force-pulls remote, cleans dangling files, rebuilds container. |
+| `trigger_rollback` | 101 | Reverts last commit on host, rebuilds container. |
+| `session_refresh` | — | Wipes/summarizes SQLite session context. |
+| `set_planner_mode` | — | Toggles deep-thinking inference mode. |
 
-## Stability & Monitoring
-- **Health Checks**: Implement a `/health` endpoint for external monitoring. Timeout should be 2–5s due to `slirp4netns` overhead.
-- **Checkpointing**: Use application-level snapshots (JSON state in Redis/SQLite) for state persistence across crashes.
-- **Host-Side Watchdog**: Monitors `.crash_count`. Reverts code if bot crashes 3 times consecutively.
+## Evolution Reboot Procedure (Holy Grail)
+
+This is the ONLY valid path for code changes. Every step is mandatory. No exceptions.
+
+- [ ] Step 1: **Read** — understand code and logs before planning.
+- [ ] Step 2: **Plan** — explain which files change and why. STOP for admin approval.
+- [ ] Step 3: **Stage** — write all changes to sandbox via `evolution_stage_change`.
+- [ ] Step 4: **Verify** — run `evolution_verify_sandbox` (syntax per file, then pytest). ALL tests must pass.
+- [ ] Step 5: **Push** — call `evolution_commit_and_push`. Admin must approve via token (+2FA).
+- [ ] Step 6: **Reboot** — request `update_self` from CoordinatorAgent to trigger exit 100.
+
+After exit 100, the host runs: `git fetch origin master && git reset --hard origin/master && git clean -fd`, then rebuilds the container from scratch.
+
+**An evolution is NOT complete until the reboot fires.** Stopping at step 5 leaves old code running — a split-brain integrity violation.
+
+**System-critical files** (`pyproject.toml`, `config.py`, `Dockerfile`): Use `skip_local_update=True` — the auto-reboot triggers automatically.
 
 ## Security Constraints
-1. **Read-Only DNA**: CANNOT write to `/code`. Evolution MUST occur via Remote.
-2. **Admin-Only**: Guarded by `admin_only_guardrail`.
-3. **Guardrail Integrity**: NEVER bypass `before/after` callbacks.
 
-## Evolution via Remote
-All code changes MUST be pushed to GitHub using `evolution_commit_and_push`. The `start.sh` script handles the `git pull` after an **Exit 100**.
+1. **Read-Only DNA**: Cannot write to `/code`. Evolution MUST go via remote push.
+2. **Admin-Only**: All system tools guarded by `admin_only_guardrail`.
+3. **Push requires approval**: `evolution_commit_and_push` protected by `admin_tool_guardrail` (token + 2FA).
+4. **Guardrail Integrity**: Never bypass `before/after` callbacks.
+
+## Gotchas
+
+- **Crash counter**: Stored in `data/.crash_count`. If it reaches 3, both the container entrypoint AND host `start.sh` trigger auto-rollback (`git reset --hard HEAD~1`). The counter resets after 30s of stable boot.
+- **Exit code matters**: Only 100 (update) and 101 (rollback) trigger controlled rebuilds. Any other non-zero exit is treated as a crash with a 30s cooldown.
+- **`git clean --exclude=data --exclude=.env`**: The force-pull cleans untracked files but preserves `data/` and `.env`. If you added a new top-level directory that isn't tracked, it will be deleted on reboot.
+- **Sandbox cleared on new cycle**: The first `evolution_stage_change` call in a session wipes any stale sandbox from a previous rejected plan.
+- **Health check timeout**: Use 2-5s timeout due to `slirp4netns` overhead in rootless Docker.
+- **WAL mode**: SQLite databases are set to WAL mode on boot for concurrency. Don't switch them to DELETE journal mode.
 
 ## Regression Testing Mandate
-Every change **MUST** include a test file in `tests/`. `evolution_verify_sandbox` must invoke the entire suite (`uv run pytest tests`).
+
+Every change MUST pass the full test suite. `evolution_verify_sandbox(check="pytest")` runs `uv run pytest tests`.
 
 ## Origins Protocol
-- **Upstream check**: Monitor `https://github.com/misunders2d/ori`.
-- **Selective adoption**: Present upstream changes as proposals.
-- **Signature Mandate**: Commits MUST be signed "evolved by {bot_name}".
+
+- **Upstream**: Monitor `https://github.com/misunders2d/ori` via `check_upstream`.
+- **Selective adoption**: Present upstream changes as proposals — never auto-merge.
+- **Signature**: Commits MUST include the `"evolved by {bot_name}"` trailer.

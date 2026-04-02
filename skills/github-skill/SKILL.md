@@ -1,31 +1,31 @@
 ---
 name: github-skill
-description: "A skill providing guidelines for interacting with GitHub repositories, code execution, and Git logic."
+description: "Operational rules and gotchas for GitHub interactions: authentication, commit signing, rate limits, and evolution push workflow."
 ---
 
-# GitHub Skill
+# GitHub Operational Rules
 
-This skill defines the operational logic for interacting with GitHub.
+## Authentication
 
-## 1. Identity & Authentication
-- **Prefer GitHub Apps**: Use GitHub App installation tokens instead of Personal Access Tokens (PATs) for dedicated identity and higher rate limits.
-- **Verified Badge**: For the "Verified" badge to appear, the agent's email must match the bot ID: `ID+app-name[bot]@users.noreply.github.com`.
-- **Commit Signing**: All git commits MUST be signed. The `evolution_commit_and_push` tool handles this automatically with the "evolved by {bot_name}" signature.
+- Use the `GITHUB_TOKEN` env var for all git operations. Never hardcode tokens.
+- `evolution_commit_and_push` handles auth automatically via temporary clone with token URL.
+- For the "Verified" badge: agent email must match `ID+app-name[bot]@users.noreply.github.com`.
 
-## 2. Rate Limit Management
-- **Efficiency**: Use **Conditional Requests** (ETags and `Last-Modified` headers). If GitHub returns `304 Not Modified`, it does NOT count against the rate limit.
-- **Throttling**: For bulk edits, wait at least 1 second between mutative requests to avoid secondary rate limits.
-- **Retry Logic**: If you receive a `403` or `429` error, check the `retry-after` header.
+## Evolution Push Procedure
 
-## 3. Agent-Repo Standards
-- **`llms.txt`**: Fetch this file if available for a structured index of repository documentation.
-- **`AGENTS.md`**: Check for this file to understand the "rules of engagement" (e.g., "Always run tests before opening a PR").
+1. Stage changes in sandbox via `evolution_stage_change`.
+2. Verify with `evolution_verify_sandbox` (syntax + pytest).
+3. Push with `evolution_commit_and_push` (requires admin token approval).
+4. Reboot via `update_self` to apply.
 
-## 4. Operational Logic
-- Use `GITHUB_TOKEN` to securely push to `GITHUB_REPO`.
-- When the agent needs to evolve itself, push changes back to the remote repository and signal for an update.
-- **Micro-Commits**: Avoid flooding the history. Group changes into **semantic snapshots** (logical task completions).
+All commits are signed with the `"evolved by {bot_name}"` trailer automatically.
 
-## Best Practices
-- **No Direct `.env` Updates**: Never push secrets to the repository.
-- **Audit Trail**: Ensure every AI-generated change is clearly distinguished from human code via the `[bot]` suffix.
+## Gotchas
+
+- **Conditional requests save rate limit**: Use ETags / `Last-Modified` headers. A `304 Not Modified` does NOT count against the rate limit.
+- **Secondary rate limits on bulk writes**: Wait at least 1 second between mutative requests. A `403` or `429` with `retry-after` header means you're throttled — respect it.
+- **Shallow clones**: `evolution_commit_and_push` uses `--depth 1` clones. You cannot access full history in the tmp repo. Use `git log` on PROJECT_ROOT instead.
+- **Micro-commits waste history**: Group changes into semantic snapshots (one logical task = one commit). Don't commit file-by-file.
+- **`.env` is gitignored**: Never push secrets. If you see `.env` in staged files, something is wrong.
+- **`llms.txt`**: If a target repo provides this file, fetch it first — it's a machine-friendly documentation index.
+- **`AGENTS.md`**: Check for this in external repos before contributing — it defines their rules of engagement.
