@@ -152,11 +152,21 @@ def _apply_config(command_text: str) -> str:
 
     for part in kv_parts:
         if "=" in part:
+            # Handle potential spaces around = or in keys
             key, value = part.split("=", 1)
             key = key.strip().upper()
+            
+            # Robust matching: check if key is in ALLOWED_CONFIG_KEYS
             if key not in ALLOWED_CONFIG_KEYS:
-                rejected_keys.append(key)
-                continue
+                # One last attempt to see if it's just a case mismatch or hidden space
+                clean_key = "".join(key.split())
+                if clean_key in ALLOWED_CONFIG_KEYS:
+                    key = clean_key
+                else:
+                    logger.warning(f"Config: Rejected unauthorized key '{key}'")
+                    rejected_keys.append(key)
+                    continue
+            
             set_key(ENV_FILE_PATH, key, value)
             os.environ[key] = value
             updated_keys.append(key)
