@@ -12,21 +12,6 @@ from google.genai import types
 logger = logging.getLogger(__name__)
 
 
-def intent_security_guardrail(tool, args, tool_context=None, **kwargs) -> dict | None:
-    """
-    Runtime Guardrail: Intercepts tool calls before execution.
-    Specifically checks SP-API updates for dangerous price drops or disallowed keywords.
-    """
-    if tool and tool.name == "sp_api_update_listing":
-        if args.get("price", 0) < 5.0:
-            return {
-                "status": "error",
-                "message": "Guardrail blocked: Proposed price is dangerously low (below $5.0).",
-            }
-
-    return None
-
-
 def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
     """
     Runtime Guardrail: Intercepts highly privileged tool calls before execution.

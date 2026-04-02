@@ -21,7 +21,9 @@ The Google ADK breaks down into standard primitives:
 
 If you need the exact syntax for setting up loop agents, attaching callbacks, forcing human confirmation on tools, binding structured pydantic models to `output_schema`, or injecting parameters dynamically into prompts:
 
-**You must read the comprehensive ADK cheatsheet located at**:  
+**You must read the official documentation sources, examples using your github toolset or webfetch:
+
+comprehensive ADK cheatsheet located at**:  
 `references/adk-cheatsheet.md`
 
 Only read the full cheatsheet if you are confused about the syntax or need exactly the right parameter string for an `Agent(...)` class invocation.

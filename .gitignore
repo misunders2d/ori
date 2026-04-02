@@ -1,21 +1,13 @@
 # Secrets
 .env
-data/.env
-data/a2a_keys.json
 
 # Databases & Runtime State
-data/*.db
-data/*.db-journal
-data/*.db-wal
-data/*.log
-data/*.log.*
-data/*.json
+data/*
+data/.*
 !data/agent.json
 !data/agent-card.json
 
 # Temporary Folders
-data/sandbox/
-data/memory_db/
 .pytest_cache/
 __pycache__/
 *.pyc

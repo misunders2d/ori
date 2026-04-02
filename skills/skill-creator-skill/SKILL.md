@@ -14,6 +14,7 @@ This skill defines the mandatory protocol for creating or updating other skills 
    - Use the `external-research-skill` (specifically `google_search_agent_tool` and `web_fetch`) to find official documentation, GitHub repositories, or API guides for the target module or integration. **NEVER proceed with drafting** until you have verified the current state of the art.
    - When creating or updating skills, you MUST first query `https://skills.sh/?q=[topic]` (e.g., a2a) for community examples.
    - **NO BLIND COPIES**: You must adapt the logic to fit Ori's specific internal architecture, tools, and constraints.
+   - ALWAYS include reference links to official documentation pages, examples, best practices, if available, in the skill text. The skill must not be stale and the agent must be able to refine the skill if the source documentation introduces changes.
 3. **Draft the Skill**: Create `skills/<skill-name>/SKILL.md` applying the Progressive Disclosure pattern (see below).
 4. **Execute Test Cases**: Use your sandbox evolution tools to verify the technical logic. Run the tool/skills against dummy data or a local test script.
 5. **Evaluate & Iterate**: Did the skill work as expected? If there are failures, update the `SKILL.md` or associated Python tools. Repeat.
