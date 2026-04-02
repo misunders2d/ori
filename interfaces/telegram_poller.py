@@ -400,6 +400,12 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                     is_group = chat_type in ["group", "supergroup"]
                     message_id = msg["message_id"]
                     from_user = msg.get("from", {})
+                    
+                    # --- UME: Temporal Normalization ---
+                    # Extract platform-native UTC timestamp
+                    unix_ts = msg.get("date", int(datetime.now().timestamp()))
+                    dt_utc = datetime.fromtimestamp(unix_ts)
+                    ts_str = dt_utc.strftime("%Y-%m-%d %H:%M:%S UTC")
 
                     display_name = from_user.get("first_name", "Unknown")
                     if from_user.get("last_name"):
@@ -416,11 +422,6 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                         continue
 
                     # ── ACCESS CONTROL GATE ──────────────────────────────────
-                    # Requirement: Only whitelisted users OR whitelisted groups can interact.
-                    # 1. In a Group Chat: If Group ID (session_id) is whitelisted, anyone can talk.
-                    # 2. In a Private Chat: The individual User ID must be whitelisted.
-                    # 3. Admins/Whitelisted users are ALWAYS allowed regardless of chat type.
-                    
                     user_authorized = is_allowed(user_id)
                     group_authorized = is_group and is_allowed(session_id)
                     
@@ -428,7 +429,6 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                         if is_blacklisted(user_id) or is_blacklisted(session_id):
                             continue
                         
-                        # Handle /start command — always accessible for ID discovery
                         if text.strip() == "/start":
                             await adapter.send_message(
                                 chat_id,
@@ -439,9 +439,7 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                             )
                             continue
 
-                        # Notify admin if not blacklisted and within cooldown
                         if should_notify_admin(user_id):
-                            # Try both ALLOWED and ADMIN env vars for notify targets
                             admin_ids_str = os.environ.get("ADMIN_USER_IDS", "") or os.environ.get("ALLOWED_USER_IDS", "")
                             admin_ids = [u.strip() for u in admin_ids_str.split(",") if u.strip()]
                             for admin_id in admin_ids:
@@ -490,12 +488,15 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                     if not text and not file_id:
                         continue
 
-                    # Suppress the redundant tag for media groups to prevent pollution
+                    # Construct normalized text with metadata header
                     mg_id = msg.get("media_group_id")
                     if mg_id and not text:
+                        # Redundant tag suppression for media groups
                         enriched_text = ""
                     else:
-                        enriched_text = f"Message from {display_name} ({user_id}): {text} {file_info_text}".strip()
+                        header = f"[Metadata: {ts_str} | Platform: telegram]"
+                        raw_text = f"Message from {display_name} ({user_id}): {text} {file_info_text}".strip()
+                        enriched_text = f"{header}\n{raw_text}"
 
                     message_content = types.Content(role="user", parts=[])
                     if enriched_text:
@@ -516,7 +517,6 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                             )
 
                     # Handle whitelist/blacklist shortcuts from authorized users
-                    # Check against the cache which is more robust than raw env split
                     if is_allowed(user_id):
                         if text.lower().startswith("whitelist "):
                             target_id = text.split(" ")[1].strip()
@@ -586,7 +586,7 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                             await adapter.send_message(chat_id, result_msg)
                         continue
 
-                    # Handle /init command — delete the message since it may contain inline credentials
+                    # Handle /init command
                     if text.strip().startswith("/init"):
                         await adapter.delete_message(chat_id, message_id)
                         result = process_init_fn(text, session_id=session_id)

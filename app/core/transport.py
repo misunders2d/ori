@@ -6,7 +6,22 @@ knowing which platform is active.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Optional, Any
+
+
+@dataclass
+class Message:
+    """A standardized message object received from any transport."""
+    text: str
+    timestamp: datetime
+    platform: str
+    message_id: int | str
+    sender_id: str
+    display_name: str
+    media_items: list[dict] = field(default_factory=list)
+    raw_payload: Any = None
 
 
 class TransportAdapter(ABC):
