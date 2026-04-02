@@ -12,7 +12,7 @@ def test_force_sync():
     # Force alignment with remote
     run("git fetch origin master")
     run("git reset --hard origin/master")
-    run("git clean -fd --exclude=data/")
+    run("git clean -fd --exclude=data --exclude=.env")
     
     # Verify alignment
     run("git status")

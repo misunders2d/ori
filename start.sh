@@ -19,7 +19,8 @@ IMAGE_NAME="ori-agent-image"
 
 # --- 2. BOOTSTRAP: FIRST CONTACT ---
 # If credentials are missing, launch the interactive setup wizard inside a one-off container.
-if [ ! -f "data/.env" ] || ! grep -q "GOOGLE_API_KEY=" "data/.env"; then
+# Check for GOOGLE_API_KEY in file OR environment
+if [ ! -f "data/.env" ] || { ! grep -q "GOOGLE_API_KEY=" "data/.env" && [ -z "$GOOGLE_API_KEY" ]; }; then
   echo "🧬 [$BOT_NAME] First-time setup detected. Launching interactive wizard..."
   docker compose run --rm -it --entrypoint "" ori-agent uv run python interfaces/setup_wizard.py
 fi
@@ -28,14 +29,25 @@ fi
 while true; do
   echo "🧬 [$BOT_NAME] Starting daemon..."
   
-  # Optimization: Only --build if the image is missing.
-  # Evolution (Signal 100) will explicitly trigger a rebuild later.
+  # Optimization: Only --build if the image is missing or dependencies changed.
+  # We check if pyproject.toml is newer than the image's creation time (approx by checking a local stamp)
+  REBUILD=false
   if [[ "$(docker images -q $IMAGE_NAME 2> /dev/null)" == "" ]]; then
-    echo "🧬 [$BOT_NAME] Image missing. Building..."
+    REBUILD=true
+  fi
+  
+  if [ "$REBUILD" = true ]; then
+    echo "🧬 [$BOT_NAME] Image missing or update required. Building..."
     docker compose up --build
   else
-    # Simple start to bypass slow rebuilds on normal crashes/reboots.
-    docker compose up
+    # Check if pyproject.toml or Dockerfile is newer than data/.last_build
+    if [ "pyproject.toml" -nt "data/.last_build" ] || [ "Dockerfile" -nt "data/.last_build" ]; then
+        echo "🧬 [$BOT_NAME] Dependencies or Dockerfile changed. Rebuilding..."
+        docker compose up --build
+        touch data/.last_build
+    else
+        docker compose up
+    fi
   fi
   
   EXIT_CODE=$?
@@ -55,10 +67,12 @@ while true; do
     echo "🧬 [$BOT_NAME] Synchronizing host DNA with remote master..."
     git fetch origin master
     git reset --hard origin/master
-    git clean -fd --exclude=data/
+    # Safer clean: explicitly exclude data directory and hidden env files
+    git clean -fd --exclude=data --exclude=.env
     
     # Rebuild image from the fresh DNA
     docker compose build --no-cache
+    touch data/.last_build
     
   # Exit Code 101: Rollback Signal (Fatal error detected)
   elif [ $EXIT_CODE -eq 101 ]; then
@@ -69,8 +83,9 @@ while true; do
     fi
     
     git reset --hard HEAD~1
-    git clean -fd --exclude=data/
+    git clean -fd --exclude=data --exclude=.env
     docker compose build --no-cache
+    touch data/.last_build
     
   # Clean Exit: The user stopped the bot manually.
   elif [ $EXIT_CODE -eq 0 ] || [ $EXIT_CODE -eq 130 ]; then

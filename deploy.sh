@@ -2,7 +2,8 @@
 
 BOT_NAME="Ori"
 if [ -f "data/.env" ]; then
-  ENV_BOT_NAME=$(grep -v '^#' data/.env | grep -E '^BOT_NAME=' | cut -d '=' -f2- | tr -d '"'\''\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  # Extract BOT_NAME from .env if present - use || true to prevent set -e exit if grep fails
+  ENV_BOT_NAME=$(grep -v '^#' data/.env | grep -E '^BOT_NAME=' | cut -d '=' -f2- | tr -d '"'\''\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || echo "")
   if [ ! -z "$ENV_BOT_NAME" ]; then BOT_NAME="$ENV_BOT_NAME"; fi
 fi
 # 🧬 $BOT_NAME: Manual Update (NTFS-friendly)

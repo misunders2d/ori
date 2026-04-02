@@ -2,6 +2,7 @@
 .env
 
 # Databases & Runtime State
+data/.env
 data/*
 data/.*
 !data/agent.json

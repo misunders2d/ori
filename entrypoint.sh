@@ -87,8 +87,8 @@ fi
 
 if [ "$CRASHES" -ge "$MAX_CRASHES" ]; then
     echo "🚨 [$BOT_NAME Watchdog] Detected $CRASHES consecutive crashes! Initiating auto-rollback..."
-    # Preserve data directory (not tracked by git, contains .env and databases)
-    gosu agentuser git clean -fd --exclude=data/ || true
+    # Preserve data directory and env files explicitly
+    gosu agentuser git clean -fd --exclude=data --exclude=.env || true
     gosu agentuser git reset --hard HEAD~1 || true
     echo "🧬 [$BOT_NAME Watchdog] Rollback complete. Proceeding with safe boot."
     CRASHES=0
@@ -120,6 +120,11 @@ set -e
 
 # Handle specific exit codes (100=Update, 101=Rollback) as clean shutdowns
 if [ "$EXIT_CODE" = "0" ] || [ "$EXIT_CODE" = "100" ] || [ "$EXIT_CODE" = "101" ]; then
+    gosu agentuser sh -c "echo 0 > $CRASH_FILE"
+fi
+
+exit $EXIT_CODE
+then
     gosu agentuser sh -c "echo 0 > $CRASH_FILE"
 fi
 
