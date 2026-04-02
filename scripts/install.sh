@@ -5,9 +5,13 @@
 
 set -e
 
+# Support custom folder name via argument
+TARGET_DIR="${1:-ori-organism}"
+
 echo "=========================================="
 echo "    🧬 Ori — Digital Organism Birth"
 echo "=========================================="
+echo "  Target: $TARGET_DIR"
 echo ""
 
 # Check prerequisites
@@ -32,15 +36,24 @@ check_cmd "curl" "Install Curl: sudo apt install curl (or brew install curl)"
 
 # Clone
 echo "  [+] Cloning Ori (latest master)..."
-git clone --depth=1 https://github.com/misunders2d/ori.git ori-organism
+git clone --depth=1 https://github.com/misunders2d/ori.git "$TARGET_DIR"
 
 # Enter directory
-cd ori-organism
+cd "$TARGET_DIR"
 
 # Detach DNA
 echo "  [+] Severing DNA connection (detaching from origin)..."
 rm -rf .git
+
+# Initialize fresh history
 git init -b master
+git config user.email "organism@local.host"
+git config user.name "Ori Birth Process"
+
+# Prepare Rootless baseline
+mkdir -p data
+touch data/.last_build
+
 git add .
 git commit -m "Initial birth of Ori Organism"
 
