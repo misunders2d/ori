@@ -15,10 +15,7 @@ if [ ! -f "data/.env" ] || ! grep -q "GOOGLE_API_KEY=" "data/.env"; then
 fi
 
 echo "🧬 [$BOT_NAME] Forcing manual update..."
-# Fix root-owned .git objects left by container commits
-if [ -d ".git" ]; then
-  sudo chown -R "$(id -u):$(id -g)" .git 2>/dev/null || true
-fi
+# Fix permissions if needed
 git pull
 docker compose up -d --build
 echo "🧬 [$BOT_NAME] Sweeping old DNA..."

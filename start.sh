@@ -4,7 +4,7 @@
 BOT_NAME="Ori"
 if [ -f "data/.env" ]; then
   # Extract BOT_NAME from .env if present
-  ENV_BOT_NAME=$(grep -v '^#' data/.env | grep -E '^BOT_NAME=' | cut -d '=' -f2- | tr -d '"'\''\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  ENV_BOT_NAME=$(grep -v '^#' data/.env | grep -E '^BOT_NAME=' | cut -d '=' -f2- | tr -d '"'\''\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || echo "")
   if [ ! -z "$ENV_BOT_NAME" ]; then BOT_NAME="$ENV_BOT_NAME"; fi
 fi
 
@@ -12,14 +12,15 @@ fi
 export AGENT_UID=$(id -u)
 export AGENT_GID=$(id -g)
 
-# 🧬 $BOT_NAME: Host-side Supervisor Loop (Signal-Based) - v4.0
-# Hardened for detached repos and forced remote synchronization.
+# 🧬 $BOT_NAME: Host-side Supervisor Loop (Signal-Based) - v5.0 (Rootless Edition)
+# Hardened for read-only containers. Evolution is pushed to Remote and pulled to Host.
 
 IMAGE_NAME="ori-agent-image"
+CRASH_FILE="data/.crash_count"
+MAX_CRASHES=3
 
 # --- 2. BOOTSTRAP: FIRST CONTACT ---
 # If credentials are missing, launch the interactive setup wizard inside a one-off container.
-# Check for GOOGLE_API_KEY in file OR environment
 if [ ! -f "data/.env" ] || { ! grep -q "GOOGLE_API_KEY=" "data/.env" && [ -z "$GOOGLE_API_KEY" ]; }; then
   echo "🧬 [$BOT_NAME] First-time setup detected. Launching interactive wizard..."
   docker compose run --rm -it --entrypoint "" ori-agent uv run python interfaces/setup_wizard.py
@@ -27,10 +28,27 @@ fi
 
 # --- 3. THE REGENERATION LOOP ---
 while true; do
+  # --- HOST-SIDE WATCHDOG: RECOVERY MECHANISM ---
+  # If the bot is caught in a crash loop, roll back the code on the host.
+  if [ -f "$CRASH_FILE" ]; then
+    CRASHES=$(cat "$CRASH_FILE")
+    if [[ "$CRASHES" =~ ^[0-9]+$ ]] && [ "$CRASHES" -ge "$MAX_CRASHES" ]; then
+        echo "🚨 [$BOT_NAME Host] Detected $CRASHES consecutive crashes. Initiating Emergency Rollback..."
+        
+        # In Rootless Mode, .git is not mounted, so permissions should remain stable.
+        git reset --hard HEAD~1
+        git clean -fd --exclude=data --exclude=.env
+        echo 0 > "$CRASH_FILE"
+        echo "🧬 [$BOT_NAME Host] Rollback complete. Rebuilding..."
+        docker compose up --build
+        EXIT_CODE=$?
+        continue
+    fi
+  fi
+
   echo "🧬 [$BOT_NAME] Starting daemon..."
   
   # Optimization: Only --build if the image is missing or dependencies changed.
-  # We check if pyproject.toml is newer than the image's creation time (approx by checking a local stamp)
   REBUILD=false
   if [[ "$(docker images -q $IMAGE_NAME 2> /dev/null)" == "" ]]; then
     REBUILD=true
@@ -54,38 +72,28 @@ while true; do
 
   # --- 4. SIGNAL HANDLING ---
   
-  # Exit Code 100: Evolution Signal (The agent modified its code)
+  # Exit Code 100: Evolution Signal (The agent modified its code on Remote)
   if [ $EXIT_CODE -eq 100 ]; then
     echo "🧬 [$BOT_NAME] Evolution Signal (100). Executing Forced Sync & Rebuild..."
     
-    # Permission Recovery: Fix any root-owned objects in .git left by container operations.
-    if [ -d ".git" ]; then
-      sudo chown -R "$(id -u):$(id -g)" .git 2>/dev/null || true
-    fi
-    
-    # FORCED SYNC: Destroy any local drift/conflicts and match the remote master exactly.
     echo "🧬 [$BOT_NAME] Synchronizing host DNA with remote master..."
     git fetch origin master
     git reset --hard origin/master
-    # Safer clean: explicitly exclude data directory and hidden env files
     git clean -fd --exclude=data --exclude=.env
     
-    # Rebuild image from the fresh DNA
     docker compose build --no-cache
     touch data/.last_build
+    echo 0 > "$CRASH_FILE"
     
-  # Exit Code 101: Rollback Signal (Fatal error detected)
+  # Exit Code 101: Manual Rollback Signal
   elif [ $EXIT_CODE -eq 101 ]; then
     echo "🧬 [$BOT_NAME] Rollback Signal (101). Reverting to previous DNA..."
-    
-    if [ -d ".git" ]; then
-      sudo chown -R "$(id -u):$(id -g)" .git 2>/dev/null || true
-    fi
     
     git reset --hard HEAD~1
     git clean -fd --exclude=data --exclude=.env
     docker compose build --no-cache
     touch data/.last_build
+    echo 0 > "$CRASH_FILE"
     
   # Clean Exit: The user stopped the bot manually.
   elif [ $EXIT_CODE -eq 0 ] || [ $EXIT_CODE -eq 130 ]; then
