@@ -295,7 +295,7 @@ def tool_output_injection_guardrail(tool, args, tool_context, tool_response):
     try:
         client = Client(api_key=os.environ.get("GOOGLE_API_KEY"))
         emb_response = client.models.embed_content(
-            model="gemini-embedding-001", contents=[fragment]
+            model=get_model_name("embedding"), contents=[fragment]
         )
         if not emb_response or not emb_response.embeddings:
             return None
