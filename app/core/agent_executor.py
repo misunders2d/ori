@@ -4,12 +4,56 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from google import genai
 from google.genai import types
 
 from app.app_utils.models import get_model_name
 from app.session_signals import get_pending_refresh
+
+
+def _inject_metadata_header(
+    text: str, timestamp: datetime, platform: str, state: dict | None = None
+) -> str:
+    """Build a metadata-prefixed message string, converting to user timezone if available.
+
+    Args:
+        text: The raw message text.
+        timestamp: Message timestamp (assumed UTC if naive).
+        platform: Platform identifier (e.g. 'telegram', 'cli').
+        state: Optional session state dict; may contain 'user_preferences' with a
+               'Timezone: Region/City' line for local time conversion.
+
+    Returns:
+        The message text prefixed with a ``[Metadata: ...]`` header line.
+    """
+    # Ensure the timestamp is timezone-aware (treat naive as UTC)
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+
+    tz_label = "UTC"
+    display_ts = timestamp
+
+    # Attempt user-preferred timezone conversion
+    if state:
+        prefs = state.get("user_preferences", "") or ""
+        for line in prefs.splitlines():
+            line = line.strip()
+            if line.lower().startswith("timezone:"):
+                tz_name = line.split(":", 1)[1].strip()
+                try:
+                    user_tz = ZoneInfo(tz_name)
+                    display_ts = timestamp.astimezone(user_tz)
+                    tz_label = display_ts.strftime("%Z") or str(user_tz)
+                except (ZoneInfoNotFoundError, KeyError):
+                    pass  # fall back to UTC
+                break
+
+    ts_str = display_ts.strftime(f"%Y-%m-%d %H:%M:%S {tz_label}")
+    header = f"[Metadata: {ts_str} | Platform: {platform}]"
+    return f"{header}\n{text}"
 
 
 @dataclass

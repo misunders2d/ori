@@ -1,8 +1,9 @@
 import asyncio
 import os
 import sys
+from datetime import datetime
 from google.genai import types
-from app.core.agent_executor import extract_agent_response
+from app.core.agent_executor import _inject_metadata_header, extract_agent_response
 
 async def start_cli_chat(get_runner_fn):
     """
@@ -114,9 +115,10 @@ async def start_cli_chat(get_runner_fn):
                 continue
 
             print(f"\n{bot_name} is thinking...", end="\r", flush=True)
-            
+
+            enriched_input = _inject_metadata_header(user_input, datetime.utcnow(), "cli")
             response = await extract_agent_response(
-                runner, user_id, session_id, user_input
+                runner, user_id, session_id, enriched_input
             )
             
             # Clear "thinking" line

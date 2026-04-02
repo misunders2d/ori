@@ -11,6 +11,7 @@ import httpx
 from google.genai import types
 
 from app.core.agent_executor import (
+    _inject_metadata_header,
     extract_agent_response,
     process_message_for_context,
     update_session_state,
@@ -401,11 +402,9 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                     message_id = msg["message_id"]
                     from_user = msg.get("from", {})
                     
-                    # --- UME: Temporal Normalization ---
-                    # Extract platform-native UTC timestamp
+                    # --- UME: Extract platform-native UTC timestamp ---
                     unix_ts = msg.get("date", int(datetime.now().timestamp()))
-                    dt_utc = datetime.fromtimestamp(unix_ts)
-                    ts_str = dt_utc.strftime("%Y-%m-%d %H:%M:%S UTC")
+                    msg_timestamp = datetime.utcfromtimestamp(unix_ts)
 
                     display_name = from_user.get("first_name", "Unknown")
                     if from_user.get("last_name"):
@@ -494,9 +493,8 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                         # Redundant tag suppression for media groups
                         enriched_text = ""
                     else:
-                        header = f"[Metadata: {ts_str} | Platform: telegram]"
                         raw_text = f"Message from {display_name} ({user_id}): {text} {file_info_text}".strip()
-                        enriched_text = f"{header}\n{raw_text}"
+                        enriched_text = _inject_metadata_header(raw_text, msg_timestamp, "telegram")
 
                     message_content = types.Content(role="user", parts=[])
                     if enriched_text:
