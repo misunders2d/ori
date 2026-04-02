@@ -57,17 +57,20 @@ async def start_cli_chat(get_runner_fn):
 
         # Get user input safely
         try:
-            print("You: ", end="", flush=True)
-            
             def get_user_input():
                 try:
-                    return sys.stdin.readline()
-                except Exception:
-                    return ""
+                    # input() correctly handles the TTY buffer and prompt
+                    return input("You: ")
+                except EOFError:
+                    return None
+                except Exception as e:
+                    import logging
+                    logging.error(f"Input thread crashed: {e}")
+                    return None
                     
             raw_input = await asyncio.to_thread(get_user_input)
             
-            if not raw_input: # EOF or disconnected terminal
+            if raw_input is None: # EOF or error
                 empty_reads += 1
                 if empty_reads > 5:
                     print("\nTerminal disconnected. Exiting CLI chat.")
