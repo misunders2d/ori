@@ -1,16 +1,15 @@
-import base64
-import hashlib
-import hmac
-import json
 import os
-import secrets
-import struct
 import sys
-import time
-import urllib.error
+import secrets
+import base64
 import urllib.parse
 import urllib.request
-
+import urllib.error
+import json
+import time
+import hashlib
+import hmac
+import struct
 
 def _decode_secret(secret: str) -> bytes:
     """Decode a base32-encoded TOTP secret, tolerating missing padding."""
@@ -20,7 +19,6 @@ def _decode_secret(secret: str) -> bytes:
         secret += "=" * padding
     return base64.b32decode(secret)
 
-
 def _generate_code(secret: str, time_step: int) -> str:
     """Generate a 6-digit TOTP code for a given time step."""
     key = _decode_secret(secret)
@@ -29,7 +27,6 @@ def _generate_code(secret: str, time_step: int) -> str:
     offset = digest[-1] & 0x0F
     code = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
     return str(code % 1_000_000).zfill(6)
-
 
 def verify_totp(secret: str, code: str, window: int = 1) -> bool:
     """Verify a TOTP code against a secret."""
@@ -43,14 +40,11 @@ def verify_totp(secret: str, code: str, window: int = 1) -> bool:
             return True
     return False
 
-
 def clear_screen():
-    os.system("cls" if os.name == "nt" else "clear")
-
+    os.system('cls' if os.name == 'nt' else 'clear')
 
 def cprint(text, color="0"):
     print(f"\033[{color}m{text}\033[0m")
-
 
 def main():
     ENV_FILE_PATH = os.path.abspath("./data/.env")
@@ -59,22 +53,18 @@ def main():
         with open(ENV_FILE_PATH, "w") as f:
             f.write("# Ori Daemon Configuration\n")
 
-    from dotenv import load_dotenv, set_key
-
+    from dotenv import set_key, load_dotenv
     load_dotenv(ENV_FILE_PATH)
 
     clear_screen()
-    cprint(
-        r"""
+    cprint(r"""
   ██████╗  ██████╗  ██╗
  ██╔═══██╗ ██╔══██╗ ██║
  ██║   ██║ ██████╔╝ ██║
  ██║   ██║ ██╔══██╗ ██║
  ╚██████╔╝ ██║  ██║ ██║
   ╚═════╝  ╚═╝  ╚═╝ ╚═╝
-    """,
-        "96",
-    )
+    """, "96")
     cprint(" Welcome to the Ori Incubation Wizard.\n", "96")
 
     # 1. Agent Name
@@ -103,13 +93,9 @@ def main():
     tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     if not tg_token:
         cprint("[3] Telegram Bot Token (Optional)", "93")
-        print(
-            "To control your agent from your phone, create a bot via @BotFather on Telegram."
-        )
+        print("To control your agent from your phone, create a bot via @BotFather on Telegram.")
         print("If you skip this, the agent will run in local CLI mode.")
-        tg_token = input(
-            "\033[92mEnter your TELEGRAM_BOT_TOKEN (or press Enter to skip):\033[0m "
-        ).strip()
+        tg_token = input("\033[92mEnter your TELEGRAM_BOT_TOKEN (or press Enter to skip):\033[0m ").strip()
         if tg_token:
             set_key(ENV_FILE_PATH, "TELEGRAM_BOT_TOKEN", tg_token)
             cprint("✅ Saved.\n", "92")
@@ -123,19 +109,15 @@ def main():
             cprint("[3.5] Secure Telegram Binding", "93")
             print("To secure your bot, we need to link it to your Telegram account.")
             verification_code = secrets.token_hex(3).upper()
-            print(
-                f"Please open your bot on Telegram and send this exact code: \033[96m{verification_code}\033[0m"
-            )
+            print(f"Please open your bot on Telegram and send this exact code: \033[96m{verification_code}\033[0m")
             print("Waiting for message... (Press Ctrl+C to skip)")
-
+            
             try:
                 offset = 0
                 chat_id_found = None
                 # Polling loop with safety timeout for non-interactive environments
                 start_time = time.time()
-                while (
-                    not chat_id_found and (time.time() - start_time) < 300
-                ):  # 5 min timeout
+                while not chat_id_found and (time.time() - start_time) < 300: # 5 min timeout
                     try:
                         url = f"https://api.telegram.org/bot{tg_token}/getUpdates?offset={offset}&timeout=5"
                         req = urllib.request.Request(url)
@@ -145,77 +127,70 @@ def main():
                                 for result in data.get("result", []):
                                     offset = result["update_id"] + 1
                                     message = result.get("message", {})
-                                    if (
-                                        message.get("text", "").strip()
-                                        == verification_code
-                                    ):
+                                    if message.get("text", "").strip() == verification_code:
                                         chat_id_found = str(message["from"]["id"])
                                         break
-                        if chat_id_found:
-                            break
+                        if chat_id_found: break
                         time.sleep(1)
                     except Exception:
                         time.sleep(2)
                         continue
-
+                        
                 if chat_id_found:
-                    set_key(ENV_FILE_PATH, "ADMIN_USER_IDS", f"tg_chat_id_found")
+                    tg_id = f"tg_{chat_id_found}"
+                    set_key(ENV_FILE_PATH, "ADMIN_USER_IDS", tg_id)
+                    
+                    # Also automatically add to whitelist.json for redundancy
+                    whitelist_path = os.path.abspath("./data/whitelist.json")
+                    os.makedirs(os.path.dirname(whitelist_path), exist_ok=True)
+                    whitelist = []
+                    if os.path.exists(whitelist_path):
+                        try:
+                            with open(whitelist_path, "r") as f:
+                                whitelist = json.load(f)
+                                if not isinstance(whitelist, list): whitelist = []
+                        except Exception: pass
+                    
+                    if tg_id not in whitelist:
+                        whitelist.append(tg_id)
+                        with open(whitelist_path, "w") as f:
+                            json.dump(whitelist, f, indent=2)
+
                     cprint(
-                        f"✅ Verified! Chat ID {chat_id_found} saved as Admin.\n", "92"
+                        f"✅ Verified! Chat ID {tg_id} saved as Admin and whitelisted.\n", "92"
                     )
                 else:
-                    cprint(
-                        "⚠️  Verification timed out. Set ADMIN_USER_IDS manually in data/.env\n",
-                        "93",
-                    )
-
+                    cprint("⚠️  Verification timed out. Set ADMIN_USER_IDS manually in data/.env\n", "93")
+                    
             except KeyboardInterrupt:
                 print("\n")
-                cprint(
-                    "⏭️  Skipped Telegram verification. Remember to set ADMIN_USER_IDS manually in data/.env\n",
-                    "90",
-                )
+                cprint("⏭️  Skipped Telegram verification. Remember to set ADMIN_USER_IDS manually in data/.env\n", "90")
 
     # 4. GitHub Evolution Habitat
     github_repo = os.environ.get("GITHUB_REPO", "").strip()
     github_token = os.environ.get("GITHUB_TOKEN", "").strip()
     if not github_repo or not github_token:
         cprint("[4] GitHub Evolution Habitat (Highly Recommended)", "93")
-        print(
-            "To truly self-evolve, the agent needs a GitHub repository to push its code changes to."
-        )
+        print("To truly self-evolve, the agent needs a GitHub repository to push its code changes to.")
         print("Without this, it cannot write permanent updates to its own source code.")
         print("\nHow to set this up:")
         print("  1. Create a new, empty private repository on GitHub.")
-        print(
-            "  2. Create a Personal Access Token (Classic) with 'repo' scope at: https://github.com/settings/tokens"
-        )
-
-        setup_github = (
-            input("\n\033[92mConfigure GitHub now? (y/N):\033[0m ").strip().lower()
-        )
-        if setup_github == "y":
-            github_repo = input(
-                "\033[92mEnter your GitHub Repo (e.g., username/my-bot):\033[0m "
-            ).strip()
-            github_token = input(
-                "\033[92mEnter your GitHub PAT (ghp_...):\033[0m "
-            ).strip()
-
+        print("  2. Create a Personal Access Token (Classic) with 'repo' scope at: https://github.com/settings/tokens")
+        
+        setup_github = input("\n\033[92mConfigure GitHub now? (y/N):\033[0m ").strip().lower()
+        if setup_github == 'y':
+            github_repo = input("\033[92mEnter your GitHub Repo (e.g., username/my-bot):\033[0m ").strip()
+            github_token = input("\033[92mEnter your GitHub PAT (ghp_...):\033[0m ").strip()
+            
             if github_repo and github_token:
-                github_repo = github_repo.replace("https://github.com/", "").replace(
-                    ".git", ""
-                )
+                github_repo = github_repo.replace("https://github.com/", "").replace(".git", "")
                 set_key(ENV_FILE_PATH, "GITHUB_REPO", github_repo)
                 set_key(ENV_FILE_PATH, "GITHUB_TOKEN", github_token)
                 cprint("✅ Habitat Saved.\n", "92")
             else:
                 cprint("❌ Missing repo or token. Skipped GitHub setup.\n", "91")
         else:
-            cprint(
-                "⏭️  Skipped. You can configure this later via /init or editing data/.env.\n",
-                "90",
-            )
+            cprint("⏭️  Skipped. You can configure this later via /init or editing data/.env.\n", "90")
 
     # 5. Admin Passcode
     admin_pass = os.environ.get("ADMIN_PASSCODE", "").strip()
@@ -243,22 +218,20 @@ def main():
         print("For maximum security during evolution, you can require a 6-digit")
         print("authenticator code (Google Auth, Authy, etc.) for admin actions.")
         enable_totp = input("\033[92mEnable TOTP 2FA? (y/N):\033[0m ").strip().lower()
-        if enable_totp == "y":
+        if enable_totp == 'y':
             raw_secret = os.urandom(10)
-            totp_secret = base64.b32encode(raw_secret).decode("utf-8").replace("=", "")
-
+            totp_secret = base64.b32encode(raw_secret).decode('utf-8').replace('=', '')
+            
             print("\nYour TOTP Secret Key is:")
             cprint(f"  {totp_secret}\n", "92")
-
+            
             uri = f"otpauth://totp/{bot_name}:Admin?secret={totp_secret}&issuer={bot_name}"
             qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=250x250&data={urllib.parse.quote(uri)}"
             print(f"Scan this QR Code URL in your browser: \n\033[94m{qr_url}\033[0m\n")
             print("Or enter the Secret Key manually into your authenticator app.\n")
-
+            
             while True:
-                code = input(
-                    "\033[92mEnter the 6-digit code from your app to verify:\033[0m "
-                ).strip()
+                code = input("\033[92mEnter the 6-digit code from your app to verify:\033[0m ").strip()
                 if verify_totp(totp_secret, code):
                     set_key(ENV_FILE_PATH, "ADMIN_TOTP_SECRET", totp_secret)
                     cprint("✅ TOTP Verified and Enabled!\n", "92")
@@ -270,7 +243,6 @@ def main():
 
     cprint(f"🎉 Incubation Complete! {bot_name} is waking up...", "92")
     time.sleep(1)
-
 
 if __name__ == "__main__":
     main()

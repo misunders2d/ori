@@ -27,6 +27,9 @@ def _load_data():
         clean_uid = uid.strip()
         if clean_uid:
             new_whitelist.add(clean_uid)
+            # Compatibility: if it's a numeric ID, also add the tg_ prefixed version
+            if clean_uid.isdigit():
+                new_whitelist.add(f"tg_{clean_uid}")
             print(f"Gate Config: Admin {clean_uid} authorized.")
 
     # 2. LOAD WHITELIST FROM JSON
@@ -70,11 +73,21 @@ def is_allowed(chat_id: str) -> bool:
     if not chat_id:
         return False
     
-    chat_id_str = str(chat_id)
+    chat_id_str = str(chat_id).strip()
     
-    # Check whitelist cache
+    # Check whitelist cache (direct match)
     if chat_id_str in _whitelist:
         logger.info(f"Gate: Access GRANTED for {chat_id_str}")
+        return True
+    
+    # Robustness check: if we have the prefixed version in whitelist but checking the raw ID
+    if chat_id_str.isdigit() and f"tg_{chat_id_str}" in _whitelist:
+        logger.info(f"Gate: Access GRANTED for {chat_id_str} (via tg_ prefix)")
+        return True
+
+    # Robustness check: if we have the raw ID in whitelist but checking the prefixed version
+    if chat_id_str.startswith("tg_") and chat_id_str[3:].isdigit() and chat_id_str[3:] in _whitelist:
+        logger.info(f"Gate: Access GRANTED for {chat_id_str} (via raw ID)")
         return True
     
     logger.warning(f"Gate: Access DENIED for {chat_id_str} (Unauthorized)")
