@@ -109,8 +109,16 @@ def evolution_stage_change(
     """
     if file_path.endswith(".env"):
         return {"status": "error", "message": "Security error: Writing to .env directly is blocked. Instruct human to configure integrations properly."}
-    
+
     sandbox_dir = os.path.abspath("./data/sandbox")
+
+    # Clear stale sandbox from previous (possibly rejected) evolution cycles
+    if os.path.exists(sandbox_dir):
+        state = tool_context.state
+        if not state.get("evolution_cycle_active"):
+            shutil.rmtree(sandbox_dir, ignore_errors=True)
+            state["evolution_cycle_active"] = True
+
     os.makedirs(sandbox_dir, exist_ok=True)
 
     resolved = _safe_resolve_path(file_path, sandbox_dir)
@@ -390,6 +398,9 @@ def evolution_commit_and_push(
     if os.path.exists(sandbox_dir):
         shutil.rmtree(sandbox_dir, ignore_errors=True)
 
+    # Reset cycle flag so next evolution_stage_change starts fresh
+    tool_context.state["evolution_cycle_active"] = False
+
     summary = []
     if staged_files:
         summary.append(f"added/updated {len(staged_files)} file(s)")
@@ -398,7 +409,9 @@ def evolution_commit_and_push(
 
     msg = f"Successfully {' and '.join(summary)} via temporary clone."
     if skip_local_update:
-        msg += " Local update skipped. A hard reboot (exit 100) is required to apply changes."
+        msg += " Local update skipped. Scheduling automatic hard reboot (exit 100) to apply changes."
+        from app.tools.system import _schedule_restart, EXIT_CODE_UPDATE
+        _schedule_restart(EXIT_CODE_UPDATE)
 
     return {
         "status": "success",

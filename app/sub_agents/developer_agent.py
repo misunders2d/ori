@@ -10,12 +10,12 @@ from app.tools.origins import analyze_upstream_file
 from app.tools.memory import remember_info, search_memory, recall_technical_context, modify_memory, delete_memory
 from app.callbacks.guardrails import (
     admin_only_guardrail,
+    admin_tool_guardrail,
     prompt_injection_guardrail,
     tool_output_injection_guardrail,
     verify_retry_guardrail,
 )
 from app.tools import (
-    evolution_commit_and_push,
     evolution_read_file,
     evolution_list_directory,
     evolution_stage_change,
@@ -64,10 +64,9 @@ developer_agent = Agent(
         "MCP DISCIPLINE: Read-only stateless bridges only. Mutating MCP tools must be replaced with native tools.\n\n"
 
         "=== TIER 3: SAFETY & PROCESS ===\n\n"
-        "ADMIN APPROVAL REQUIRED: Plan -> STOP -> Admin 'proceed' -> Stage -> Verify -> Commit.\n\n"
+        "ADMIN APPROVAL REQUIRED: Plan -> STOP -> Admin 'proceed' -> Stage -> Verify -> Commit -> Reboot. No exceptions.\n\n"
         "AUDITABILITY: Every action must leave a traceable record in logs.\n\n"
         "RESOURCE DISCIPLINE: Hard caps and circuit breakers on all loops and API calls.\n\n"
-        "SCOPE BOUNDARIES: Use CoordinatorAgent for system tools like `run_system_task_now` or `update_self`.\n\n"
 
         "=== TIER 4: OPERATIONAL PROTOCOLS ===\n\n"
         "DIAGNOSE FIRST: Read logs and code BEFORE forming hypotheses. Check `data/agent.log` for the `Gate:` prefix "
@@ -76,14 +75,23 @@ developer_agent = Agent(
         "ADK & A2A: Fetch and review working examples from official repos before implementing features. Never write ADK code from memory.\n\n"
         "POST-EVOLUTION HYGIENE: Review instructions after every commit. Remove stale references. Instructions are code.\n\n"
 
-        "=== EVOLUTION WORKFLOW ===\n\n"
+        "=== EVOLUTION WORKFLOW (HOLY GRAIL — NEVER SKIP A STEP) ===\n\n"
+        "This is the ONLY valid sequence for evolving the codebase. Every step is mandatory. "
+        "Skipping or reordering steps is a TIER 1 violation.\n\n"
         "1. READ — Understand code/logs. Read files BEFORE planning.\n"
-        "2. PULL/CLEAN — Keep workspace fresh.\n"
-        "3. PLAN — Explain which files and why.\n"
-        "4. WAIT — Present plan. STOP for admin 'proceed'.\n"
-        "5. STAGE — Sandbox first.\n"
-        "6. VERIFY — syntax, pytest. Full suite must pass.\n"
-        "7. COMMIT — commit-and-push only if ALL checks pass."
+        "2. PULL/CLEAN — Run `evolution_git_pull` or `evolution_git_reset` to ensure a fresh workspace.\n"
+        "3. PLAN — Explain which files change and why. Be specific.\n"
+        "4. WAIT — Present plan to admin. FULL STOP. Do NOT proceed until admin says 'proceed'.\n"
+        "5. STAGE — Write all changes to sandbox via `evolution_stage_change`.\n"
+        "6. VERIFY — Run `evolution_verify_sandbox` with 'syntax' for each Python file, then 'pytest' for full suite. ALL tests MUST pass.\n"
+        "7. COMMIT — Call `evolution_commit_and_push` ONLY if ALL checks pass. This requires admin token approval.\n"
+        "8. REBOOT — After a successful push, you MUST request `update_self` from CoordinatorAgent to trigger exit 100. "
+        "The host supervisor will then force-pull from remote, clean dangling files, and rebuild the container. "
+        "An evolution is NOT complete until the reboot is triggered. Never stop at step 7.\n\n"
+
+        "CRITICAL: Local source code is READ-ONLY in rootless mode. Changes only take effect after the full "
+        "push-reboot cycle (steps 7-8). If you skip the reboot, the running code diverges from the remote — "
+        "this is a system integrity violation."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[google_adk_skill, google_adk_a2a_skill, skill_creator_skill, log_maintenance_skill, system_management_skill, external_research_skill]),
@@ -108,5 +116,6 @@ developer_agent = Agent(
     ],
     before_agent_callback=admin_only_guardrail,
     before_model_callback=prompt_injection_guardrail,
+    before_tool_callback=admin_tool_guardrail,
     after_tool_callback=[tool_output_injection_guardrail, verify_retry_guardrail],
 )

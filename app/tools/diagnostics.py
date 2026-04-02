@@ -19,25 +19,6 @@ def check_active_tasks(tool_context: ToolContext) -> dict:
         return {"status": "success", "active_tasks": task_list}
     except Exception: return {"status": "error", "message": "Task check failed."}
 
-def repair_data_permissions(tool_context: ToolContext = None) -> dict:
-    """Fixes 'readonly database' by recursively correcting permissions in data/."""
-    data_dir = os.path.abspath("./data")
-    try:
-        # 777 for directories, 666 for files (Definitive fix for Docker permission sync)
-        os.chmod(data_dir, 0o777)
-        count = 0
-        for root, dirs, files in os.walk(data_dir):
-            for d in dirs: 
-                try: os.chmod(os.path.join(root, d), 0o777)
-                except Exception: pass
-            for f in files:
-                f_path = os.path.join(root, f)
-                try: os.chmod(f_path, 0o666)
-                except Exception: pass
-                count += 1
-        return {"status": "success", "message": f"Repaired {count} files in data/."}
-    except Exception as e: return {"status": "error", "message": str(e)}
-
 async def report_health(tool_context: ToolContext) -> dict:
     """Returns a full system health report including API, disk, and git integrity."""
     try:

@@ -30,6 +30,7 @@ def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
         "session_refresh",
         "update_self",
         "trigger_rollback",
+        "evolution_commit_and_push",
     ]:
         current_state = tool_context.state.to_dict()
         user_id = current_state.get("user_id", "")

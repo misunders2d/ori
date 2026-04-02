@@ -68,24 +68,6 @@ def process_init_command(text: str, session_id: str = "") -> str:
         _global_runner = None
     return result
 
-def ensure_writable_data():
-    """Aggressively corrects file permissions in the data directory at startup to prevent 'readonly' errors."""
-    data_dir = os.path.abspath("./data")
-    if not os.path.exists(data_dir): return
-    try:
-        # Recursive chmod to ensure SQLite can always write journals and wal files
-        # Using 777/666 to ensure write access regardless of UID/GID alignment during complex filesystem syncs
-        os.chmod(data_dir, 0o777)
-        for root, dirs, files in os.walk(data_dir):
-            for d in dirs:
-                try: os.chmod(os.path.join(root, d), 0o777)
-                except Exception: pass
-            for f in files:
-                try: os.chmod(os.path.join(root, f), 0o666)
-                except Exception: pass
-        logger.info("FileSystem: Permissions self-healed and locked (777/666).")
-    except Exception as e: logger.warning(f"FileSystem: Self-heal limited: {e}")
-
 def ensure_db_concurrency():
     """Enables SQLite Write-Ahead Logging (WAL) for better concurrency and fewer 'database is locked' errors."""
     data_dir = os.path.abspath("./data")
@@ -117,7 +99,6 @@ async def run_proactive_diagnostics():
 
 async def main():
     logger.info("Initializing Autonomous Worker Daemon...")
-    ensure_writable_data()
     ensure_db_concurrency()
     runner = get_runner()
     scheduler.start()
