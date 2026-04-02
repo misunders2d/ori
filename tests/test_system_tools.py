@@ -45,7 +45,7 @@ async def test_execute_approved_action_totp_valid():
                 assert "Session refreshed" in result["message"]
 
 def test_check_active_tasks():
-    from app.tools.system import check_active_tasks
+    from app.tools.diagnostics import check_active_tasks
     from app.tasks import ACTIVE_TASKS
     
     ACTIVE_TASKS.clear()

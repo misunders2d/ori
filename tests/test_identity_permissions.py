@@ -1,7 +1,7 @@
 import os
 import pytest
 import sqlite3
-from app.tools.system import repair_data_permissions
+from app.tools.diagnostics import repair_data_permissions
 
 def test_data_directory_write_access():
     """Verify that the process has write access to the data directory."""

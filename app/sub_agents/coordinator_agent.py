@@ -14,14 +14,21 @@ from app.callbacks.guardrails import (
 from app.sub_agents.developer_agent import developer_agent
 from app.sub_agents.knowledge_agent import knowledge_agent
 from app.tools import (
+    blacklist_chat,
+    check_active_tasks,
     configure_integration,
     delete_scheduled_task,
     edit_scheduled_task,
+    execute_approved_action,
     get_current_time,
     get_user_preferences,
+    inspect_secure_env,
+    list_access_control,
     list_integrations,
     list_scheduled_tasks,
     remove_integration,
+    repair_data_permissions,
+    report_health,
     run_system_task_now,
     save_user_preferences,
     schedule_one_off_task,
@@ -31,8 +38,10 @@ from app.tools import (
     session_refresh,
     set_planner_mode,
     trigger_rollback,
+    unwhitelist_chat,
     update_self,
     web_fetch,
+    whitelist_chat,
 )
 from app.tools.a2a import get_agent_identity
 from app.tools.auth import (
@@ -46,7 +55,6 @@ from app.tools.auth import (
 )
 from app.tools.channel_summarizer import summarize_channel
 from app.tools.google_search import google_search_agent_tool
-from app.tools.health import report_health
 from app.tools.memory import (
     recall_human_preferences,
     recall_technical_context,
@@ -56,8 +64,6 @@ from app.tools.memory import (
     delete_memory,
 )
 from app.tools.origins import analyze_upstream_file, check_upstream
-from app.tools.system import check_active_tasks, execute_approved_action
-from app.tools.whitelist import blacklist_chat, list_access_control, unwhitelist_chat, whitelist_chat
 
 root_agent = Agent(
     name="CoordinatorAgent",
@@ -138,6 +144,8 @@ root_agent = Agent(
         unwhitelist_chat,
         list_access_control,
         summarize_channel,
+        repair_data_permissions,
+        inspect_secure_env,
     ],
     before_agent_callback=[state_setter],
     before_model_callback=prompt_injection_guardrail,
