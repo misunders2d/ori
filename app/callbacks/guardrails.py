@@ -80,7 +80,9 @@ def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
         admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
         admin_users = [u.strip() for u in admin_users_str.split(",") if u.strip()]
 
-        if not admin_users or user_id not in admin_users:
+        # A2A callers with validated API keys are trusted
+        is_a2a = user_id.startswith("A2A_USER_")
+        if not is_a2a and (not admin_users or user_id not in admin_users):
             return {
                 "status": "error",
                 "message": f"Guardrail Intervention: Only Admin/Master users can invoke `{tool.name}`. Your user_id ({user_id}) is unauthorized.",
@@ -270,6 +272,10 @@ def admin_only_guardrail(callback_context: CallbackContext) -> types.Content | N
                 )
             ]
         )
+
+    # A2A callers with validated API keys are trusted (key was checked by a2a_server)
+    if user_id.startswith("A2A_USER_"):
+        return None  # Allow — authenticated A2A caller
 
     if user_id not in admin_users:
         return types.Content(
