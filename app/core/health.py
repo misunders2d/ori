@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import subprocess
@@ -115,5 +116,68 @@ async def get_system_health() -> Dict[str, Any]:
             
     except Exception:
         report["vitals"]["git_integrity"] = "unknown"
+
+    # 5. Container Resource Usage (self + children)
+    try:
+        stats_res = subprocess.run(
+            ["docker", "stats", "--no-stream", "--format",
+             '{"name":"{{.Name}}","cpu":"{{.CPUPerc}}","mem":"{{.MemUsage}}","mem_pct":"{{.MemPerc}}","net":"{{.NetIO}}"}'],
+            capture_output=True, text=True, timeout=10,
+        )
+        if stats_res.returncode == 0 and stats_res.stdout.strip():
+            containers = []
+            for line in stats_res.stdout.strip().split("\n"):
+                try:
+                    entry = json.loads(line)
+                    containers.append(entry)
+                except json.JSONDecodeError:
+                    continue
+            report["vitals"]["containers"] = containers
+            report["vitals"]["container_count"] = len(containers)
+
+            # Flag if any container is using > 80% memory
+            for c in containers:
+                try:
+                    mem_pct = float(c.get("mem_pct", "0").rstrip("%"))
+                    if mem_pct > 80:
+                        report["status"] = "degraded"
+                        report["vitals"].setdefault("warnings", []).append(
+                            f"Container {c['name']} using {c['mem_pct']} memory"
+                        )
+                except (ValueError, TypeError):
+                    pass
+    except Exception:
+        report["vitals"]["containers"] = "unavailable (docker not accessible)"
+
+    # 6. Spawned Children Status
+    try:
+        children_res = subprocess.run(
+            ["docker", "ps", "-a",
+             "--filter", "label=ori.parent",
+             "--format", "{{.Names}}\t{{.Status}}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if children_res.returncode == 0:
+            children = []
+            for line in children_res.stdout.strip().split("\n"):
+                if not line.strip():
+                    continue
+                parts = line.split("\t", 1)
+                children.append({
+                    "name": parts[0],
+                    "status": parts[1] if len(parts) > 1 else "unknown",
+                })
+            report["vitals"]["spawned_agents"] = children
+            report["vitals"]["spawned_count"] = len(children)
+
+            # Flag unhealthy children
+            for child in children:
+                if "unhealthy" in child.get("status", "").lower():
+                    report["status"] = "degraded"
+                    report["vitals"].setdefault("warnings", []).append(
+                        f"Child agent {child['name']} is unhealthy"
+                    )
+    except Exception:
+        report["vitals"]["spawned_agents"] = "unavailable"
 
     return report
