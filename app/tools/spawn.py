@@ -143,6 +143,26 @@ async def spawn_agent(
     # Port 0 = Docker assigns a random available port
     agent_port = "0"
 
+    # Detect parent's Docker network so child can resolve parent by container name
+    parent_network = None
+    try:
+        net_proc = await asyncio.create_subprocess_exec(
+            "docker", "inspect", "--format", "{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}",
+            os.environ.get("HOSTNAME", ""),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        net_out, _ = await net_proc.communicate()
+        net_name = net_out.decode().strip()
+        if net_name and net_name != "bridge":
+            parent_network = net_name
+    except Exception:
+        pass
+
+    # Fallback: look for a compose network matching the project directory
+    if not parent_network:
+        project_dir = os.path.basename(PROJECT_ROOT)
+        parent_network = f"{project_dir}_default"
+
     # Build docker run command
     # The child gets:
     #   1. Parent's env file for shared creds (GOOGLE_API_KEY, ANTHROPIC_API_KEY, etc.)
@@ -151,6 +171,7 @@ async def spawn_agent(
     run_cmd = [
         "docker", "run", "-d",
         "--name", container_name,
+        "--network", parent_network,
         "--label", "project=ori",
         "--label", f"ori.parent={os.environ.get('BOT_NAME', 'Ori')}",
         "--label", f"ori.purpose={purpose}",
@@ -183,39 +204,27 @@ async def spawn_agent(
     container_id = stdout.decode().strip()[:12]
 
     # Wait for the child's A2A server to come up
-    child_url = None
+    # Use container name as hostname (works on shared Docker network)
+    child_url = f"http://{container_name}:8000"
+    child_ready = False
     for attempt in range(15):
         await asyncio.sleep(2)
-        # Get the mapped port
-        port_cmd = await asyncio.create_subprocess_exec(
-            "docker", "port", container_name, "8000",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
-        port_out, _ = await port_cmd.communicate()
-        port_str = port_out.decode().strip()
-        if not port_str:
-            continue
-
-        # Parse "0.0.0.0:XXXXX" -> port
-        mapped_port = port_str.split(":")[-1]
-        child_url = f"http://localhost:{mapped_port}"
-
-        # Try to reach the agent card
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 resp = await client.get(f"{child_url}/.well-known/agent.json")
                 if resp.status_code == 200:
+                    child_ready = True
                     break
         except Exception:
-            child_url = None
             continue
 
-    if not child_url:
+    if not child_ready:
         return {
             "status": "partial",
-            "message": f"Container '{container_name}' started (ID: {container_id}) but A2A server not yet reachable. Try adding as friend manually later.",
+            "message": f"Container '{container_name}' started (ID: {container_id}) but A2A server not yet reachable at {child_url}. Try adding as friend manually later.",
             "container_id": container_id,
             "container_name": container_name,
+            "a2a_url": child_url,
         }
 
     # Auto-add as friend
