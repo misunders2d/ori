@@ -72,7 +72,7 @@ root_agent = Agent(
         SystemToolset(),
         AccessControlToolset(),
         # Individual tools (no natural group)
-        google_search_agent_tool,
+        *([google_search_agent_tool] if google_search_agent_tool else []),
         web_fetch,
         check_upstream,
         analyze_upstream_file,

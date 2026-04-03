@@ -172,12 +172,10 @@ def prompt_injection_guardrail(
             text_to_check = text_to_check.strip()
             if text_to_check:
                 vectors = _get_cached_vectors()
-                if vectors:
-                    import os
-
+                google_key = os.environ.get("GOOGLE_API_KEY", "").strip()
+                if vectors and google_key:
                     from google.genai import Client
-
-                    client = Client(api_key=os.environ.get("GOOGLE_API_KEY"))
+                    client = Client(api_key=google_key)
                     try:
                         emb_response = client.models.embed_content(
                             model=get_model_name("embedding"), contents=[text_to_check]
@@ -296,7 +294,9 @@ def tool_output_injection_guardrail(tool, args, tool_context, tool_response):
     if not vectors:
         return None
 
-    import os
+    google_key = os.environ.get("GOOGLE_API_KEY", "").strip()
+    if not google_key:
+        return None
 
     from google.genai import Client
 
@@ -306,7 +306,7 @@ def tool_output_injection_guardrail(tool, args, tool_context, tool_response):
     fragment = content[start:end]
 
     try:
-        client = Client(api_key=os.environ.get("GOOGLE_API_KEY"))
+        client = Client(api_key=google_key)
         emb_response = client.models.embed_content(
             model=get_model_name("embedding"), contents=[fragment]
         )

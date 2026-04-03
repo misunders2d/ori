@@ -77,8 +77,18 @@ export AGENT_UID="${AGENT_UID:-$(id -u)}"
 export AGENT_GID="${AGENT_GID:-$(id -g)}"
 
 # --- First-time setup wizard ---
-if [ ! -f "data/.env" ] || { ! grep -q "GOOGLE_API_KEY=" "data/.env" 2>/dev/null && [ -z "${GOOGLE_API_KEY:-}" ]; }; then
-    log "First-time setup detected. Launching interactive wizard..."
+# Require at least one LLM provider to be configured before starting.
+needs_setup() {
+    [ ! -f "data/.env" ] && return 0
+    # Check for any provider: API key or Vertex AI mode
+    grep -q "GOOGLE_API_KEY=" "data/.env" 2>/dev/null && return 1
+    grep -q "ANTHROPIC_API_KEY=" "data/.env" 2>/dev/null && return 1
+    grep -qi "GOOGLE_GENAI_USE_VERTEXAI=TRUE" "data/.env" 2>/dev/null && return 1
+    return 0
+}
+
+if needs_setup; then
+    log "No LLM provider configured. Launching setup wizard..."
     docker compose run --rm -it --entrypoint "" ori-agent uv run python interfaces/setup_wizard.py
 fi
 

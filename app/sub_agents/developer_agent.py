@@ -87,7 +87,7 @@ developer_agent = Agent(
         MemoryToolset(),
         # Individual tools (no natural group)
         analyze_upstream_file,
-        google_search_agent_tool,
+        *([google_search_agent_tool] if google_search_agent_tool else []),
         web_fetch,
         github_mcp_toolset,
     ],
