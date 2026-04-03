@@ -169,9 +169,18 @@ async def spawn_agent(
         child_adc = os.path.join(spawn_data, ".adc.json")
         _shutil.copy2(parent_adc, child_adc)
 
-    # Parent's env file provides shared credentials (API keys, tokens)
-    # Use host path since docker run operates on host filesystem
-    parent_env_host = os.path.join(host_data_path, ".env")
+    # Collect shared credentials from parent's environment to pass to child.
+    # We use -e flags instead of --env-file because --env-file is read by the
+    # Docker CLI (running inside this container) and can't access host paths.
+    shared_env_keys = [
+        "GOOGLE_API_KEY", "ANTHROPIC_API_KEY",
+        "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION",
+    ]
+    shared_env_flags = []
+    for key in shared_env_keys:
+        val = os.environ.get(key, "")
+        if val:
+            shared_env_flags.extend(["-e", f"{key}={val}"])
 
     # Pick a random port for the child's A2A server
     # Port 0 = Docker assigns a random available port
@@ -209,13 +218,15 @@ async def spawn_agent(
         "--label", "project=ori",
         "--label", f"ori.parent={os.environ.get('BOT_NAME', 'Ori')}",
         "--label", f"ori.purpose={purpose}",
-        "--env-file", parent_env_host,
+        # Child-specific env vars
         "-e", f"DOTENV_PATH=/code/data/.env",
         "-e", f"BOT_NAME={bot_name}",
         "-e", f"A2A_API_KEY={child_a2a_key}",
         "-e", f"ADMIN_PASSCODE={child_passcode}",
         "-e", "GOOGLE_APPLICATION_CREDENTIALS=/code/data/.adc.json",
-        # Clear parent's messenger tokens — children communicate via A2A only
+        # Shared credentials from parent
+        *shared_env_flags,
+        # No messenger — children communicate via A2A only
         "-e", "TELEGRAM_BOT_TOKEN=",
         "-e", "SLACK_BOT_TOKEN=",
         "-v", f"{host_spawn_data}:/code/data:z",
