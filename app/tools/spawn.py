@@ -256,7 +256,7 @@ async def spawn_agent(
         await asyncio.sleep(2)
         try:
             async with httpx.AsyncClient(timeout=5) as client:
-                resp = await client.get(f"{child_url}/.well-known/agent.json")
+                resp = await client.get(f"{child_url}/.well-known/agent-card.json")
                 if resp.status_code == 200:
                     child_ready = True
                     break

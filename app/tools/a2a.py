@@ -63,7 +63,7 @@ def get_agent_identity(tool_context: ToolContext) -> Dict[str, Any]:
 async def _discover_agent_card(base_url: str) -> Optional[Dict[str, Any]]:
     """Fetch a remote agent's card via standard .well-known discovery paths."""
     base_url = base_url.rstrip("/")
-    discovery_paths = ["/.well-known/agent.json", "/.well-known/agent-card.json"]
+    discovery_paths = ["/.well-known/agent-card.json", "/.well-known/agent.json"]
 
     async with httpx.AsyncClient(timeout=10.0) as client:
         for path in discovery_paths:
