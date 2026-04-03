@@ -5,6 +5,12 @@ Call sites never import provider-specific classes (e.g. Gemini) directly.
 
 Format: "provider/model_name"  (e.g. "google/gemini-3-flash-preview")
 Bare strings without '/' default to the "google" provider.
+
+Auth modes:
+  - API key: GOOGLE_API_KEY / ANTHROPIC_API_KEY (direct provider APIs)
+  - Vertex AI ADC: gcloud auth application-default login + GOOGLE_GENAI_USE_VERTEXAI=TRUE
+    (covers both Gemini and Claude via Vertex AI Model Garden — no per-provider API keys needed)
+  - Service account: GOOGLE_APPLICATION_CREDENTIALS + GOOGLE_GENAI_USE_VERTEXAI=TRUE
 """
 
 import logging
@@ -37,6 +43,32 @@ VALID_COMPONENTS = frozenset(MODEL_DEFAULTS.keys())
 # Parsing
 # ---------------------------------------------------------------------------
 
+def _is_vertex_mode() -> bool:
+    """Check if running in Vertex AI mode (ADC/service account auth)."""
+    return os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").upper() == "TRUE"
+
+
+def get_auth_mode() -> dict:
+    """Return the current authentication mode and status."""
+    vertex = _is_vertex_mode()
+    mode = {
+        "vertex_ai": vertex,
+        "google_cloud_project": os.environ.get("GOOGLE_CLOUD_PROJECT", ""),
+        "google_cloud_location": os.environ.get("GOOGLE_CLOUD_LOCATION", ""),
+    }
+    if vertex:
+        mode["auth_method"] = "Vertex AI (ADC / service account)"
+        mode["google_api_key"] = False
+        mode["anthropic_api_key"] = False
+        svc_acct = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+        mode["service_account"] = bool(svc_acct)
+    else:
+        mode["auth_method"] = "Direct API keys"
+        mode["google_api_key"] = bool(os.environ.get("GOOGLE_API_KEY"))
+        mode["anthropic_api_key"] = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    return mode
+
+
 def _parse_model_str(model_str: str) -> tuple[str, str]:
     """Split "provider/model_name" into (provider, model_name).
 
@@ -55,15 +87,24 @@ def _parse_model_str(model_str: str) -> tuple[str, str]:
 def _build_model(provider: str, model_name: str, **kwargs):
     """Construct a provider-specific LLM model object.
 
-    Returns a BaseLlm instance (e.g. Gemini, LiteLlm).
+    Returns a BaseLlm instance (e.g. Gemini, Claude, LiteLlm).
     Raises ValueError for unsupported providers.
+
+    In Vertex AI mode, both Google and Anthropic models use ADC credentials.
+    In API key mode, Google uses GOOGLE_API_KEY and Anthropic uses ANTHROPIC_API_KEY via LiteLlm.
     """
     if provider == "google":
         from google.adk.models import Gemini
         return Gemini(model=model_name, **kwargs)
     if provider == "anthropic":
-        from google.adk.models.lite_llm import LiteLlm
-        return LiteLlm(model=f"anthropic/{model_name}", **kwargs)
+        if _is_vertex_mode():
+            # Native ADK Claude class via Vertex AI Model Garden (uses ADC, no Anthropic API key)
+            from google.adk.models.anthropic_llm import Claude
+            return Claude(model=model_name, **kwargs)
+        else:
+            # Direct Anthropic API via LiteLlm (uses ANTHROPIC_API_KEY)
+            from google.adk.models.lite_llm import LiteLlm
+            return LiteLlm(model=f"anthropic/{model_name}", **kwargs)
     raise ValueError(
         f"Unsupported model provider: '{provider}'. Currently supported: google, anthropic"
     )
@@ -152,19 +193,32 @@ async def validate_model(model_str: str) -> dict | None:
             return None
 
     if provider == "anthropic":
-        import anthropic
-        client = anthropic.AsyncAnthropic()
-        try:
-            model = await client.models.retrieve(model_name)
-            return {
-                "name": model.id,
-                "display_name": getattr(model, "display_name", ""),
-                "input_token_limit": getattr(model, "max_input_tokens", None),
-                "output_token_limit": getattr(model, "max_tokens", None),
-            }
-        except Exception as e:
-            logger.warning("Model validation failed for '%s': %s", model_str, e)
+        if _is_vertex_mode():
+            # In Vertex mode, Claude models are accessed via Google Cloud.
+            # Validate by checking the model is in the ADK registry.
+            try:
+                from google.adk.models.anthropic_llm import Claude
+                supported = Claude.supported_models()
+                import re
+                if any(re.fullmatch(p, model_name) for p in supported):
+                    return {"name": model_name, "display_name": model_name, "via": "vertex_ai"}
+            except Exception as e:
+                logger.warning("Vertex Claude validation failed for '%s': %s", model_str, e)
             return None
+        else:
+            import anthropic
+            client = anthropic.AsyncAnthropic()
+            try:
+                model = await client.models.retrieve(model_name)
+                return {
+                    "name": model.id,
+                    "display_name": getattr(model, "display_name", ""),
+                    "input_token_limit": getattr(model, "max_input_tokens", None),
+                    "output_token_limit": getattr(model, "max_tokens", None),
+                }
+            except Exception as e:
+                logger.warning("Model validation failed for '%s': %s", model_str, e)
+                return None
 
     logger.warning("Cannot validate model for unsupported provider: %s", provider)
     return None
@@ -197,24 +251,38 @@ async def list_provider_models(provider: str = "google", filter_str: str = "") -
             logger.error("Failed to list models from %s: %s", provider, e)
             return [{"error": str(e)}]
     elif provider == "anthropic":
-        import anthropic
-        client = anthropic.AsyncAnthropic()
-        try:
-            page = await client.models.list(limit=100)
-            for model in page.data:
-                name = model.id
-                display = getattr(model, "display_name", "")
-                if filter_str and filter_str.lower() not in (name + display).lower():
-                    continue
+        if _is_vertex_mode():
+            # In Vertex mode, list known Claude model patterns from ADK registry
+            try:
+                from google.adk.models.anthropic_llm import Claude
+                patterns = Claude.supported_models()
                 results.append({
-                    "name": name,
-                    "display_name": display,
-                    "input_token_limit": getattr(model, "max_input_tokens", None),
-                    "output_token_limit": getattr(model, "max_tokens", None),
+                    "note": "Vertex AI mode — Claude models matched by patterns",
+                    "supported_patterns": patterns,
+                    "via": "vertex_ai",
                 })
-        except Exception as e:
-            logger.error("Failed to list models from %s: %s", provider, e)
-            return [{"error": str(e)}]
+            except Exception as e:
+                logger.error("Failed to get Vertex Claude models: %s", e)
+                return [{"error": str(e)}]
+        else:
+            import anthropic
+            client = anthropic.AsyncAnthropic()
+            try:
+                page = await client.models.list(limit=100)
+                for model in page.data:
+                    name = model.id
+                    display = getattr(model, "display_name", "")
+                    if filter_str and filter_str.lower() not in (name + display).lower():
+                        continue
+                    results.append({
+                        "name": name,
+                        "display_name": display,
+                        "input_token_limit": getattr(model, "max_input_tokens", None),
+                        "output_token_limit": getattr(model, "max_tokens", None),
+                    })
+            except Exception as e:
+                logger.error("Failed to list models from %s: %s", provider, e)
+                return [{"error": str(e)}]
     else:
         return [{"error": f"Unsupported provider: {provider}. Supported: {sorted(SUPPORTED_PROVIDERS)}"}]
 

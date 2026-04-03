@@ -9,6 +9,7 @@ from app.app_utils.models import (
     SUPPORTED_PROVIDERS,
     VALID_COMPONENTS,
     get_all_assignments,
+    get_auth_mode,
     get_model_string,
     set_model,
     validate_model,
@@ -32,6 +33,7 @@ async def list_available_models(
         "available_models": models,
         "current_assignments": assignments,
         "valid_components": sorted(VALID_COMPONENTS),
+        "auth_mode": get_auth_mode(),
     }
 
 
