@@ -118,6 +118,13 @@ def setup_google_login(env_path, set_key_fn):
         print("  After installing, re-run this setup.\n")
         return False
 
+    print("  You need a Google Cloud project. If you don't have one:")
+    print("    1. Go to https://console.cloud.google.com")
+    print("    2. Click 'Select a project' > 'New Project'")
+    print("    3. Name it (e.g. 'ori-agent') and create it")
+    print("    4. Enable the Vertex AI API: https://console.cloud.google.com/apis/library/aiplatform.googleapis.com")
+    print("  Your project ID is shown in the project selector (e.g. 'ori-agent-123456').\n")
+
     project = prompt("  Enter your GOOGLE_CLOUD_PROJECT:", required=True)
     location = prompt("  Enter your GOOGLE_CLOUD_LOCATION (default: us-central1):") or "us-central1"
 
