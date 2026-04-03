@@ -14,7 +14,16 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SPAWN_DIR = os.path.abspath("./data/spawns")
-IMAGE_NAME = "ori-agent-image"
+
+
+def _instance_prefix() -> str:
+    """Derive a unique prefix from BOT_NAME for container/image naming."""
+    return os.environ.get("BOT_NAME", "Ori").strip().replace(" ", "-").lower()
+
+
+def _image_name() -> str:
+    """Image name scoped to this instance."""
+    return f"{_instance_prefix()}-agent-image"
 
 
 async def _get_host_data_path() -> str:
@@ -72,7 +81,8 @@ async def spawn_agent(
     if not safe_name:
         return {"status": "error", "message": "bot_name is required."}
 
-    container_name = f"ori-{safe_name}"
+    prefix = _instance_prefix()
+    container_name = f"{prefix}-{safe_name}"
 
     # Check if container already exists
     check = await asyncio.create_subprocess_exec(
@@ -218,8 +228,8 @@ async def spawn_agent(
         "docker", "run", "-d",
         "--name", container_name,
         "--network", parent_network,
-        "--label", "project=ori",
-        "--label", f"ori.parent={os.environ.get('BOT_NAME', 'Ori')}",
+        "--label", f"ori.instance={prefix}",
+        "--label", f"ori.parent={prefix}",
         "--label", f"ori.purpose={purpose}",
         # Child-specific env vars
         "-e", f"DOTENV_PATH=/code/data/.env",
@@ -236,7 +246,7 @@ async def spawn_agent(
         "-v", "/var/run/docker.sock:/var/run/docker.sock",
         "-p", f"{agent_port}:8000",
         "--restart", "unless-stopped",
-        IMAGE_NAME,
+        _image_name(),
     ]
 
     proc = await asyncio.create_subprocess_exec(
@@ -308,10 +318,10 @@ async def spawn_agent(
 
 async def list_spawned_agents(tool_context: ToolContext = None) -> dict:
     """List all spawned sibling agent containers and their status."""
+    prefix = _instance_prefix()
     proc = await asyncio.create_subprocess_exec(
         "docker", "ps", "-a",
-        "--filter", "label=project=ori",
-        "--filter", f"label=ori.parent",
+        "--filter", f"label=ori.parent={prefix}",
         "--format", "{{.Names}}\t{{.Status}}\t{{.Ports}}\t{{.Label \"ori.purpose\"}}",
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
@@ -347,14 +357,15 @@ async def stop_spawned_agent(
         remove: If True, remove the container AND delete its data directory.
             This is irreversible — the agent's state, memory, and credentials are gone.
     """
-    # Safety: only allow stopping containers with the ori parent label
+    # Safety: only allow stopping containers spawned by THIS instance
+    prefix = _instance_prefix()
     check = await asyncio.create_subprocess_exec(
-        "docker", "inspect", "--format", "{{.Config.Labels}}", container_name,
+        "docker", "inspect", "--format", '{{index .Config.Labels "ori.parent"}}', container_name,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
     stdout, _ = await check.communicate()
-    if "ori.parent" not in stdout.decode():
-        return {"status": "error", "message": f"'{container_name}' is not a spawned agent or doesn't exist."}
+    if stdout.decode().strip() != prefix:
+        return {"status": "error", "message": f"'{container_name}' is not a spawned agent of this instance or doesn't exist."}
 
     stop = await asyncio.create_subprocess_exec(
         "docker", "stop", container_name,
@@ -373,8 +384,8 @@ async def stop_spawned_agent(
     await rm.communicate()
 
     # Delete spawn data directory
-    # Container name is "ori-{safe_name}", extract the safe_name
-    safe_name = container_name.removeprefix("ori-")
+    # Container name is "{prefix}-{safe_name}", extract the safe_name
+    safe_name = container_name.removeprefix(f"{prefix}-")
     spawn_data = os.path.join(SPAWN_DIR, safe_name)
     cleanup_msg = ""
     if os.path.exists(spawn_data):
@@ -399,7 +410,7 @@ async def stop_spawned_agent(
 
     # Prune dangling images to prevent storage clutter from dead children
     await asyncio.create_subprocess_exec(
-        "docker", "image", "prune", "-f", "--filter", "label=project=ori",
+        "docker", "image", "prune", "-f", "--filter", f"label=ori.instance={prefix}",
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
 

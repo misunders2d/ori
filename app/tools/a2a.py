@@ -145,6 +145,8 @@ async def add_friend(url: str, friend_name: str, tool_context: ToolContext) -> D
                 "name": card.get("name"),
                 "endpoint_url": endpoint_url,
                 "capabilities": card.get("capabilities", {}),
+                "required_security": required_security,
+                "auth_status": "key_configured" if has_key else "key_missing",
             },
         }
     except Exception as e:

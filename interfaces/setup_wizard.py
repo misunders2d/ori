@@ -263,6 +263,7 @@ def main():
         load_dotenv(ENV_FILE_PATH)
     except ImportError:
         set_key = _set_key_stdlib
+        load_dotenv = _load_dotenv_stdlib
         _load_dotenv_stdlib(ENV_FILE_PATH)
 
     clear_screen()

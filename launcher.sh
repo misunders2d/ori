@@ -16,7 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # --- Configuration ---
-IMAGE_NAME="ori-agent-image"
+IMAGE_NAME=""  # set after BOT_NAME is read
 CRASH_FILE="data/.crash_count"
 MAX_CRASHES=3
 COOLDOWN=30
@@ -34,6 +34,9 @@ read_bot_name() {
 }
 
 BOT_NAME=$(read_bot_name)
+BOT_NAME_LOWER="${BOT_NAME,,}"  # lowercase for Docker naming
+export BOT_NAME BOT_NAME_LOWER  # docker-compose.yml uses these
+IMAGE_NAME="${BOT_NAME_LOWER}-agent-image"
 log() { echo ":: [$BOT_NAME Launcher] $*"; }
 
 # --- Helper: read crash counter ---
@@ -88,7 +91,7 @@ smart_build() {
     fi
     touch data/.last_build
     # Always prune dangling images after build
-    docker image prune -f --filter "label=project=ori" 2>/dev/null || true
+    docker image prune -f 2>/dev/null || true
 }
 
 # --- Helper: detect interactive mode ---
@@ -157,6 +160,9 @@ log "Starting regeneration loop..."
 while true; do
     CRASHES=$(read_crashes)
     BOT_NAME=$(read_bot_name)  # re-read in case .env changed
+    BOT_NAME_LOWER="${BOT_NAME,,}"
+    export BOT_NAME BOT_NAME_LOWER
+    IMAGE_NAME="${BOT_NAME_LOWER}-agent-image"
 
     # --- CRASH LOOP RECOVERY ---
     if [ "$CRASHES" -ge "$MAX_CRASHES" ]; then
@@ -194,7 +200,7 @@ while true; do
     if is_interactive; then
         log "No messenger configured. Launching interactive CLI..."
         docker compose up -d cloudflare-tunnel 2>/dev/null || true
-        docker compose run --rm -it --service-ports ori-agent
+        docker compose run --rm -it --service-ports agent
         EXIT_CODE=$?
     else
         docker compose up $BUILD_FLAG &

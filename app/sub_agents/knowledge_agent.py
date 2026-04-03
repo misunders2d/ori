@@ -70,8 +70,9 @@ knowledge_agent = Agent(
         "PRIVACY MANDATE: Never share user-specific data, long-term human memory, environment secrets, "
         "or session data via A2A. Technical DNA only.\n\n"
 
-        "SECURITY AWARENESS: When adding a friend, check if their Agent Card declares `securitySchemes`. "
-        "If so, inform the user that an API key is needed and invoke `update_friend_key` to prompt them for it securely.\n\n"
+        "SECURITY AWARENESS: After adding a friend, check the `auth_status` field in the response. "
+        "Only invoke `update_friend_key` if `auth_status` is `key_missing`. "
+        "If `auth_status` is `key_configured`, the key is already stored — do NOT ask the user for it.\n\n"
 
         "SETUP HELP — HOW TO ENABLE A2A COMMUNICATION:\n"
         "When the user asks how to enable, find, or connect to other agents via A2A, explain these steps:\n"
