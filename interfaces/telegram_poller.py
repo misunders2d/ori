@@ -625,8 +625,11 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                         await adapter.send_message(
                             chat_id,
                             f"{bot_name} is not configured yet.\n\n"
-                            "To set up, send:\n"
-                            "`/init YOUR_PASSCODE GOOGLE_API_KEY=your-key-here`"
+                            "No LLM provider detected. To set up, send:\n"
+                            "`/init YOUR_PASSCODE GOOGLE_API_KEY=your-key`\n"
+                            "or\n"
+                            "`/init YOUR_PASSCODE ANTHROPIC_API_KEY=your-key`\n\n"
+                            "For Vertex AI, configure via the setup wizard."
                         )
                         continue
 

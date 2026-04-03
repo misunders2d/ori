@@ -67,7 +67,12 @@ _global_runner = None
 def get_runner():
     global _global_runner
     if not _global_runner:
-        if not os.environ.get("GOOGLE_API_KEY"): return None
+        # Check for any valid LLM provider (API key or Vertex AI)
+        has_google = bool(os.environ.get("GOOGLE_API_KEY", "").strip())
+        has_vertex = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").upper() == "TRUE"
+        has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
+        if not (has_google or has_vertex or has_anthropic):
+            return None
         db_path = os.path.abspath("./data/ori-sessions.db")
         # Verify the session DB directory is writable
         db_dir = os.path.dirname(db_path)
@@ -204,7 +209,33 @@ async def main():
     except Exception as e:
         logger.warning(f"A2A Server failed to start: {e}")
 
-    # 2. Automatic tunnel detection + A2A Broadcast
+    # 2. Post-boot: warn admin if Google API key is missing (needed for security guardrails)
+    async def _warn_missing_google_key():
+        await asyncio.sleep(10)  # let Telegram poller start first
+        google_key = os.environ.get("GOOGLE_API_KEY", "").strip()
+        if google_key:
+            return
+        admin_ids = [i.strip() for i in os.environ.get("ADMIN_USER_IDS", "").split(",") if i.strip()]
+        from app.core.transport import get_adapter
+        adapter = get_adapter("telegram")
+        if adapter and admin_ids:
+            passcode_hint = os.environ.get("ADMIN_PASSCODE", "YOUR_PASSCODE")[:3] + "..."
+            msg = (
+                "**Security Notice:** No Google API key detected.\n\n"
+                "The embedding-based prompt injection defense is disabled. "
+                "To enable it, send:\n"
+                f"`/init {passcode_hint} GOOGLE_API_KEY=your-key`\n\n"
+                "Get a free key at: https://aistudio.google.com/app/apikey"
+            )
+            for aid in admin_ids:
+                chat_id = aid.replace("tg_", "") if aid.startswith("tg_") else aid
+                try:
+                    await adapter.send_message(chat_id, msg)
+                except Exception:
+                    pass
+    tasks.append(asyncio.create_task(_warn_missing_google_key()))
+
+    # Automatic tunnel detection + A2A Broadcast
     async def detect_and_broadcast():
         # Give cloudflared a moment to establish the tunnel
         await asyncio.sleep(3)
