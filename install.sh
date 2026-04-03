@@ -12,8 +12,16 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SERVICE_NAME="ori-agent"
 LAUNCHER_PATH="$SCRIPT_DIR/launcher.sh"
+
+# Derive service name from BOT_NAME in .env, default to "ori"
+_bot_name="ori"
+if [ -f "$SCRIPT_DIR/data/.env" ]; then
+    _env_name=$(grep -v '^#' "$SCRIPT_DIR/data/.env" | grep -E '^BOT_NAME=' | cut -d '=' -f2- | tr -d "\"'\\r" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' 2>/dev/null || true)
+    [ -n "$_env_name" ] && _bot_name="$_env_name"
+fi
+# Sanitize for systemd: lowercase, spaces/underscores to hyphens, strip non-alnum
+SERVICE_NAME="$(echo "$_bot_name" | tr '[:upper:]' '[:lower:]' | tr ' _' '-' | sed 's/[^a-z0-9-]//g')-agent"
 
 # Ensure launcher exists and is executable
 if [ ! -f "$LAUNCHER_PATH" ]; then
@@ -30,7 +38,7 @@ install_systemd() {
 
     sudo tee "$service_file" > /dev/null <<UNIT
 [Unit]
-Description=Ori Agent Daemon
+Description=${SERVICE_NAME} daemon
 After=network-online.target docker.service
 Wants=network-online.target
 Requires=docker.service
@@ -60,7 +68,7 @@ UNIT
     sudo systemctl start "$SERVICE_NAME"
 
     echo ""
-    echo ":: Ori installed and running as systemd service."
+    echo ":: $SERVICE_NAME installed and running as systemd service."
     echo "   Status:  sudo systemctl status $SERVICE_NAME"
     echo "   Logs:    sudo journalctl -u $SERVICE_NAME -f"
     echo "   Stop:    sudo systemctl stop $SERVICE_NAME"
@@ -71,8 +79,8 @@ install_launchd() {
     echo ":: Installing launchd service..."
 
     local plist_dir="$HOME/Library/LaunchAgents"
-    local plist_file="$plist_dir/com.ori.agent.plist"
-    local log_dir="$HOME/Library/Logs/Ori"
+    local plist_file="$plist_dir/com.${SERVICE_NAME}.plist"
+    local log_dir="$HOME/Library/Logs/${SERVICE_NAME}"
     mkdir -p "$plist_dir" "$log_dir"
 
     cat > "$plist_file" <<PLIST
@@ -81,7 +89,7 @@ install_launchd() {
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.ori.agent</string>
+    <string>com.${SERVICE_NAME}</string>
     <key>ProgramArguments</key>
     <array>
         <string>$LAUNCHER_PATH</string>
@@ -98,9 +106,9 @@ install_launchd() {
     <key>ThrottleInterval</key>
     <integer>10</integer>
     <key>StandardOutPath</key>
-    <string>$log_dir/ori-stdout.log</string>
+    <string>$log_dir/stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>$log_dir/ori-stderr.log</string>
+    <string>$log_dir/stderr.log</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
@@ -113,14 +121,14 @@ PLIST
     launchctl load "$plist_file"
 
     echo ""
-    echo ":: Ori installed and running as launchd service."
-    echo "   Logs:    tail -f $log_dir/ori-stdout.log"
+    echo ":: $SERVICE_NAME installed and running as launchd service."
+    echo "   Logs:    tail -f $log_dir/stdout.log"
     echo "   Stop:    launchctl unload $plist_file"
     echo "   Restart: launchctl unload $plist_file && launchctl load $plist_file"
 }
 
 # --- Main ---
-echo ":: Ori Installer"
+echo ":: Installer ($SERVICE_NAME)"
 echo "   Project dir: $SCRIPT_DIR"
 echo ""
 

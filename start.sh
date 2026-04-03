@@ -8,7 +8,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-SERVICE_NAME="ori-agent"
+# Derive service name from BOT_NAME in .env, default to "ori"
+_bot_name="ori"
+if [ -f "data/.env" ]; then
+    _env_name=$(grep -v '^#' data/.env | grep -E '^BOT_NAME=' | cut -d '=' -f2- | tr -d "\"'\\r" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' 2>/dev/null || true)
+    [ -n "$_env_name" ] && _bot_name="$_env_name"
+fi
+SERVICE_NAME="$(echo "$_bot_name" | tr '[:upper:]' '[:lower:]' | tr ' _' '-' | sed 's/[^a-z0-9-]//g')-agent"
 
 # --- Run setup wizard if no provider configured (needs interactive terminal) ---
 needs_setup() {
@@ -36,22 +42,22 @@ if command -v systemctl &>/dev/null; then
     if systemctl list-unit-files "${SERVICE_NAME}.service" &>/dev/null && \
        systemctl cat "${SERVICE_NAME}.service" &>/dev/null 2>&1; then
         # Service already installed — restart it
-        echo ":: Restarting Ori via systemd..."
+        echo ":: Restarting $SERVICE_NAME via systemd..."
         sudo systemctl restart "$SERVICE_NAME"
-        echo ":: Ori is running."
+        echo ":: $SERVICE_NAME is running."
         echo "   Logs:  sudo journalctl -u $SERVICE_NAME -f"
         echo "   Stop:  sudo systemctl stop $SERVICE_NAME"
     else
         # systemd available but service not installed — install it
-        echo ":: First run detected. Installing Ori as a system service..."
+        echo ":: First run detected. Installing $SERVICE_NAME as a system service..."
         ./install.sh
     fi
 else
     # No systemd — run launcher in background
-    echo ":: Starting Ori in background..."
+    echo ":: Starting $SERVICE_NAME in background..."
     mkdir -p data
     nohup ./launcher.sh >> data/launcher.log 2>&1 &
-    echo ":: Ori is running (PID: $!)."
+    echo ":: $SERVICE_NAME is running (PID: $!)."
     echo "   Logs:  tail -f data/launcher.log"
     echo "   Stop:  kill $!"
 fi
