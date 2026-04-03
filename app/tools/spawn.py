@@ -285,9 +285,8 @@ async def spawn_agent(
             "a2a_url": child_url,
         }
 
-    # Store child's A2A key BEFORE add_friend so it's already available
-    # when add_friend checks for existing keys (prevents secure capture prompt)
-    from app.tools.a2a import add_friend, KEYS_FILE
+    # Register child directly — no discovery or add_friend needed.
+    from app.tools.a2a import FRIENDS_FILE, KEYS_FILE
     try:
         parent_keys = {}
         if os.path.exists(KEYS_FILE):
@@ -296,23 +295,33 @@ async def spawn_agent(
         parent_keys[safe_name] = child_a2a_key
         with open(KEYS_FILE, "w") as f:
             json.dump(parent_keys, f, indent=2)
-    except Exception as e:
-        logger.warning("Failed to store child A2A key: %s", e)
 
-    # Now add as friend (key is already stored, so no secure capture prompt)
-    friend_result = await add_friend(
-        url=child_url,
-        friend_name=safe_name,
-        tool_context=tool_context,
-    )
+        friends = {}
+        if os.path.exists(FRIENDS_FILE):
+            with open(FRIENDS_FILE) as f:
+                friends = json.load(f)
+        friends[safe_name] = {
+            "name": bot_name,
+            "base_url": child_url,
+            "endpoint_url": child_url,
+            "required_security": [],
+            "auth_status": "key_configured",
+            "relationship": "child",
+            "last_discovered_at": datetime.utcnow().isoformat(),
+        }
+        with open(FRIENDS_FILE, "w") as f:
+            json.dump(friends, f, indent=4)
+    except Exception as e:
+        logger.warning("Failed to register spawned child: %s", e)
 
     return {
         "status": "success",
-        "message": f"Agent '{bot_name}' spawned and connected.",
+        "message": f"Agent '{bot_name}' spawned, connected, and registered as friend '{safe_name}' with API key pre-configured. No further setup needed.",
         "container_id": container_id,
         "container_name": container_name,
         "a2a_url": child_url,
-        "friend_registration": friend_result,
+        "friend_name": safe_name,
+        "auth_status": "key_configured",
     }
 
 
