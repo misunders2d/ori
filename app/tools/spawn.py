@@ -17,6 +17,35 @@ SPAWN_DIR = os.path.abspath("./data/spawns")
 IMAGE_NAME = "ori-agent-image"
 
 
+async def _get_host_data_path() -> str:
+    """Resolve the host-side path of /code/data by inspecting our own container's mounts.
+
+    The spawn tool runs inside a container but calls Docker on the host (via socket).
+    Volume paths in docker run must be HOST paths, not container paths.
+    """
+    hostname = os.environ.get("HOSTNAME", "")
+    if not hostname:
+        # Not in a container — use local path
+        return os.path.abspath("./data")
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "inspect", "--format",
+            '{{range .Mounts}}{{if eq .Destination "/code/data"}}{{.Source}}{{end}}{{end}}',
+            hostname,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        host_path = stdout.decode().strip()
+        if host_path:
+            return host_path
+    except Exception:
+        pass
+
+    # Fallback: assume standard layout
+    return os.path.abspath("./data")
+
+
 async def spawn_agent(
     bot_name: str,
     purpose: str,
@@ -54,9 +83,13 @@ async def spawn_agent(
     if stdout.strip():
         return {"status": "error", "message": f"Container '{container_name}' already exists. Remove it first or choose a different name."}
 
-    # Create spawn data directory
+    # Create spawn data directory (container-side path for file operations)
     spawn_data = os.path.join(SPAWN_DIR, safe_name)
     os.makedirs(spawn_data, exist_ok=True)
+
+    # Resolve the host-side path for Docker volume mounts
+    host_data_path = await _get_host_data_path()
+    host_spawn_data = os.path.join(host_data_path, "spawns", safe_name)
 
     # Generate unique credentials for the child
     child_a2a_key = secrets.token_urlsafe(32)
@@ -137,8 +170,8 @@ async def spawn_agent(
         _shutil.copy2(parent_adc, child_adc)
 
     # Parent's env file provides shared credentials (API keys, tokens)
-    parent_env_file = os.environ.get("DOTENV_PATH", "./data/.env")
-    parent_env_abs = os.path.abspath(parent_env_file)
+    # Use host path since docker run operates on host filesystem
+    parent_env_host = os.path.join(host_data_path, ".env")
 
     # Pick a random port for the child's A2A server
     # Port 0 = Docker assigns a random available port
@@ -176,7 +209,7 @@ async def spawn_agent(
         "--label", "project=ori",
         "--label", f"ori.parent={os.environ.get('BOT_NAME', 'Ori')}",
         "--label", f"ori.purpose={purpose}",
-        "--env-file", parent_env_abs,
+        "--env-file", parent_env_host,
         "-e", f"DOTENV_PATH=/code/data/.env",
         "-e", f"BOT_NAME={bot_name}",
         "-e", f"A2A_API_KEY={child_a2a_key}",
@@ -185,7 +218,7 @@ async def spawn_agent(
         # Clear parent's messenger tokens — children communicate via A2A only
         "-e", "TELEGRAM_BOT_TOKEN=",
         "-e", "SLACK_BOT_TOKEN=",
-        "-v", f"{spawn_data}:/code/data:z",
+        "-v", f"{host_spawn_data}:/code/data:z",
         "-v", "/var/run/docker.sock:/var/run/docker.sock",
         "-p", f"{agent_port}:8000",
         "--restart", "unless-stopped",
