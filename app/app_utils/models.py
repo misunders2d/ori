@@ -117,12 +117,21 @@ def _build_model(provider: str, model_name: str, **kwargs):
         from google.adk.models import Gemini
         return Gemini(model=model_name, **kwargs)
     if provider == "anthropic":
-        if _is_vertex_mode():
+        # Prefer direct Anthropic API (via LiteLlm) when API key is available.
+        # Only use Vertex AI Claude class when explicitly in Vertex mode AND no direct key.
+        has_anthropic_key = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
+        if has_anthropic_key:
+            from google.adk.models.lite_llm import LiteLlm
+            return LiteLlm(model=f"anthropic/{model_name}", **kwargs)
+        elif _is_vertex_mode():
+            # Vertex AI Model Garden — requires Claude to be enabled in the project
             from google.adk.models.anthropic_llm import Claude
             return Claude(model=model_name, **kwargs)
         else:
-            from google.adk.models.lite_llm import LiteLlm
-            return LiteLlm(model=f"anthropic/{model_name}", **kwargs)
+            raise ValueError(
+                "Anthropic models require either ANTHROPIC_API_KEY or Vertex AI mode "
+                "with Claude enabled in the Model Garden."
+            )
     raise ValueError(
         f"Unsupported model provider: '{provider}'. Currently supported: google, anthropic"
     )

@@ -309,13 +309,14 @@ def main():
         print("  How would you like to authenticate?\n")
         print("    1. Google Gemini — paste an API key (free tier available)")
         if has_gcloud:
-            print("    2. Google Cloud login — opens a link, you sign in (covers Gemini + Claude)")
+            print("    2. Google Cloud login — sign in via browser (Gemini only)")
         else:
             cprint("    2. Google Cloud login — UNAVAILABLE (gcloud CLI not installed)", "90")
             cprint("       Install: curl https://sdk.cloud.google.com | bash && gcloud init", "90")
         print("    3. Anthropic Claude — paste an API key")
-        print("    4. Multiple — combine options (e.g. 1,3 for both API keys)")
-        print()
+        print("")
+        cprint("  TIP: For both Gemini + Claude, combine options (e.g. 2,3 or 1,3).", "96")
+        cprint("  Anthropic does not support login — API key is the only option.\n", "96")
 
         providers_configured = set()
 
@@ -339,12 +340,11 @@ def main():
                         continue
                     if setup_google_login(ENV_FILE_PATH, set_key):
                         providers_configured.add("google")
-                        providers_configured.add("anthropic")  # Vertex covers both
                 elif c == "3":
                     if setup_anthropic_api_key(ENV_FILE_PATH, set_key):
                         providers_configured.add("anthropic")
                 elif c == "4":
-                    cprint("  Use comma-separated numbers (e.g. 1,3) to combine options.", "93")
+                    cprint("  There's no option 4. Combine options with commas (e.g. 1,3 or 2,3).", "93")
                 else:
                     cprint(f"  Unknown option: {c}", "91")
 
