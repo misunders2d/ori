@@ -300,6 +300,7 @@ def main():
             print("    2. Google Cloud login — opens a link, you sign in (covers Gemini + Claude)")
         else:
             cprint("    2. Google Cloud login — UNAVAILABLE (gcloud CLI not installed)", "90")
+            cprint("       Install: curl https://sdk.cloud.google.com | bash && gcloud init", "90")
         print("    3. Anthropic Claude — paste an API key")
         print("    4. Multiple — combine options (e.g. 1,3 for both API keys)")
         print()
