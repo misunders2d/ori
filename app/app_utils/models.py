@@ -31,8 +31,8 @@ MODEL_DEFAULTS: dict[str, str] = {
     "KnowledgeAgent":     "google/gemini-3-flash-preview",
     "google_search":      "google/gemini-3-flash-preview",
     "summarizer":         "google/gemini-3.1-flash-lite-preview",
-    "session_summarizer": "google/gemini-2.0-flash-lite-preview-02-05",
-    "channel_summarizer": "google/gemini-2.0-flash-lite-preview-02-05",
+    "session_summarizer": "google/gemini-3.1-flash-lite-preview",
+    "channel_summarizer": "google/gemini-3.1-flash-lite-preview",
     "embedding":          "google/gemini-embedding-001",
 }
 

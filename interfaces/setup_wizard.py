@@ -172,7 +172,7 @@ def select_default_model(env_path, set_key_fn, providers):
     if "google" in providers:
         models.extend([
             ("google/gemini-3-flash-preview", "Gemini 3 Flash (fast, free tier)"),
-            ("google/gemini-2.5-pro-preview-05-06", "Gemini 2.5 Pro (powerful, paid)"),
+            ("google/gemini-3.1-pro-preview", "Gemini 3.1 Pro (most capable Google model)"),
         ])
     if "anthropic" in providers:
         models.extend([
@@ -204,6 +204,40 @@ def select_default_model(env_path, set_key_fn, providers):
 # Main wizard
 # ---------------------------------------------------------------------------
 
+def _set_key_stdlib(env_path, key, value):
+    """Write a KEY=VALUE to .env without requiring python-dotenv."""
+    lines = []
+    found = False
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                if line.strip().startswith(f"{key}="):
+                    lines.append(f'{key}="{value}"\n')
+                    found = True
+                else:
+                    lines.append(line)
+    if not found:
+        lines.append(f'{key}="{value}"\n')
+    with open(env_path, "w") as f:
+        f.writelines(lines)
+    os.environ[key] = value
+
+
+def _load_dotenv_stdlib(env_path):
+    """Load .env into os.environ without requiring python-dotenv."""
+    if not os.path.exists(env_path):
+        return
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                key, val = line.split("=", 1)
+                val = val.strip().strip('"').strip("'")
+                os.environ.setdefault(key.strip(), val)
+
+
 def main():
     ENV_FILE_PATH = os.path.abspath("./data/.env")
     os.makedirs(os.path.dirname(ENV_FILE_PATH), exist_ok=True)
@@ -211,8 +245,13 @@ def main():
         with open(ENV_FILE_PATH, "w") as f:
             f.write("# Ori Daemon Configuration\n")
 
-    from dotenv import set_key, load_dotenv
-    load_dotenv(ENV_FILE_PATH)
+    # Use python-dotenv if available, fall back to stdlib for host-side execution
+    try:
+        from dotenv import set_key, load_dotenv
+        load_dotenv(ENV_FILE_PATH)
+    except ImportError:
+        set_key = _set_key_stdlib
+        _load_dotenv_stdlib(ENV_FILE_PATH)
 
     clear_screen()
     cprint(r"""
@@ -282,7 +321,11 @@ def main():
                 cprint("  At least one provider is required.\n", "91")
 
         # Reload env after provider setup
-        load_dotenv(ENV_FILE_PATH, override=True)
+        try:
+            load_dotenv(ENV_FILE_PATH, override=True)
+        except TypeError:
+            # stdlib fallback doesn't support override param
+            _load_dotenv_stdlib(ENV_FILE_PATH)
 
         # Model selection
         cprint("[2b] Default Model", "93")

@@ -116,7 +116,16 @@ needs_setup() {
 
 if needs_setup; then
     log "No LLM provider configured. Launching setup wizard..."
-    docker compose run --rm -it --entrypoint "" ori-agent uv run python interfaces/setup_wizard.py
+    # Run wizard on the HOST (not in container) so gcloud, browsers, etc. work
+    if command -v python3 &>/dev/null; then
+        python3 interfaces/setup_wizard.py
+    elif command -v python &>/dev/null; then
+        python interfaces/setup_wizard.py
+    else
+        # Fallback: run in container (gcloud won't be available)
+        log "No host Python found. Running wizard in container (some auth flows may be limited)."
+        docker compose run --rm -it --entrypoint "" ori-agent uv run python interfaces/setup_wizard.py
+    fi
 fi
 
 # ============================================================================
