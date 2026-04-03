@@ -142,7 +142,10 @@ async def spawn_agent(
     import json
     from datetime import datetime
 
-    parent_base_url = os.environ.get("A2A_BASE_URL", "")
+    # Use the parent's container name on the shared Docker network (always reachable).
+    # A2A_BASE_URL may be empty (tunnel not yet detected) or a public URL (unreachable from inside).
+    parent_hostname = os.environ.get("HOSTNAME", "")
+    parent_base_url = f"http://{parent_hostname}:8000" if parent_hostname else os.environ.get("A2A_BASE_URL", "")
     friends_path = os.path.join(spawn_data, "friends.json")
     friends = {
         parent_bot_name.lower(): {
