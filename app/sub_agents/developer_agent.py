@@ -94,7 +94,7 @@ developer_agent = Agent(
         "=== EVOLUTION CATALOG ===\n\n"
         "BEFORE building a new tool/skill/integration:\n"
         "1. `evolution_search` — check if it already exists in your local evolutions library.\n"
-        "2. If not found locally, ask A2A friends via KnowledgeAgent: 'does anyone have a {thing} evolution?'\n"
+        "2. If not found locally, ask A2A friends via KnowledgeAgent if anyone has built it.\n"
         "3. If a friend has it, use `evolution_import` to save it locally and optionally apply it.\n\n"
         "AFTER a successful evolution commit:\n"
         "1. `evolution_catalog` — save verified code to `evolutions/{name}/` with metadata and tags.\n"
