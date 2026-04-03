@@ -10,6 +10,27 @@ cd "$SCRIPT_DIR"
 
 SERVICE_NAME="ori-agent"
 
+# --- Run setup wizard if no provider configured (needs interactive terminal) ---
+needs_setup() {
+    [ ! -f "data/.env" ] && return 0
+    grep -q "GOOGLE_API_KEY=" "data/.env" 2>/dev/null && return 1
+    grep -q "ANTHROPIC_API_KEY=" "data/.env" 2>/dev/null && return 1
+    grep -qi "GOOGLE_GENAI_USE_VERTEXAI=TRUE" "data/.env" 2>/dev/null && return 1
+    return 0
+}
+
+if needs_setup; then
+    echo ":: No LLM provider configured. Running setup wizard..."
+    if command -v python3 &>/dev/null; then
+        python3 interfaces/setup_wizard.py
+    elif command -v python &>/dev/null; then
+        python interfaces/setup_wizard.py
+    else
+        echo ":: Error: Python not found. Please run the setup wizard manually."
+        exit 1
+    fi
+fi
+
 if command -v systemctl &>/dev/null; then
     # systemd available
     if systemctl list-unit-files "${SERVICE_NAME}.service" &>/dev/null && \
