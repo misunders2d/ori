@@ -17,6 +17,12 @@ class EvolutionToolset(BaseToolset):
             evolution_sync_local_to_upstream,
         )
         from app.tools.research import check_installed_package
+        from app.tools.evolution_catalog import (
+            evolution_catalog,
+            evolution_search,
+            evolution_share,
+            evolution_import,
+        )
 
         return [
             FunctionTool(func=evolution_read_file),
@@ -28,4 +34,8 @@ class EvolutionToolset(BaseToolset):
             FunctionTool(func=evolution_git_reset),
             FunctionTool(func=evolution_sync_local_to_upstream),
             FunctionTool(func=check_installed_package),
+            FunctionTool(func=evolution_catalog),
+            FunctionTool(func=evolution_search),
+            FunctionTool(func=evolution_share),
+            FunctionTool(func=evolution_import),
         ]

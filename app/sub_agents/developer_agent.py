@@ -78,7 +78,17 @@ developer_agent = Agent(
 
         "CRITICAL: Local source code is READ-ONLY in rootless mode. Changes only take effect after the full "
         "push-reboot cycle (steps 7-8). If you skip the reboot, the running code diverges from the remote — "
-        "this is a system integrity violation."
+        "this is a system integrity violation.\n\n"
+
+        "=== EVOLUTION CATALOG ===\n\n"
+        "BEFORE building a new tool/skill/integration:\n"
+        "1. `evolution_search` — check if it already exists in your local evolutions library.\n"
+        "2. If not found locally, ask A2A friends via KnowledgeAgent: 'does anyone have a {thing} evolution?'\n"
+        "3. If a friend has it, use `evolution_import` to save it locally and optionally apply it.\n\n"
+        "AFTER a successful evolution commit:\n"
+        "1. `evolution_catalog` — save verified code to `evolutions/{name}/` with metadata and tags.\n"
+        "2. This makes it discoverable by you and shareable with friends via `evolution_share`.\n"
+        "3. Always catalog reusable evolutions. Skip one-off fixes or config changes."
     ),
     tools=[
         # Toolsets (grouped by domain)
