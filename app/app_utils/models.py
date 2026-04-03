@@ -73,10 +73,12 @@ def _parse_model_str(model_str: str) -> tuple[str, str]:
     """Split "provider/model_name" into (provider, model_name).
 
     Bare strings (no '/') default to the "google" provider.
+    Strips quotes that leak from .env files (Docker --env-file doesn't strip them).
     """
+    model_str = model_str.strip().strip("\"'")
     if "/" in model_str:
         provider, model_name = model_str.split("/", 1)
-        return provider.lower(), model_name
+        return provider.lower().strip(), model_name.strip()
     return "google", model_str
 
 
