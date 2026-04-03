@@ -276,7 +276,7 @@ async def spawn_agent(
     from app.tools.a2a import add_friend, KEYS_FILE
     friend_result = await add_friend(
         url=child_url,
-        name=safe_name,
+        friend_name=safe_name,
         tool_context=tool_context,
     )
 
