@@ -84,6 +84,16 @@ def confirm(label, default=False):
 # Provider setup flows
 # ---------------------------------------------------------------------------
 
+def _run_interactive(cmd, description):
+    """Run a command interactively (inherits stdin/stdout for browser auth flows)."""
+    print(f"\n  Running: {' '.join(cmd)}\n")
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        cprint(f"  {description} exited with code {result.returncode}.", "91")
+        return False
+    return True
+
+
 def setup_google_api_key(env_path, set_key_fn):
     """Collect a Google AI Studio API key."""
     cprint("  Auth method: API Key (Google AI Studio)", "96")
@@ -95,11 +105,18 @@ def setup_google_api_key(env_path, set_key_fn):
     return True
 
 
-def setup_google_vertex(env_path, set_key_fn):
-    """Guide user through Vertex AI ADC setup."""
-    cprint("  Auth method: Vertex AI (Application Default Credentials)", "96")
-    print("  This uses your Google Cloud login — no API key needed.")
+def setup_google_login(env_path, set_key_fn):
+    """Authenticate with Google Cloud via browser login (ADC)."""
+    cprint("  Auth method: Google Cloud Login (Application Default Credentials)", "96")
+    print("  This opens a browser link for you to sign in with your Google account.")
     print("  Both Gemini and Claude models are available via Vertex AI.\n")
+
+    # Check if gcloud is installed
+    gcloud_check = subprocess.run(["which", "gcloud"], capture_output=True)
+    if gcloud_check.returncode != 0:
+        cprint("  Error: gcloud CLI not found. Install it from: https://cloud.google.com/sdk/docs/install", "91")
+        print("  After installing, re-run this setup.\n")
+        return False
 
     project = prompt("  Enter your GOOGLE_CLOUD_PROJECT:", required=True)
     location = prompt("  Enter your GOOGLE_CLOUD_LOCATION (default: us-central1):") or "us-central1"
@@ -108,21 +125,34 @@ def setup_google_vertex(env_path, set_key_fn):
     set_key_fn(env_path, "GOOGLE_CLOUD_LOCATION", location)
     set_key_fn(env_path, "GOOGLE_GENAI_USE_VERTEXAI", "TRUE")
 
-    # Check if ADC credentials already exist
+    # Check if already authenticated
     adc_path = os.path.expanduser("~/.config/gcloud/application_default_credentials.json")
     if os.path.exists(adc_path):
-        cprint("  ADC credentials found. Vertex AI is ready.\n", "92")
-    else:
-        print("\n  You need to authenticate with Google Cloud.")
-        print("  Run this command in your terminal:\n")
-        cprint("    gcloud auth application-default login\n", "93")
-        input("  Press Enter after you've authenticated...")
-        if os.path.exists(adc_path):
-            cprint("  Authenticated successfully.\n", "92")
-        else:
-            cprint("  Warning: ADC credentials not found. Vertex AI may not work until you run gcloud auth.\n", "93")
+        cprint("  Existing credentials found.", "92")
+        if not confirm("  Re-authenticate?"):
+            cprint("  Keeping existing credentials.\n", "92")
+            return True
 
-    return True
+    # Run gcloud auth interactively — user clicks the link, logs in
+    print("\n  A browser link will appear. Click it to sign in with your Google account.")
+    print("  If you're on a headless server, copy the URL to your local browser.\n")
+
+    success = _run_interactive(
+        ["gcloud", "auth", "application-default", "login",
+         "--project", project, "--no-launch-browser"],
+        "Google Cloud authentication",
+    )
+
+    if success and os.path.exists(adc_path):
+        cprint("\n  Authenticated successfully.\n", "92")
+        return True
+    elif success:
+        # gcloud succeeded but ADC file might be elsewhere
+        cprint("\n  Login completed. If Vertex AI fails, run: gcloud auth application-default login\n", "93")
+        return True
+    else:
+        cprint("\n  Authentication failed. You can retry or switch to API key mode.\n", "91")
+        return False
 
 
 def setup_anthropic_api_key(env_path, set_key_fn):
@@ -219,17 +249,17 @@ def main():
         cprint("[2] LLM Provider Setup (Required)", "93")
         print("You must configure at least one AI provider for your agent to think.\n")
 
-        print("  Provider options:")
-        print("    1. Google Gemini (API key — free tier available)")
-        print("    2. Google Gemini (Vertex AI — uses Google Cloud login)")
-        print("    3. Anthropic Claude (API key)")
-        print("    4. Vertex AI for both Gemini + Claude (single Google Cloud login)")
+        print("  How would you like to authenticate?\n")
+        print("    1. Google Gemini — paste an API key (free tier available)")
+        print("    2. Google Cloud login — opens a link, you sign in (covers Gemini + Claude)")
+        print("    3. Anthropic Claude — paste an API key")
+        print("    4. Multiple — combine options (e.g. 1,3 for both API keys)")
         print()
 
         providers_configured = set()
 
         while not providers_configured:
-            choice = prompt("  Select provider(s) — comma-separated (e.g. 1,3):", required=True)
+            choice = prompt("  Select option(s) — comma-separated (e.g. 1,3):", required=True)
             choices = [c.strip() for c in choice.split(",")]
 
             for c in choices:
@@ -237,16 +267,14 @@ def main():
                     if setup_google_api_key(ENV_FILE_PATH, set_key):
                         providers_configured.add("google")
                 elif c == "2":
-                    if setup_google_vertex(ENV_FILE_PATH, set_key):
+                    if setup_google_login(ENV_FILE_PATH, set_key):
                         providers_configured.add("google")
                         providers_configured.add("anthropic")  # Vertex covers both
                 elif c == "3":
                     if setup_anthropic_api_key(ENV_FILE_PATH, set_key):
                         providers_configured.add("anthropic")
                 elif c == "4":
-                    if setup_google_vertex(ENV_FILE_PATH, set_key):
-                        providers_configured.add("google")
-                        providers_configured.add("anthropic")
+                    cprint("  Use comma-separated numbers (e.g. 1,3) to combine options.", "93")
                 else:
                     cprint(f"  Unknown option: {c}", "91")
 
