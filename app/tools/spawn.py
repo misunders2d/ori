@@ -397,4 +397,10 @@ async def stop_spawned_agent(
             except Exception:
                 pass
 
+    # Prune dangling images to prevent storage clutter from dead children
+    await asyncio.create_subprocess_exec(
+        "docker", "image", "prune", "-f", "--filter", "label=project=ori",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+
     return {"status": "success", "message": f"Agent '{container_name}' stopped, removed, and cleaned up.{cleanup_msg}"}
