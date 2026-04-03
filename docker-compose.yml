@@ -21,9 +21,9 @@ services:
     volumes:
       # --- Docker socket (required for health stats, agent spawning) ---
       - /var/run/docker.sock:/var/run/docker.sock
-      # --- Google Cloud ADC credentials (from gcloud auth on host) ---
-      - ${HOME}/.config/gcloud:/home/agentuser/.config/gcloud:ro
       # --- Mutable state (persisted across rebuilds) ---
+      # NOTE: ADC credentials (gcloud auth) are copied into data/ by launcher.sh
+      # before Docker starts — no direct gcloud mount needed.
       - ./data:/code/data:z
       - ./.git:/code/.git:z
       # --- Self-evolvable code (bot logic, not infra) ---

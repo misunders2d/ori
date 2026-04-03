@@ -128,6 +128,13 @@ async def spawn_agent(
         with open(keys_path, "w") as f:
             json.dump({parent_bot_name.lower(): parent_a2a_key}, f, indent=2)
 
+    # Copy ADC credentials to child's data dir if available
+    parent_adc = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+    if parent_adc and os.path.isfile(parent_adc):
+        import shutil as _shutil
+        child_adc = os.path.join(spawn_data, ".adc.json")
+        _shutil.copy2(parent_adc, child_adc)
+
     # Parent's env file provides shared credentials (API keys, tokens)
     parent_env_file = os.environ.get("DOTENV_PATH", "./data/.env")
     parent_env_abs = os.path.abspath(parent_env_file)
@@ -152,7 +159,9 @@ async def spawn_agent(
         "-e", f"BOT_NAME={bot_name}",
         "-e", f"A2A_API_KEY={child_a2a_key}",
         "-e", f"ADMIN_PASSCODE={child_passcode}",
+        "-e", "GOOGLE_APPLICATION_CREDENTIALS=/code/data/.adc.json",
         "-v", f"{spawn_data}:/code/data:z",
+        "-v", "/var/run/docker.sock:/var/run/docker.sock",
         "-p", f"{agent_port}:8000",
         "--restart", "unless-stopped",
         IMAGE_NAME,

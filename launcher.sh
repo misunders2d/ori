@@ -103,6 +103,22 @@ is_interactive() {
 export AGENT_UID="${AGENT_UID:-$(id -u)}"
 export AGENT_GID="${AGENT_GID:-$(id -g)}"
 
+# --- Ensure HOME is set (may be missing under some init systems) ---
+export HOME="${HOME:-$(eval echo ~$(whoami))}"
+
+# --- Copy ADC credentials into data/ so the container can read them ---
+# gcloud auth saves credentials to ~/.config/gcloud/ on the host.
+# We copy the file into data/ (already mounted) instead of mounting gcloud directly,
+# which avoids: permission issues, creating directories for non-existent files,
+# and breaking gcloud on the host.
+ADC_HOST="${HOME}/.config/gcloud/application_default_credentials.json"
+ADC_DATA="data/.adc.json"
+if [ -f "$ADC_HOST" ]; then
+    cp "$ADC_HOST" "$ADC_DATA" 2>/dev/null || true
+    chmod 644 "$ADC_DATA" 2>/dev/null || true
+    log "ADC credentials copied to data/.adc.json"
+fi
+
 # --- First-time setup wizard ---
 # Require at least one LLM provider to be configured before starting.
 needs_setup() {
