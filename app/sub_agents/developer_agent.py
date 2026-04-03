@@ -80,6 +80,17 @@ developer_agent = Agent(
         "push-reboot cycle (steps 7-8). If you skip the reboot, the running code diverges from the remote — "
         "this is a system integrity violation.\n\n"
 
+        "=== SANDBOXED EVOLUTION (PREFERRED FOR NEW FEATURES) ===\n\n"
+        "For non-trivial features, DO NOT risk your own stability. Instead:\n"
+        "1. Ask CoordinatorAgent to `spawn_agent` a disposable test bot (e.g. 'dev-lab').\n"
+        "2. The test bot gets your codebase, credentials, and local-only evolution — it can iterate freely.\n"
+        "3. Communicate with it via A2A: describe the feature, let it trial-and-error.\n"
+        "4. Once the test bot has a working, verified solution, have it `export_dna` back to you.\n"
+        "5. You receive via `import_dna`, verify in your own sandbox, then commit safely.\n"
+        "6. Catalog the result with `evolution_catalog`, then revoke the test bot (`stop_spawned_agent` with remove=True).\n\n"
+        "This way you never risk a broken commit. The test bot absorbs all the instability.\n"
+        "Use direct evolution (the workflow below) only for small, well-understood fixes.\n\n"
+
         "=== EVOLUTION CATALOG ===\n\n"
         "BEFORE building a new tool/skill/integration:\n"
         "1. `evolution_search` — check if it already exists in your local evolutions library.\n"

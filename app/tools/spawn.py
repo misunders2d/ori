@@ -1,6 +1,7 @@
 """Tool for spawning sibling agent containers."""
 
 import asyncio
+import json
 import logging
 import os
 import secrets
@@ -227,13 +228,25 @@ async def spawn_agent(
             "a2a_url": child_url,
         }
 
-    # Auto-add as friend
-    from app.tools.a2a import add_friend
+    # Auto-add as friend and store the child's API key on the parent side
+    from app.tools.a2a import add_friend, KEYS_FILE
     friend_result = await add_friend(
         url=child_url,
         name=safe_name,
         tool_context=tool_context,
     )
+
+    # Store child's A2A key so the parent can authenticate when calling the child
+    try:
+        parent_keys = {}
+        if os.path.exists(KEYS_FILE):
+            with open(KEYS_FILE) as f:
+                parent_keys = json.load(f)
+        parent_keys[safe_name] = child_a2a_key
+        with open(KEYS_FILE, "w") as f:
+            json.dump(parent_keys, f, indent=2)
+    except Exception as e:
+        logger.warning("Failed to store child A2A key: %s", e)
 
     return {
         "status": "success",
