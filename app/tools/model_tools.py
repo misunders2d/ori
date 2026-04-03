@@ -6,6 +6,7 @@ from typing import Annotated
 from google.adk.tools.tool_context import ToolContext
 
 from app.app_utils.models import (
+    SUPPORTED_PROVIDERS,
     VALID_COMPONENTS,
     get_all_assignments,
     get_model_string,
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 async def list_available_models(
-    provider: Annotated[str, "Model provider to query (default 'google')"] = "google",
+    provider: Annotated[str, "Model provider to query: 'google' or 'anthropic' (default 'google')"] = "google",
     filter: Annotated[str, "Optional substring filter (e.g. 'flash', 'pro')"] = "",
     tool_context: ToolContext = None,
 ) -> dict:
@@ -36,7 +37,7 @@ async def list_available_models(
 
 async def set_agent_model(
     component_name: Annotated[str, "Target component (e.g. 'DeveloperAgent', 'channel_summarizer')"],
-    model_name: Annotated[str, "Model identifier, e.g. 'google/gemini-2.5-pro' or bare 'gemini-2.5-pro'"],
+    model_name: Annotated[str, "Model identifier, e.g. 'google/gemini-2.5-pro', 'anthropic/claude-sonnet-4-20250514', or bare name"],
     tool_context: ToolContext = None,
 ) -> dict:
     """Switch the model for a specific agent or component. Validates against the live API."""
@@ -46,9 +47,13 @@ async def set_agent_model(
             "message": f"Unknown component '{component_name}'. Valid: {sorted(VALID_COMPONENTS)}",
         }
 
-    # Normalize: bare name -> "google/name"
+    # Normalize: require provider prefix
     if "/" not in model_name:
-        model_name = f"google/{model_name}"
+        # Infer provider from model name prefix
+        if model_name.startswith("claude"):
+            model_name = f"anthropic/{model_name}"
+        else:
+            model_name = f"google/{model_name}"
 
     # Validate against live API
     info = await validate_model(model_name)
@@ -67,8 +72,17 @@ async def set_agent_model(
     if tool_context:
         tool_context.state[f"model:{component_name}"] = model_name
 
+    old_provider, _ = _parse_model_str(old_model)
+    new_provider, _ = _parse_model_str(model_name)
+    cross_provider = old_provider != new_provider
+
+    msg = f"Model for {component_name} changed: {old_model} -> {model_name}"
+    if cross_provider:
+        msg += " (cross-provider change — takes full effect after restart)"
+
     return {
         "status": "success",
-        "message": f"Model for {component_name} changed: {old_model} -> {model_name}",
+        "message": msg,
         "model_info": info,
+        "restart_required": cross_provider,
     }

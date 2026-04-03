@@ -55,15 +55,21 @@ def _parse_model_str(model_str: str) -> tuple[str, str]:
 def _build_model(provider: str, model_name: str, **kwargs):
     """Construct a provider-specific LLM model object.
 
-    Returns a BaseLlm instance (e.g. Gemini).
+    Returns a BaseLlm instance (e.g. Gemini, LiteLlm).
     Raises ValueError for unsupported providers.
     """
     if provider == "google":
         from google.adk.models import Gemini
         return Gemini(model=model_name, **kwargs)
+    if provider == "anthropic":
+        from google.adk.models.lite_llm import LiteLlm
+        return LiteLlm(model=f"anthropic/{model_name}", **kwargs)
     raise ValueError(
-        f"Unsupported model provider: '{provider}'. Currently supported: google"
+        f"Unsupported model provider: '{provider}'. Currently supported: google, anthropic"
     )
+
+
+SUPPORTED_PROVIDERS = frozenset({"google", "anthropic"})
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +151,21 @@ async def validate_model(model_str: str) -> dict | None:
             logger.warning("Model validation failed for '%s': %s", model_str, e)
             return None
 
+    if provider == "anthropic":
+        import anthropic
+        client = anthropic.AsyncAnthropic()
+        try:
+            model = await client.models.retrieve(model_name)
+            return {
+                "name": model.id,
+                "display_name": getattr(model, "display_name", ""),
+                "input_token_limit": getattr(model, "max_input_tokens", None),
+                "output_token_limit": getattr(model, "max_tokens", None),
+            }
+        except Exception as e:
+            logger.warning("Model validation failed for '%s': %s", model_str, e)
+            return None
+
     logger.warning("Cannot validate model for unsupported provider: %s", provider)
     return None
 
@@ -175,7 +196,26 @@ async def list_provider_models(provider: str = "google", filter_str: str = "") -
         except Exception as e:
             logger.error("Failed to list models from %s: %s", provider, e)
             return [{"error": str(e)}]
+    elif provider == "anthropic":
+        import anthropic
+        client = anthropic.AsyncAnthropic()
+        try:
+            page = await client.models.list(limit=100)
+            for model in page.data:
+                name = model.id
+                display = getattr(model, "display_name", "")
+                if filter_str and filter_str.lower() not in (name + display).lower():
+                    continue
+                results.append({
+                    "name": name,
+                    "display_name": display,
+                    "input_token_limit": getattr(model, "max_input_tokens", None),
+                    "output_token_limit": getattr(model, "max_tokens", None),
+                })
+        except Exception as e:
+            logger.error("Failed to list models from %s: %s", provider, e)
+            return [{"error": str(e)}]
     else:
-        return [{"error": f"Unsupported provider: {provider}"}]
+        return [{"error": f"Unsupported provider: {provider}. Supported: {sorted(SUPPORTED_PROVIDERS)}"}]
 
     return results

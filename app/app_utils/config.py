@@ -11,6 +11,7 @@ ENV_FILE_PATH = os.environ.get("DOTENV_PATH", "./data/.env")
 
 ALLOWED_CONFIG_KEYS = frozenset({
     "GOOGLE_API_KEY",
+    "ANTHROPIC_API_KEY",
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_WEBHOOK_SECRET",
     "GITHUB_TOKEN",
@@ -25,6 +26,7 @@ ALLOWED_CONFIG_KEYS = frozenset({
 # ADMIN_USER_IDS and REQUIRE_2FA are excluded — they must only be set via /init (requires passcode).
 AGENT_CONFIG_KEYS = frozenset({
     "GOOGLE_API_KEY",
+    "ANTHROPIC_API_KEY",
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_WEBHOOK_SECRET",
     "GITHUB_TOKEN",

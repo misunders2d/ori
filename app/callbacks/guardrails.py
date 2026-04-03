@@ -144,9 +144,22 @@ def prompt_injection_guardrail(
     model_key = f"model:{callback_context.agent_name}"
     model_override = callback_context.state.to_dict().get(model_key)
     if model_override:
-        from app.app_utils.models import _parse_model_str
-        _provider, override_model_name = _parse_model_str(model_override)
-        llm_request.model = override_model_name
+        from app.app_utils.models import _parse_model_str, MODEL_DEFAULTS
+        override_provider, override_model_name = _parse_model_str(model_override)
+        # Determine the current agent's provider from its default or env
+        default_str = MODEL_DEFAULTS.get(callback_context.agent_name, "google/unknown")
+        current_provider, _ = _parse_model_str(default_str)
+        if override_provider == current_provider:
+            # Same provider: safe to hot-swap via request model string
+            llm_request.model = override_model_name
+        else:
+            # Cross-provider swap: cannot change backend mid-session.
+            # The override is persisted to .env and takes effect on restart.
+            logger.warning(
+                "Cross-provider hot-swap requested for %s (%s -> %s). "
+                "Takes effect after restart.",
+                callback_context.agent_name, current_provider, override_provider,
+            )
 
     if llm_request.contents:
         last_msg = llm_request.contents[-1]
