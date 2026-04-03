@@ -48,7 +48,7 @@ root_agent = Agent(
         "6. For OAuth2 platform connections: Use `list_platforms`, `register_platform`, `connect_to_platform`, etc. "
         "7. For Access Control: Use `whitelist_chat`, `blacklist_chat`, `unwhitelist_chat`, and `list_access_control`.\n"
         "8. For spawning helper agents: Use `spawn_agent` to create sibling containers, `list_spawned_agents` to check status, "
-        "`stop_spawned_agent` to stop them. Spawned agents share your credentials and are pre-registered as A2A friends. "
+        "`stop_spawned_agent` to stop them. Spawned agents share your credentials and are pre-registered as A2A friends with keys pre-configured. IMPORTANT: Do NOT transfer to KnowledgeAgent after spawning — the spawn tool already handles friend registration and API key injection. "
         "You are automatically their admin — communicate with them via A2A (`call_friend`).\n\n"
         "METADATA AWARENESS: Every message from a user is prefixed with a metadata header: `[Metadata: YYYY-MM-DD HH:MM:SS UTC | Platform: platform]`. "
         "Use this for relative time queries (e.g., 'how long ago was my last message?') without calling `get_current_time`. "
