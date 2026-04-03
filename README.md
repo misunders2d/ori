@@ -1,4 +1,4 @@
-# Ori: The Self-Evolving Autonomous Agent (v2.0)
+# Ori: The Self-Evolving Autonomous Agent (v2.0.0)
 
 **Ori** is a headless, messenger-agnostic autonomous agent that lives in your infrastructure, handles your workflows, and **writes its own code**. It spawns child agents, collaborates with peers via A2A, and maintains a shared evolution library across instances.
 
@@ -159,6 +159,23 @@ Ori instances discover and collaborate via the Agent-to-Agent protocol:
 - **Image Cleanup:** Dangling images pruned after every build
 - **Rate Limiting:** Per-container token-bucket throttle (configurable via `AGENT_RPM`). Retry with exponential backoff on 429/503 errors.
 - **Exit Signals:** `100` = evolution (pull + rebuild), `101` = rollback, `0/130` = clean shutdown
+
+## Sandboxed Evolution
+
+For non-trivial features, Ori prefers a safe development pattern:
+
+1. **Spawn** a disposable test bot (`spawn_agent("dev-lab", "feature development")`)
+2. The test bot iterates freely — crashes don't affect the parent
+3. Once working, the test bot sends verified code back via `export_dna`
+4. Parent receives, verifies, catalogs, and commits safely
+5. Test bot is revoked (`stop_spawned_agent("ori-dev-lab", remove=True)`)
+
+This keeps the production instance stable while enabling aggressive experimentation.
+
+## Milestones
+
+- **April 2026:** v2.0.0 — Multi-provider models (Gemini/Claude), agent spawning with hierarchical admin, evolution catalog, decoupled deployment, rate limiting, sandboxed evolution pattern.
+- **March 2026:** v1.0.0 — First stable release. First successful autonomous DNA exchange over Ori-Net.
 
 ## License
 
