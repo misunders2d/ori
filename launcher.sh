@@ -107,24 +107,29 @@ export AGENT_GID="${AGENT_GID:-$(id -g)}"
 # Require at least one LLM provider to be configured before starting.
 needs_setup() {
     [ ! -f "data/.env" ] && return 0
-    # Check for any provider: API key or Vertex AI mode
-    grep -q "GOOGLE_API_KEY=" "data/.env" 2>/dev/null && return 1
-    grep -q "ANTHROPIC_API_KEY=" "data/.env" 2>/dev/null && return 1
-    grep -qi "GOOGLE_GENAI_USE_VERTEXAI=TRUE" "data/.env" 2>/dev/null && return 1
+    # Check for any provider: API key or Vertex AI mode (handles quoted values)
+    grep -qE 'GOOGLE_API_KEY=.+' "data/.env" 2>/dev/null && return 1
+    grep -qE 'ANTHROPIC_API_KEY=.+' "data/.env" 2>/dev/null && return 1
+    grep -qiE 'GOOGLE_GENAI_USE_VERTEXAI=.?TRUE' "data/.env" 2>/dev/null && return 1
     return 0
 }
 
 if needs_setup; then
-    log "No LLM provider configured. Launching setup wizard..."
-    # Run wizard on the HOST (not in container) so gcloud, browsers, etc. work
-    if command -v python3 &>/dev/null; then
-        python3 interfaces/setup_wizard.py
-    elif command -v python &>/dev/null; then
-        python interfaces/setup_wizard.py
+    # Only run wizard if we have an interactive terminal
+    if [ -t 0 ]; then
+        log "No LLM provider configured. Launching setup wizard..."
+        if command -v python3 &>/dev/null; then
+            python3 interfaces/setup_wizard.py
+        elif command -v python &>/dev/null; then
+            python interfaces/setup_wizard.py
+        else
+            log "No host Python found. Please run: python3 interfaces/setup_wizard.py"
+            exit 1
+        fi
     else
-        # Fallback: run in container (gcloud won't be available)
-        log "No host Python found. Running wizard in container (some auth flows may be limited)."
-        docker compose run --rm -it --entrypoint "" ori-agent uv run python interfaces/setup_wizard.py
+        log "ERROR: No LLM provider configured and no interactive terminal available."
+        log "Run the setup wizard manually: python3 interfaces/setup_wizard.py"
+        exit 1
     fi
 fi
 

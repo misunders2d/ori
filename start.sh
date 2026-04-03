@@ -13,9 +13,9 @@ SERVICE_NAME="ori-agent"
 # --- Run setup wizard if no provider configured (needs interactive terminal) ---
 needs_setup() {
     [ ! -f "data/.env" ] && return 0
-    grep -q "GOOGLE_API_KEY=" "data/.env" 2>/dev/null && return 1
-    grep -q "ANTHROPIC_API_KEY=" "data/.env" 2>/dev/null && return 1
-    grep -qi "GOOGLE_GENAI_USE_VERTEXAI=TRUE" "data/.env" 2>/dev/null && return 1
+    grep -qE 'GOOGLE_API_KEY=.+' "data/.env" 2>/dev/null && return 1
+    grep -qE 'ANTHROPIC_API_KEY=.+' "data/.env" 2>/dev/null && return 1
+    grep -qiE 'GOOGLE_GENAI_USE_VERTEXAI=.?TRUE' "data/.env" 2>/dev/null && return 1
     return 0
 }
 
