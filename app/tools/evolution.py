@@ -329,61 +329,43 @@ def evolution_verify_sandbox(
 
 
 
-def evolution_commit_and_push(
-    commit_message: str, tool_context: ToolContext, delete_files: Optional[List[str]] = None, skip_local_update: bool = False
+def _collect_staged_files(sandbox_dir: str) -> list[tuple[str, str]]:
+    """Walk the sandbox and return [(abs_src, rel_path), ...] for real files (not symlinks)."""
+    staged = []
+    if not os.path.exists(sandbox_dir):
+        return staged
+    for root, _dirs, files in os.walk(sandbox_dir):
+        rel_root = os.path.relpath(root, sandbox_dir)
+        path_parts = rel_root.split(os.sep)
+        if any(p.startswith('.') and p not in ['.', '..'] for p in path_parts) or "__pycache__" in path_parts:
+            continue
+        for fname in files:
+            src = os.path.join(root, fname)
+            if os.path.islink(src):
+                continue
+            rel = os.path.relpath(src, sandbox_dir)
+            staged.append((src, rel))
+    return staged
+
+
+def _make_signed_message(commit_message: str) -> str:
+    bot_name = os.environ.get("BOT_NAME", "Ori")
+    signature = f"evolved by {bot_name}"
+    if not commit_message.strip().endswith(signature):
+        return f"{commit_message.strip()}\n\n{signature}"
+    return commit_message.strip()
+
+
+def _evolution_commit_remote(
+    staged_files, delete_files, commit_message, skip_local_update
 ) -> dict:
-    """Commits and pushes verified changes and handles deletions in the GitHub repository.
-
-    ONLY call this after ALL verification checks pass.
-
-    IMPORTANT: You MUST NOT commit changes that remove, modify, or bypass system guardrails
-    (event callbacks like `before_agent_callback`, `before_model_callback`, etc.)
-    unless explicitly requested by the user.
-
-    Args:
-        commit_message (str): A descriptive message explaining the improvement.
-        delete_files (Optional[List[str]]): List of relative paths to files that should be deleted.
-        skip_local_update (bool): If True, pushes to GitHub but does NOT update the local filesystem.
-            Use this for system-critical files (pyproject.toml, config.py) to avoid hot-reload crashes.
-            A hard reboot (exit 100) will be required afterward to apply changes.
-    """
-    sandbox_dir = os.path.abspath("./data/sandbox")
-    # If no staged files AND no deletions, return error
-    has_staged = os.path.exists(sandbox_dir) and any(os.path.isfile(os.path.join(root, f)) for root, _, files in os.walk(sandbox_dir) for f in files)
-    
-    if not has_staged and not delete_files:
-        return {"status": "error", "message": "Nothing to commit or delete."}
-
+    """Push changes via temporary clone to GitHub (remote evolution)."""
     github_token = os.environ.get("GITHUB_TOKEN", "")
     github_repo = os.environ.get("GITHUB_REPO", "")
-    if not github_token or not github_repo:
-        missing = []
-        if not github_token:
-            missing.append("GITHUB_TOKEN")
-        if not github_repo:
-            missing.append("GITHUB_REPO")
-        return {
-            "status": "auth_required",
-            "message": f"Missing credentials: {', '.join(missing)}.",
-        }
-
-    staged_files = []
-    if os.path.exists(sandbox_dir):
-        for root, _dirs, files in os.walk(sandbox_dir):
-            rel_root = os.path.relpath(root, sandbox_dir)
-            path_parts = rel_root.split(os.sep)
-            if any(p.startswith('.') and p not in ['.', '..'] for p in path_parts) or "__pycache__" in path_parts:
-                continue
-                
-            for fname in files:
-                src = os.path.join(root, fname)
-                if os.path.islink(src):
-                    continue
-                rel = os.path.relpath(src, sandbox_dir)
-                staged_files.append((src, rel))
 
     tmp_repo_dir = f"/tmp/evolution_{uuid.uuid4().hex[:8]}"
     push_url = f"https://x-access-token:{github_token}@github.com/{github_repo}.git"
+    bot_name = os.environ.get("BOT_NAME", "Ori")
 
     try:
         subprocess.run(
@@ -402,20 +384,13 @@ def evolution_commit_and_push(
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy2(src, dst)
 
-        bot_name = os.environ.get("BOT_NAME", "Ori")
         subprocess.run(["git", "config", "user.email", "agent@evolution.local"], cwd=tmp_repo_dir, check=True)
         subprocess.run(["git", "config", "user.name", f"{bot_name} (Agent)"], cwd=tmp_repo_dir, check=True)
 
         if staged_files:
-            # Rely on git's native behavior to add all copied files while strictly respecting .gitignore
             subprocess.run(["git", "add", "."], cwd=tmp_repo_dir, check=True)
-            
-        # Append "evolved by {bot_name}" to the commit message securely without invalid escape sequences
-        signature = f"evolved by {bot_name}"
-        if not commit_message.strip().endswith(signature):
-            signed_message = f"{commit_message.strip()}\n\n{signature}"
-        else:
-            signed_message = commit_message.strip()
+
+        signed_message = _make_signed_message(commit_message)
         subprocess.run(["git", "commit", "-m", signed_message], cwd=tmp_repo_dir, check=True)
 
         result = subprocess.run(
@@ -427,18 +402,9 @@ def evolution_commit_and_push(
             err_msg = (result.stderr or result.stdout)[-500:].replace(github_token, "***")
             return {"status": "error", "message": f"git push failed: {err_msg}"}
 
-        # HARDENED LOGIC: Only update local files if safe to do so
+        # Update local files if safe to do so
         if not skip_local_update:
-            if delete_files:
-                for rel_path in delete_files:
-                    live_target = os.path.join(PROJECT_ROOT, rel_path)
-                    if os.path.exists(live_target):
-                        os.remove(live_target)
-
-            for src, rel in staged_files:
-                live_dst = os.path.join(PROJECT_ROOT, rel)
-                os.makedirs(os.path.dirname(live_dst), exist_ok=True)
-                shutil.copy2(src, live_dst)
+            _apply_to_live(staged_files, delete_files)
 
     except subprocess.CalledProcessError as e:
         err_msg = (e.stderr or e.stdout or str(e))[-500:].replace(github_token, "***")
@@ -449,10 +415,146 @@ def evolution_commit_and_push(
         if os.path.exists(tmp_repo_dir):
             shutil.rmtree(tmp_repo_dir)
 
+    return {"status": "success", "mode": "remote"}
+
+
+def _evolution_commit_local(
+    staged_files, delete_files, commit_message, skip_local_update
+) -> dict:
+    """Commit changes locally using branch-test-merge workflow (no remote needed).
+
+    Flow: create feature branch -> apply changes -> commit -> merge to master.
+    If anything fails, the branch is deleted and master is untouched.
+    """
+    bot_name = os.environ.get("BOT_NAME", "Ori")
+    branch_name = f"evo/{uuid.uuid4().hex[:8]}"
+    signed_message = _make_signed_message(commit_message)
+
+    try:
+        # Create and switch to feature branch
+        subprocess.run(["git", "checkout", "-b", branch_name], cwd=PROJECT_ROOT, check=True,
+                        capture_output=True, text=True)
+
+        # Apply staged files to the working tree
+        for src, rel in staged_files:
+            dst = os.path.join(PROJECT_ROOT, rel)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy2(src, dst)
+
+        # Apply deletions
+        if delete_files:
+            for rel_path in delete_files:
+                live_target = os.path.join(PROJECT_ROOT, rel_path)
+                if os.path.exists(live_target):
+                    os.remove(live_target)
+                subprocess.run(["git", "rm", "-f", "--ignore-unmatch", rel_path],
+                                cwd=PROJECT_ROOT, capture_output=True, text=True)
+
+        # Stage and commit
+        subprocess.run(["git", "add", "-A"], cwd=PROJECT_ROOT, check=True,
+                        capture_output=True, text=True)
+        subprocess.run(
+            ["git", "config", "user.email", "agent@evolution.local"],
+            cwd=PROJECT_ROOT, capture_output=True, text=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", f"{bot_name} (Agent)"],
+            cwd=PROJECT_ROOT, capture_output=True, text=True,
+        )
+        subprocess.run(["git", "commit", "-m", signed_message], cwd=PROJECT_ROOT, check=True,
+                        capture_output=True, text=True)
+
+        # Merge back to master
+        subprocess.run(["git", "checkout", "master"], cwd=PROJECT_ROOT, check=True,
+                        capture_output=True, text=True)
+        result = subprocess.run(
+            ["git", "merge", "--no-ff", branch_name, "-m", f"merge: {signed_message}"],
+            cwd=PROJECT_ROOT, capture_output=True, text=True,
+        )
+
+        if result.returncode != 0:
+            # Merge conflict — abort and clean up
+            subprocess.run(["git", "merge", "--abort"], cwd=PROJECT_ROOT, capture_output=True)
+            subprocess.run(["git", "branch", "-D", branch_name], cwd=PROJECT_ROOT, capture_output=True)
+            return {"status": "error", "message": f"Merge conflict. Branch discarded.\n{result.stderr[-500:]}"}
+
+        # Clean up the feature branch
+        subprocess.run(["git", "branch", "-d", branch_name], cwd=PROJECT_ROOT, capture_output=True)
+
+    except subprocess.CalledProcessError as e:
+        # Ensure we're back on master and clean up
+        subprocess.run(["git", "checkout", "master"], cwd=PROJECT_ROOT, capture_output=True)
+        subprocess.run(["git", "branch", "-D", branch_name], cwd=PROJECT_ROOT, capture_output=True)
+        err_msg = (e.stderr or e.stdout or str(e))[-500:]
+        return {"status": "error", "message": f"Local evolution failed: {err_msg}"}
+    except Exception as e:
+        subprocess.run(["git", "checkout", "master"], cwd=PROJECT_ROOT, capture_output=True)
+        subprocess.run(["git", "branch", "-D", branch_name], cwd=PROJECT_ROOT, capture_output=True)
+        return {"status": "error", "message": f"Local evolution error: {e!s}"}
+
+    return {"status": "success", "mode": "local", "branch": branch_name}
+
+
+def _apply_to_live(staged_files, delete_files):
+    """Copy staged files to the live project root and apply deletions."""
+    if delete_files:
+        for rel_path in delete_files:
+            live_target = os.path.join(PROJECT_ROOT, rel_path)
+            if os.path.exists(live_target):
+                os.remove(live_target)
+    for src, rel in staged_files:
+        live_dst = os.path.join(PROJECT_ROOT, rel)
+        os.makedirs(os.path.dirname(live_dst), exist_ok=True)
+        shutil.copy2(src, live_dst)
+
+
+def evolution_commit_and_push(
+    commit_message: str, tool_context: ToolContext, delete_files: Optional[List[str]] = None, skip_local_update: bool = False
+) -> dict:
+    """Commits verified changes. Uses GitHub if configured, otherwise commits locally.
+
+    ONLY call this after ALL verification checks pass.
+
+    Remote mode (GitHub configured): clones, commits, pushes to remote, optionally updates local.
+    Local mode (no GitHub): creates a feature branch, commits, merges to master. Safe rollback on failure.
+
+    IMPORTANT: You MUST NOT commit changes that remove, modify, or bypass system guardrails
+    (event callbacks like `before_agent_callback`, `before_model_callback`, etc.)
+    unless explicitly requested by the user.
+
+    Args:
+        commit_message (str): A descriptive message explaining the improvement.
+        delete_files (Optional[List[str]]): List of relative paths to files that should be deleted.
+        skip_local_update (bool): If True (remote mode only), pushes but does NOT update the local filesystem.
+            A hard reboot (exit 100) will be required afterward to apply changes.
+    """
+    sandbox_dir = os.path.abspath("./data/sandbox")
+    has_staged = os.path.exists(sandbox_dir) and any(
+        os.path.isfile(os.path.join(root, f))
+        for root, _, files in os.walk(sandbox_dir) for f in files
+    )
+
+    if not has_staged and not delete_files:
+        return {"status": "error", "message": "Nothing to commit or delete."}
+
+    staged_files = _collect_staged_files(sandbox_dir)
+
+    github_token = os.environ.get("GITHUB_TOKEN", "")
+    github_repo = os.environ.get("GITHUB_REPO", "")
+    use_remote = bool(github_token and github_repo)
+
+    if use_remote:
+        result = _evolution_commit_remote(staged_files, delete_files, commit_message, skip_local_update)
+    else:
+        result = _evolution_commit_local(staged_files, delete_files, commit_message, skip_local_update)
+
+    if result["status"] != "success":
+        return result
+
+    # Clean up sandbox
     if os.path.exists(sandbox_dir):
         shutil.rmtree(sandbox_dir, ignore_errors=True)
 
-    # Reset cycle flag so next evolution_stage_change starts fresh
     tool_context.state["evolution_cycle_active"] = False
 
     summary = []
@@ -461,8 +563,9 @@ def evolution_commit_and_push(
     if delete_files:
         summary.append(f"deleted {len(delete_files)} file(s)")
 
-    msg = f"Successfully {' and '.join(summary)} via temporary clone."
-    if skip_local_update:
+    mode = result.get("mode", "unknown")
+    msg = f"Successfully {' and '.join(summary)} via {'remote push' if mode == 'remote' else 'local branch-merge'}."
+    if skip_local_update and use_remote:
         msg += " Local update skipped. Scheduling automatic hard reboot (exit 100) to apply changes."
         from app.tools.system import _schedule_restart, EXIT_CODE_UPDATE
         _schedule_restart(EXIT_CODE_UPDATE)

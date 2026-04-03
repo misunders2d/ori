@@ -64,6 +64,33 @@ needs_rebuild() {
     return 1
 }
 
+# --- Helper: detect if deps changed (needs --no-cache) vs code-only change ---
+deps_changed() {
+    # Compare dep files against a separate fingerprint
+    local fingerprint="data/.deps_hash"
+    local current_hash
+    current_hash=$(cat pyproject.toml uv.lock Dockerfile 2>/dev/null | sha256sum | cut -d' ' -f1)
+    if [ -f "$fingerprint" ] && [ "$(cat "$fingerprint")" = "$current_hash" ]; then
+        return 1  # deps unchanged
+    fi
+    echo "$current_hash" > "$fingerprint"
+    return 0  # deps changed
+}
+
+# --- Helper: build image and clean up old images ---
+smart_build() {
+    if deps_changed; then
+        log "Dependencies changed. Full rebuild (--no-cache)..."
+        docker compose build --no-cache
+    else
+        log "Code-only change. Incremental rebuild..."
+        docker compose build
+    fi
+    touch data/.last_build
+    # Always prune dangling images after build
+    docker image prune -f --filter "label=project=ori" 2>/dev/null || true
+}
+
 # --- Helper: detect interactive mode ---
 is_interactive() {
     if [ -f "data/.env" ] && grep -qE "^(TELEGRAM_BOT_TOKEN|SLACK_BOT_TOKEN)=" data/.env 2>/dev/null; then
@@ -120,8 +147,7 @@ while true; do
 
         echo "0" > "$CRASH_FILE"
         log "Rollback complete. Rebuilding..."
-        docker compose build --no-cache
-        touch data/.last_build
+        smart_build
     fi
 
     # --- INCREMENT CRASH COUNTER (reset on stable boot) ---
@@ -164,13 +190,15 @@ while true; do
     # --- SIGNAL HANDLING ---
     case $EXIT_CODE in
         100)
-            # Evolution signal: Ori pushed code to remote, pull and rebuild
-            log "Evolution signal (100). Syncing with remote and rebuilding..."
-            git fetch origin master 2>/dev/null || true
-            git reset --hard origin/master
-            git clean -fd --exclude=data --exclude='data/*' --exclude=.env
-            docker compose build --no-cache
-            touch data/.last_build
+            # Evolution signal: Ori committed changes, sync and rebuild
+            log "Evolution signal (100). Syncing and rebuilding..."
+            # Pull from remote if configured, otherwise changes are already local
+            if git remote get-url origin &>/dev/null; then
+                git fetch origin master 2>/dev/null || true
+                git reset --hard origin/master
+                git clean -fd --exclude=data --exclude='data/*' --exclude=.env
+            fi
+            smart_build
             echo "0" > "$CRASH_FILE"
             ;;
         101)
@@ -178,8 +206,7 @@ while true; do
             log "Rollback signal (101). Reverting to previous commit..."
             git reset --hard HEAD~1
             git clean -fd --exclude=data --exclude='data/*' --exclude=.env
-            docker compose build --no-cache
-            touch data/.last_build
+            smart_build
             echo "0" > "$CRASH_FILE"
             ;;
         0|130)
@@ -191,7 +218,6 @@ while true; do
         *)
             # Unexpected crash
             log "Daemon exited with code $EXIT_CODE. Cooling down (${COOLDOWN}s)..."
-            docker image prune -f --filter "label=project=ori" 2>/dev/null || true
             sleep "$COOLDOWN"
             ;;
     esac
