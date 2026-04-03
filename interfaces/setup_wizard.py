@@ -292,9 +292,14 @@ def main():
         cprint("  security guardrails (prompt injection defense). Without it, security", "93")
         cprint("  features will be reduced. Use option 4 to combine providers (e.g. 1,3).\n", "93")
 
+        has_gcloud = subprocess.run(["which", "gcloud"], capture_output=True).returncode == 0
+
         print("  How would you like to authenticate?\n")
         print("    1. Google Gemini — paste an API key (free tier available)")
-        print("    2. Google Cloud login — opens a link, you sign in (covers Gemini + Claude)")
+        if has_gcloud:
+            print("    2. Google Cloud login — opens a link, you sign in (covers Gemini + Claude)")
+        else:
+            cprint("    2. Google Cloud login — UNAVAILABLE (gcloud CLI not installed)", "90")
         print("    3. Anthropic Claude — paste an API key")
         print("    4. Multiple — combine options (e.g. 1,3 for both API keys)")
         print()
@@ -310,6 +315,15 @@ def main():
                     if setup_google_api_key(ENV_FILE_PATH, set_key):
                         providers_configured.add("google")
                 elif c == "2":
+                    if not has_gcloud:
+                        cprint("  Option 2 requires gcloud CLI, which is not installed.\n", "91")
+                        print("  Quick setup:")
+                        print("    1. Install:  curl https://sdk.cloud.google.com | bash")
+                        print("    2. Restart shell or run:  source ~/.bashrc")
+                        print("    3. Initialize:  gcloud init")
+                        print("    4. Re-run this setup\n")
+                        cprint("  Or use option 1 (API key) to continue now.\n", "93")
+                        continue
                     if setup_google_login(ENV_FILE_PATH, set_key):
                         providers_configured.add("google")
                         providers_configured.add("anthropic")  # Vertex covers both
