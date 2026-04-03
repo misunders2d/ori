@@ -3,6 +3,7 @@ import logging
 import math
 import os
 import re
+import time
 
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models.llm_request import LlmRequest
@@ -12,6 +13,40 @@ from google.genai import types
 from app.app_utils.models import get_model_name
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Per-container request throttle (token bucket)
+# ---------------------------------------------------------------------------
+# Prevents any single container from exhausting the shared API quota.
+# Configurable via AGENT_RPM env var (requests per minute). Default: 30.
+# ---------------------------------------------------------------------------
+
+class _RequestThrottle:
+    """Simple token-bucket rate limiter."""
+
+    def __init__(self):
+        self._rpm = int(os.environ.get("AGENT_RPM", "30"))
+        self._tokens = float(self._rpm)
+        self._last_refill = time.monotonic()
+
+    def acquire(self) -> bool:
+        """Try to acquire a token. Returns False if rate limit exceeded."""
+        now = time.monotonic()
+        elapsed = now - self._last_refill
+        self._tokens = min(self._rpm, self._tokens + elapsed * (self._rpm / 60.0))
+        self._last_refill = now
+        if self._tokens >= 1.0:
+            self._tokens -= 1.0
+            return True
+        return False
+
+    @property
+    def rpm(self):
+        return self._rpm
+
+
+_throttle = _RequestThrottle()
 
 
 def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
@@ -135,6 +170,18 @@ def prompt_injection_guardrail(
     Dynamically tracks Prompt Injection across any language using Semantic Cosine Similarity dot products against known anchor spaces (vector clusters).
     Dynamically strips the BuiltInPlanner's thinking_config from the payload if use_planner was explicitly set to False in the DB session.
     """
+    # Per-container rate throttle — prevents one agent from exhausting shared API quota
+    if not _throttle.acquire():
+        logger.warning("Rate throttle hit (%d RPM). Delaying request for %s.", _throttle.rpm, callback_context.agent_name)
+        # Sleep briefly to let tokens refill rather than hard-failing
+        time.sleep(2.0)
+        if not _throttle.acquire():
+            return LlmResponse(
+                content=types.Content(
+                    parts=[types.Part(text="I'm being rate-limited to protect shared API quota. Please wait a moment and try again.")]
+                )
+            )
+
     use_planner = callback_context.state.to_dict().get("use_planner", False)
     if not use_planner and getattr(llm_request, "config", None):
         if hasattr(llm_request.config, "thinking_config"):

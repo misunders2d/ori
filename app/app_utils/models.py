@@ -84,25 +84,43 @@ def _parse_model_str(model_str: str) -> tuple[str, str]:
 # Factory
 # ---------------------------------------------------------------------------
 
+def _default_retry_options():
+    """Default retry config for all LLM calls — handles 429s with exponential backoff."""
+    from google.genai import types
+    return types.HttpRetryOptions(
+        attempts=4,
+        initialDelay=2.0,
+        maxDelay=60.0,
+        expBase=2.0,
+        jitter=1.0,
+        httpStatusCodes=[429, 503, 529],
+    )
+
+
 def _build_model(provider: str, model_name: str, **kwargs):
     """Construct a provider-specific LLM model object.
 
     Returns a BaseLlm instance (e.g. Gemini, Claude, LiteLlm).
     Raises ValueError for unsupported providers.
 
+    All models get default retry options (4 attempts, exponential backoff)
+    unless explicitly overridden via kwargs.
+
     In Vertex AI mode, both Google and Anthropic models use ADC credentials.
     In API key mode, Google uses GOOGLE_API_KEY and Anthropic uses ANTHROPIC_API_KEY via LiteLlm.
     """
+    # Apply default retry options if not explicitly provided
+    if "retry_options" not in kwargs:
+        kwargs["retry_options"] = _default_retry_options()
+
     if provider == "google":
         from google.adk.models import Gemini
         return Gemini(model=model_name, **kwargs)
     if provider == "anthropic":
         if _is_vertex_mode():
-            # Native ADK Claude class via Vertex AI Model Garden (uses ADC, no Anthropic API key)
             from google.adk.models.anthropic_llm import Claude
             return Claude(model=model_name, **kwargs)
         else:
-            # Direct Anthropic API via LiteLlm (uses ANTHROPIC_API_KEY)
             from google.adk.models.lite_llm import LiteLlm
             return LiteLlm(model=f"anthropic/{model_name}", **kwargs)
     raise ValueError(
