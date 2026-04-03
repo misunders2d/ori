@@ -9,7 +9,7 @@ set -e
 TARGET_DIR="${1:-ori-organism}"
 
 echo "=========================================="
-echo "    🧬 Ori — Digital Organism Birth"
+echo "    Ori — Digital Organism Birth"
 echo "=========================================="
 echo "  Target: $TARGET_DIR"
 echo ""
@@ -21,8 +21,8 @@ check_cmd() {
     if ! command -v "$cmd" &> /dev/null; then
         echo ""
         echo "----------------------------------------------------------"
-        echo "  ❌ ERROR: '$cmd' is not installed."
-        echo "  👉 HELP:  $help"
+        echo "  ERROR: '$cmd' is not installed."
+        echo "  HELP:  $help"
         echo "----------------------------------------------------------"
         echo ""
         exit 1
@@ -32,7 +32,6 @@ check_cmd() {
 check_cmd "docker" "Install Docker: https://docs.docker.com/get-docker/"
 check_cmd "git" "Install Git: https://git-scm.com/downloads"
 check_cmd "python3" "Install Python 3: https://www.python.org/downloads/"
-check_cmd "curl" "Install Curl: sudo apt install curl (or brew install curl)"
 
 # Clone
 echo "  [+] Cloning Ori (latest master)..."
@@ -41,16 +40,16 @@ git clone --depth=1 https://github.com/misunders2d/ori.git "$TARGET_DIR"
 # Enter directory
 cd "$TARGET_DIR"
 
-# Detach DNA
+# Detach from original repo
 echo "  [+] Severing DNA connection (detaching from origin)..."
 rm -rf .git
 
-# Initialize fresh history
+# Initialize fresh local history
 git init -b master
 git config user.email "organism@local.host"
 git config user.name "Ori Birth Process"
 
-# Prepare Rootless baseline
+# Prepare baseline
 mkdir -p data
 touch data/.last_build
 
@@ -58,9 +57,14 @@ git add .
 git commit -m "Initial birth of Ori Organism"
 
 # Make scripts executable
-chmod +x start.sh deploy.sh rollback.sh
+chmod +x launcher.sh install.sh deploy.sh start.sh
 
-# Launch Setup
+# Run setup wizard on host (not in container — needs gcloud, browser, etc.)
 echo "  [+] Launching incubation wizard..."
 echo ""
-exec ./start.sh </dev/tty
+python3 interfaces/setup_wizard.py </dev/tty
+
+# Start the bot
+echo ""
+echo "  [+] Starting Ori..."
+exec ./launcher.sh </dev/tty
