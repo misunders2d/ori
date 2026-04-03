@@ -19,6 +19,8 @@ services:
       retries: 3
       start_period: 30s
     volumes:
+      # --- Docker socket (required for health stats, agent spawning) ---
+      - /var/run/docker.sock:/var/run/docker.sock
       # --- Mutable state (persisted across rebuilds) ---
       - ./data:/code/data:z
       - ./.git:/code/.git:z

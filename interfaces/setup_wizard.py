@@ -287,6 +287,10 @@ def main():
     if not has_any_provider:
         cprint("[2] LLM Provider Setup (Required)", "93")
         print("You must configure at least one AI provider for your agent to think.\n")
+        cprint("  NOTE: A Google API key (option 1) is strongly recommended even if you", "93")
+        cprint("  choose Claude as your primary model. It powers the embedding-based", "93")
+        cprint("  security guardrails (prompt injection defense). Without it, security", "93")
+        cprint("  features will be reduced. Use option 4 to combine providers (e.g. 1,3).\n", "93")
 
         print("  How would you like to authenticate?\n")
         print("    1. Google Gemini — paste an API key (free tier available)")

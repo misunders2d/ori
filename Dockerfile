@@ -3,10 +3,13 @@ FROM mirror.gcr.io/library/python:3.11-slim
 LABEL project="ori"
 
 # --- 1. SYSTEM DEPENDENCIES ---
-# Install git, gosu, curl, sqlite3, and Node.js
+# Install git, gosu, curl, sqlite3, Node.js, and Docker CLI (for health stats + spawning)
 RUN apt-get update && apt-get install -y --no-install-recommends git gosu curl sqlite3 \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list \
+    && apt-get update && apt-get install -y --no-install-recommends docker-ce-cli \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir uv==0.5.10

@@ -55,6 +55,13 @@ done
 # Fix ownership
 chown -R agentuser:agentgroup /code /home/agentuser
 
+# Grant Docker socket access (for health stats + agent spawning)
+if [ -S /var/run/docker.sock ]; then
+    DOCKER_GID=$(stat -c "%g" /var/run/docker.sock)
+    groupadd -o -g "$DOCKER_GID" dockerhost 2>/dev/null || true
+    usermod -aG dockerhost agentuser 2>/dev/null || true
+fi
+
 # --- 3. GIT CONFIG ---
 gosu agentuser git config --global --add safe.directory /code || true
 gosu agentuser git config --global user.name "$BOT_NAME (Agent)" || true
