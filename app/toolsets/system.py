@@ -15,6 +15,7 @@ class SystemToolset(BaseToolset):
         )
         from app.tools.diagnostics import report_health, inspect_secure_env
         from app.tools.model_tools import list_available_models, set_agent_model
+        from app.tools.spawn import spawn_agent, list_spawned_agents, stop_spawned_agent
 
         return [
             FunctionTool(func=update_self),
@@ -26,4 +27,7 @@ class SystemToolset(BaseToolset):
             FunctionTool(func=inspect_secure_env),
             FunctionTool(func=list_available_models),
             FunctionTool(func=set_agent_model),
+            FunctionTool(func=spawn_agent),
+            FunctionTool(func=list_spawned_agents),
+            FunctionTool(func=stop_spawned_agent),
         ]

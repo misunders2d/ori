@@ -155,9 +155,10 @@ def evolution_verify_sandbox(
     Args:
         check (str): The type of check to run. One of:
             - 'syntax' — Parse a Python file for syntax errors (requires target).
+            - 'deps' — Resolve dependencies when pyproject.toml is staged. Runs uv lock and stages uv.lock.
             - 'pytest' — Run the full test suite.
             - 'import' — Try importing a module (requires target, e.g., 'app.tools').
-        target (str): The file path (for 'syntax') or module name (for 'import'). Not needed for 'pytest'.
+        target (str): The file path (for 'syntax') or module name (for 'import'). Not needed for 'pytest' or 'deps'.
 
     Returns:
         dict: Verification status and output.
@@ -178,6 +179,53 @@ def evolution_verify_sandbox(
                 [sys.executable, "-m", "py_compile", resolved],
                 capture_output=True, text=True, timeout=15,
             )
+
+        elif check == "deps":
+            # Resolve dependencies when pyproject.toml is staged.
+            # Generates updated uv.lock so the Docker build (uv sync --frozen) succeeds.
+            staged_pyproject = os.path.join(sandbox_dir, "pyproject.toml")
+            if not os.path.exists(staged_pyproject):
+                return {"status": "error", "message": "No pyproject.toml staged. Stage it first, then run 'deps' check."}
+
+            # uv lock needs the full project context — symlink everything else
+            for item in os.listdir(PROJECT_ROOT):
+                if item.startswith('.') or item == "data":
+                    continue
+                src = os.path.join(PROJECT_ROOT, item)
+                dst = os.path.join(sandbox_dir, item)
+                if not os.path.exists(dst):
+                    try:
+                        os.symlink(src, dst, target_is_directory=os.path.isdir(src))
+                    except Exception:
+                        pass
+
+            result = subprocess.run(
+                ["uv", "lock"],
+                cwd=sandbox_dir,
+                capture_output=True, text=True, timeout=120,
+            )
+
+            if result.returncode == 0:
+                # Copy the generated uv.lock back into the sandbox as a staged file
+                generated_lock = os.path.join(sandbox_dir, "uv.lock")
+                if os.path.exists(generated_lock) and not os.path.islink(generated_lock):
+                    return {
+                        "status": "success",
+                        "message": "Dependencies resolved. uv.lock updated and staged.",
+                        "output": result.stdout[-500:] if result.stdout else "",
+                    }
+                return {
+                    "status": "success",
+                    "message": "Dependencies resolved (uv.lock unchanged).",
+                    "output": result.stdout[-500:] if result.stdout else "",
+                }
+            else:
+                combined = (result.stdout or "") + "\n" + (result.stderr or "")
+                return {
+                    "status": "error",
+                    "message": "Dependency resolution FAILED.",
+                    "output": combined[-1000:],
+                }
 
         elif check == "import" or check == "pytest":
             # Auto-bootstrap: symlink project structure to backfill missing files
