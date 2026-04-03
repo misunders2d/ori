@@ -160,6 +160,9 @@ async def spawn_agent(
         "-e", f"A2A_API_KEY={child_a2a_key}",
         "-e", f"ADMIN_PASSCODE={child_passcode}",
         "-e", "GOOGLE_APPLICATION_CREDENTIALS=/code/data/.adc.json",
+        # Clear parent's messenger tokens — children communicate via A2A only
+        "-e", "TELEGRAM_BOT_TOKEN=",
+        "-e", "SLACK_BOT_TOKEN=",
         "-v", f"{spawn_data}:/code/data:z",
         "-v", "/var/run/docker.sock:/var/run/docker.sock",
         "-p", f"{agent_port}:8000",
