@@ -275,15 +275,9 @@ async def spawn_agent(
             "a2a_url": child_url,
         }
 
-    # Auto-add as friend and store the child's API key on the parent side
+    # Store child's A2A key BEFORE add_friend so it's already available
+    # when add_friend checks for existing keys (prevents secure capture prompt)
     from app.tools.a2a import add_friend, KEYS_FILE
-    friend_result = await add_friend(
-        url=child_url,
-        friend_name=safe_name,
-        tool_context=tool_context,
-    )
-
-    # Store child's A2A key so the parent can authenticate when calling the child
     try:
         parent_keys = {}
         if os.path.exists(KEYS_FILE):
@@ -294,6 +288,13 @@ async def spawn_agent(
             json.dump(parent_keys, f, indent=2)
     except Exception as e:
         logger.warning("Failed to store child A2A key: %s", e)
+
+    # Now add as friend (key is already stored, so no secure capture prompt)
+    friend_result = await add_friend(
+        url=child_url,
+        friend_name=safe_name,
+        tool_context=tool_context,
+    )
 
     return {
         "status": "success",
