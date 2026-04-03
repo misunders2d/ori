@@ -52,14 +52,27 @@ for db in /code/data/*.db /code/data/**/*.db; do
     sqlite3 "$db" "PRAGMA wal_checkpoint(TRUNCATE);" 2>/dev/null || true
 done
 
-# Fix ownership
-chown -R agentuser:agentgroup /code /home/agentuser
+# Fix ownership (exclude read-only mounts like gcloud config)
+chown -R agentuser:agentgroup /code 2>/dev/null || true
+find /home/agentuser -maxdepth 0 -exec chown agentuser:agentgroup {} \; 2>/dev/null || true
+find /home/agentuser -mindepth 1 -maxdepth 1 -not -name ".config" -exec chown -R agentuser:agentgroup {} \; 2>/dev/null || true
+# Only chown .config items we own (not gcloud which is mounted read-only)
+if [ -d /home/agentuser/.config ]; then
+    find /home/agentuser/.config -maxdepth 1 -mindepth 1 -not -name "gcloud" -exec chown -R agentuser:agentgroup {} \; 2>/dev/null || true
+fi
 
 # Grant Docker socket access (for health stats + agent spawning)
 if [ -S /var/run/docker.sock ]; then
     DOCKER_GID=$(stat -c "%g" /var/run/docker.sock)
     groupadd -o -g "$DOCKER_GID" dockerhost 2>/dev/null || true
     usermod -aG dockerhost agentuser 2>/dev/null || true
+fi
+
+# Set ADC path if gcloud credentials are mounted but env var not set
+ADC_PATH="/home/agentuser/.config/gcloud/application_default_credentials.json"
+if [ -f "$ADC_PATH" ] && [ -z "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then
+    export GOOGLE_APPLICATION_CREDENTIALS="$ADC_PATH"
+    echo ":: [$BOT_NAME Container] ADC credentials found at $ADC_PATH"
 fi
 
 # --- 3. GIT CONFIG ---
