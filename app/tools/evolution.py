@@ -110,6 +110,12 @@ def evolution_stage_change(
     if file_path.endswith(".env"):
         return {"status": "error", "message": "Security error: Writing to .env directly is blocked. Instruct human to configure integrations properly."}
 
+    # Infrastructure files are outside the self-evolution scope.
+    # Recovery and deployment logic must remain untouched to prevent bricking.
+    INFRA_FILES = {"Dockerfile", "docker-compose.yml", "entrypoint.sh", "launcher.sh", "install.sh"}
+    if os.path.basename(file_path) in INFRA_FILES:
+        return {"status": "error", "message": f"Infrastructure file '{file_path}' is protected. Deployment and recovery scripts cannot be modified by self-evolution."}
+
     sandbox_dir = os.path.abspath("./data/sandbox")
 
     # Clear stale sandbox from previous (possibly rejected) evolution cycles

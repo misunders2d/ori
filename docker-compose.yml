@@ -12,20 +12,25 @@ services:
     ports:
       - "${AGENT_PORT:-0}:8000"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/.well-known/agent.json"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     volumes:
-      # Use :z to ensure SELinux relabeling (cross-distribution compatibility)
+      # --- Mutable state (persisted across rebuilds) ---
       - ./data:/code/data:z
       - ./.git:/code/.git:z
+      # --- Self-evolvable code (bot logic, not infra) ---
       - ./app:/code/app:z
       - ./skills:/code/skills:z
       - ./interfaces:/code/interfaces:z
       - ./tests:/code/tests:z
       - ./run_bot.py:/code/run_bot.py:z
-      # Mounting system files as well so the agent can self-evolve them
-      - ./Dockerfile:/code/Dockerfile:z
-      - ./docker-compose.yml:/code/docker-compose.yml:z
-      - ./entrypoint.sh:/code/entrypoint.sh:z
-      - ./start.sh:/code/start.sh:z
+      # NOTE: Dockerfile, docker-compose.yml, entrypoint.sh, launcher.sh
+      # are NOT mounted. They are baked into the image and outside the
+      # self-evolution scope. Only launcher.sh (host-side) can rebuild.
 
   cloudflare-tunnel:
     image: cloudflare/cloudflared:latest

@@ -24,7 +24,7 @@ COPY ./skills ./skills
 COPY ./interfaces ./interfaces
 COPY ./tests ./tests
 COPY ./run_bot.py ./
-COPY ./Dockerfile ./docker-compose.yml ./entrypoint.sh ./start.sh ./
+COPY ./entrypoint.sh ./
 
 # Sync dependencies (frozen ensures we respect the lockfile)
 RUN uv sync --frozen
