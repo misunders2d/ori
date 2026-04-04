@@ -181,13 +181,20 @@ def evolution_verify_sandbox(
             )
 
         elif check == "deps":
-            # Resolve dependencies when pyproject.toml is staged.
-            # Generates updated uv.lock so the Docker build (uv sync --frozen) succeeds.
+            # Resolve AND install dependencies when pyproject.toml is staged.
+            # Generates updated uv.lock and verifies uv sync succeeds, so the
+            # Docker build (uv sync --frozen) won't fail after commit.
             staged_pyproject = os.path.join(sandbox_dir, "pyproject.toml")
             if not os.path.exists(staged_pyproject):
                 return {"status": "error", "message": "No pyproject.toml staged. Stage it first, then run 'deps' check."}
 
             # uv lock needs the full project context — symlink everything else
+            # IMPORTANT: Remove any existing uv.lock symlink first to prevent
+            # writing through it and corrupting the live lockfile.
+            sandbox_lock = os.path.join(sandbox_dir, "uv.lock")
+            if os.path.islink(sandbox_lock):
+                os.unlink(sandbox_lock)
+
             for item in os.listdir(PROJECT_ROOT):
                 if item.startswith('.') or item == "data":
                     continue
@@ -199,33 +206,42 @@ def evolution_verify_sandbox(
                     except Exception:
                         pass
 
+            # Step 1: Resolve dependencies (generates uv.lock)
             result = subprocess.run(
                 ["uv", "lock"],
                 cwd=sandbox_dir,
                 capture_output=True, text=True, timeout=120,
             )
 
-            if result.returncode == 0:
-                # Copy the generated uv.lock back into the sandbox as a staged file
-                generated_lock = os.path.join(sandbox_dir, "uv.lock")
-                if os.path.exists(generated_lock) and not os.path.islink(generated_lock):
-                    return {
-                        "status": "success",
-                        "message": "Dependencies resolved. uv.lock updated and staged.",
-                        "output": result.stdout[-500:] if result.stdout else "",
-                    }
-                return {
-                    "status": "success",
-                    "message": "Dependencies resolved (uv.lock unchanged).",
-                    "output": result.stdout[-500:] if result.stdout else "",
-                }
-            else:
+            if result.returncode != 0:
                 combined = (result.stdout or "") + "\n" + (result.stderr or "")
                 return {
                     "status": "error",
-                    "message": "Dependency resolution FAILED.",
+                    "message": "Dependency resolution FAILED (uv lock).",
                     "output": combined[-1000:],
                 }
+
+            # Step 2: Verify installation works (catches missing system libs, build failures)
+            sync_result = subprocess.run(
+                ["uv", "sync", "--frozen"],
+                cwd=sandbox_dir,
+                capture_output=True, text=True, timeout=300,
+            )
+
+            if sync_result.returncode != 0:
+                combined = (sync_result.stdout or "") + "\n" + (sync_result.stderr or "")
+                return {
+                    "status": "error",
+                    "message": "Dependency installation FAILED (uv sync). The package resolves but cannot be installed — check for missing system libraries or build dependencies.",
+                    "output": combined[-1000:],
+                }
+
+            # uv.lock is now a real file in sandbox (not a symlink) — it will be collected by _collect_staged_files
+            return {
+                "status": "success",
+                "message": "Dependencies resolved and installation verified. uv.lock updated and staged.",
+                "output": result.stdout[-500:] if result.stdout else "",
+            }
 
         elif check == "import" or check == "pytest":
             # Auto-bootstrap: symlink project structure to backfill missing files
@@ -536,6 +552,46 @@ def evolution_commit_and_push(
 
     if not has_staged and not delete_files:
         return {"status": "error", "message": "Nothing to commit or delete."}
+
+    # --- AUTO-RESOLVE DEPENDENCIES ---
+    # If pyproject.toml is staged, automatically run uv lock + uv sync --frozen
+    # to generate a matching uv.lock and verify installation. This prevents
+    # committing a pyproject.toml without a matching lockfile, which would crash
+    # the Docker build (uv sync --frozen fails on stale lockfile).
+    staged_pyproject = os.path.join(sandbox_dir, "pyproject.toml")
+    if os.path.isfile(staged_pyproject) and not os.path.islink(staged_pyproject):
+        # Break any existing uv.lock symlink to avoid corrupting the live lockfile
+        sandbox_lock = os.path.join(sandbox_dir, "uv.lock")
+        if os.path.islink(sandbox_lock):
+            os.unlink(sandbox_lock)
+
+        # Symlink project context for uv to work
+        for item in os.listdir(PROJECT_ROOT):
+            if item.startswith('.') or item == "data":
+                continue
+            src = os.path.join(PROJECT_ROOT, item)
+            dst = os.path.join(sandbox_dir, item)
+            if not os.path.exists(dst):
+                try:
+                    os.symlink(src, dst, target_is_directory=os.path.isdir(src))
+                except Exception:
+                    pass
+
+        lock_result = subprocess.run(
+            ["uv", "lock"], cwd=sandbox_dir,
+            capture_output=True, text=True, timeout=120,
+        )
+        if lock_result.returncode != 0:
+            combined = (lock_result.stdout or "") + "\n" + (lock_result.stderr or "")
+            return {"status": "error", "message": f"Auto-dependency resolution failed (uv lock). Cannot commit.\n{combined[-500:]}"}
+
+        sync_result = subprocess.run(
+            ["uv", "sync", "--frozen"], cwd=sandbox_dir,
+            capture_output=True, text=True, timeout=300,
+        )
+        if sync_result.returncode != 0:
+            combined = (sync_result.stdout or "") + "\n" + (sync_result.stderr or "")
+            return {"status": "error", "message": f"Auto-dependency install failed (uv sync). Cannot commit.\n{combined[-500:]}"}
 
     staged_files = _collect_staged_files(sandbox_dir)
 
