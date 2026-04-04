@@ -3,10 +3,10 @@
     "name": "Ori",
     "version": "1.0.0",
     "description": "An autonomous self-evolving digital organism.",
-    "url": "https://room-versus-met-resume.trycloudflare.com",
+    "url": "https://authors-swimming-portion-infant.trycloudflare.com",
     "provider": {
         "organization": "Ori Project",
-        "url": "https://room-versus-met-resume.trycloudflare.com"
+        "url": "https://authors-swimming-portion-infant.trycloudflare.com"
     },
     "defaultInputModes": [
         "text/plain"
@@ -17,7 +17,7 @@
     "endpoints": [
         {
             "type": "json-rpc",
-            "url": "https://room-versus-met-resume.trycloudflare.com"
+            "url": "https://authors-swimming-portion-infant.trycloudflare.com"
         }
     ],
     "capabilities": {
