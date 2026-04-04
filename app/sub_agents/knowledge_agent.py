@@ -76,8 +76,8 @@ knowledge_agent = Agent(
 
         "SETUP HELP — HOW TO ENABLE A2A COMMUNICATION:\n"
         "When the user asks how to enable, find, or connect to other agents via A2A, explain these steps:\n"
-        "1. **The Shield (API Key)**: Ori generated an `A2A_API_KEY` in `data/.env`. Share this with trusted friends.\n"
-        "2. **The Public URL**: To find your public URL, run: `docker compose logs cloudflare-tunnel`.\n"
+        "1. **The Shield (API Key)**: Ori has an `A2A_API_KEY` in the credential vault. Share this with trusted friends.\n"
+        "2. **The Public URL**: Your public URL is detected automatically from the Cloudflare tunnel.\n"
         "3. **Adding Friends**: Use `add_friend` with the friend's URL. You will use a secure capture for the key.\n"
         "4. **Stability**: If your URL changes, run `broadcast_address_update` to let friends know.\n"
     ),
