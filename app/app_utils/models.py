@@ -172,9 +172,9 @@ def set_model(component: str, model_str: str) -> None:
     if component not in VALID_COMPONENTS:
         raise ValueError(f"Invalid component: '{component}'. Valid: {sorted(VALID_COMPONENTS)}")
 
-    from app.app_utils.runtime_config import set_config
+    from deploy.vault import set as vault_set
     env_key = f"MODEL_{component.upper()}"
-    set_config(env_key, model_str)
+    vault_set(env_key, model_str)
     logger.info("Model for %s set to %s", component, model_str)
 
 

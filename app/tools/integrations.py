@@ -74,7 +74,7 @@ def remove_integration(key_name: str, tool_context: ToolContext) -> dict:
         dict: Status of the operation.
     """
     from app.app_utils.config import AGENT_CONFIG_KEYS
-    from app.app_utils.runtime_config import unset_config
+    from deploy.vault import unset as vault_unset
 
     key_name = key_name.strip().upper()
 
@@ -87,7 +87,7 @@ def remove_integration(key_name: str, tool_context: ToolContext) -> dict:
     if key_name == "GOOGLE_API_KEY":
         return {"status": "error", "message": "Cannot remove GOOGLE_API_KEY — it is required for the bot to function."}
 
-    unset_config(key_name)
+    vault_unset(key_name)
 
     return {
         "status": "success",

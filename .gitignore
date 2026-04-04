@@ -1,5 +1,6 @@
-# Secrets
+# Secrets & Vault
 .env
+data/vault/
 
 # Databases & Runtime State
 data/.env

@@ -251,20 +251,67 @@ def _load_dotenv_stdlib(env_path):
 
 
 def main():
+    # The wizard writes to the vault (data/vault/credentials.json).
+    # It also maintains a legacy .env for backward compatibility during migration.
+    # The vault write is the authoritative one; .env is best-effort.
+    import json as _json
+    import tempfile as _tempfile
+
+    VAULT_DIR = os.path.abspath("./data/vault")
+    VAULT_FILE = os.path.join(VAULT_DIR, "credentials.json")
+    _vault_cache = {}
+
+    def _load_vault():
+        nonlocal _vault_cache
+        if os.path.exists(VAULT_FILE):
+            try:
+                with open(VAULT_FILE) as f:
+                    _vault_cache = _json.load(f)
+            except Exception:
+                _vault_cache = {}
+        # Also load legacy .env if vault is empty
+        if not _vault_cache:
+            env_path = os.path.abspath("./data/.env")
+            if os.path.exists(env_path):
+                try:
+                    with open(env_path) as f:
+                        for line in f:
+                            line = line.strip()
+                            if line and not line.startswith("#") and "=" in line:
+                                k, v = line.split("=", 1)
+                                _vault_cache[k.strip()] = v.strip().strip("\"'")
+                except Exception:
+                    pass
+        for k, v in _vault_cache.items():
+            if v:
+                os.environ[k] = str(v)
+
+    def set_key(env_path, key, value):
+        """Write to vault (primary) and .env (legacy fallback)."""
+        _vault_cache[key] = value
+        os.environ[key] = value
+        # Write vault atomically
+        os.makedirs(VAULT_DIR, mode=0o700, exist_ok=True)
+        fd, tmp = _tempfile.mkstemp(dir=VAULT_DIR, prefix=".vault.")
+        try:
+            with os.fdopen(fd, "w") as f:
+                _json.dump(_vault_cache, f, indent=2)
+            os.rename(tmp, VAULT_FILE)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        # Also write legacy .env for migration compatibility
+        _set_key_stdlib(env_path, key, value)
+
     ENV_FILE_PATH = os.path.abspath("./data/.env")
     os.makedirs(os.path.dirname(ENV_FILE_PATH), exist_ok=True)
     if not os.path.exists(ENV_FILE_PATH):
         with open(ENV_FILE_PATH, "w") as f:
             f.write("# Ori Daemon Configuration\n")
 
-    # Use python-dotenv if available, fall back to stdlib for host-side execution
-    try:
-        from dotenv import set_key, load_dotenv
-        load_dotenv(ENV_FILE_PATH)
-    except ImportError:
-        set_key = _set_key_stdlib
-        load_dotenv = _load_dotenv_stdlib
-        _load_dotenv_stdlib(ENV_FILE_PATH)
+    _load_vault()
 
     clear_screen()
     cprint(r"""

@@ -3,7 +3,7 @@ import logging
 import os
 import shlex
 
-from app.app_utils.runtime_config import set_config
+from deploy.vault import set as vault_set
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +167,7 @@ def _apply_config(command_text: str) -> str:
                     rejected_keys.append(key)
                     continue
 
-            set_config(key, value)
+            vault_set(key, value)
             updated_keys.append(key)
 
     msgs = []
