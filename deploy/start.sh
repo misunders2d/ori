@@ -1,35 +1,59 @@
 #!/usr/bin/env bash
-# Ori — One-command start.
-#   - Ensures venv exists
-#   - Runs setup wizard if no LLM provider configured (interactive)
-#   - Installs systemd/launchd service on first run
-#   - Restarts service on subsequent runs
-#   - Falls back to foreground mode if no service manager
+# ============================================================================
+# Ori — One-command start. No sudo. No root. No manual steps.
+#
+# What happens:
+#   1. Checks Python and sets up venv if needed
+#   2. Runs setup wizard if no LLM keys configured (first run)
+#   3. Installs as a user-level service (systemd/launchd) on first run
+#   4. Restarts the service on subsequent runs
+# ============================================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-# --- 1. Ensure Python venv exists ---
+# ---- Step 1: Check prerequisites ----
+if ! command -v python3 &>/dev/null; then
+    echo ""
+    echo "  ERROR: Python 3 is required but not installed."
+    echo ""
+    echo "  Install it:"
+    echo "    Ubuntu/Debian:  sudo apt install python3 python3-venv"
+    echo "    macOS:          brew install python3"
+    echo "    Arch:           sudo pacman -S python"
+    echo ""
+    exit 1
+fi
+
+PY_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+PY_MINOR=$(python3 -c 'import sys; print(sys.version_info.minor)')
+if [ "$(python3 -c 'import sys; print(sys.version_info.major)')" -lt 3 ] || [ "$PY_MINOR" -lt 10 ]; then
+    echo ""
+    echo "  ERROR: Python 3.10+ required (found $PY_VERSION)."
+    echo ""
+    exit 1
+fi
+
+# ---- Step 2: Ensure venv exists ----
 if [ ! -f ".venv/bin/python" ]; then
-    echo ":: Setting up Python virtual environment..."
+    echo ":: Setting up Python environment..."
     if command -v uv &>/dev/null; then
         uv sync
-    elif command -v python3 &>/dev/null; then
-        python3 -m venv .venv
-        .venv/bin/pip install -e .
     else
-        echo ":: Error: Python 3 not found. Install Python 3.10+ first."
-        exit 1
+        echo ":: Installing uv package manager..."
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        export PATH="$HOME/.local/bin:$PATH"
+        uv sync
     fi
+    echo ":: Python environment ready."
 fi
 
 PYTHON="$PROJECT_ROOT/.venv/bin/python"
 SUPERVISOR="$PROJECT_ROOT/deploy/ori-supervisor.py"
 
-# --- 2. Run setup wizard if no LLM provider configured ---
-# This MUST happen here (interactive terminal) before systemd takes over.
+# ---- Step 3: Run setup wizard if needed ----
 VAULT_FILE="$PROJECT_ROOT/data/vault/credentials.json"
 
 needs_setup() {
@@ -47,16 +71,22 @@ sys.exit(1)
 
 if needs_setup; then
     if [ -t 0 ]; then
-        echo ":: No LLM provider configured. Running setup wizard..."
+        echo ""
+        echo ":: First-time setup — let's configure your agent."
+        echo ""
         "$PYTHON" interfaces/setup_wizard.py
     else
-        echo ":: Error: No LLM provider configured and no interactive terminal."
-        echo "   Run this script from an interactive terminal first to complete setup."
+        echo ""
+        echo "  ERROR: First-time setup requires an interactive terminal."
+        echo "  Run this command from a terminal window:"
+        echo ""
+        echo "    cd $PROJECT_ROOT && deploy/start.sh"
+        echo ""
         exit 1
     fi
 fi
 
-# --- 3. Derive service name ---
+# ---- Step 4: Derive service name ----
 _bot_name="ori"
 if [ -f "$VAULT_FILE" ]; then
     _env_name=$("$PYTHON" -c "import json; print(json.load(open('$VAULT_FILE')).get('BOT_NAME',''))" 2>/dev/null || true)
@@ -64,19 +94,36 @@ if [ -f "$VAULT_FILE" ]; then
 fi
 SERVICE_NAME="$(echo "$_bot_name" | tr '[:upper:]' '[:lower:]' | tr ' _' '-' | sed 's/[^a-z0-9-]//g')-agent"
 
-# --- 4. Start ---
-if command -v systemctl &>/dev/null; then
-    if systemctl cat "${SERVICE_NAME}.service" &>/dev/null 2>&1; then
-        echo ":: Restarting $SERVICE_NAME via systemd..."
-        sudo systemctl restart "$SERVICE_NAME"
-    else
-        echo ":: First run — installing $SERVICE_NAME as a system service..."
-        "$SCRIPT_DIR/install.sh"
-    fi
-    echo ":: $SERVICE_NAME is running."
-    echo "   Logs:  sudo journalctl -u $SERVICE_NAME -f"
-    echo "   Stop:  sudo systemctl stop $SERVICE_NAME"
+# ---- Step 5: Start ----
+is_service_installed() {
+    OS="$(uname -s)"
+    case "$OS" in
+        Linux)
+            systemctl --user cat "$SERVICE_NAME" &>/dev/null 2>&1
+            ;;
+        Darwin)
+            [ -f "$HOME/Library/LaunchAgents/com.${SERVICE_NAME}.plist" ]
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+if is_service_installed; then
+    OS="$(uname -s)"
+    case "$OS" in
+        Linux)  systemctl --user restart "$SERVICE_NAME" ;;
+        Darwin)
+            plist="$HOME/Library/LaunchAgents/com.${SERVICE_NAME}.plist"
+            launchctl unload "$plist" 2>/dev/null || true
+            launchctl load "$plist"
+            ;;
+    esac
+    echo ":: $SERVICE_NAME restarted."
+    echo "   Logs:  deploy/logs.sh"
+    echo "   Stop:  deploy/stop.sh"
 else
-    echo ":: Starting $SERVICE_NAME (foreground, Ctrl+C to stop)..."
-    exec "$PYTHON" "$SUPERVISOR"
+    echo ":: Installing $SERVICE_NAME as a background service..."
+    "$SCRIPT_DIR/install.sh"
 fi
