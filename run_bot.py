@@ -31,7 +31,11 @@ if not os.environ.get("A2A_API_KEY"):
     set_key(ENV_FILE_PATH, "A2A_API_KEY", "ori-" + secrets.token_urlsafe(24))
 
 # Snapshot a backup after successful env loading for crash recovery
-shutil.copy2(ENV_FILE_PATH, ENV_BACKUP_PATH)
+# Only update backup if .env has real content — never overwrite a good backup with a gutted file
+_env_size = os.path.getsize(ENV_FILE_PATH)
+_backup_size = os.path.getsize(ENV_BACKUP_PATH) if os.path.exists(ENV_BACKUP_PATH) else 0
+if _env_size >= _backup_size:
+    shutil.copy2(ENV_FILE_PATH, ENV_BACKUP_PATH)
 
 from logging.handlers import RotatingFileHandler
 LOG_FILE_PATH = os.path.abspath("./data/agent.log")
