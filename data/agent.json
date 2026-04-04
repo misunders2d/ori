@@ -3,10 +3,10 @@
     "name": "Ori",
     "version": "1.0.0",
     "description": "An autonomous self-evolving digital organism.",
-    "url": "https://idol-collaborative-sellers-americans.trycloudflare.com",
+    "url": "http://localhost:8000",
     "provider": {
         "organization": "Ori Project",
-        "url": "https://idol-collaborative-sellers-americans.trycloudflare.com"
+        "url": "http://localhost:8000"
     },
     "defaultInputModes": [
         "text/plain"
@@ -17,7 +17,7 @@
     "endpoints": [
         {
             "type": "json-rpc",
-            "url": "https://idol-collaborative-sellers-americans.trycloudflare.com"
+            "url": "http://localhost:8000"
         }
     ],
     "capabilities": {
@@ -62,18 +62,6 @@
                 "a2a",
                 "exchange"
             ]
-        }
-    ],
-    "securitySchemes": {
-        "apiKey": {
-            "type": "apiKey",
-            "name": "x-a2a-api-key",
-            "in": "header"
-        }
-    },
-    "security": [
-        {
-            "apiKey": []
         }
     ]
 }

@@ -1,12 +1,13 @@
 import os
-import pytest
 import json
+import pytest
 from unittest.mock import patch, MagicMock
 
 from interfaces.setup_wizard import _decode_secret, _generate_code, verify_totp, main
 
+
 def test_setup_wizard_totp_functions():
-    """Verify that the native TOTP implementation ported to the setup wizard works correctly."""
+    """Verify that the native TOTP implementation works correctly."""
     secret = "JBSWY3DPEHPK3PXP"
     time_step = 12345678
     code = _generate_code(secret, time_step)
@@ -15,18 +16,19 @@ def test_setup_wizard_totp_functions():
         assert verify_totp(secret, code) is True
         assert verify_totp(secret, "000000") is False
 
-@patch("dotenv.set_key")
-@patch("dotenv.load_dotenv")
+
 @patch("builtins.input")
 @patch("builtins.print")
 @patch("interfaces.setup_wizard.clear_screen")
-def test_setup_wizard_main_all_inputs(mock_clear, mock_print, mock_input, mock_load, mock_set_key, monkeypatch, tmp_path):
+def test_setup_wizard_main_all_inputs(mock_clear, mock_print, mock_input, monkeypatch, tmp_path):
     """Test the complete interactive setup flow including TOTP enablement."""
     monkeypatch.setattr(os, "environ", {})
+    monkeypatch.chdir(tmp_path)
 
-    env_file = tmp_path / ".env"
+    # Create data dir structure
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
 
-    # Mock Telegram API response
     mock_tg_response = MagicMock()
     mock_tg_response.read.return_value = json.dumps({
         "ok": True,
@@ -44,9 +46,9 @@ def test_setup_wizard_main_all_inputs(mock_clear, mock_print, mock_input, mock_l
     with patch("interfaces.setup_wizard.verify_totp", return_value=True):
         mock_input.side_effect = [
             "MyCustomBot",    # Bot Name
-            "1",              # Provider selection: Google API key
+            "1",              # Provider: Google API key
             "AIzaSyTestKey",  # Google Key
-            "1",              # Model selection: first in list
+            "1",              # Model selection
             "12345:ABCDE",    # Telegram Token
             "y",              # Configure GitHub?
             "user/my-bot",    # GitHub Repo
@@ -56,43 +58,53 @@ def test_setup_wizard_main_all_inputs(mock_clear, mock_print, mock_input, mock_l
             "123456",         # TOTP code
         ]
 
-        with patch("interfaces.setup_wizard.os.path.abspath", return_value=str(env_file)):
-            with patch("urllib.request.urlopen", return_value=mock_tg_response):
-                with patch("secrets.token_hex", return_value="ABCDEF"):
-                    main()
+        with patch("urllib.request.urlopen", return_value=mock_tg_response):
+            with patch("secrets.token_hex", return_value="ABCDEF"):
+                main()
 
-    # set_key called for: BOT_NAME, GOOGLE_API_KEY, GOOGLE_GENAI_USE_VERTEXAI,
-    # MODEL_COORDINATORAGENT, MODEL_DEVELOPERAGENT, MODEL_KNOWLEDGEAGENT,
-    # TELEGRAM_BOT_TOKEN, ADMIN_USER_IDS, GITHUB_REPO, GITHUB_TOKEN,
-    # ADMIN_PASSCODE, A2A_API_KEY, ADMIN_TOTP_SECRET
-    assert mock_set_key.call_count == 13
+    # Verify vault was created with all expected keys
+    vault_file = data_dir / "vault" / "credentials.json"
+    assert vault_file.exists(), "Vault file should be created"
+    vault_data = json.loads(vault_file.read_text())
+    assert vault_data["BOT_NAME"] == "MyCustomBot"
+    assert vault_data["GOOGLE_API_KEY"] == "AIzaSyTestKey"
+    assert "ADMIN_PASSCODE" in vault_data
+    assert "A2A_API_KEY" in vault_data
+    assert "TELEGRAM_BOT_TOKEN" in vault_data
+    assert "GITHUB_REPO" in vault_data
+    assert "ADMIN_TOTP_SECRET" in vault_data
 
-@patch("dotenv.set_key")
-@patch("dotenv.load_dotenv")
+
 @patch("builtins.input")
 @patch("builtins.print")
 @patch("interfaces.setup_wizard.clear_screen")
-def test_setup_wizard_main_skip_optional(mock_clear, mock_print, mock_input, mock_load, mock_set_key, monkeypatch, tmp_path):
-    """Test the interactive setup flow when optional components are skipped."""
+def test_setup_wizard_main_skip_optional(mock_clear, mock_print, mock_input, monkeypatch, tmp_path):
+    """Test the setup flow when optional components are skipped."""
     monkeypatch.setattr(os, "environ", {})
+    monkeypatch.chdir(tmp_path)
 
-    env_file = tmp_path / ".env"
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
 
     mock_input.side_effect = [
         "",               # Skip Bot Name (defaults to Ori)
-        "1",              # Provider selection: Google API key
+        "1",              # Provider: Google API key
         "AIzaSyTestKey",  # Google Key
-        "1",              # Model selection: first in list
+        "1",              # Model selection
         "",               # Skip Telegram
         "n",              # Skip GitHub
         "",               # Enter to continue Admin Passcode
         "n",              # Skip TOTP
     ]
 
-    with patch("interfaces.setup_wizard.os.path.abspath", return_value=str(env_file)):
-        main()
+    main()
 
-    # set_key called for: BOT_NAME, GOOGLE_API_KEY, GOOGLE_GENAI_USE_VERTEXAI,
-    # MODEL_COORDINATORAGENT, MODEL_DEVELOPERAGENT, MODEL_KNOWLEDGEAGENT,
-    # ADMIN_PASSCODE, A2A_API_KEY
-    assert mock_set_key.call_count == 8
+    vault_file = data_dir / "vault" / "credentials.json"
+    assert vault_file.exists(), "Vault file should be created"
+    vault_data = json.loads(vault_file.read_text())
+    assert vault_data["GOOGLE_API_KEY"] == "AIzaSyTestKey"
+    assert "ADMIN_PASSCODE" in vault_data
+    assert "A2A_API_KEY" in vault_data
+    # Optional keys should NOT be present
+    assert vault_data.get("TELEGRAM_BOT_TOKEN", "") == ""
+    assert "GITHUB_REPO" not in vault_data or vault_data["GITHUB_REPO"] == ""

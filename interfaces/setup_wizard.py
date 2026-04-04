@@ -257,13 +257,20 @@ def main():
     import json as _json
     import tempfile as _tempfile
 
-    VAULT_DIR = os.path.abspath("./data/vault")
-    VAULT_FILE = os.path.join(VAULT_DIR, "credentials.json")
+    # VAULT_DIR is derived later, after ENV_FILE_PATH is set
+    VAULT_DIR = None
+    VAULT_FILE = None
     _vault_cache = {}
+
+    def _init_vault_paths(env_file_path):
+        nonlocal VAULT_DIR, VAULT_FILE
+        data_dir = os.path.dirname(os.path.abspath(env_file_path))
+        VAULT_DIR = os.path.join(data_dir, "vault")
+        VAULT_FILE = os.path.join(VAULT_DIR, "credentials.json")
 
     def _load_vault():
         nonlocal _vault_cache
-        if os.path.exists(VAULT_FILE):
+        if VAULT_FILE and os.path.exists(VAULT_FILE):
             try:
                 with open(VAULT_FILE) as f:
                     _vault_cache = _json.load(f)
@@ -310,6 +317,8 @@ def main():
     if not os.path.exists(ENV_FILE_PATH):
         with open(ENV_FILE_PATH, "w") as f:
             f.write("# Ori Daemon Configuration\n")
+
+    _init_vault_paths(ENV_FILE_PATH)
 
     _load_vault()
 
@@ -399,12 +408,8 @@ def main():
             if not providers_configured:
                 cprint("  At least one provider is required.\n", "91")
 
-        # Reload env after provider setup
-        try:
-            load_dotenv(ENV_FILE_PATH, override=True)
-        except TypeError:
-            # stdlib fallback doesn't support override param
-            _load_dotenv_stdlib(ENV_FILE_PATH)
+        # Reload env after provider setup (vault cache is already in sync via set_key)
+        _load_dotenv_stdlib(ENV_FILE_PATH)
 
         # Model selection
         cprint("[2b] Default Model", "93")

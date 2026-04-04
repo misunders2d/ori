@@ -3287,7 +3287,7 @@ wheels = [
 
 [[package]]
 name = "ori"
-version = "1.0.0"
+version = "2.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
@@ -3302,7 +3302,6 @@ dependencies = [
     { name = "litellm" },
     { name = "lxml" },
     { name = "opentelemetry-instrumentation-google-genai" },
-    { name = "python-dotenv" },
     { name = "rich" },
     { name = "uvicorn" },
 ]
@@ -3341,7 +3340,6 @@ requires-dist = [
     { name = "litellm", specifier = "!=1.82.7,!=1.82.8,>=1.83.1" },
     { name = "lxml", specifier = ">=5.0.0,<6.0.0" },
     { name = "opentelemetry-instrumentation-google-genai", specifier = ">=0.1.0,<1.0.0" },
-    { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "rich", specifier = ">=14.3.3" },
     { name = "ruff", marker = "extra == 'lint'", specifier = ">=0.4.6,<1.0.0" },
     { name = "ty", marker = "extra == 'lint'", specifier = ">=0.0.1a0" },
