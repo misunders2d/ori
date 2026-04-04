@@ -11,9 +11,16 @@ import sys
 # No .env file, no python-dotenv, no config.json. Single source of truth.
 # ---------------------------------------------------------------------------
 if not os.environ.get("_VAULT_LOADED"):
-    # Standalone mode — supervisor didn't load vault, do it ourselves
-    from deploy.vault import load_vault
-    load_vault()
+    # Not started by the supervisor. Two cases:
+    # 1. Spawned child container — credentials injected via Docker -e flags, already in os.environ
+    # 2. Standalone dev mode — load from vault
+    _has_creds = any(os.environ.get(k) for k in ["GOOGLE_API_KEY", "ANTHROPIC_API_KEY"])
+    if not _has_creds:
+        try:
+            from deploy.vault import load_vault
+            load_vault()
+        except (PermissionError, OSError):
+            pass  # Child container without vault access — credentials from -e flags
 
 from logging.handlers import RotatingFileHandler
 LOG_FILE_PATH = os.path.abspath("./data/agent.log")
