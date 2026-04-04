@@ -32,18 +32,22 @@ def check_exit_signal() -> bool:
     return os.path.exists(SIGNAL_FILE)
 
 
-def execute_exit_signal():
-    """Read the signal file and perform a clean exit. Called by transport layers."""
+def consume_exit_signal() -> bool:
+    """Check and log exit signal. Returns True if shutdown should proceed.
+
+    Called by transport layers after each message cycle. The transport
+    should `return` from its coroutine (not sys.exit) to let asyncio
+    shut down cleanly without traceback cascades.
+    """
     if not os.path.exists(SIGNAL_FILE):
-        return
+        return False
     try:
         with open(SIGNAL_FILE, 'r') as f:
             code = f.read().strip()
-        logger.info(f'CORE: Executing clean shutdown (signal: {code})...')
+        logger.info(f'CORE: Clean shutdown requested (signal: {code})...')
     except Exception:
         pass
-    # Clean exit — sys.exit triggers finally blocks, flushes buffers, closes files
-    sys.exit(0)
+    return True
 
 
 def _is_child_container() -> bool:

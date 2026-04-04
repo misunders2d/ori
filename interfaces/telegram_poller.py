@@ -715,7 +715,8 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                 await asyncio.sleep(5)
 
             # Check for exit signal after each poll cycle (clean shutdown)
-            from app.tools.system import check_exit_signal, execute_exit_signal
+            from app.tools.system import check_exit_signal, consume_exit_signal
             if check_exit_signal():
-                logger.info("Exit signal detected in Telegram poller. Shutting down cleanly...")
-                execute_exit_signal()
+                if consume_exit_signal():
+                    logger.info("Telegram poller exiting for clean shutdown...")
+                    return  # Exit coroutine → asyncio.gather completes → main() exits

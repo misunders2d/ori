@@ -132,7 +132,8 @@ async def start_cli_chat(get_runner_fn):
             await asyncio.sleep(2)
 
         # Check for exit signal after each interaction (clean shutdown)
-        from app.tools.system import check_exit_signal, execute_exit_signal
+        from app.tools.system import check_exit_signal, consume_exit_signal
         if check_exit_signal():
-            print(f"\n{bot_name}: Exit signal detected. Shutting down cleanly...")
-            execute_exit_signal()
+            if consume_exit_signal():
+                print(f"\n{bot_name}: Shutting down cleanly...")
+                break  # Exit loop → coroutine returns → main() exits
