@@ -207,16 +207,14 @@ async def spawn_agent(
     # Build docker run command.
     # Children use --network host so they can reach the parent on localhost.
     # Each child gets a unique A2A_PORT to avoid port conflicts.
-    # Find an available port starting from 8001
+    # Find an available port starting from 8001.
+    # Children use --network host, so check actual host port usage (not just Docker).
+    import socket
     child_port = 8001
     for _ in range(100):
-        check_port = await asyncio.create_subprocess_exec(
-            "docker", "ps", "--filter", f"publish={child_port}", "--format", "{{.ID}}",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
-        port_out, _ = await check_port.communicate()
-        if not port_out.strip():
-            break
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if s.connect_ex(("127.0.0.1", child_port)) != 0:
+                break  # Port is free
         child_port += 1
 
     run_cmd = [
