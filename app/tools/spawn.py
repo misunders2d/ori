@@ -102,9 +102,10 @@ async def spawn_agent(
     if stdout.strip():
         return {"status": "error", "message": f"Container '{container_name}' already exists. Remove it first or choose a different name."}
 
-    # Create spawn data directory (container-side path for file operations)
+    # Create spawn data directory with open permissions so the container's
+    # agentuser (non-root) can write to it via the bind mount.
     spawn_data = os.path.join(SPAWN_DIR, safe_name)
-    os.makedirs(spawn_data, exist_ok=True)
+    os.makedirs(spawn_data, mode=0o777, exist_ok=True)
 
     # Resolve the host-side path for Docker volume mounts
     host_data_path = _get_host_data_path()
