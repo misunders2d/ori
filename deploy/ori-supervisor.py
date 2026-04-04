@@ -144,14 +144,14 @@ def apply_evolution():
     github_token = get("GITHUB_TOKEN")
     github_repo = get("GITHUB_REPO")
     if github_token and github_repo:
-        push_url = f"https://x-access-token:{github_token}@github.com/{github_repo}.git"
+        fetch_url = f"https://x-access-token:{github_token}@github.com/{github_repo}.git"
         try:
             subprocess.run(
-                ["git", "fetch", "origin", "master"],
+                ["git", "fetch", fetch_url, "master"],
                 cwd=PROJECT_ROOT, capture_output=True, timeout=60,
             )
             subprocess.run(
-                ["git", "reset", "--hard", "origin/master"],
+                ["git", "reset", "--hard", "FETCH_HEAD"],
                 cwd=PROJECT_ROOT, capture_output=True, timeout=30,
             )
             subprocess.run(
@@ -211,27 +211,6 @@ def copy_adc():
             pass
 
 
-def run_setup_wizard():
-    """Run interactive setup wizard if no LLM provider is configured."""
-    vault_data = get_all()
-    has_google = bool(vault_data.get("GOOGLE_API_KEY", ""))
-    has_vertex = vault_data.get("GOOGLE_GENAI_USE_VERTEXAI", "").upper() == "TRUE"
-    has_anthropic = bool(vault_data.get("ANTHROPIC_API_KEY", ""))
-
-    if has_google or has_vertex or has_anthropic:
-        return  # Already configured
-
-    if not sys.stdin.isatty():
-        logger.error("No LLM provider configured and no interactive terminal. Run setup wizard manually.")
-        sys.exit(1)
-
-    logger.info("No LLM provider configured. Launching setup wizard...")
-    wizard = os.path.join(PROJECT_ROOT, "interfaces", "setup_wizard.py")
-    subprocess.run([sys.executable, wizard], cwd=PROJECT_ROOT)
-    # Reload vault after wizard writes credentials
-    load_vault()
-
-
 # ---------------------------------------------------------------------------
 # Main supervisor loop
 # ---------------------------------------------------------------------------
@@ -246,10 +225,25 @@ def main():
     ensure_secrets()
     copy_adc()
 
+    # Signal to run_bot.py that vault is already loaded (skip double-load)
+    os.environ["_VAULT_LOADED"] = "1"
+
     bot_name = get("BOT_NAME") or "Ori"
     logger.info("Bot: %s", bot_name)
 
-    run_setup_wizard()
+    # Verify LLM provider is configured (setup wizard runs from start.sh, not here)
+    vault_data = get_all()
+    has_provider = (
+        bool(vault_data.get("GOOGLE_API_KEY"))
+        or vault_data.get("GOOGLE_GENAI_USE_VERTEXAI", "").upper() == "TRUE"
+        or bool(vault_data.get("ANTHROPIC_API_KEY"))
+    )
+    if not has_provider:
+        logger.error(
+            "No LLM provider configured. Run 'deploy/start.sh' from an "
+            "interactive terminal to complete the setup wizard."
+        )
+        sys.exit(1)
 
     # Initial dep sync if needed
     if deps_changed():
