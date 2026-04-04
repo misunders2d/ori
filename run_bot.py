@@ -294,3 +294,15 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+    # Exit with the actual signal code so the supervisor gets it from
+    # proc.returncode directly — not just from the signal file (race-proof).
+    signal_file = os.path.abspath("./data/.exit_signal")
+    if os.path.exists(signal_file):
+        try:
+            with open(signal_file) as f:
+                code = int(f.read().strip())
+            if code in (100, 101):
+                sys.exit(code)
+        except (ValueError, OSError):
+            pass
