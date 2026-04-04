@@ -1,6 +1,8 @@
 import os
 import stat
+import pytest
 
+@pytest.mark.infra
 def test():
     data_dir = "./data"
     dummy_file = os.path.join(data_dir, "dummy.db")

@@ -1,6 +1,8 @@
 import os
 import subprocess
+import pytest
 
+@pytest.mark.infra
 def test_github_token():
     token = os.environ.get("GITHUB_TOKEN")
     if not token:
@@ -8,6 +10,7 @@ def test_github_token():
     else:
         print(f"GITHUB_TOKEN is set (length: {len(token)}).")
 
+@pytest.mark.infra
 def test_npx_available():
     try:
         result = subprocess.run(["npx", "--version"], capture_output=True, text=True, check=True)

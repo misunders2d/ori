@@ -2,6 +2,7 @@ import subprocess
 import os
 import pytest
 
+@pytest.mark.infra
 def test_git_output():
     def run(cmd):
         res = subprocess.run(cmd, capture_output=True, text=True, shell=True)

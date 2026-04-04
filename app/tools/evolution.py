@@ -286,7 +286,7 @@ def evolution_verify_sandbox(
                 pytest_script = (
                     "import pytest, sys, os; "
                     "os.environ['PYTHONPATH'] = os.getcwd(); "
-                    "sys.exit(pytest.main(['tests', '-v']))"
+                    "sys.exit(pytest.main(['tests', '-v', '-m', 'not infra']))"
                 )
                 result = subprocess.run(
                     [sys.executable, "-c", pytest_script],

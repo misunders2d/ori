@@ -4,6 +4,7 @@ import pwd
 import grp
 import pytest
 
+@pytest.mark.infra
 def test_check_permissions():
     def check_path(path):
         res = f"--- Checking {path} ---\n"

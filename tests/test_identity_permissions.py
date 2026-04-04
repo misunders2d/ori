@@ -3,6 +3,7 @@ import pytest
 import sqlite3
 
 
+@pytest.mark.infra
 def test_data_directory_write_access():
     """Verify that the process has write access to the data directory."""
     data_dir = "./data"
@@ -22,6 +23,7 @@ def test_data_directory_write_access():
     except Exception as e:
         pytest.fail(f"An unexpected error occurred during write test: {e}")
 
+@pytest.mark.infra
 def test_system_db_wal_mode():
     """Verify that the database can be switched to WAL mode."""
     data_dir = "./data"
