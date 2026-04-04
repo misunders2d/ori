@@ -240,6 +240,14 @@ while true; do
     touch data/.last_build
 
     # --- SIGNAL HANDLING ---
+    # The container writes its intent to data/.exit_signal and exits with 0
+    # so Docker does not race-restart it. Read the signal file first.
+    SIGNAL_FILE="data/.exit_signal"
+    if [ -f "$SIGNAL_FILE" ]; then
+        EXIT_CODE=$(cat "$SIGNAL_FILE" 2>/dev/null || echo "0")
+        rm -f "$SIGNAL_FILE"
+    fi
+
     case $EXIT_CODE in
         100)
             # Evolution signal: Ori committed changes, sync and rebuild

@@ -10,20 +10,27 @@ logger = logging.getLogger(__name__)
 
 EXIT_CODE_UPDATE = 100
 EXIT_CODE_ROLLBACK = 101
+SIGNAL_FILE = os.path.abspath('./data/.exit_signal')
 
 def _schedule_restart(exit_code: int):
-    # Proactive exit to force Docker to pull new images and clear memory
     def hard_exit():
-        logger.info(f"CORE: Finalizing process with exit code {exit_code}...")
-        os._exit(exit_code)
+        logger.info(f'CORE: Finalizing process with exit code {exit_code}...')
+        # Write signal to file so the launcher knows what to do.
+        # Exit with 0 so Docker does not race-restart the container.
+        try:
+            with open(SIGNAL_FILE, 'w') as f:
+                f.write(str(exit_code))
+        except Exception as e:
+            logger.error(f'Failed to write exit signal: {e}')
+        os._exit(0)
         
     threading.Timer(1.0, hard_exit).start()
 
 def update_self(tool_context: ToolContext) -> dict:
     """Pulls latest code, clears memory, and performs a HARD reboot of the container."""
-    logger.info("========================================")
-    logger.info("🧬 [Ori System] PERIMETER LOCKDOWN: Dispatched Hard Exit (Code 100).")
-    logger.info("========================================")
+    logger.info('========================================')
+    logger.info('🧬 [Ori System] PERIMETER LOCKDOWN: Dispatched Hard Exit (Code 100).')
+    logger.info('========================================')
     _schedule_restart(EXIT_CODE_UPDATE)
     return {"status": "success", "message": "Applying Lockdown. The agent is performing a hard reboot..."}
 
