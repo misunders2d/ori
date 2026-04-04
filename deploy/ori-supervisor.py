@@ -15,6 +15,7 @@ Usage:
 """
 
 import logging
+import logging.handlers
 import os
 import secrets
 import shutil
@@ -51,8 +52,6 @@ logging.basicConfig(
         logging.handlers.RotatingFileHandler(LOG_FILE, maxBytes=200_000, backupCount=2),
     ],
 )
-# Need to import after basicConfig
-from logging.handlers import RotatingFileHandler
 
 logger = logging.getLogger("ori-supervisor")
 
