@@ -3,10 +3,10 @@
 # Ori Bootstrap — One-liner installer for new instances
 # ============================================================================
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/misunders2d/ori/master/deploy/bootstrap.sh | bash
+#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/misunders2d/ori/master/deploy/bootstrap.sh)" -- --name "MyAgent"
 #
-# Or with a custom name:
-#   curl -fsSL ... | bash -s -- --name "Scout"
+# Custom directory:
+#   bash -c "$(curl -fsSL ...)" -- --name "Scout" --dir ./scout
 #
 # What it does:
 #   1. Clones the repo
@@ -29,10 +29,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Default install directory
+# Default install directory: current directory + bot name
 if [ -z "$INSTALL_DIR" ]; then
     SAFE_NAME="$(echo "$BOT_NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | sed 's/[^a-z0-9-]//g')"
-    INSTALL_DIR="$HOME/$SAFE_NAME"
+    INSTALL_DIR="$(pwd)/$SAFE_NAME"
 fi
 
 echo "============================================"

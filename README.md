@@ -44,14 +44,14 @@ deploy/Dockerfile.child   → child containers (spawned on demand)
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/misunders2d/ori/master/deploy/bootstrap.sh | bash -s -- --name "MyAgent"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/misunders2d/ori/master/deploy/bootstrap.sh)" -- --name "MyAgent"
 ```
 
-This clones the repo, creates a fresh git history, sets up Python + dependencies, runs the setup wizard, and installs as a background service. **No sudo required.**
+This clones the repo into a folder in your current directory, creates a fresh git history, sets up Python + dependencies, runs the setup wizard, and installs as a background service. **No sudo required.**
 
-**Custom name and directory:**
+**Custom directory:**
 ```bash
-curl -fsSL ... | bash -s -- --name "Scout" --dir ~/agents/scout
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/misunders2d/ori/master/deploy/bootstrap.sh)" -- --name "Scout" --dir ./scout
 ```
 
 **Already hatched?**
