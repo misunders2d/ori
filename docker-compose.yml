@@ -12,7 +12,7 @@ services:
       - AGENT_GID=${AGENT_GID:-1000}
     ports:
       - "${AGENT_PORT:-0}:8000"
-    restart: on-failure
+    restart: "no"  # Launcher owns ALL restart logic via docker wait + signal files
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/.well-known/agent-card.json"]
       interval: 30s

@@ -1,26 +1,90 @@
 import asyncio
+import hashlib
 import logging
 import os
 import secrets
 import shutil
 import sqlite3
 import sys
+import tempfile
 from dotenv import load_dotenv, set_key
 
 # Load env variables safely
 ENV_FILE_PATH = os.environ.get("DOTENV_PATH", "./data/.env")
 ENV_BACKUP_PATH = ENV_FILE_PATH + ".backup"
+ENV_CHECKSUM_PATH = ENV_FILE_PATH + ".sha256"
 os.makedirs(os.path.dirname(ENV_FILE_PATH), exist_ok=True)
-if not os.path.exists(ENV_FILE_PATH):
-    with open(ENV_FILE_PATH, "w") as f: f.write("# Ori Daemon Configuration\n")
 
-# Protect against partial-write corruption: if .env is suspiciously small but a
-# backup exists with more content, restore the backup before loading.
-if os.path.exists(ENV_BACKUP_PATH):
-    env_size = os.path.getsize(ENV_FILE_PATH)
-    backup_size = os.path.getsize(ENV_BACKUP_PATH)
-    if backup_size > env_size + 50:
+
+def _file_checksum(path):
+    """SHA-256 of a file's contents."""
+    try:
+        with open(path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except (OSError, IOError):
+        return ""
+
+
+def _count_real_keys(path):
+    """Count non-comment, non-empty lines (actual KEY=VALUE pairs)."""
+    try:
+        with open(path) as f:
+            return sum(1 for line in f if line.strip() and not line.strip().startswith("#"))
+    except (OSError, IOError):
+        return 0
+
+
+def _save_env_backup():
+    """Atomically save .env backup only if .env has real content."""
+    key_count = _count_real_keys(ENV_FILE_PATH)
+    if key_count < 2:
+        return  # Never overwrite backup with a gutted file
+    env_dir = os.path.dirname(os.path.abspath(ENV_FILE_PATH))
+    # Atomic write: write to temp file, then rename (rename is atomic on POSIX)
+    fd, tmp_path = tempfile.mkstemp(dir=env_dir, prefix=".env.backup.")
+    try:
+        shutil.copy2(ENV_FILE_PATH, tmp_path)
+        os.rename(tmp_path, ENV_BACKUP_PATH)
+        # Save checksum of the good backup for tamper detection
+        checksum = _file_checksum(ENV_BACKUP_PATH)
+        with open(ENV_CHECKSUM_PATH, "w") as f:
+            f.write(checksum)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+def _restore_env_from_backup():
+    """Restore .env from backup if the current .env looks corrupted."""
+    if not os.path.exists(ENV_BACKUP_PATH):
+        return False
+    env_keys = _count_real_keys(ENV_FILE_PATH)
+    backup_keys = _count_real_keys(ENV_BACKUP_PATH)
+    # If backup has significantly more keys, .env is likely corrupted
+    if backup_keys > env_keys + 1:
+        # Verify backup integrity if checksum exists
+        if os.path.exists(ENV_CHECKSUM_PATH):
+            stored = ""
+            try:
+                with open(ENV_CHECKSUM_PATH) as f:
+                    stored = f.read().strip()
+            except (OSError, IOError):
+                pass
+            if stored and _file_checksum(ENV_BACKUP_PATH) != stored:
+                return False  # Backup itself is corrupted
         shutil.copy2(ENV_BACKUP_PATH, ENV_FILE_PATH)
+        return True
+    return False
+
+
+if not os.path.exists(ENV_FILE_PATH):
+    with open(ENV_FILE_PATH, "w") as f:
+        f.write("# Ori Daemon Configuration\n")
+
+# Protect against partial-write corruption or os._exit() race conditions
+restored = _restore_env_from_backup()
 
 load_dotenv(ENV_FILE_PATH, override=True)
 
@@ -31,11 +95,7 @@ if not os.environ.get("A2A_API_KEY"):
     set_key(ENV_FILE_PATH, "A2A_API_KEY", "ori-" + secrets.token_urlsafe(24))
 
 # Snapshot a backup after successful env loading for crash recovery
-# Only update backup if .env has real content — never overwrite a good backup with a gutted file
-_env_size = os.path.getsize(ENV_FILE_PATH)
-_backup_size = os.path.getsize(ENV_BACKUP_PATH) if os.path.exists(ENV_BACKUP_PATH) else 0
-if _env_size >= _backup_size:
-    shutil.copy2(ENV_FILE_PATH, ENV_BACKUP_PATH)
+_save_env_backup()
 
 from logging.handlers import RotatingFileHandler
 LOG_FILE_PATH = os.path.abspath("./data/agent.log")

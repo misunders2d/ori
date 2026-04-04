@@ -84,10 +84,16 @@ deps_changed() {
 smart_build() {
     if deps_changed; then
         log "Dependencies changed. Full rebuild (--no-cache)..."
-        docker compose build --no-cache
+        if ! docker compose build --no-cache; then
+            log "ERROR: Full rebuild failed!"
+            return 1
+        fi
     else
         log "Code-only change. Incremental rebuild..."
-        docker compose build
+        if ! docker compose build; then
+            log "ERROR: Incremental rebuild failed!"
+            return 1
+        fi
     fi
     touch data/.last_build
     # Always prune dangling images after build
@@ -173,7 +179,17 @@ fi
 # ============================================================================
 log "Starting regeneration loop..."
 
+# Fingerprint of this script at startup — used to detect on-disk changes
+_SELF_HASH=$(sha256sum "${BASH_SOURCE[0]}" 2>/dev/null | cut -d' ' -f1)
+
 while true; do
+    # --- HOT-RELOAD: re-exec if launcher.sh changed on disk ---
+    _CURRENT_HASH=$(sha256sum "${BASH_SOURCE[0]}" 2>/dev/null | cut -d' ' -f1)
+    if [ "$_CURRENT_HASH" != "$_SELF_HASH" ]; then
+        log "Launcher script changed on disk. Re-executing..."
+        exec "${BASH_SOURCE[0]}"
+    fi
+
     CRASHES=$(read_crashes)
     BOT_NAME=$(read_bot_name)  # re-read in case .env changed
     BOT_NAME_LOWER="${BOT_NAME,,}"
@@ -209,32 +225,42 @@ while true; do
     BUILD_FLAG=""
     if needs_rebuild; then
         log "Build required (new image or dependency change)."
-        BUILD_FLAG="--build"
+        BUILD_FLAG="yes"
     fi
 
     # --- LAUNCH ---
+    CONTAINER_NAME="${BOT_NAME_LOWER}-agent"
     if is_interactive; then
         log "No messenger configured. Launching interactive CLI..."
         docker compose up -d cloudflare-tunnel 2>/dev/null || true
         docker compose run --rm -it --service-ports agent
         EXIT_CODE=$?
     else
-        docker compose up $BUILD_FLAG &
-        COMPOSE_PID=$!
+        # Build if needed BEFORE launching (--build inside `up` can mask failures)
+        if [ -n "$BUILD_FLAG" ]; then
+            smart_build || { log "ERROR: Build failed. Cooling down..."; sleep "$COOLDOWN"; continue; }
+        fi
+
+        # Start all services detached so the launcher retains control
+        docker compose up -d
 
         # Background stability check: if boot survives STABLE_THRESHOLD, reset crash counter
         (
             sleep "$STABLE_THRESHOLD"
-            if kill -0 "$COMPOSE_PID" 2>/dev/null; then
+            if docker inspect --format='{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null | grep -q true; then
                 log "Boot stable for ${STABLE_THRESHOLD}s. Resetting crash counter."
                 echo "0" > "$CRASH_FILE"
             fi
         ) &
         STABILITY_PID=$!
 
-        wait "$COMPOSE_PID" || true
-        EXIT_CODE=$?
+        # Wait for the AGENT container specifically (not compose, not tunnel)
+        # docker wait blocks until the container stops and returns its exit code
+        EXIT_CODE=$(docker wait "$CONTAINER_NAME" 2>/dev/null || echo "1")
         kill "$STABILITY_PID" 2>/dev/null || true
+
+        # Stop compose so we get a clean restart on the next loop iteration
+        docker compose down --timeout 5 2>/dev/null || true
     fi
 
     touch data/.last_build
@@ -252,21 +278,44 @@ while true; do
         100)
             # Evolution signal: Ori committed changes, sync and rebuild
             log "Evolution signal (100). Syncing and rebuilding..."
+            # Snapshot .env BEFORE any git operations
+            [ -f "data/.env" ] && cp -a data/.env data/.env.pre-signal 2>/dev/null || true
             # Pull from remote if configured, otherwise changes are already local
             if git remote get-url origin &>/dev/null; then
                 git fetch origin master 2>/dev/null || true
                 git reset --hard origin/master
                 git clean -fd --exclude=data --exclude='data/*' --exclude=.env
             fi
-            smart_build
+            # Restore .env if git operations damaged it
+            if [ -f "data/.env.pre-signal" ]; then
+                pre_keys=$(grep -cve '^\s*#' -e '^\s*$' data/.env.pre-signal 2>/dev/null || echo 0)
+                cur_keys=$(grep -cve '^\s*#' -e '^\s*$' data/.env 2>/dev/null || echo 0)
+                if [ "$pre_keys" -gt "$cur_keys" ]; then
+                    cp -a data/.env.pre-signal data/.env
+                    log "Restored .env from pre-signal snapshot ($pre_keys keys vs $cur_keys)."
+                fi
+                rm -f data/.env.pre-signal
+            fi
+            smart_build || log "WARNING: Build failed, starting with existing image."
             echo "0" > "$CRASH_FILE"
             ;;
         101)
             # Rollback signal: Ori requested manual rollback
             log "Rollback signal (101). Reverting to previous commit..."
+            [ -f "data/.env" ] && cp -a data/.env data/.env.pre-signal 2>/dev/null || true
             git reset --hard HEAD~1
             git clean -fd --exclude=data --exclude='data/*' --exclude=.env
-            smart_build
+            # Restore .env if git operations damaged it
+            if [ -f "data/.env.pre-signal" ]; then
+                pre_keys=$(grep -cve '^\s*#' -e '^\s*$' data/.env.pre-signal 2>/dev/null || echo 0)
+                cur_keys=$(grep -cve '^\s*#' -e '^\s*$' data/.env 2>/dev/null || echo 0)
+                if [ "$pre_keys" -gt "$cur_keys" ]; then
+                    cp -a data/.env.pre-signal data/.env
+                    log "Restored .env from pre-signal snapshot."
+                fi
+                rm -f data/.env.pre-signal
+            fi
+            smart_build || log "WARNING: Build failed, starting with existing image."
             echo "0" > "$CRASH_FILE"
             ;;
         0|130)
