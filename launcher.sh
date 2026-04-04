@@ -106,6 +106,22 @@ is_interactive() {
 export AGENT_UID="${AGENT_UID:-$(id -u)}"
 export AGENT_GID="${AGENT_GID:-$(id -g)}"
 
+# --- Ensure current user can access Docker without sudo ---
+if [ -S /var/run/docker.sock ] && ! docker info &>/dev/null; then
+    log "Docker socket not accessible. Adding $(whoami) to the docker group..."
+    if command -v sudo &>/dev/null; then
+        sudo groupadd -f docker 2>/dev/null || true
+        sudo usermod -aG docker "$(whoami)"
+        log "Added to docker group. Activating new group membership..."
+        # Re-exec this script under the new group so the rest of the session works
+        exec sg docker "$0"
+    else
+        log "ERROR: Cannot access Docker and sudo is not available."
+        log "Run manually: sudo usermod -aG docker $(whoami) && newgrp docker"
+        exit 1
+    fi
+fi
+
 # --- Ensure HOME is set (may be missing under some init systems) ---
 export HOME="${HOME:-$(eval echo ~$(whoami))}"
 
