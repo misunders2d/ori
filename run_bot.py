@@ -130,7 +130,7 @@ async def detect_tunnel_url(timeout=30) -> str | None:
         logger.warning("httpx not available, cannot detect tunnel URL")
         return None
 
-    metrics_url = "http://cloudflare-tunnel:2000/metrics"
+    metrics_url = "http://localhost:2000/metrics"
     for attempt in range(timeout):
         try:
             async with httpx.AsyncClient() as client:
