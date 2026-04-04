@@ -3,10 +3,10 @@
     "name": "Ori",
     "version": "1.0.0",
     "description": "An autonomous self-evolving digital organism.",
-    "url": "https://authors-swimming-portion-infant.trycloudflare.com",
+    "url": "https://idol-collaborative-sellers-americans.trycloudflare.com",
     "provider": {
         "organization": "Ori Project",
-        "url": "https://authors-swimming-portion-infant.trycloudflare.com"
+        "url": "https://idol-collaborative-sellers-americans.trycloudflare.com"
     },
     "defaultInputModes": [
         "text/plain"
@@ -17,7 +17,7 @@
     "endpoints": [
         {
             "type": "json-rpc",
-            "url": "https://authors-swimming-portion-infant.trycloudflare.com"
+            "url": "https://idol-collaborative-sellers-americans.trycloudflare.com"
         }
     ],
     "capabilities": {
