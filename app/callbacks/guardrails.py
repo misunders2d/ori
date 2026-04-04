@@ -65,7 +65,6 @@ def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
         "schedule_recurring_system_task",
         "run_system_task_now",
         "session_refresh",
-        "update_self",
         "trigger_rollback",
         "evolution_commit_and_push",
     ]:

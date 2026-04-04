@@ -23,7 +23,7 @@ def mock_tool_context():
 
 @pytest.mark.asyncio
 async def test_admin_guardrail_respects_require_2fa_toggle(mock_tool_context):
-    tool = MockTool("update_self")
+    tool = MockTool("evolution_commit_and_push")
     
     # CASE: REQUIRE_2FA=false
     with patch.dict(os.environ, {"ADMIN_USER_IDS": "admin_user", "ADMIN_TOTP_SECRET": "base32secret3232", "REQUIRE_2FA": "false"}):
