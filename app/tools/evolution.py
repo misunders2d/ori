@@ -446,74 +446,88 @@ def _evolution_commit_remote(
 def _evolution_commit_local(
     staged_files, delete_files, commit_message, skip_local_update
 ) -> dict:
-    """Commit changes locally using branch-test-merge workflow (no remote needed).
+    """Commit changes locally using a git worktree (never touches the live directory).
 
-    Flow: create feature branch -> apply changes -> commit -> merge to master.
-    If anything fails, the branch is deleted and master is untouched.
+    Flow: create worktree on feature branch -> apply changes -> commit -> merge
+    to master (git state only, not files on disk) -> clean up worktree.
+    The supervisor applies file changes after the process exits cleanly.
     """
     bot_name = os.environ.get("BOT_NAME", "Ori")
     branch_name = f"evo/{uuid.uuid4().hex[:8]}"
+    worktree_dir = os.path.abspath("./data/evo-work")
     signed_message = _make_signed_message(commit_message)
 
-    try:
-        # Create and switch to feature branch
-        subprocess.run(["git", "checkout", "-b", branch_name], cwd=PROJECT_ROOT, check=True,
-                        capture_output=True, text=True)
+    # Clean up any stale worktree from a previous failed evolution
+    if os.path.exists(worktree_dir):
+        subprocess.run(["git", "worktree", "remove", "--force", worktree_dir],
+                        cwd=PROJECT_ROOT, capture_output=True, text=True)
+        if os.path.exists(worktree_dir):
+            shutil.rmtree(worktree_dir, ignore_errors=True)
 
-        # Apply staged files to the working tree
+    try:
+        # Create worktree on a new feature branch
+        subprocess.run(
+            ["git", "worktree", "add", worktree_dir, "-b", branch_name],
+            cwd=PROJECT_ROOT, check=True, capture_output=True, text=True,
+        )
+
+        # Apply staged files to the worktree
         for src, rel in staged_files:
-            dst = os.path.join(PROJECT_ROOT, rel)
+            dst = os.path.join(worktree_dir, rel)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy2(src, dst)
 
         # Apply deletions
         if delete_files:
             for rel_path in delete_files:
-                live_target = os.path.join(PROJECT_ROOT, rel_path)
-                if os.path.exists(live_target):
-                    os.remove(live_target)
+                target = os.path.join(worktree_dir, rel_path)
+                if os.path.exists(target):
+                    os.remove(target)
                 subprocess.run(["git", "rm", "-f", "--ignore-unmatch", rel_path],
-                                cwd=PROJECT_ROOT, capture_output=True, text=True)
+                                cwd=worktree_dir, capture_output=True, text=True)
 
-        # Stage and commit
-        subprocess.run(["git", "add", "-A"], cwd=PROJECT_ROOT, check=True,
+        # Stage and commit inside the worktree
+        subprocess.run(["git", "add", "-A"], cwd=worktree_dir, check=True,
                         capture_output=True, text=True)
         subprocess.run(
             ["git", "config", "user.email", "agent@evolution.local"],
-            cwd=PROJECT_ROOT, capture_output=True, text=True,
+            cwd=worktree_dir, capture_output=True, text=True,
         )
         subprocess.run(
             ["git", "config", "user.name", f"{bot_name} (Agent)"],
-            cwd=PROJECT_ROOT, capture_output=True, text=True,
+            cwd=worktree_dir, capture_output=True, text=True,
         )
-        subprocess.run(["git", "commit", "-m", signed_message], cwd=PROJECT_ROOT, check=True,
+        subprocess.run(["git", "commit", "-m", signed_message], cwd=worktree_dir, check=True,
                         capture_output=True, text=True)
 
-        # Merge back to master
-        subprocess.run(["git", "checkout", "master"], cwd=PROJECT_ROOT, check=True,
-                        capture_output=True, text=True)
+        # Merge the feature branch into master (updates git state, NOT files on disk)
         result = subprocess.run(
             ["git", "merge", "--no-ff", branch_name, "-m", f"merge: {signed_message}"],
             cwd=PROJECT_ROOT, capture_output=True, text=True,
         )
 
         if result.returncode != 0:
-            # Merge conflict — abort and clean up
             subprocess.run(["git", "merge", "--abort"], cwd=PROJECT_ROOT, capture_output=True)
+            subprocess.run(["git", "worktree", "remove", "--force", worktree_dir],
+                            cwd=PROJECT_ROOT, capture_output=True)
             subprocess.run(["git", "branch", "-D", branch_name], cwd=PROJECT_ROOT, capture_output=True)
             return {"status": "error", "message": f"Merge conflict. Branch discarded.\n{result.stderr[-500:]}"}
 
-        # Clean up the feature branch
+        # Clean up worktree and branch
+        subprocess.run(["git", "worktree", "remove", "--force", worktree_dir],
+                        cwd=PROJECT_ROOT, capture_output=True)
         subprocess.run(["git", "branch", "-d", branch_name], cwd=PROJECT_ROOT, capture_output=True)
 
     except subprocess.CalledProcessError as e:
-        # Ensure we're back on master and clean up
-        subprocess.run(["git", "checkout", "master"], cwd=PROJECT_ROOT, capture_output=True)
+        # Clean up on failure
+        subprocess.run(["git", "worktree", "remove", "--force", worktree_dir],
+                        cwd=PROJECT_ROOT, capture_output=True)
         subprocess.run(["git", "branch", "-D", branch_name], cwd=PROJECT_ROOT, capture_output=True)
         err_msg = (e.stderr or e.stdout or str(e))[-500:]
         return {"status": "error", "message": f"Local evolution failed: {err_msg}"}
     except Exception as e:
-        subprocess.run(["git", "checkout", "master"], cwd=PROJECT_ROOT, capture_output=True)
+        subprocess.run(["git", "worktree", "remove", "--force", worktree_dir],
+                        cwd=PROJECT_ROOT, capture_output=True)
         subprocess.run(["git", "branch", "-D", branch_name], cwd=PROJECT_ROOT, capture_output=True)
         return {"status": "error", "message": f"Local evolution error: {e!s}"}
 
