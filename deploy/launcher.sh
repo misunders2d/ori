@@ -158,10 +158,11 @@ generate_secret() {
     log "Generated ${key}"
 }
 
-if [ -f "data/.env" ]; then
-    generate_secret "ADMIN_PASSCODE"
-    generate_secret "A2A_API_KEY" "ori-"
-fi
+# Ensure data/.env exists (may be missing on first run or after disaster recovery)
+mkdir -p data
+touch data/.env
+generate_secret "ADMIN_PASSCODE"
+generate_secret "A2A_API_KEY" "ori-"
 
 # --- First-time setup wizard ---
 # Require at least one LLM provider to be configured before starting.
