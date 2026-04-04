@@ -640,10 +640,13 @@ def evolution_commit_and_push(
 
     mode = result.get("mode", "unknown")
     msg = f"Successfully {' and '.join(summary)} via {'remote push' if mode == 'remote' else 'local branch-merge'}."
-    if skip_local_update and use_remote:
-        msg += " Local update skipped. Scheduling automatic hard reboot (exit 100) to apply changes."
-        from app.tools.system import _schedule_restart, EXIT_CODE_UPDATE
-        _schedule_restart(EXIT_CODE_UPDATE)
+
+    # Auto-trigger reboot after successful commit — this is the final step of
+    # the evolution cycle. The commit approval covers the reboot; no second
+    # approval is needed. The launcher will pull, rebuild, and restart.
+    from app.tools.system import _schedule_restart, EXIT_CODE_UPDATE
+    _schedule_restart(EXIT_CODE_UPDATE)
+    msg += " Scheduling automatic reboot (exit 100) to apply changes."
 
     return {
         "status": "success",

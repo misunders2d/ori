@@ -58,39 +58,17 @@ def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
     if not tool or not tool_context:
         return None
 
-    # Tools requiring token approval (staged intent + explicit confirmation)
-    _APPROVAL_REQUIRED = {
+    if tool.name in [
         "configure_integration",
         "remove_integration",
         "schedule_system_task",
         "schedule_recurring_system_task",
         "run_system_task_now",
         "session_refresh",
+        "update_self",
         "trigger_rollback",
         "evolution_commit_and_push",
-    }
-
-    # Tools that are admin-only but don't need token approval.
-    # update_self runs as part of the post-commit evolution flow;
-    # requiring a second approval would break the single-approval cycle.
-    _ADMIN_ONLY_NO_APPROVAL = {
-        "update_self",
-    }
-
-    if tool.name in _ADMIN_ONLY_NO_APPROVAL:
-        current_state = tool_context.state.to_dict()
-        user_id = current_state.get("user_id", "")
-        admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
-        admin_users = [u.strip() for u in admin_users_str.split(",") if u.strip()]
-        is_a2a = user_id.startswith("A2A_USER_")
-        if not is_a2a and (not admin_users or user_id not in admin_users):
-            return {
-                "status": "error",
-                "message": f"Guardrail Intervention: Only Admin users can invoke `{tool.name}`. Your user_id ({user_id}) is unauthorized.",
-            }
-        return None  # Admin or A2A — allow without approval
-
-    if tool.name in _APPROVAL_REQUIRED:
+    ]:
         current_state = tool_context.state.to_dict()
         user_id = current_state.get("user_id", "")
         session_id = current_state.get("session_id", "default")
