@@ -239,6 +239,7 @@ async def spawn_agent(
         "-e", "TELEGRAM_BOT_TOKEN=",
         "-e", "SLACK_BOT_TOKEN=",
         "-v", f"{host_spawn_data}:/code/data:z",
+        "--user", f"{os.getuid()}:{os.getgid()}",
         "--restart", "on-failure:3",
         _image_name(),
     ]
