@@ -52,9 +52,16 @@ def _is_child_container() -> bool:
 
 
 def update_self(tool_context: ToolContext) -> dict:
-    """Signals the system to pull latest code and rebuild the container."""
+    """Signals the system to restart. On the parent, the supervisor handles git pull + dep sync.
+    On children, Docker's restart policy restarts the container (proving the process survives reboot)."""
     if _is_child_container():
-        return {"status": "error", "message": "REBOOT BLOCKED: You are a spawned child agent. Use `export_dna` to send verified changes to your parent instead."}
+        # Children reboot via direct exit — Docker restart: on-failure:3 brings them back.
+        # No code changes on disk (children don't commit), just a clean restart to prove stability.
+        # Safe to use threading.Timer here — children don't write to vault or .env.
+        import threading
+        logger.info('Child agent rebooting (clean exit for Docker restart)...')
+        threading.Timer(2.0, lambda: sys.exit(0)).start()
+        return {"status": "success", "message": "Child reboot initiated. Docker will restart the container."}
     logger.info('========================================')
     logger.info('🧬 [Ori System] PERIMETER LOCKDOWN: Exit signal dispatched (Code 100).')
     logger.info('========================================')
@@ -63,8 +70,6 @@ def update_self(tool_context: ToolContext) -> dict:
 
 def trigger_rollback(tool_context: ToolContext) -> dict:
     """Signals the system to revert to the previous commit and rebuild."""
-    if _is_child_container():
-        return {"status": "error", "message": "ROLLBACK BLOCKED: You are a spawned child agent. Children don't commit, so there's nothing to roll back."}
     _write_exit_signal(EXIT_CODE_ROLLBACK)
     return {"status": "success", "message": "Rollback signal dispatched. The system will shut down cleanly after this response is delivered."}
 
