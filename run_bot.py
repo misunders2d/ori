@@ -12,8 +12,7 @@ import sys
 # ---------------------------------------------------------------------------
 if not os.environ.get("_VAULT_LOADED"):
     # Standalone mode — supervisor didn't load vault, do it ourselves
-    from deploy.vault import migrate_from_legacy, load_vault
-    migrate_from_legacy()
+    from deploy.vault import load_vault
     load_vault()
 
 from logging.handlers import RotatingFileHandler

@@ -32,7 +32,6 @@ sys.path.insert(0, PROJECT_ROOT)
 from deploy.vault import (
     VAULT_FILE,
     load_vault,
-    migrate_from_legacy,
     get,
     set as vault_set,
     get_all,
@@ -244,7 +243,6 @@ def main():
 
     # Initialize
     os.makedirs(os.path.join(PROJECT_ROOT, "data"), exist_ok=True)
-    migrate_from_legacy()
     load_vault()
     ensure_secrets()
     copy_adc()

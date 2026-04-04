@@ -24,10 +24,6 @@ VAULT_FILE = os.path.join(VAULT_DIR, "credentials.json")
 VAULT_BACKUP = os.path.join(VAULT_DIR, "credentials.json.bak")
 VAULT_LOCK = os.path.join(VAULT_DIR, ".vault_lock")
 
-# Legacy paths for migration
-_LEGACY_ENV = os.path.join(_PROJECT_ROOT, "data", ".env")
-_LEGACY_CONFIG = os.path.join(_PROJECT_ROOT, "data", "config.json")
-
 
 def _ensure_dir():
     os.makedirs(VAULT_DIR, mode=0o700, exist_ok=True)
@@ -164,77 +160,3 @@ def set_many(updates: dict):
         if value is not None:
             os.environ[key] = str(value)
     logger.info("Vault: set %d keys", len(updates))
-
-
-# ---------------------------------------------------------------------------
-# Migration from legacy .env + config.json
-# ---------------------------------------------------------------------------
-
-def _parse_dotenv(path: str) -> dict:
-    """Parse a .env file into a dict. Handles comments, quotes, empty lines."""
-    result = {}
-    if not os.path.exists(path):
-        return result
-    try:
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if "=" not in line:
-                    continue
-                key, value = line.split("=", 1)
-                key = key.strip()
-                value = value.strip().strip("\"'")
-                if key:
-                    result[key] = value
-    except OSError:
-        pass
-    return result
-
-
-def migrate_from_legacy():
-    """One-time migration from data/.env + data/config.json to vault.
-
-    Idempotent — safe to call multiple times. Only migrates if the vault
-    is empty and legacy files exist.
-    """
-    existing = _with_lock(_read_vault)
-    if existing:
-        return  # Vault already has data, skip migration
-
-    migrated = {}
-
-    # Read legacy .env
-    env_data = _parse_dotenv(_LEGACY_ENV)
-    if env_data:
-        migrated.update(env_data)
-        logger.info("Vault: migrating %d keys from .env", len(env_data))
-
-    # Read legacy config.json (takes precedence over .env)
-    if os.path.exists(_LEGACY_CONFIG):
-        try:
-            with open(_LEGACY_CONFIG) as f:
-                config_data = json.load(f)
-            if isinstance(config_data, dict):
-                migrated.update(config_data)
-                logger.info("Vault: migrating %d keys from config.json", len(config_data))
-        except (json.JSONDecodeError, OSError):
-            pass
-
-    if migrated:
-        def _do_migrate():
-            _atomic_write(migrated)
-        _with_lock(_do_migrate)
-
-        # Rename legacy files so migration doesn't re-run
-        for path, suffix in [(_LEGACY_ENV, ".migrated"), (_LEGACY_CONFIG, ".migrated")]:
-            if os.path.exists(path):
-                try:
-                    os.rename(path, path + suffix)
-                except OSError:
-                    pass
-
-        logger.info("Vault: migration complete (%d total keys)", len(migrated))
-    else:
-        logger.info("Vault: no legacy files to migrate")
