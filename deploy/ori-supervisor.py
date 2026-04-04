@@ -176,6 +176,35 @@ def apply_evolution():
     if deps_changed():
         sync_deps()
 
+    # Rebuild child image so future spawns use the updated code
+    rebuild_child_image()
+
+
+def rebuild_child_image():
+    """Rebuild the child Docker image if Docker is available."""
+    dockerfile = os.path.join(PROJECT_ROOT, "deploy", "Dockerfile.child")
+    if not os.path.exists(dockerfile):
+        return
+    try:
+        # Derive image name from BOT_NAME
+        bot_name = get("BOT_NAME") or "ori"
+        image_name = f"{bot_name.strip().replace(' ', '-').lower()}-child-image"
+        logger.info("Rebuilding child image: %s", image_name)
+        result = subprocess.run(
+            ["docker", "build", "-t", image_name, "-f", dockerfile, PROJECT_ROOT],
+            capture_output=True, text=True, timeout=300,
+        )
+        if result.returncode != 0:
+            logger.warning("Child image rebuild failed (non-critical): %s", result.stderr[-300:])
+        else:
+            logger.info("Child image rebuilt successfully")
+            # Prune old dangling images
+            subprocess.run(["docker", "image", "prune", "-f"], capture_output=True, timeout=30)
+    except FileNotFoundError:
+        pass  # Docker not installed — no children to rebuild
+    except Exception as e:
+        logger.warning("Child image rebuild skipped: %s", e)
+
 
 def apply_rollback():
     """After exit 101: revert one commit, sync deps."""
