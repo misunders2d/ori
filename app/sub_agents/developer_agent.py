@@ -97,7 +97,7 @@ developer_agent = Agent(
         "2. If not found locally, ask A2A friends via KnowledgeAgent if anyone has built it.\n"
         "3. If a friend has it, use `evolution_import` to save it locally and optionally apply it.\n\n"
         "AFTER a successful evolution commit:\n"
-        "1. `evolution_catalog` — save verified code to `evolutions/{name}/` with metadata and tags.\n"
+        "1. `evolution_catalog` — save verified code to `evolutions/{{name}}/` with metadata and tags.\n"
         "2. This makes it discoverable by you and shareable with friends via `evolution_share`.\n"
         "3. Always catalog reusable evolutions. Skip one-off fixes or config changes."
     ),
