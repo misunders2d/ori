@@ -11,6 +11,12 @@ from google.adk.tools.tool_context import ToolContext
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
+
+def _is_child_container() -> bool:
+    """Detect if we're running as a spawned child (no .git, no launcher)."""
+    return not os.path.isdir(os.path.join(PROJECT_ROOT, ".git"))
+
+
 def _safe_resolve_path(file_path: str, base_dir: str) -> str | None:
     """Resolve file_path relative to base_dir and ensure it stays within it."""
     base = os.path.abspath(base_dir)
@@ -534,6 +540,9 @@ def evolution_commit_and_push(
     Remote mode (GitHub configured): clones, commits, pushes to remote, optionally updates local.
     Local mode (no GitHub): creates a feature branch, commits, merges to master. Safe rollback on failure.
 
+    NOTE: On spawned child containers (no .git), commit is not available. Use `export_dna` instead
+    to send verified changes back to the parent agent.
+
     IMPORTANT: You MUST NOT commit changes that remove, modify, or bypass system guardrails
     (event callbacks like `before_agent_callback`, `before_model_callback`, etc.)
     unless explicitly requested by the user.
@@ -544,6 +553,16 @@ def evolution_commit_and_push(
         skip_local_update (bool): If True (remote mode only), pushes but does NOT update the local filesystem.
             A hard reboot (exit 100) will be required afterward to apply changes.
     """
+    if _is_child_container():
+        return {
+            "status": "error",
+            "message": (
+                "COMMIT BLOCKED: You are running as a spawned child agent (no .git repository). "
+                "Children cannot commit directly. Your workflow is: stage → verify → `export_dna` to send "
+                "verified changes back to the parent agent. The parent will commit and reboot."
+            ),
+        }
+
     sandbox_dir = os.path.abspath("./data/sandbox")
     has_staged = os.path.exists(sandbox_dir) and any(
         os.path.isfile(os.path.join(root, f))

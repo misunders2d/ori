@@ -26,8 +26,15 @@ def _schedule_restart(exit_code: int):
         
     threading.Timer(1.0, hard_exit).start()
 
+def _is_child_container() -> bool:
+    """Detect if we're running as a spawned child (no .git, no launcher)."""
+    return not os.path.isdir(os.path.join(os.path.dirname(__file__), '..', '..', '.git'))
+
+
 def update_self(tool_context: ToolContext) -> dict:
     """Pulls latest code, clears memory, and performs a HARD reboot of the container."""
+    if _is_child_container():
+        return {"status": "error", "message": "REBOOT BLOCKED: You are a spawned child agent. Use `export_dna` to send verified changes to your parent instead."}
     logger.info('========================================')
     logger.info('🧬 [Ori System] PERIMETER LOCKDOWN: Dispatched Hard Exit (Code 100).')
     logger.info('========================================')
@@ -36,6 +43,8 @@ def update_self(tool_context: ToolContext) -> dict:
 
 def trigger_rollback(tool_context: ToolContext) -> dict:
     """Reverts commits and performs a HARD reboot."""
+    if _is_child_container():
+        return {"status": "error", "message": "ROLLBACK BLOCKED: You are a spawned child agent. Children don't commit, so there's nothing to roll back."}
     _schedule_restart(EXIT_CODE_ROLLBACK)
     return {"status": "success", "message": "Rolling back system. Hard rebooting..."}
 

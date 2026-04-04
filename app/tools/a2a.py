@@ -497,13 +497,39 @@ def update_friend_address(friend_name: str, new_url: str, tool_context: ToolCont
 # DNA Exchange (Ori-specific extension — not part of A2A v1.0 standard)
 # ---------------------------------------------------------------------------
 
+def _read_file_preferring_sandbox(rel_path: str) -> Optional[str]:
+    """Read a file, preferring the sandbox version over the live version.
+
+    This allows export_dna to package verified sandbox changes (from children)
+    rather than the original baked-in code.
+    """
+    sandbox_path = os.path.join(os.path.abspath("./data/sandbox"), rel_path)
+    if os.path.isfile(sandbox_path) and not os.path.islink(sandbox_path):
+        with open(sandbox_path, "r") as f:
+            return f.read()
+    live_path = os.path.join(PROJECT_ROOT, rel_path)
+    if os.path.isfile(live_path):
+        with open(live_path, "r") as f:
+            return f.read()
+    return None
+
+
 def export_dna(tool_context: ToolContext) -> Dict[str, Any]:
     """
     Packages sanitized technical improvements (DNA) from this Ori instance.
+    If there are verified changes in the sandbox, those are exported instead
+    of the live code — this is how children pass verified evolutions back to the parent.
     """
     try:
+        sandbox_dir = os.path.abspath("./data/sandbox")
+        has_sandbox = os.path.isdir(sandbox_dir) and any(
+            os.path.isfile(os.path.join(r, f)) and not os.path.islink(os.path.join(r, f))
+            for r, _, files in os.walk(sandbox_dir) for f in files
+        )
+
         dna_package = {
             "version": "1.0.0",
+            "source": "sandbox" if has_sandbox else "live",
             "tools": {},
             "skills": {},
         }
@@ -512,22 +538,39 @@ def export_dna(tool_context: ToolContext) -> Dict[str, Any]:
         if os.path.isdir(tools_dir):
             for filename in os.listdir(tools_dir):
                 if filename.endswith(".py") and filename != "__init__.py":
-                    with open(os.path.join(tools_dir, filename), "r") as f:
-                        dna_package["tools"][filename] = f.read()
+                    content = _read_file_preferring_sandbox(os.path.join("app", "tools", filename))
+                    if content:
+                        dna_package["tools"][filename] = content
+
+        # Also pick up any NEW tool files only in sandbox (not in live)
+        sandbox_tools = os.path.join(sandbox_dir, "app", "tools")
+        if os.path.isdir(sandbox_tools):
+            for filename in os.listdir(sandbox_tools):
+                if filename.endswith(".py") and filename != "__init__.py" and filename not in dna_package["tools"]:
+                    fpath = os.path.join(sandbox_tools, filename)
+                    if os.path.isfile(fpath) and not os.path.islink(fpath):
+                        with open(fpath, "r") as f:
+                            dna_package["tools"][filename] = f.read()
 
         skills_dir = os.path.join(PROJECT_ROOT, "skills")
         if os.path.isdir(skills_dir):
             for skill_name in os.listdir(skills_dir):
                 skill_path = os.path.join(skills_dir, skill_name)
                 if os.path.isdir(skill_path):
-                    skill_md = os.path.join(skill_path, "SKILL.md")
-                    if os.path.isfile(skill_md):
-                        with open(skill_md, "r") as f:
-                            dna_package["skills"][skill_name] = f.read()
+                    content = _read_file_preferring_sandbox(os.path.join("skills", skill_name, "SKILL.md"))
+                    if content:
+                        dna_package["skills"][skill_name] = content
 
+        # Include staged pyproject.toml if it exists (for dependency changes)
+        staged_pyproject = _read_file_preferring_sandbox("pyproject.toml")
+        live_pyproject = os.path.join(PROJECT_ROOT, "pyproject.toml")
+        if os.path.isfile(os.path.join(sandbox_dir, "pyproject.toml")):
+            dna_package["pyproject_toml"] = staged_pyproject
+
+        source_label = "sandbox (verified changes)" if has_sandbox else "live codebase"
         return {
             "status": "success",
-            "message": "Technical DNA successfully sequenced and sanitized.",
+            "message": f"Technical DNA successfully sequenced from {source_label}.",
             "dna_package": dna_package,
         }
     except Exception as e:

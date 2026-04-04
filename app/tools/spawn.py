@@ -245,7 +245,7 @@ async def spawn_agent(
         "-v", f"{host_spawn_data}:/code/data:z",
         "-v", "/var/run/docker.sock:/var/run/docker.sock",
         "-p", f"{agent_port}:8000",
-        "--restart", "unless-stopped",
+        "--restart", "on-failure:3",  # Restart on crash only, max 3 retries (no launcher to manage children)
         _image_name(),
     ]
 
