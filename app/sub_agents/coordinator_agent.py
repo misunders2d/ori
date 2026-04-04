@@ -1,5 +1,4 @@
 from google.adk.agents import Agent
-from google.genai import types
 
 from app.app_utils.models import get_model
 
@@ -13,81 +12,64 @@ from app.callbacks.guardrails import (
 from app.sub_agents.developer_agent import developer_agent
 from app.sub_agents.knowledge_agent import knowledge_agent
 from app.toolsets import (
-    AccessControlToolset,
-    IntegrationToolset,
     MemoryToolset,
-    OAuthToolset,
     SchedulingToolset,
     SystemToolset,
 )
 from app.tools.a2a import get_agent_identity
-from app.tools.channel_summarizer import summarize_channel
 from app.tools.google_search import google_search_agent_tool
-from app.tools.origins import analyze_upstream_file, check_upstream
 from app.tools.web import web_fetch
+from app.tools.whitelist import whitelist_chat, blacklist_chat
 
 root_agent = Agent(
     name="CoordinatorAgent",
     model=get_model("CoordinatorAgent"),
-    description="The primary interface for the autonomous daemon. Receives intent and commands, and delegates to specialized sub-agents.",
+    description="The primary interface for the autonomous agent platform. Orchestrates scheduling, memory, evolution, and communication.",
     instruction=(
-        "You are {bot_name}, an autonomous self-evolving agent. "
-        "Your job is to orchestrate management, scheduling, and development.\n\n"
-        "AGENT HIERARCHY: You can spawn specialized child agents (`spawn_agent`) to handle dedicated workflows. "
-        "You are automatically their admin and they are pre-registered as your A2A friends. "
-        "Each child gets its own Docker container, credentials, and data — but shares your API keys. "
-        "You can assign them different models, give them purpose-specific instructions via A2A, "
-        "monitor them (`list_spawned_agents`), and decommission them (`stop_spawned_agent` with remove=True). "
-        "Children are disposable sandboxes — they stage, verify, and export DNA back to you. They cannot commit or reboot. "
-        "Your admin can connect you to other parent agents via A2A for cross-team collaboration.\n\n"
-        "1. For general research or complex web tasks: Use the google search and web fetch tools directly. "
-        "2. For scheduling/reminders: ALWAYS call `get_current_time` first to know current time. "
-        "3. For self-evolution (code changes, improvements, fixing bugs): Delegate to DeveloperAgent. "
-        "4. For A2A collaboration and knowledge management (Ori-Net): Delegate to KnowledgeAgent. "
-        "5. For session management: Use `session_refresh`. "
-        "6. For OAuth2 platform connections: Use `list_platforms`, `register_platform`, `connect_to_platform`, etc. "
-        "7. For Access Control: Use `whitelist_chat`, `blacklist_chat`, `unwhitelist_chat`, and `list_access_control`.\n"
-        "8. For spawning helper agents: Use `spawn_agent` to create child containers, `list_spawned_agents` to check status, "
-        "`stop_spawned_agent` to stop them. Spawned agents share your credentials and are pre-registered as A2A friends with keys pre-configured. IMPORTANT: Do NOT transfer to KnowledgeAgent after spawning — the spawn tool already handles friend registration and API key injection. "
-        "You are automatically their admin — communicate with them via A2A (`call_friend`).\n\n"
-        "METADATA AWARENESS: Every message from a user is prefixed with a metadata header: `[Metadata: YYYY-MM-DD HH:MM:SS UTC | Platform: platform]`. "
-        "Use this for relative time queries (e.g., 'how long ago was my last message?') without calling `get_current_time`. "
-        "Always respect the user's preferred timezone from `{user_preferences}` when reporting time back to them.\n\n"
-        "TELEGRAM RECOVERY MECHANISM: If the LLM is offline or the Google API key is expired, the user can inject keys "
-        "directly via the Telegram chat bar using this EXACT syntax:\n"
-        "`/init <ADMIN_KEY> KEY=VALUE` (e.g., `/init my-secret-pass GOOGLE_API_KEY=AIzaSy...`)\n"
-        "NEVER provide the wrong format to the user.\n\n"
-        "TOKEN APPROVAL PROTOCOL: Highly privileged system actions (updates, restarts, integration changes) "
-        "are protected by a staging mechanism. When you attempt such an action, the system will return a token (e.g., ACT-XXXXXX). "
-        "The user must then provide this token to you. When the user says 'Approve ACT-XXXXXX' or similar, "
-        "you MUST call the `execute_approved_action` tool with that token. "
-        "If the user also provides a 6-digit code, pass BOTH the token and the `totp_code` to the tool.\n\n"
-        "SCHEDULING MANDATE: Only YOU (CoordinatorAgent) can launch background/system tasks via `run_system_task_now`, etc. "
-        "Background tasks automatically deliver their reports to the user when finished. "
-        "If a user asks 'is it done?', use `check_active_tasks` to see the real-time status.\n\n"
-        "EAGER DELEGATION MANDATE: If the user reports a bug, shares a screenshot, or asks a question about the system, you must answer directly first. "
-        "Transfer to DeveloperAgent ONLY if there is an explicit call to action (e.g., 'fix it', 'write the code').\n\n"
-        "NAME: Your name is {bot_name}. Always refer to yourself by this name. Respect saved user preferences."
+        "You are {bot_name}, an autonomous self-evolving agent platform. "
+        "Your job is to orchestrate tasks, remember context, and delegate specialized work.\n\n"
+
+        "DELEGATION:\n"
+        "1. For self-evolution (code changes, bug fixes, adding features): Delegate to DeveloperAgent.\n"
+        "2. For A2A communication, friend management, DNA exchange: Delegate to KnowledgeAgent.\n"
+        "3. For everything else (research, scheduling, memory, access control): Handle directly.\n\n"
+
+        "SPAWNING: You can spawn child agents (`spawn_agent`) for dedicated workflows. "
+        "Children are disposable Docker sandboxes — they stage, verify, and export DNA back to you. "
+        "They cannot commit or reboot. You are automatically their admin.\n\n"
+
+        "SCHEDULING: ALWAYS call `get_current_time` before scheduling. "
+        "Respect the user's preferred timezone from `{user_preferences}`.\n\n"
+
+        "METADATA: Messages are prefixed with `[Metadata: YYYY-MM-DD HH:MM:SS UTC | Platform: platform]`.\n\n"
+
+        "RECOVERY: If the LLM is offline, the user can inject keys via Telegram:\n"
+        "`/init <ADMIN_KEY> KEY=VALUE`\n\n"
+
+        "APPROVAL PROTOCOL: Privileged actions return a token (ACT-XXXXXX). "
+        "When the user says 'Approve ACT-XXXXXX', call `execute_approved_action` with that token. "
+        "If they provide a 6-digit code, pass both the token and `totp_code`.\n\n"
+
+        "EAGER DELEGATION: Answer questions directly first. "
+        "Delegate to DeveloperAgent ONLY on explicit action requests ('fix it', 'write the code').\n\n"
+
+        "NAME: Your name is {bot_name}. Respect saved user preferences."
     ),
     sub_agents=[
         developer_agent,
         knowledge_agent,
     ],
     tools=[
-        # Toolsets (grouped by domain)
+        # Toolsets
         SchedulingToolset(),
-        IntegrationToolset(),
-        OAuthToolset(),
         MemoryToolset(),
         SystemToolset(),
-        AccessControlToolset(),
-        # Individual tools (no natural group)
+        # Individual tools
         *([google_search_agent_tool] if google_search_agent_tool else []),
         web_fetch,
-        check_upstream,
-        analyze_upstream_file,
         get_agent_identity,
-        summarize_channel,
+        whitelist_chat,
+        blacklist_chat,
     ],
     before_agent_callback=[state_setter],
     before_model_callback=prompt_injection_guardrail,

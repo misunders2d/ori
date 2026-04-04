@@ -3,7 +3,7 @@ from google.adk.tools.function_tool import FunctionTool
 
 
 class SchedulingToolset(BaseToolset):
-    """Groups all scheduling, timing, and background task tools."""
+    """Core scheduling and timing tools."""
 
     async def get_tools(self, readonly_context=None):
         from app.tools.scheduling import (
@@ -13,11 +13,7 @@ class SchedulingToolset(BaseToolset):
             list_scheduled_tasks,
             edit_scheduled_task,
             delete_scheduled_task,
-            schedule_system_task,
-            schedule_recurring_system_task,
-            run_system_task_now,
         )
-        from app.tools.diagnostics import check_active_tasks
 
         return [
             FunctionTool(func=get_current_time),
@@ -26,8 +22,4 @@ class SchedulingToolset(BaseToolset):
             FunctionTool(func=list_scheduled_tasks),
             FunctionTool(func=edit_scheduled_task),
             FunctionTool(func=delete_scheduled_task),
-            FunctionTool(func=schedule_system_task),
-            FunctionTool(func=schedule_recurring_system_task),
-            FunctionTool(func=run_system_task_now),
-            FunctionTool(func=check_active_tasks),
         ]

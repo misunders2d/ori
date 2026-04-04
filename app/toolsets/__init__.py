@@ -1,17 +1,15 @@
 from .scheduling import SchedulingToolset
 from .integration import IntegrationToolset
-from .oauth import OAuthToolset
 from .memory import MemoryToolset
 from .system import SystemToolset
-from .access_control import AccessControlToolset
 from .evolution import EvolutionToolset
+from .github import GitHubToolset
 
 __all__ = [
     "SchedulingToolset",
     "IntegrationToolset",
-    "OAuthToolset",
     "MemoryToolset",
     "SystemToolset",
-    "AccessControlToolset",
     "EvolutionToolset",
+    "GitHubToolset",
 ]
