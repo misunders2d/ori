@@ -6,7 +6,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJECT_ROOT"
 
 # Derive service name from BOT_NAME in .env, default to "ori"
 _bot_name="ori"
@@ -50,13 +51,13 @@ if command -v systemctl &>/dev/null; then
     else
         # systemd available but service not installed — install it
         echo ":: First run detected. Installing $SERVICE_NAME as a system service..."
-        ./install.sh
+        "$SCRIPT_DIR/install.sh"
     fi
 else
     # No systemd — run launcher in background
     echo ":: Starting $SERVICE_NAME in background..."
     mkdir -p data
-    nohup ./launcher.sh >> data/launcher.log 2>&1 &
+    nohup "$SCRIPT_DIR/launcher.sh" >> data/launcher.log 2>&1 &
     echo ":: $SERVICE_NAME is running (PID: $!)."
     echo "   Logs:  tail -f data/launcher.log"
     echo "   Stop:  kill $!"

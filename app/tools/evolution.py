@@ -118,7 +118,10 @@ def evolution_stage_change(
 
     # Infrastructure files are outside the self-evolution scope.
     # Recovery and deployment logic must remain untouched to prevent bricking.
-    INFRA_FILES = {"Dockerfile", "docker-compose.yml", "entrypoint.sh", "launcher.sh", "install.sh"}
+    # Block all deploy/ directory files and known infra filenames
+    if file_path.startswith("deploy/") or file_path.startswith("deploy\\"):
+        return {"status": "error", "message": f"Deploy directory '{file_path}' is protected. Deployment and recovery scripts cannot be modified by self-evolution."}
+    INFRA_FILES = {"Dockerfile", "docker-compose.yml", "entrypoint.sh", "launcher.sh", "install.sh", "start.sh"}
     if os.path.basename(file_path) in INFRA_FILES:
         return {"status": "error", "message": f"Infrastructure file '{file_path}' is protected. Deployment and recovery scripts cannot be modified by self-evolution."}
 
@@ -643,10 +646,11 @@ def evolution_commit_and_push(
 
     # Auto-trigger reboot after successful commit — this is the final step of
     # the evolution cycle. The commit approval covers the reboot; no second
-    # approval is needed. The launcher will pull, rebuild, and restart.
-    from app.tools.system import _schedule_restart, EXIT_CODE_UPDATE
-    _schedule_restart(EXIT_CODE_UPDATE)
-    msg += " Scheduling automatic reboot (exit 100) to apply changes."
+    # approval is needed. The transport layer will pick up the signal after
+    # delivering this response and do a clean sys.exit(0).
+    from app.tools.system import _write_exit_signal, EXIT_CODE_UPDATE
+    _write_exit_signal(EXIT_CODE_UPDATE)
+    msg += " Reboot signal dispatched — the system will shut down cleanly after this response."
 
     return {
         "status": "success",

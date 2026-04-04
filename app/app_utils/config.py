@@ -3,11 +3,9 @@ import logging
 import os
 import shlex
 
-from dotenv import set_key
+from app.app_utils.runtime_config import set_config
 
 logger = logging.getLogger(__name__)
-
-ENV_FILE_PATH = os.environ.get("DOTENV_PATH", "./data/.env")
 
 ALLOWED_CONFIG_KEYS = frozenset({
     "GOOGLE_API_KEY",
@@ -152,23 +150,15 @@ def _apply_config(command_text: str) -> str:
     parts = shlex.split(body)
     kv_parts = parts[1:]  # Skip the passcode
 
-    os.makedirs(os.path.dirname(os.path.abspath(ENV_FILE_PATH)), exist_ok=True)
-    if not os.path.exists(ENV_FILE_PATH):
-        with open(ENV_FILE_PATH, "w") as f:
-            f.write("# Autonomous Ori Daemon Configuration\n")
-
     updated_keys = []
     rejected_keys = []
 
     for part in kv_parts:
         if "=" in part:
-            # Handle potential spaces around = or in keys
             key, value = part.split("=", 1)
             key = key.strip().upper()
-            
-            # Robust matching: check if key is in ALLOWED_CONFIG_KEYS
+
             if key not in ALLOWED_CONFIG_KEYS:
-                # One last attempt to see if it's just a case mismatch or hidden space
                 clean_key = "".join(key.split())
                 if clean_key in ALLOWED_CONFIG_KEYS:
                     key = clean_key
@@ -176,9 +166,8 @@ def _apply_config(command_text: str) -> str:
                     logger.warning(f"Config: Rejected unauthorized key '{key}'")
                     rejected_keys.append(key)
                     continue
-            
-            set_key(ENV_FILE_PATH, key, value)
-            os.environ[key] = value
+
+            set_config(key, value)
             updated_keys.append(key)
 
     msgs = []

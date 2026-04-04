@@ -6,14 +6,15 @@
 # It must NEVER be modified by Ori's self-evolution (DeveloperAgent).
 #
 # Recovery chain:
-#   systemd/launchd (auto-start) -> launcher.sh (rollback) -> docker compose (the bot)
+#   systemd/launchd (auto-start) -> launcher.sh (rollback) -> docker compose -f deploy/docker-compose.yml (the bot)
 #
 # Supports: Linux, macOS, Windows (WSL)
 # ============================================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJECT_ROOT"
 
 # --- Configuration ---
 IMAGE_NAME=""  # set after BOT_NAME is read
@@ -84,13 +85,13 @@ deps_changed() {
 smart_build() {
     if deps_changed; then
         log "Dependencies changed. Full rebuild (--no-cache)..."
-        if ! docker compose build --no-cache; then
+        if ! docker compose -f deploy/docker-compose.yml build --no-cache; then
             log "ERROR: Full rebuild failed!"
             return 1
         fi
     else
         log "Code-only change. Incremental rebuild..."
-        if ! docker compose build; then
+        if ! docker compose -f deploy/docker-compose.yml build; then
             log "ERROR: Incremental rebuild failed!"
             return 1
         fi
@@ -142,6 +143,24 @@ if [ -f "$ADC_HOST" ]; then
     cp "$ADC_HOST" "$ADC_DATA" 2>/dev/null || true
     chmod 644 "$ADC_DATA" 2>/dev/null || true
     log "ADC credentials copied to data/.adc.json"
+fi
+
+# --- Generate secrets if missing (BEFORE container starts) ---
+# These are written to .env ONCE and never again. The running container
+# treats .env as read-only.
+generate_secret() {
+    local key="$1" prefix="${2:-}"
+    if [ -f "data/.env" ] && grep -qE "^${key}=.+" "data/.env" 2>/dev/null; then
+        return  # already set
+    fi
+    local value="${prefix}$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))' 2>/dev/null || head -c32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c32)"
+    echo "${key}=${value}" >> "data/.env"
+    log "Generated ${key}"
+}
+
+if [ -f "data/.env" ]; then
+    generate_secret "ADMIN_PASSCODE"
+    generate_secret "A2A_API_KEY" "ori-"
 fi
 
 # --- First-time setup wizard ---
@@ -232,8 +251,8 @@ while true; do
     CONTAINER_NAME="${BOT_NAME_LOWER}-agent"
     if is_interactive; then
         log "No messenger configured. Launching interactive CLI..."
-        docker compose up -d cloudflare-tunnel 2>/dev/null || true
-        docker compose run --rm -it --service-ports agent
+        docker compose -f deploy/docker-compose.yml up -d cloudflare-tunnel 2>/dev/null || true
+        docker compose -f deploy/docker-compose.yml run --rm -it --service-ports agent
         EXIT_CODE=$?
     else
         # Build if needed BEFORE launching (--build inside `up` can mask failures)
@@ -242,7 +261,7 @@ while true; do
         fi
 
         # Start all services detached so the launcher retains control
-        docker compose up -d
+        docker compose -f deploy/docker-compose.yml up -d
 
         # Background stability check: if boot survives STABLE_THRESHOLD, reset crash counter
         (
@@ -260,7 +279,7 @@ while true; do
         kill "$STABILITY_PID" 2>/dev/null || true
 
         # Stop compose so we get a clean restart on the next loop iteration
-        docker compose down --timeout 5 2>/dev/null || true
+        docker compose -f deploy/docker-compose.yml down --timeout 5 2>/dev/null || true
     fi
 
     touch data/.last_build

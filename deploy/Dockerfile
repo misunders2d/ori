@@ -27,7 +27,7 @@ COPY ./skills ./skills
 COPY ./interfaces ./interfaces
 COPY ./tests ./tests
 COPY ./run_bot.py ./
-COPY ./entrypoint.sh ./
+COPY ./deploy/entrypoint.sh ./
 
 # Sync dependencies (frozen ensures we respect the lockfile)
 RUN uv sync --frozen
@@ -51,7 +51,7 @@ RUN mkdir -p $UV_CACHE_DIR $NPM_CONFIG_CACHE \
 # --- 5. EXECUTION PROTOCOL ---
 # Add and configure entrypoint
 # This entrypoint handles host UID/GID remapping for perfect permission alignment.
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Starts as root, drops to agentuser via gosu in entrypoint.sh after UID/GID sync

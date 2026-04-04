@@ -16,11 +16,7 @@ Auth modes:
 import logging
 import os
 
-from dotenv import set_key
-
 logger = logging.getLogger(__name__)
-
-ENV_FILE_PATH = os.environ.get("DOTENV_PATH", "./data/.env")
 
 # ---------------------------------------------------------------------------
 # Default model assignments per component
@@ -172,19 +168,13 @@ def get_model(component: str, **kwargs):
 
 
 def set_model(component: str, model_str: str) -> None:
-    """Persist a model assignment to env var and .env file."""
+    """Persist a model assignment to runtime config."""
     if component not in VALID_COMPONENTS:
         raise ValueError(f"Invalid component: '{component}'. Valid: {sorted(VALID_COMPONENTS)}")
 
+    from app.app_utils.runtime_config import set_config
     env_key = f"MODEL_{component.upper()}"
-
-    os.makedirs(os.path.dirname(os.path.abspath(ENV_FILE_PATH)), exist_ok=True)
-    if not os.path.exists(ENV_FILE_PATH):
-        with open(ENV_FILE_PATH, "w") as f:
-            f.write("# Autonomous Ori Daemon Configuration\n")
-
-    set_key(ENV_FILE_PATH, env_key, model_str)
-    os.environ[env_key] = model_str
+    set_config(env_key, model_str)
     logger.info("Model for %s set to %s", component, model_str)
 
 

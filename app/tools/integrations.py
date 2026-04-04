@@ -73,9 +73,8 @@ def remove_integration(key_name: str, tool_context: ToolContext) -> dict:
     Returns:
         dict: Status of the operation.
     """
-    from dotenv import unset_key
-
-    from app.app_utils.config import AGENT_CONFIG_KEYS, ENV_FILE_PATH
+    from app.app_utils.config import AGENT_CONFIG_KEYS
+    from app.app_utils.runtime_config import unset_config
 
     key_name = key_name.strip().upper()
 
@@ -88,11 +87,7 @@ def remove_integration(key_name: str, tool_context: ToolContext) -> dict:
     if key_name == "GOOGLE_API_KEY":
         return {"status": "error", "message": "Cannot remove GOOGLE_API_KEY — it is required for the bot to function."}
 
-    try:
-        unset_key(ENV_FILE_PATH, key_name)
-    except Exception:
-        pass
-    os.environ.pop(key_name, None)
+    unset_config(key_name)
 
     return {
         "status": "success",

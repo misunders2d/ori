@@ -12,12 +12,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LAUNCHER_PATH="$SCRIPT_DIR/launcher.sh"
 
 # Derive service name from BOT_NAME in .env, default to "ori"
 _bot_name="ori"
-if [ -f "$SCRIPT_DIR/data/.env" ]; then
-    _env_name=$(grep -v '^#' "$SCRIPT_DIR/data/.env" | grep -E '^BOT_NAME=' | cut -d '=' -f2- | tr -d "\"'\\r" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' 2>/dev/null || true)
+if [ -f "$PROJECT_ROOT/data/.env" ]; then
+    _env_name=$(grep -v '^#' "$PROJECT_ROOT/data/.env" | grep -E '^BOT_NAME=' | cut -d '=' -f2- | tr -d "\"'\\r" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' 2>/dev/null || true)
     [ -n "$_env_name" ] && _bot_name="$_env_name"
 fi
 # Sanitize for systemd: lowercase, spaces/underscores to hyphens, strip non-alnum
@@ -47,7 +48,7 @@ Requires=docker.service
 Type=simple
 User=$(whoami)
 Group=$(id -gn)
-WorkingDirectory=$SCRIPT_DIR
+WorkingDirectory=$PROJECT_ROOT
 ExecStart=$LAUNCHER_PATH
 Restart=on-failure
 RestartSec=10
@@ -129,7 +130,7 @@ PLIST
 
 # --- Main ---
 echo ":: Installer ($SERVICE_NAME)"
-echo "   Project dir: $SCRIPT_DIR"
+echo "   Project dir: $PROJECT_ROOT"
 echo ""
 
 OS="$(uname -s)"

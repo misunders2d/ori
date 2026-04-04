@@ -1,7 +1,11 @@
-# Signal Based Architecture v4.0 (Lifecycle Edition)
+# Signal Based Architecture v5.0 (Clean Exit Edition)
+#
+# The agent NEVER calls os._exit(). Instead it writes a signal file and
+# the transport layer (Telegram/Slack poller) checks for it after each
+# message cycle and does a clean sys.exit(0). This eliminates the race
+# condition where os._exit() could interrupt file writes (e.g. .env).
 import os
 import sys
-import threading
 import logging
 import inspect
 from google.adk.tools.tool_context import ToolContext
@@ -12,19 +16,35 @@ EXIT_CODE_UPDATE = 100
 EXIT_CODE_ROLLBACK = 101
 SIGNAL_FILE = os.path.abspath('./data/.exit_signal')
 
-def _schedule_restart(exit_code: int):
-    def hard_exit():
-        logger.info(f'CORE: Finalizing process with exit code {exit_code}...')
-        # Write signal to file so the launcher knows what to do.
-        # Exit with 0 so Docker does not race-restart the container.
-        try:
-            with open(SIGNAL_FILE, 'w') as f:
-                f.write(str(exit_code))
-        except Exception as e:
-            logger.error(f'Failed to write exit signal: {e}')
-        os._exit(0)
-        
-    threading.Timer(1.0, hard_exit).start()
+
+def _write_exit_signal(exit_code: int):
+    """Write the exit signal file. The transport layer will read it and exit cleanly."""
+    logger.info(f'CORE: Exit signal {exit_code} written. Waiting for clean shutdown...')
+    try:
+        with open(SIGNAL_FILE, 'w') as f:
+            f.write(str(exit_code))
+    except Exception as e:
+        logger.error(f'Failed to write exit signal: {e}')
+
+
+def check_exit_signal() -> bool:
+    """Check if an exit signal is pending. Called by transport layers after each message cycle."""
+    return os.path.exists(SIGNAL_FILE)
+
+
+def execute_exit_signal():
+    """Read the signal file and perform a clean exit. Called by transport layers."""
+    if not os.path.exists(SIGNAL_FILE):
+        return
+    try:
+        with open(SIGNAL_FILE, 'r') as f:
+            code = f.read().strip()
+        logger.info(f'CORE: Executing clean shutdown (signal: {code})...')
+    except Exception:
+        pass
+    # Clean exit — sys.exit triggers finally blocks, flushes buffers, closes files
+    sys.exit(0)
+
 
 def _is_child_container() -> bool:
     """Detect if we're running as a spawned child (no .git, no launcher)."""
@@ -32,21 +52,21 @@ def _is_child_container() -> bool:
 
 
 def update_self(tool_context: ToolContext) -> dict:
-    """Pulls latest code, clears memory, and performs a HARD reboot of the container."""
+    """Signals the system to pull latest code and rebuild the container."""
     if _is_child_container():
         return {"status": "error", "message": "REBOOT BLOCKED: You are a spawned child agent. Use `export_dna` to send verified changes to your parent instead."}
     logger.info('========================================')
-    logger.info('🧬 [Ori System] PERIMETER LOCKDOWN: Dispatched Hard Exit (Code 100).')
+    logger.info('🧬 [Ori System] PERIMETER LOCKDOWN: Exit signal dispatched (Code 100).')
     logger.info('========================================')
-    _schedule_restart(EXIT_CODE_UPDATE)
-    return {"status": "success", "message": "Applying Lockdown. The agent is performing a hard reboot..."}
+    _write_exit_signal(EXIT_CODE_UPDATE)
+    return {"status": "success", "message": "Reboot signal dispatched. The system will shut down cleanly after this response is delivered."}
 
 def trigger_rollback(tool_context: ToolContext) -> dict:
-    """Reverts commits and performs a HARD reboot."""
+    """Signals the system to revert to the previous commit and rebuild."""
     if _is_child_container():
         return {"status": "error", "message": "ROLLBACK BLOCKED: You are a spawned child agent. Children don't commit, so there's nothing to roll back."}
-    _schedule_restart(EXIT_CODE_ROLLBACK)
-    return {"status": "success", "message": "Rolling back system. Hard rebooting..."}
+    _write_exit_signal(EXIT_CODE_ROLLBACK)
+    return {"status": "success", "message": "Rollback signal dispatched. The system will shut down cleanly after this response is delivered."}
 
 def session_refresh(mode: str, tool_context: ToolContext) -> dict:
     """Wipes conversation history."""
@@ -60,10 +80,10 @@ async def set_planner_mode(enabled: bool, tool_context: ToolContext) -> dict:
 async def execute_approved_action(token: str, totp_code: str = "", tool_context: ToolContext = None) -> dict:
     from app.core.pending_actions import get_and_delete_action
     import app.tools as tools_module
-    
+
     totp_secret = os.environ.get("ADMIN_TOTP_SECRET")
     require_2fa = os.environ.get("REQUIRE_2FA", "true").lower() == "true"
-    
+
     if totp_secret and require_2fa:
         from app.app_utils.totp import verify_totp
         if not totp_code or not verify_totp(totp_secret, str(totp_code)):

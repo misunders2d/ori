@@ -1,7 +1,9 @@
 services:
   agent:
     image: ${BOT_NAME_LOWER:-ori}-agent-image
-    build: .
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
     container_name: ${BOT_NAME_LOWER:-ori}-agent
     init: true
     stdin_open: true
@@ -25,17 +27,16 @@ services:
       # --- Mutable state (persisted across rebuilds) ---
       # NOTE: ADC credentials (gcloud auth) are copied into data/ by launcher.sh
       # before Docker starts — no direct gcloud mount needed.
-      - ./data:/code/data:z
-      - ./.git:/code/.git:z
+      - ../data:/code/data:z
+      - ../.git:/code/.git:z
       # --- Self-evolvable code (bot logic, not infra) ---
-      - ./app:/code/app:z
-      - ./skills:/code/skills:z
-      - ./interfaces:/code/interfaces:z
-      - ./tests:/code/tests:z
-      - ./run_bot.py:/code/run_bot.py:z
-      # NOTE: Dockerfile, docker-compose.yml, entrypoint.sh, launcher.sh
-      # are NOT mounted. They are baked into the image and outside the
-      # self-evolution scope. Only launcher.sh (host-side) can rebuild.
+      - ../app:/code/app:z
+      - ../skills:/code/skills:z
+      - ../interfaces:/code/interfaces:z
+      - ../tests:/code/tests:z
+      - ../run_bot.py:/code/run_bot.py:z
+      # NOTE: Deploy files (Dockerfile, docker-compose.yml, entrypoint.sh,
+      # launcher.sh) are NOT mounted — baked into image, outside evolution scope.
 
   cloudflare-tunnel:
     image: cloudflare/cloudflared:latest

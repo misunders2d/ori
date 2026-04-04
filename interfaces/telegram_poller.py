@@ -706,10 +706,16 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                     _active_tasks[session_id] = (task, message_content)
 
             except httpx.ReadTimeout:
-                continue
+                pass
             except asyncio.CancelledError:
                 logger.info("Telegram poller shutting down")
                 return
             except Exception:
                 logger.exception("Telegram poller error, retrying in 5s")
                 await asyncio.sleep(5)
+
+            # Check for exit signal after each poll cycle (clean shutdown)
+            from app.tools.system import check_exit_signal, execute_exit_signal
+            if check_exit_signal():
+                logger.info("Exit signal detected in Telegram poller. Shutting down cleanly...")
+                execute_exit_signal()

@@ -13,9 +13,8 @@ import logging
 import os
 import json
 
-from dotenv import set_key
-
-from app.app_utils.config import ALLOWED_CONFIG_KEYS, ENV_FILE_PATH
+from app.app_utils.config import ALLOWED_CONFIG_KEYS
+from app.app_utils.runtime_config import set_config
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +60,7 @@ def capture_key(session_id: str, value: str) -> dict:
     if key_name not in ALLOWED_CONFIG_KEYS:
         return {"status": "error", "message": f"Internal error: unknown key {key_name}."}
 
-    set_key(ENV_FILE_PATH, key_name, value)
-    os.environ[key_name] = value
+    set_config(key_name, value)
 
     # Restart Telegram poller if messaging config changed
     if key_name in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"):
