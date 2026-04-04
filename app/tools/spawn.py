@@ -52,32 +52,11 @@ async def _ensure_child_image() -> bool:
     return True
 
 
-async def _get_host_data_path() -> str:
-    """Resolve the host-side path of /code/data by inspecting our own container's mounts.
+def _get_host_data_path() -> str:
+    """Return the absolute path to the data/ directory.
 
-    The spawn tool runs inside a container but calls Docker on the host (via socket).
-    Volume paths in docker run must be HOST paths, not container paths.
+    Parent runs natively (not in Docker), so this is just the local path.
     """
-    hostname = os.environ.get("HOSTNAME", "")
-    if not hostname:
-        # Not in a container — use local path
-        return os.path.abspath("./data")
-
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "docker", "inspect", "--format",
-            '{{range .Mounts}}{{if eq .Destination "/code/data"}}{{.Source}}{{end}}{{end}}',
-            hostname,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await proc.communicate()
-        host_path = stdout.decode().strip()
-        if host_path:
-            return host_path
-    except Exception:
-        pass
-
-    # Fallback: assume standard layout
     return os.path.abspath("./data")
 
 
@@ -128,7 +107,7 @@ async def spawn_agent(
     os.makedirs(spawn_data, exist_ok=True)
 
     # Resolve the host-side path for Docker volume mounts
-    host_data_path = await _get_host_data_path()
+    host_data_path = _get_host_data_path()
     host_spawn_data = os.path.join(host_data_path, "spawns", safe_name)
 
     # Generate unique credentials for the child
@@ -182,10 +161,9 @@ async def spawn_agent(
     import json
     from datetime import datetime
 
-    # Use the parent's container name on the shared Docker network (always reachable).
-    # A2A_BASE_URL may be empty (tunnel not yet detected) or a public URL (unreachable from inside).
-    parent_hostname = os.environ.get("HOSTNAME", "")
-    parent_base_url = f"http://{parent_hostname}:8000" if parent_hostname else os.environ.get("A2A_BASE_URL", "")
+    # Parent runs natively on localhost. Children use --network host, so localhost works.
+    parent_port = os.environ.get("A2A_PORT", "8000")
+    parent_base_url = f"http://localhost:{parent_port}"
     friends_path = os.path.join(spawn_data, "friends.json")
     friends = {
         parent_bot_name.lower(): {
@@ -225,39 +203,25 @@ async def spawn_agent(
         if val:
             shared_env_flags.extend(["-e", f"{key}={val}"])
 
-    # Pick a random port for the child's A2A server
-    # Port 0 = Docker assigns a random available port
-    agent_port = "0"
-
-    # Detect parent's Docker network so child can resolve parent by container name
-    parent_network = None
-    try:
-        net_proc = await asyncio.create_subprocess_exec(
-            "docker", "inspect", "--format", "{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}",
-            os.environ.get("HOSTNAME", ""),
+    # Build docker run command.
+    # Children use --network host so they can reach the parent on localhost.
+    # Each child gets a unique A2A_PORT to avoid port conflicts.
+    # Find an available port starting from 8001
+    child_port = 8001
+    for _ in range(100):
+        check_port = await asyncio.create_subprocess_exec(
+            "docker", "ps", "--filter", f"publish={child_port}", "--format", "{{.ID}}",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
-        net_out, _ = await net_proc.communicate()
-        net_name = net_out.decode().strip()
-        if net_name and net_name != "bridge":
-            parent_network = net_name
-    except Exception:
-        pass
+        port_out, _ = await check_port.communicate()
+        if not port_out.strip():
+            break
+        child_port += 1
 
-    # Fallback: look for a compose network matching the project directory
-    if not parent_network:
-        project_dir = os.path.basename(PROJECT_ROOT)
-        parent_network = f"{project_dir}_default"
-
-    # Build docker run command
-    # The child gets:
-    #   1. Parent's env file for shared creds (GOOGLE_API_KEY, ANTHROPIC_API_KEY, etc.)
-    #   2. Its own data dir with its own .env (overrides BOT_NAME, A2A_API_KEY, etc.)
-    #   3. The child's .env takes precedence because DOTENV_PATH points to it
     run_cmd = [
         "docker", "run", "-d",
         "--name", container_name,
-        "--network", parent_network,
+        "--network", "host",
         "--label", f"ori.instance={prefix}",
         "--label", f"ori.parent={prefix}",
         "--label", f"ori.purpose={purpose}",
@@ -266,6 +230,7 @@ async def spawn_agent(
         "-e", f"BOT_NAME={bot_name}",
         "-e", f"A2A_API_KEY={child_a2a_key}",
         "-e", f"ADMIN_PASSCODE={child_passcode}",
+        "-e", f"A2A_PORT={child_port}",
         "-e", "GOOGLE_APPLICATION_CREDENTIALS=/code/data/.adc.json",
         # Shared credentials from parent
         *shared_env_flags,
@@ -273,9 +238,7 @@ async def spawn_agent(
         "-e", "TELEGRAM_BOT_TOKEN=",
         "-e", "SLACK_BOT_TOKEN=",
         "-v", f"{host_spawn_data}:/code/data:z",
-        "-v", "/var/run/docker.sock:/var/run/docker.sock",
-        "-p", f"{agent_port}:8000",
-        "--restart", "on-failure:3",  # Restart on crash only, max 3 retries (no launcher to manage children)
+        "--restart", "on-failure:3",
         _image_name(),
     ]
 
@@ -292,8 +255,8 @@ async def spawn_agent(
     container_id = stdout.decode().strip()[:12]
 
     # Wait for the child's A2A server to come up
-    # Use container name as hostname (works on shared Docker network)
-    child_url = f"http://{container_name}:8000"
+    # Child uses host networking, so it's on localhost:{child_port}
+    child_url = f"http://localhost:{child_port}"
     child_ready = False
     for attempt in range(15):
         await asyncio.sleep(2)
