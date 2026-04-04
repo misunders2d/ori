@@ -22,8 +22,34 @@ def _instance_prefix() -> str:
 
 
 def _image_name() -> str:
-    """Image name scoped to this instance."""
-    return f"{_instance_prefix()}-agent-image"
+    """Image name scoped to this instance (child image)."""
+    return f"{_instance_prefix()}-child-image"
+
+
+async def _ensure_child_image() -> bool:
+    """Build the child Docker image if it doesn't exist."""
+    image = _image_name()
+    check = await asyncio.create_subprocess_exec(
+        "docker", "images", "-q", image,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, _ = await check.communicate()
+    if stdout.strip():
+        return True  # Image exists
+
+    dockerfile = os.path.join(PROJECT_ROOT, "deploy", "Dockerfile.child")
+    if not os.path.exists(dockerfile):
+        return False
+
+    proc = await asyncio.create_subprocess_exec(
+        "docker", "build", "-t", image, "-f", dockerfile, PROJECT_ROOT,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        logger.error("Child image build failed: %s", stderr.decode()[-500:])
+        return False
+    return True
 
 
 async def _get_host_data_path() -> str:
@@ -76,6 +102,10 @@ async def spawn_agent(
     Returns:
         dict: Status, container ID, and A2A connection info.
     """
+    # Ensure child image exists
+    if not await _ensure_child_image():
+        return {"status": "error", "message": "Failed to build child Docker image. Check deploy/Dockerfile.child."}
+
     # Sanitize bot name
     safe_name = bot_name.strip().replace(" ", "-").lower()
     if not safe_name:

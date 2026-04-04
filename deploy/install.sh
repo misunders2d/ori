@@ -2,34 +2,40 @@
 # ============================================================================
 # Ori Installer — One-time auto-start setup
 # ============================================================================
-# Run this once on a fresh server. After that, Ori is self-sustaining.
-#
-# Supports:
-#   - Linux (systemd)
-#   - macOS (launchd)
-#   - WSL (treated as Linux)
+# Sets up the Python supervisor as a system service.
+# Docker is only needed for the Cloudflare tunnel and child agents.
 # ============================================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-LAUNCHER_PATH="$SCRIPT_DIR/launcher.sh"
 
-# Derive service name from BOT_NAME in .env, default to "ori"
+# Ensure venv and uv exist
+if [ ! -f "$PROJECT_ROOT/.venv/bin/python" ]; then
+    echo ":: Setting up Python virtual environment..."
+    cd "$PROJECT_ROOT"
+    if command -v uv &>/dev/null; then
+        uv sync
+    else
+        python3 -m venv .venv
+        .venv/bin/pip install -e .
+    fi
+fi
+
+PYTHON="$PROJECT_ROOT/.venv/bin/python"
+SUPERVISOR="$PROJECT_ROOT/deploy/ori-supervisor.py"
+
+# Derive service name from vault or default
 _bot_name="ori"
-if [ -f "$PROJECT_ROOT/data/.env" ]; then
+VAULT_FILE="$PROJECT_ROOT/data/vault/credentials.json"
+if [ -f "$VAULT_FILE" ]; then
+    _env_name=$(python3 -c "import json; print(json.load(open('$VAULT_FILE')).get('BOT_NAME',''))" 2>/dev/null || true)
+    [ -n "$_env_name" ] && _bot_name="$_env_name"
+elif [ -f "$PROJECT_ROOT/data/.env" ]; then
     _env_name=$(grep -v '^#' "$PROJECT_ROOT/data/.env" | grep -E '^BOT_NAME=' | cut -d '=' -f2- | tr -d "\"'\\r" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' 2>/dev/null || true)
     [ -n "$_env_name" ] && _bot_name="$_env_name"
 fi
-# Sanitize for systemd: lowercase, spaces/underscores to hyphens, strip non-alnum
 SERVICE_NAME="$(echo "$_bot_name" | tr '[:upper:]' '[:lower:]' | tr ' _' '-' | sed 's/[^a-z0-9-]//g')-agent"
-
-# Ensure launcher exists and is executable
-if [ ! -f "$LAUNCHER_PATH" ]; then
-    echo "Error: launcher.sh not found at $LAUNCHER_PATH"
-    exit 1
-fi
-chmod +x "$LAUNCHER_PATH"
 
 # --- Detect platform ---
 install_systemd() {
@@ -40,25 +46,20 @@ install_systemd() {
     sudo tee "$service_file" > /dev/null <<UNIT
 [Unit]
 Description=${SERVICE_NAME} daemon
-After=network-online.target docker.service
+After=network-online.target
 Wants=network-online.target
-Requires=docker.service
 
 [Service]
 Type=simple
 User=$(whoami)
 Group=$(id -gn)
 WorkingDirectory=$PROJECT_ROOT
-ExecStart=$LAUNCHER_PATH
+ExecStart=$PYTHON $SUPERVISOR
 Restart=on-failure
-RestartSec=10
+RestartSec=30
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=$SERVICE_NAME
-
-# Hardening
-NoNewPrivileges=false
-ProtectSystem=false
 
 [Install]
 WantedBy=multi-user.target
@@ -69,11 +70,10 @@ UNIT
     sudo systemctl start "$SERVICE_NAME"
 
     echo ""
-    echo ":: $SERVICE_NAME installed and running as systemd service."
+    echo ":: $SERVICE_NAME installed and running."
     echo "   Status:  sudo systemctl status $SERVICE_NAME"
     echo "   Logs:    sudo journalctl -u $SERVICE_NAME -f"
     echo "   Stop:    sudo systemctl stop $SERVICE_NAME"
-    echo "   Restart: sudo systemctl restart $SERVICE_NAME"
 }
 
 install_launchd() {
@@ -93,10 +93,11 @@ install_launchd() {
     <string>com.${SERVICE_NAME}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>$LAUNCHER_PATH</string>
+        <string>$PYTHON</string>
+        <string>$SUPERVISOR</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>$SCRIPT_DIR</string>
+    <string>$PROJECT_ROOT</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -105,7 +106,7 @@ install_launchd() {
         <false/>
     </dict>
     <key>ThrottleInterval</key>
-    <integer>10</integer>
+    <integer>30</integer>
     <key>StandardOutPath</key>
     <string>$log_dir/stdout.log</string>
     <key>StandardErrorPath</key>
@@ -122,15 +123,14 @@ PLIST
     launchctl load "$plist_file"
 
     echo ""
-    echo ":: $SERVICE_NAME installed and running as launchd service."
+    echo ":: $SERVICE_NAME installed and running."
     echo "   Logs:    tail -f $log_dir/stdout.log"
     echo "   Stop:    launchctl unload $plist_file"
-    echo "   Restart: launchctl unload $plist_file && launchctl load $plist_file"
 }
 
 # --- Main ---
-echo ":: Installer ($SERVICE_NAME)"
-echo "   Project dir: $PROJECT_ROOT"
+echo ":: Ori Installer ($SERVICE_NAME)"
+echo "   Project: $PROJECT_ROOT"
 echo ""
 
 OS="$(uname -s)"
@@ -139,7 +139,8 @@ case "$OS" in
         if command -v systemctl &>/dev/null; then
             install_systemd
         else
-            echo "Error: systemd not found. Please run launcher.sh manually or set up your init system."
+            echo "Error: systemd not found. Run the supervisor manually:"
+            echo "  $PYTHON $SUPERVISOR"
             exit 1
         fi
         ;;
@@ -148,7 +149,14 @@ case "$OS" in
         ;;
     *)
         echo "Unsupported platform: $OS"
-        echo "Please run ./launcher.sh manually or configure your system's service manager."
+        echo "Run the supervisor manually: $PYTHON $SUPERVISOR"
         exit 1
         ;;
 esac
+
+# Start the tunnel if Docker is available
+if command -v docker &>/dev/null; then
+    echo ""
+    echo ":: Starting Cloudflare tunnel..."
+    docker compose -f "$SCRIPT_DIR/docker-compose.yml" up -d 2>/dev/null || true
+fi

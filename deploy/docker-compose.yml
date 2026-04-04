@@ -1,46 +1,9 @@
+# Ori Deploy — Tunnel only
+# The parent agent runs natively (not in Docker). This compose file
+# manages only the Cloudflare tunnel and optionally the child image build.
 services:
-  agent:
-    image: ${BOT_NAME_LOWER:-ori}-agent-image
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
-    container_name: ${BOT_NAME_LOWER:-ori}-agent
-    init: true
-    stdin_open: true
-    tty: true
-    environment:
-      - DOTENV_PATH=/code/data/.env
-      - AGENT_UID=${AGENT_UID:-1000}
-      - AGENT_GID=${AGENT_GID:-1000}
-    ports:
-      - "${AGENT_PORT:-0}:8000"
-    restart: "no"  # Launcher owns ALL restart logic via docker wait + signal files
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/.well-known/agent-card.json"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    volumes:
-      # --- Docker socket (required for health stats, agent spawning) ---
-      - /var/run/docker.sock:/var/run/docker.sock
-      # --- Mutable state (persisted across rebuilds) ---
-      # NOTE: ADC credentials (gcloud auth) are copied into data/ by launcher.sh
-      # before Docker starts — no direct gcloud mount needed.
-      - ../data:/code/data:z
-      - ../.git:/code/.git:z
-      # --- Self-evolvable code (bot logic, not infra) ---
-      - ../app:/code/app:z
-      - ../skills:/code/skills:z
-      - ../interfaces:/code/interfaces:z
-      - ../tests:/code/tests:z
-      - ../run_bot.py:/code/run_bot.py:z
-      # NOTE: Deploy files (Dockerfile, docker-compose.yml, entrypoint.sh,
-      # launcher.sh) are NOT mounted — baked into image, outside evolution scope.
-
   cloudflare-tunnel:
     image: cloudflare/cloudflared:latest
-    command: tunnel --url http://${BOT_NAME_LOWER:-ori}-agent:8000 --metrics 0.0.0.0:2000
+    command: tunnel --url http://localhost:8000 --metrics 0.0.0.0:2000
     restart: unless-stopped
-    depends_on:
-      - agent
+    network_mode: host
