@@ -179,22 +179,32 @@ async def main():
     try:
         import uvicorn
         from app.a2a_server import a2a_app
-        
+
         # Determine if we are in CLI mode (no messengers configured)
         is_cli = not any(key in os.environ for key in ["TELEGRAM_BOT_TOKEN", "SLACK_BOT_TOKEN"])
-        
+
         # Only start Uvicorn if not in CLI mode to prevent TTY hijacking and config errors
         if a2a_app and not is_cli:
             port = int(os.environ.get("A2A_PORT", 8000))
             config = uvicorn.Config(
-                a2a_app, 
-                host="0.0.0.0", 
-                port=port, 
-                log_level="info", 
-                proxy_headers=True, 
+                a2a_app,
+                host="0.0.0.0",
+                port=port,
+                log_level="info",
+                proxy_headers=True,
                 forwarded_allow_ips="*"
             )
-            tasks.append(asyncio.create_task(uvicorn.Server(config).serve()))
+
+            async def _safe_uvicorn_serve(server):
+                """Wrap uvicorn.serve() to catch port-bind failures (SystemExit)."""
+                try:
+                    await server.serve()
+                except SystemExit:
+                    logger.warning("A2A server failed to bind port %d (in use?). Running without A2A.", port)
+                except Exception as e:
+                    logger.warning("A2A server error: %s. Running without A2A.", e)
+
+            tasks.append(asyncio.create_task(_safe_uvicorn_serve(uvicorn.Server(config))))
     except Exception as e:
         logger.warning(f"A2A Server failed to start: {e}")
 
