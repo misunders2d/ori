@@ -18,21 +18,23 @@ class EvolutionToolset(BaseToolset):
         from app.tools.evolution import (
             evolution_read_file,
             evolution_list_directory,
+            evolution_stage_change,
+            evolution_verify_sandbox,
         )
         from app.tools.research import check_installed_package
 
-        # Read-only tools available everywhere
+        # Development tools available everywhere (read, write, test)
         tools = [
             FunctionTool(func=evolution_read_file),
             FunctionTool(func=evolution_list_directory),
+            FunctionTool(func=evolution_stage_change),
+            FunctionTool(func=evolution_verify_sandbox),
             FunctionTool(func=check_installed_package),
         ]
 
         if not _is_child_container():
-            # Parent-only: mutation and git tools
+            # Parent-only: git ops and catalog (require .git repo)
             from app.tools.evolution import (
-                evolution_stage_change,
-                evolution_verify_sandbox,
                 evolution_commit_and_push,
                 evolution_git_pull,
                 evolution_git_reset,
@@ -45,8 +47,6 @@ class EvolutionToolset(BaseToolset):
                 evolution_import,
             )
             tools.extend([
-                FunctionTool(func=evolution_stage_change),
-                FunctionTool(func=evolution_verify_sandbox),
                 FunctionTool(func=evolution_commit_and_push),
                 FunctionTool(func=evolution_git_pull),
                 FunctionTool(func=evolution_git_reset),

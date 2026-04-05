@@ -180,6 +180,7 @@ async def spawn_agent(
     shared_env_keys = [
         "GOOGLE_API_KEY", "ANTHROPIC_API_KEY",
         "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION",
+        "GITHUB_TOKEN",
     ]
     shared_env_flags = []
     for key in shared_env_keys:
