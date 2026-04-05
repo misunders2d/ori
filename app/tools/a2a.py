@@ -653,61 +653,44 @@ def _read_file_preferring_sandbox(rel_path: str) -> Optional[str]:
 
 def export_dna(tool_context: ToolContext) -> Dict[str, Any]:
     """
-    Packages sanitized technical improvements (DNA) from this Ori instance.
-    If there are verified changes in the sandbox, those are exported instead
-    of the live code — this is how children pass verified evolutions back to the parent.
+    Packages only the staged sandbox changes as DNA for export.
+    Only files that were explicitly staged (real files, not symlinks) are included.
+    This keeps the payload minimal and avoids dumping the entire codebase.
     """
     try:
         sandbox_dir = os.path.abspath("./data/sandbox")
-        has_sandbox = os.path.isdir(sandbox_dir) and any(
-            os.path.isfile(os.path.join(r, f)) and not os.path.islink(os.path.join(r, f))
-            for r, _, files in os.walk(sandbox_dir) for f in files
-        )
+        if not os.path.isdir(sandbox_dir):
+            return {"status": "error", "message": "No sandbox directory found. Stage changes first."}
 
         dna_package = {
             "version": "1.0.0",
-            "source": "sandbox" if has_sandbox else "live",
-            "tools": {},
-            "skills": {},
+            "source": "sandbox",
+            "files": {},
         }
 
-        tools_dir = os.path.join(PROJECT_ROOT, "app", "tools")
-        if os.path.isdir(tools_dir):
-            for filename in os.listdir(tools_dir):
-                if filename.endswith(".py") and filename != "__init__.py":
-                    content = _read_file_preferring_sandbox(os.path.join("app", "tools", filename))
-                    if content:
-                        dna_package["tools"][filename] = content
+        # Walk the sandbox and collect only real files (not symlinks)
+        for root, _dirs, files in os.walk(sandbox_dir):
+            for filename in files:
+                full_path = os.path.join(root, filename)
+                if os.path.islink(full_path):
+                    continue
+                # Skip cache/temp artifacts
+                rel_path = os.path.relpath(full_path, sandbox_dir)
+                if any(part.startswith('.') or part == '__pycache__' for part in rel_path.split(os.sep)):
+                    continue
+                try:
+                    with open(full_path, "r") as f:
+                        dna_package["files"][rel_path] = f.read()
+                except (UnicodeDecodeError, PermissionError):
+                    continue  # skip binary/unreadable files
 
-        # Also pick up any NEW tool files only in sandbox (not in live)
-        sandbox_tools = os.path.join(sandbox_dir, "app", "tools")
-        if os.path.isdir(sandbox_tools):
-            for filename in os.listdir(sandbox_tools):
-                if filename.endswith(".py") and filename != "__init__.py" and filename not in dna_package["tools"]:
-                    fpath = os.path.join(sandbox_tools, filename)
-                    if os.path.isfile(fpath) and not os.path.islink(fpath):
-                        with open(fpath, "r") as f:
-                            dna_package["tools"][filename] = f.read()
+        if not dna_package["files"]:
+            return {"status": "error", "message": "No staged changes found in sandbox."}
 
-        skills_dir = os.path.join(PROJECT_ROOT, "skills")
-        if os.path.isdir(skills_dir):
-            for skill_name in os.listdir(skills_dir):
-                skill_path = os.path.join(skills_dir, skill_name)
-                if os.path.isdir(skill_path):
-                    content = _read_file_preferring_sandbox(os.path.join("skills", skill_name, "SKILL.md"))
-                    if content:
-                        dna_package["skills"][skill_name] = content
-
-        # Include staged pyproject.toml if it exists (for dependency changes)
-        staged_pyproject = _read_file_preferring_sandbox("pyproject.toml")
-        live_pyproject = os.path.join(PROJECT_ROOT, "pyproject.toml")
-        if os.path.isfile(os.path.join(sandbox_dir, "pyproject.toml")):
-            dna_package["pyproject_toml"] = staged_pyproject
-
-        source_label = "sandbox (verified changes)" if has_sandbox else "live codebase"
+        file_list = ", ".join(sorted(dna_package["files"].keys()))
         return {
             "status": "success",
-            "message": f"Technical DNA successfully sequenced from {source_label}.",
+            "message": f"DNA exported: {len(dna_package['files'])} file(s) — {file_list}",
             "dna_package": dna_package,
         }
     except Exception as e:
@@ -718,26 +701,46 @@ def export_dna(tool_context: ToolContext) -> Dict[str, Any]:
 def import_dna(dna_package: Dict[str, Any], tool_context: ToolContext) -> Dict[str, Any]:
     """
     Receives a technical DNA package from a friend and stages it in the sandbox for verification.
+    Supports both the new format (files: {rel_path: content}) and legacy format (tools/skills dicts).
     """
     try:
         sandbox_dir = os.path.abspath("./data/sandbox")
         os.makedirs(sandbox_dir, exist_ok=True)
 
-        for filename, content in dna_package.get("tools", {}).items():
-            tool_path = os.path.join(sandbox_dir, "app", "tools", filename)
-            os.makedirs(os.path.dirname(tool_path), exist_ok=True)
-            with open(tool_path, "w") as f:
+        imported = []
+
+        # New format: flat file map with relative paths
+        for rel_path, content in dna_package.get("files", {}).items():
+            file_path = os.path.join(sandbox_dir, rel_path)
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            with open(file_path, "w") as f:
                 f.write(content)
+            imported.append(rel_path)
+
+        # Legacy format: tools/skills dicts
+        for filename, content in dna_package.get("tools", {}).items():
+            rel_path = os.path.join("app", "tools", filename)
+            file_path = os.path.join(sandbox_dir, rel_path)
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            with open(file_path, "w") as f:
+                f.write(content)
+            imported.append(rel_path)
 
         for skill_name, content in dna_package.get("skills", {}).items():
-            skill_path = os.path.join(sandbox_dir, "skills", skill_name, "SKILL.md")
-            os.makedirs(os.path.dirname(skill_path), exist_ok=True)
-            with open(skill_path, "w") as f:
+            rel_path = os.path.join("skills", skill_name, "SKILL.md")
+            file_path = os.path.join(sandbox_dir, rel_path)
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            with open(file_path, "w") as f:
                 f.write(content)
+            imported.append(rel_path)
 
+        if not imported:
+            return {"status": "error", "message": "DNA package was empty — nothing to import."}
+
+        file_list = ", ".join(sorted(imported))
         return {
             "status": "success",
-            "message": "Inbound DNA staged in sandbox. Run 'evolution_verify_sandbox' to test compatibility.",
+            "message": f"Imported {len(imported)} file(s) into sandbox: {file_list}. Run 'evolution_verify_sandbox' to test compatibility.",
         }
     except Exception as e:
         logger.error("DNA import failed: %s", e)
