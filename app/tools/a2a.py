@@ -708,12 +708,49 @@ def export_dna(tool_context: ToolContext) -> Dict[str, Any]:
         return {"status": "error", "message": f"DNA sequencing failed: {e}"}
 
 
-def import_dna(dna_url: str = "", dna_package: Dict[str, Any] = None, tool_context: ToolContext = None) -> Dict[str, Any]:
-    """
-    Imports DNA into the sandbox for verification.
 
-    Preferred: pass dna_url (from export_dna) to fetch the archive out-of-band.
-    Legacy fallback: pass dna_package dict with files/tools/skills keys.
+def _import_dna_legacy(dna_package: dict) -> list:
+    """Internal helper: import DNA from a legacy inline dict (files/tools/skills keys)."""
+    sandbox_dir = os.path.abspath("./data/sandbox")
+    os.makedirs(sandbox_dir, exist_ok=True)
+    imported = []
+
+    for rel_path, file_content in dna_package.get("files", {}).items():
+        file_path = os.path.join(sandbox_dir, rel_path)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        with open(file_path, "w") as f:
+            f.write(file_content)
+        imported.append(rel_path)
+
+    for filename, file_content in dna_package.get("tools", {}).items():
+        rel_path = os.path.join("app", "tools", filename)
+        file_path = os.path.join(sandbox_dir, rel_path)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        with open(file_path, "w") as f:
+            f.write(file_content)
+        imported.append(rel_path)
+
+    for skill_name, file_content in dna_package.get("skills", {}).items():
+        rel_path = os.path.join("skills", skill_name, "SKILL.md")
+        file_path = os.path.join(sandbox_dir, rel_path)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        with open(file_path, "w") as f:
+            f.write(file_content)
+        imported.append(rel_path)
+
+    return imported
+
+
+def import_dna(dna_url: str, tool_context: ToolContext = None) -> Dict[str, Any]:
+    """
+    Imports DNA into the sandbox for verification by fetching a .tar.gz archive from the given URL.
+    The URL is provided by export_dna on the source agent.
+
+    Args:
+        dna_url (str): The download URL for the DNA archive (e.g. 'https://agent.example.com/dna/dna_abc123.tar.gz').
+
+    Returns:
+        dict: Status and list of imported files.
     """
     import tarfile
     import io
@@ -723,65 +760,37 @@ def import_dna(dna_url: str = "", dna_package: Dict[str, Any] = None, tool_conte
         os.makedirs(sandbox_dir, exist_ok=True)
         imported = []
 
-        if dna_url:
-            # Out-of-band: fetch archive via HTTP, extract directly
-            api_key = None
-            try:
-                with open(FRIENDS_FILE, "r") as f:
-                    friends = json.load(f)
-                for name, info in friends.items():
-                    endpoint = info.get("endpoint_url", "")
-                    if endpoint and dna_url.startswith(endpoint.rstrip("/")):
-                        api_key = _load_friend_key(name)
-                        break
-            except (FileNotFoundError, json.JSONDecodeError):
-                pass
+        # Look up API key for the source agent
+        api_key = None
+        try:
+            with open(FRIENDS_FILE, "r") as f:
+                friends = json.load(f)
+            for name, info in friends.items():
+                endpoint = info.get("endpoint_url", "")
+                if endpoint and dna_url.startswith(endpoint.rstrip("/")):
+                    api_key = _load_friend_key(name)
+                    break
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
 
-            headers = {}
-            if api_key:
-                headers["x-a2a-api-key"] = api_key
+        headers = {}
+        if api_key:
+            headers["x-a2a-api-key"] = api_key
 
-            resp = httpx.get(dna_url, headers=headers, timeout=60, follow_redirects=True)
-            if resp.status_code != 200:
-                return {"status": "error", "message": f"Failed to fetch DNA archive: HTTP {resp.status_code}"}
+        resp = httpx.get(dna_url, headers=headers, timeout=60, follow_redirects=True)
+        if resp.status_code != 200:
+            return {"status": "error", "message": f"Failed to fetch DNA archive: HTTP {resp.status_code}"}
 
-            with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz") as tar:
-                # Security: reject paths that escape the sandbox
-                for member in tar.getmembers():
-                    if member.name.startswith("/") or ".." in member.name:
-                        return {"status": "error", "message": f"Unsafe path in archive: {member.name}"}
-                    imported.append(member.name)
-                tar.extractall(path=sandbox_dir)
-
-        elif dna_package:
-            # Legacy: inline file contents
-            for rel_path, content in dna_package.get("files", {}).items():
-                file_path = os.path.join(sandbox_dir, rel_path)
-                os.makedirs(os.path.dirname(file_path), exist_ok=True)
-                with open(file_path, "w") as f:
-                    f.write(content)
-                imported.append(rel_path)
-
-            for filename, content in dna_package.get("tools", {}).items():
-                rel_path = os.path.join("app", "tools", filename)
-                file_path = os.path.join(sandbox_dir, rel_path)
-                os.makedirs(os.path.dirname(file_path), exist_ok=True)
-                with open(file_path, "w") as f:
-                    f.write(content)
-                imported.append(rel_path)
-
-            for skill_name, content in dna_package.get("skills", {}).items():
-                rel_path = os.path.join("skills", skill_name, "SKILL.md")
-                file_path = os.path.join(sandbox_dir, rel_path)
-                os.makedirs(os.path.dirname(file_path), exist_ok=True)
-                with open(file_path, "w") as f:
-                    f.write(content)
-                imported.append(rel_path)
-        else:
-            return {"status": "error", "message": "Provide either dna_url or dna_package."}
+        with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz") as tar:
+            # Security: reject paths that escape the sandbox
+            for member in tar.getmembers():
+                if member.name.startswith("/") or ".." in member.name:
+                    return {"status": "error", "message": f"Unsafe path in archive: {member.name}"}
+                imported.append(member.name)
+            tar.extractall(path=sandbox_dir)
 
         if not imported:
-            return {"status": "error", "message": "DNA package was empty — nothing to import."}
+            return {"status": "error", "message": "DNA archive was empty."}
 
         file_list = ", ".join(sorted(imported))
         return {
