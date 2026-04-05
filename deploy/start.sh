@@ -125,7 +125,9 @@ if is_service_installed; then
     # Ensure Cloudflare tunnel is running with the correct port
     if command -v docker &>/dev/null; then
         _a2a_port=$("$PYTHON" -c "import json; print(json.load(open('$VAULT_FILE')).get('A2A_PORT','8000'))" 2>/dev/null || echo "8000")
-        A2A_PORT="$_a2a_port" docker compose -f "$SCRIPT_DIR/docker-compose.yml" up -d 2>/dev/null || true
+        _bot_name=$("$PYTHON" -c "import json; print(json.load(open('$VAULT_FILE')).get('BOT_NAME','ori'))" 2>/dev/null || echo "ori")
+        _metrics_port=$("$PYTHON" -c "import json; v=json.load(open('$VAULT_FILE')); print(v.get('TUNNEL_METRICS_PORT', int(v.get('A2A_PORT','8000'))+1000))" 2>/dev/null || echo "2000")
+        A2A_PORT="$_a2a_port" BOT_NAME="$_bot_name" TUNNEL_METRICS_PORT="$_metrics_port" docker compose -f "$SCRIPT_DIR/docker-compose.yml" up -d 2>/dev/null || true
     fi
 
     echo "   Logs:  deploy/logs.sh"
