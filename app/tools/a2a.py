@@ -1,3 +1,4 @@
+import re
 import asyncio
 import os
 import json
@@ -653,12 +654,61 @@ def _read_file_preferring_sandbox(rel_path: str) -> Optional[str]:
 
 DNA_EXPORTS_DIR = os.path.abspath("./data/dna_exports")
 
+# Patterns that indicate hardcoded secrets in source files
+_SECRET_PATTERNS = [
+    re.compile(r'xoxb-[0-9A-Za-z\-]+'),          # Slack bot tokens
+    re.compile(r'xoxp-[0-9A-Za-z\-]+'),          # Slack user tokens
+    re.compile(r'sk-[A-Za-z0-9]{20,}'),           # OpenAI / Anthropic keys
+    re.compile(r'AIza[0-9A-Za-z\-_]{35}'),        # Google API keys
+    re.compile(r'ghp_[A-Za-z0-9]{36,}'),          # GitHub PATs
+    re.compile(r'ghs_[A-Za-z0-9]{36,}'),          # GitHub App tokens
+    re.compile(r'glpat-[A-Za-z0-9\-_]{20,}'),     # GitLab PATs
+    re.compile(r'AKIA[0-9A-Z]{16}'),              # AWS access keys
+    re.compile(r'-----BEGIN (RSA |EC )?PRIVATE KEY'), # Private keys
+]
+
+
+def _scan_for_secrets(file_path: str, rel_path: str) -> list:
+    """Scan a file for hardcoded secret patterns. Returns list of (line_num, pattern_hint) tuples."""
+    findings = []
+    try:
+        with open(file_path, "r") as f:
+            for line_num, line in enumerate(f, 1):
+                for pattern in _SECRET_PATTERNS:
+                    if pattern.search(line):
+                        findings.append((line_num, pattern.pattern[:30]))
+                        break  # one finding per line is enough
+    except (UnicodeDecodeError, PermissionError):
+        pass
+
+    # Also check against live env var values (same as a2a_privacy_guardrail)
+    try:
+        with open(file_path, "r") as f:
+            text = f.read()
+        from app.app_utils.config import ALLOWED_CONFIG_KEYS
+        _SAFE_KEYS = {"BOT_NAME", "GITHUB_REPO", "APP_NAME"}
+        for key in ALLOWED_CONFIG_KEYS:
+            if key in _SAFE_KEYS:
+                continue
+            val = os.environ.get(key, "")
+            if val and len(val) > 6 and val in text:
+                # Find the line number
+                for line_num, line in enumerate(text.splitlines(), 1):
+                    if val in line:
+                        findings.append((line_num, f"env:{key}"))
+                        break
+    except Exception:
+        pass
+
+    return findings
+
 
 def export_dna(tool_context: ToolContext) -> Dict[str, Any]:
     """
     Packages staged sandbox changes into a .tar.gz archive and returns a download URL.
     The archive is served via the A2A HTTP server — file contents never pass through the LLM.
     Only real files (not symlinks) from the sandbox are included.
+    Files are scanned for hardcoded secrets before archiving — export is blocked if any are found.
     """
     import tarfile
 
@@ -681,6 +731,23 @@ def export_dna(tool_context: ToolContext) -> Dict[str, Any]:
 
         if not staged_files:
             return {"status": "error", "message": "No staged changes found in sandbox."}
+
+        # Pre-archive secret scan — block export if secrets are found
+        all_findings = []
+        for full_path, rel_path in staged_files:
+            findings = _scan_for_secrets(full_path, rel_path)
+            for line_num, hint in findings:
+                all_findings.append(f"  {rel_path}:{line_num} ({hint})")
+
+        if all_findings:
+            report = "\n".join(all_findings)
+            return {
+                "status": "error",
+                "message": (
+                    f"DNA export BLOCKED: {len(all_findings)} hardcoded secret(s) detected. "
+                    f"Replace with vault.get() calls, then retry.\n{report}"
+                ),
+            }
 
         # Create archive
         os.makedirs(DNA_EXPORTS_DIR, exist_ok=True)
