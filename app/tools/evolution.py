@@ -17,6 +17,20 @@ def _is_child_container() -> bool:
     return not os.path.isdir(os.path.join(PROJECT_ROOT, ".git"))
 
 
+def _find_uv() -> str:
+    """Find the uv binary, checking common install locations."""
+    for candidate in [
+        shutil.which("uv"),
+        os.path.expanduser("~/.local/bin/uv"),
+        os.path.expanduser("~/.cargo/bin/uv"),
+        "/usr/local/bin/uv",
+        "/usr/bin/uv",
+    ]:
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    return "uv"  # fallback to PATH
+
+
 def _safe_resolve_path(file_path: str, base_dir: str) -> str | None:
     """Resolve file_path relative to base_dir and ensure it stays within it."""
     base = os.path.abspath(base_dir)
@@ -217,7 +231,7 @@ def evolution_verify_sandbox(
 
             # Step 1: Resolve dependencies (generates uv.lock)
             result = subprocess.run(
-                ["uv", "lock"],
+                [_find_uv(), "lock"],
                 cwd=sandbox_dir,
                 capture_output=True, text=True, timeout=120,
             )
@@ -232,7 +246,7 @@ def evolution_verify_sandbox(
 
             # Step 2: Verify installation works (catches missing system libs, build failures)
             sync_result = subprocess.run(
-                ["uv", "sync", "--frozen"],
+                [_find_uv(), "sync", "--frozen"],
                 cwd=sandbox_dir,
                 capture_output=True, text=True, timeout=300,
             )
@@ -614,7 +628,7 @@ def evolution_commit_and_push(
                     pass
 
         lock_result = subprocess.run(
-            ["uv", "lock"], cwd=sandbox_dir,
+            [_find_uv(), "lock"], cwd=sandbox_dir,
             capture_output=True, text=True, timeout=120,
         )
         if lock_result.returncode != 0:
@@ -622,7 +636,7 @@ def evolution_commit_and_push(
             return {"status": "error", "message": f"Auto-dependency resolution failed (uv lock). Cannot commit.\n{combined[-500:]}"}
 
         sync_result = subprocess.run(
-            ["uv", "sync", "--frozen"], cwd=sandbox_dir,
+            [_find_uv(), "sync", "--frozen"], cwd=sandbox_dir,
             capture_output=True, text=True, timeout=300,
         )
         if sync_result.returncode != 0:
