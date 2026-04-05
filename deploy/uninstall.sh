@@ -86,7 +86,7 @@ case "$OS" in
                 _remove_systemd_service "$ORIGINAL_SERVICE_NAME"
             fi
             # Scan for any other service files referencing this project directory
-            for f in "$HOME/.config/systemd/user/"*-agent.service 2>/dev/null; do
+            for f in "$HOME/.config/systemd/user/"*-agent.service; do
                 [ -f "$f" ] || continue
                 if grep -q "$PROJECT_ROOT" "$f" 2>/dev/null; then
                     svc_name="$(basename "$f" .service)"
