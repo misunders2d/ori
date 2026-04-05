@@ -142,8 +142,10 @@ esac
 
 # Start tunnel if Docker is available
 if command -v docker &>/dev/null; then
-    echo ":: Starting Cloudflare tunnel..."
-    docker compose -f "$SCRIPT_DIR/docker-compose.yml" up -d 2>/dev/null || true
+    # Read A2A_PORT from vault so the tunnel points to the right port
+    _a2a_port=$("$PYTHON" -c "import json; print(json.load(open('$VAULT_FILE')).get('A2A_PORT','8000'))" 2>/dev/null || echo "8000")
+    echo ":: Starting Cloudflare tunnel (port $_a2a_port)..."
+    A2A_PORT="$_a2a_port" docker compose -f "$SCRIPT_DIR/docker-compose.yml" up -d 2>/dev/null || true
 else
     echo ""
     echo "   Note: Docker not found. The Cloudflare tunnel (for A2A internet access)"
