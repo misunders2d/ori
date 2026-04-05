@@ -229,6 +229,36 @@ def rebuild_child_image():
         logger.warning("Child image rebuild skipped: %s", e)
 
 
+
+def refresh_tunnel():
+    """Restart the Cloudflare tunnel container with correct ports from vault."""
+    if not shutil.which("docker"):
+        return
+    bot_name = (get("BOT_NAME") or "ori").strip().replace(" ", "-").lower()
+    tunnel_name = "".join(c for c in bot_name if c.isalnum() or c == "-")
+    a2a_port = get("A2A_PORT") or "8000"
+    metrics_port = get("TUNNEL_METRICS_PORT") or str(int(a2a_port) + 1000)
+    compose_file = os.path.join(PROJECT_ROOT, "deploy", "docker-compose.yml")
+    if not os.path.exists(compose_file):
+        return
+    env = {
+        **os.environ,
+        "A2A_PORT": a2a_port,
+        "BOT_NAME": tunnel_name,
+        "TUNNEL_METRICS_PORT": metrics_port,
+    }
+    # Export so run_bot.py can detect the tunnel on the correct port
+    os.environ["TUNNEL_METRICS_PORT"] = metrics_port
+    try:
+        subprocess.run(
+            ["docker", "compose", "-f", compose_file, "up", "-d", "--force-recreate"],
+            env=env, capture_output=True, text=True, timeout=60,
+        )
+        logger.info("Tunnel refreshed (port %s, metrics %s)", a2a_port, metrics_port)
+    except Exception as e:
+        logger.warning("Tunnel refresh failed: %s", e)
+
+
 def apply_rollback():
     """After exit 101: revert one commit, sync deps."""
     logger.info("Applying rollback (HEAD~1)...")
@@ -363,6 +393,7 @@ def main():
             # Evolution: pull/update code, sync deps, restart
             logger.info("Evolution signal (100). Applying changes...")
             apply_evolution()
+            refresh_tunnel()
             crash_count = 0
             continue
 
@@ -370,6 +401,7 @@ def main():
             # Rollback: revert one commit, sync deps, restart
             logger.info("Rollback signal (101). Reverting...")
             apply_rollback()
+            refresh_tunnel()
             crash_count = 0
             continue
 
