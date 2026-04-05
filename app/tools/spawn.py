@@ -128,7 +128,7 @@ async def spawn_agent(
     merged_admin_ids = ",".join(admin_ids)
 
     # Child gets half the parent's RPM by default to protect shared quota
-    parent_rpm = int(os.environ.get("AGENT_RPM", "30"))
+    parent_rpm = int(os.environ.get("AGENT_RPM", "2000"))
     child_rpm = max(10, parent_rpm // 2)
 
     # Build model override env flags

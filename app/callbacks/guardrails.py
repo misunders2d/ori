@@ -19,14 +19,14 @@ logger = logging.getLogger(__name__)
 # Per-container request throttle (token bucket)
 # ---------------------------------------------------------------------------
 # Prevents any single container from exhausting the shared API quota.
-# Configurable via AGENT_RPM env var (requests per minute). Default: 30.
+# Configurable via AGENT_RPM env var (requests per minute). Default: 2000.
 # ---------------------------------------------------------------------------
 
 class _RequestThrottle:
     """Simple token-bucket rate limiter."""
 
     def __init__(self):
-        self._rpm = int(os.environ.get("AGENT_RPM", "30"))
+        self._rpm = int(os.environ.get("AGENT_RPM", "2000"))
         self._tokens = float(self._rpm)
         self._last_refill = time.monotonic()
 
