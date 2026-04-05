@@ -122,11 +122,26 @@ def deps_changed() -> bool:
     return True
 
 
+def _find_uv() -> str:
+    """Find the uv binary, checking common install locations."""
+    for candidate in [
+        shutil.which("uv"),
+        os.path.expanduser("~/.local/bin/uv"),
+        os.path.expanduser("~/.cargo/bin/uv"),
+        "/usr/local/bin/uv",
+        "/usr/bin/uv",
+    ]:
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    return "uv"  # fallback to PATH
+
+
 def sync_deps():
     """Run uv sync to install dependencies."""
-    logger.info("Syncing dependencies (uv sync)...")
+    uv = _find_uv()
+    logger.info("Syncing dependencies (%s sync)...", uv)
     result = subprocess.run(
-        ["uv", "sync"], cwd=PROJECT_ROOT,
+        [uv, "sync"], cwd=PROJECT_ROOT,
         capture_output=True, text=True, timeout=300,
     )
     if result.returncode != 0:
