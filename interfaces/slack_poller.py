@@ -13,7 +13,7 @@ from app.core.agent_executor import (
     extract_agent_response,
     process_message_for_context,
 )
-from app.core.transport import register_adapter
+from app.core.transport import register_adapter, get_adapter, parse_notify_from_session_id
 from app.core.transport_slack import SlackAdapter
 from app.core.whitelist import (
     is_allowed,
@@ -211,18 +211,19 @@ async def poll_slack(get_runner_fn, process_init_fn):
                 admin_ids_str = os.environ.get("ADMIN_USER_IDS", "") or os.environ.get("ALLOWED_USER_IDS", "")
                 admin_ids = [u.strip() for u in admin_ids_str.split(",") if u.strip()]
                 for admin_id in admin_ids:
-                    # Notify via whatever adapter owns the admin ID
-                    if admin_id.startswith("sl_"):
-                        admin_channel = admin_id.replace("sl_", "")
-                        await adapter.send_message(
-                            admin_channel,
-                            f"*Unauthorized Slack Access Attempt*\n"
-                            f"*User:* {display_name} ({user_id})\n"
-                            f"*Channel:* {channel_type} ({session_id})\n"
-                            f"*Message:* {text}\n\n"
-                            f"To allow, reply with: `Whitelist {user_id}`\n"
-                            f"To block, reply with: `Blacklist {user_id}`",
-                        )
+                    notify_info = parse_notify_from_session_id(admin_id)
+                    if notify_info:
+                        target_adapter = get_adapter(notify_info["type"])
+                        if target_adapter:
+                            await target_adapter.send_message(
+                                notify_info["chat_id"],
+                                f"*Unauthorized Slack Access Attempt*\n"
+                                f"*User:* {display_name} ({user_id})\n"
+                                f"*Channel:* {channel_type} ({session_id})\n"
+                                f"*Message:* {text}\n\n"
+                                f"To allow, reply with: `Whitelist {user_id}`\n"
+                                f"To block, reply with: `Blacklist {user_id}`",
+                            )
             return
 
         # --- WHITELIST / BLACKLIST SHORTCUTS ---

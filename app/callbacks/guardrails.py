@@ -282,7 +282,7 @@ def admin_only_guardrail(callback_context: CallbackContext) -> types.Content | N
         return types.Content(
             parts=[
                 types.Part(
-                    text=f"Guardrail Intervention: Only Admin/Master users can invoke this agent. Your user_id (`{user_id}`) is unauthorized."
+                    text=f"Guardrail Intervention: Only Admin/Master users can invoke this agent. Your user_id (`{user_id}`) is unauthorized.\n\nTo add this ID to the admin list, run `update_self` from an already authorized platform and modify `ADMIN_USER_IDS`."
                 )
             ]
         )
