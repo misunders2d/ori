@@ -278,7 +278,19 @@ async def main():
         logger.warning("No messaging interfaces active. Bot is effectively silent.")
 
     try:
-        await asyncio.gather(*tasks)
+        # Wait for tasks, cancelling all when an exit signal is detected.
+        # One-shot tasks (broadcast, warnings) complete early without a signal.
+        # When a transport (telegram/slack/cli) exits due to an exit signal,
+        # we cancel remaining tasks (e.g. uvicorn) so the process can exit.
+        from app.tools.system import check_exit_signal
+        remaining = set(tasks)
+        while remaining:
+            done, remaining = await asyncio.wait(remaining, return_when=asyncio.FIRST_COMPLETED)
+            if check_exit_signal():
+                for t in remaining:
+                    t.cancel()
+                await asyncio.gather(*remaining, return_exceptions=True)
+                break
     except asyncio.CancelledError:
         logger.info("Daemon shutting down.")
     finally:
