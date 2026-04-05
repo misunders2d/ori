@@ -33,6 +33,12 @@ SAFE_NAME="$(echo "$_bot_name" | tr '[:upper:]' '[:lower:]' | tr ' _' '-' | sed 
 SERVICE_NAME="${SAFE_NAME}-agent"
 INSTANCE_PREFIX="$SAFE_NAME"
 
+# Also read the originally-installed service name (may differ if BOT_NAME changed)
+ORIGINAL_SERVICE_NAME=""
+if [ -f "$PROJECT_ROOT/data/.service_name" ]; then
+    ORIGINAL_SERVICE_NAME=$(cat "$PROJECT_ROOT/data/.service_name" 2>/dev/null || true)
+fi
+
 echo ""
 echo "============================================"
 echo "  Uninstalling: $_bot_name"
@@ -57,37 +63,56 @@ if ! $SKIP_CONFIRM; then
 fi
 
 # ---- 1. Stop and remove system service ----
+# Collect all candidate service names (current + original + any that reference this directory)
+_remove_systemd_service() {
+    local svc="$1"
+    [ -z "$svc" ] && return
+    systemctl --user stop "$svc" 2>/dev/null || true
+    systemctl --user disable "$svc" 2>/dev/null || true
+    local svc_file="$HOME/.config/systemd/user/${svc}.service"
+    if [ -f "$svc_file" ]; then
+        rm "$svc_file"
+        echo ":: Removed systemd service: $svc"
+    fi
+}
+
 OS="$(uname -s)"
 case "$OS" in
     Linux)
         if command -v systemctl &>/dev/null; then
-            if systemctl --user is-active "$SERVICE_NAME" &>/dev/null; then
-                systemctl --user stop "$SERVICE_NAME"
-                echo ":: Stopped $SERVICE_NAME service."
+            _remove_systemd_service "$SERVICE_NAME"
+            # Also remove the originally-installed service if name differs
+            if [ -n "$ORIGINAL_SERVICE_NAME" ] && [ "$ORIGINAL_SERVICE_NAME" != "$SERVICE_NAME" ]; then
+                _remove_systemd_service "$ORIGINAL_SERVICE_NAME"
             fi
-            if systemctl --user is-enabled "$SERVICE_NAME" &>/dev/null; then
-                systemctl --user disable "$SERVICE_NAME"
-            fi
-            SERVICE_FILE="$HOME/.config/systemd/user/${SERVICE_NAME}.service"
-            if [ -f "$SERVICE_FILE" ]; then
-                rm "$SERVICE_FILE"
-                systemctl --user daemon-reload
-                echo ":: Removed systemd unit file."
-            fi
+            # Scan for any other service files referencing this project directory
+            for f in "$HOME/.config/systemd/user/"*-agent.service 2>/dev/null; do
+                [ -f "$f" ] || continue
+                if grep -q "$PROJECT_ROOT" "$f" 2>/dev/null; then
+                    svc_name="$(basename "$f" .service)"
+                    if [ "$svc_name" != "$SERVICE_NAME" ] && [ "$svc_name" != "$ORIGINAL_SERVICE_NAME" ]; then
+                        _remove_systemd_service "$svc_name"
+                    fi
+                fi
+            done
+            systemctl --user daemon-reload
         fi
         ;;
     Darwin)
-        PLIST="$HOME/Library/LaunchAgents/com.${SERVICE_NAME}.plist"
-        if [ -f "$PLIST" ]; then
-            launchctl unload "$PLIST" 2>/dev/null || true
-            rm "$PLIST"
-            echo ":: Removed launchd plist."
-        fi
-        LOG_DIR="$HOME/Library/Logs/${SERVICE_NAME}"
-        if [ -d "$LOG_DIR" ]; then
-            rm -rf "$LOG_DIR"
-            echo ":: Removed launchd log directory."
-        fi
+        # Remove current + original plist
+        for _svc in "$SERVICE_NAME" "$ORIGINAL_SERVICE_NAME"; do
+            [ -z "$_svc" ] && continue
+            PLIST="$HOME/Library/LaunchAgents/com.${_svc}.plist"
+            if [ -f "$PLIST" ]; then
+                launchctl unload "$PLIST" 2>/dev/null || true
+                rm "$PLIST"
+                echo ":: Removed launchd plist: $_svc"
+            fi
+            LOG_DIR="$HOME/Library/Logs/${_svc}"
+            if [ -d "$LOG_DIR" ]; then
+                rm -rf "$LOG_DIR"
+            fi
+        done
         ;;
 esac
 

@@ -52,6 +52,9 @@ UNIT
     systemctl --user enable "$SERVICE_NAME"
     systemctl --user start "$SERVICE_NAME"
 
+    # Record the service name so uninstall can find it even if BOT_NAME changes
+    echo "$SERVICE_NAME" > "$PROJECT_ROOT/data/.service_name"
+
     # Enable lingering so service starts on boot even without login
     loginctl enable-linger "$(whoami)" 2>/dev/null || true
 
@@ -105,6 +108,9 @@ install_launchd() {
 PLIST
 
     launchctl load "$plist_file"
+
+    # Record the service name so uninstall can find it even if BOT_NAME changes
+    echo "$SERVICE_NAME" > "$PROJECT_ROOT/data/.service_name"
 
     echo ""
     echo ":: $SERVICE_NAME installed and running."
