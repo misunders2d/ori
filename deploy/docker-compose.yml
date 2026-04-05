@@ -4,6 +4,7 @@
 services:
   cloudflare-tunnel:
     image: cloudflare/cloudflared:latest
-    command: tunnel --url http://localhost:${A2A_PORT:-8000} --metrics 0.0.0.0:2000
+    container_name: ${BOT_NAME:-ori}-tunnel
+    command: tunnel --url http://localhost:${A2A_PORT:-8000} --metrics 0.0.0.0:${TUNNEL_METRICS_PORT:-2000}
     restart: unless-stopped
     network_mode: host
