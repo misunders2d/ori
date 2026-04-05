@@ -141,7 +141,6 @@ async def detect_tunnel_url(timeout=30) -> str | None:
     a2a_port = int(os.environ.get("A2A_PORT", "8000"))
     default_metrics = str(a2a_port + 1000)
     metrics_port = os.environ.get("TUNNEL_METRICS_PORT", default_metrics)
-    
     metrics_url = f"http://localhost:{metrics_port}/metrics"
     logger.info("Polling tunnel metrics at %s...", metrics_url)
     
