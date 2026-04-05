@@ -30,6 +30,7 @@ MODEL_DEFAULTS: dict[str, str] = {
     "session_summarizer": "google/gemini-3.1-flash-lite-preview",
     "channel_summarizer": "google/gemini-3.1-flash-lite-preview",
     "embedding":          "google/gemini-embedding-001",
+    "youtube_summarizer": "google/gemini-3-flash-preview",
 }
 
 VALID_COMPONENTS = frozenset(MODEL_DEFAULTS.keys())

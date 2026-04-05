@@ -20,6 +20,7 @@ from app.tools.a2a import get_agent_identity
 from app.tools.google_search import google_search_agent_tool
 from app.tools.web import web_fetch
 from app.tools.whitelist import whitelist_chat, blacklist_chat
+from app.tools.youtube import youtube_summary
 
 root_agent = Agent(
     name="CoordinatorAgent",
@@ -67,6 +68,7 @@ root_agent = Agent(
         # Individual tools
         *([google_search_agent_tool] if google_search_agent_tool else []),
         web_fetch,
+        youtube_summary,
         get_agent_identity,
         whitelist_chat,
         blacklist_chat,

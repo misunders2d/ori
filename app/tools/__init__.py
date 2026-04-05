@@ -7,6 +7,7 @@ from .preferences import save_user_preferences, get_user_preferences
 from .research import check_installed_package
 from .web import web_fetch
 from .whitelist import whitelist_chat, blacklist_chat
+from .youtube import youtube_summary
 
 __all__ = [
     "configure_integration", "remove_integration", "list_integrations",
@@ -21,4 +22,5 @@ __all__ = [
     "save_user_preferences", "get_user_preferences",
     "check_installed_package", "web_fetch",
     "whitelist_chat", "blacklist_chat",
+    "youtube_summary",
 ]
