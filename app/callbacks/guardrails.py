@@ -176,16 +176,14 @@ def prompt_injection_guardrail(
     if not _throttle.acquire():
         logger.warning("Rate throttle hit (%d RPM). Waiting for token refill for %s.", _throttle.rpm, callback_context.agent_name)
         # Back off with increasing delays, up to ~60s total
-        for delay in (2, 5, 10, 15, 30):
+        for delay in (5, 10, 15, 30):
             time.sleep(delay)
             if _throttle.acquire():
                 break
         else:
-            return LlmResponse(
-                content=types.Content(
-                    parts=[types.Part(text="I'm being rate-limited to protect shared API quota. Please wait a moment and try again.")]
-                )
-            )
+            # Raise so agent_executor's retry loop handles it (with longer backoff)
+            # instead of returning text that gets surfaced to the caller
+            raise Exception("429 internal rate throttle exhausted")
 
     use_planner = callback_context.state.to_dict().get("use_planner", False)
     if not use_planner and getattr(llm_request, "config", None):
