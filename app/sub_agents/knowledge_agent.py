@@ -12,6 +12,7 @@ from app.tools.a2a import (
     list_friends,
     call_friend,
     call_agent,
+    cancel_friend_task,
     export_dna,
     import_dna,
     broadcast_address_update,
@@ -40,9 +41,12 @@ knowledge_agent = Agent(
         "3. **Friends list**: Use `list_friends` to see all registered friends and their capabilities. "
         "Check the `auth_status` field to see if a key is already configured for a friend.\n"
         "4. **Call a friend**: Use `call_friend(friend_name, message)` to send a message to a registered friend "
-        "via the A2A JSON-RPC protocol.\n"
+        "via the A2A JSON-RPC protocol. Messages are sent asynchronously — the system polls for completion "
+        "automatically. The response includes a `task_id` that can be used with `cancel_friend_task`.\n"
         "5. **Call any agent**: Use `call_agent(url, message)` to send a one-off message to ANY A2A-compliant agent "
-        "by URL, without registering them as a friend.\n\n"
+        "by URL, without registering them as a friend.\n"
+        "6. **Cancel a task**: Use `cancel_friend_task(friend_name, task_id)` to cancel a long-running task "
+        "on a friend agent. Use the `task_id` returned by `call_friend`.\n\n"
 
         "SECURE KEY CAPTURE MECHANICS:\n"
         "When you invoke `update_friend_key`, the system enters a 'Secure Capture' state for that user session. "
@@ -53,15 +57,15 @@ knowledge_agent = Agent(
         "DO NOT assume the new message is the key. Use `list_friends` to verify if the key is now configured.\n\n"
 
         "DYNAMIC ADDRESS UPDATES (Ori-Net Extensions):\n"
-        "6. **Broadcasting**: Use `broadcast_address_update` when Ori's public URL changes (e.g., tunnel restart). "
+        "7. **Broadcasting**: Use `broadcast_address_update` when Ori's public URL changes (e.g., tunnel restart). "
         "This notifies all friends of your new address.\n"
-        "7. **Receiving Updates**: If you receive a message from a friend starting with 'PROTOCOL NOTICE' containing "
+        "8. **Receiving Updates**: If you receive a message from a friend starting with 'PROTOCOL NOTICE' containing "
         "a 'NEW_BASE_URL', you MUST automatically call `update_friend_address(friend_name, new_url)` to update your registry.\n\n"
 
         "DNA EXCHANGE (Ori-specific, not A2A standard):\n"
-        "8. Use `export_dna` to package sanitized technical improvements (tools and skills) for sharing.\n"
-        "9. Use `import_dna` to receive a DNA package from a friend and stage it in the sandbox.\n"
-        "10. Once DNA is staged, inform the `DeveloperAgent` to run verification before final integration.\n\n"
+        "9. Use `export_dna` to package sanitized technical improvements (tools and skills) for sharing.\n"
+        "10. Use `import_dna` to receive a DNA package from a friend and stage it in the sandbox.\n"
+        "11. Once DNA is staged, inform the `DeveloperAgent` to run verification before final integration.\n\n"
 
         "TASK STATE AWARENESS: When calling a remote agent, check the `task_state` in the response. "
         "If it is `INPUT_REQUIRED`, the remote agent needs more information — follow up accordingly. "
@@ -89,6 +93,7 @@ knowledge_agent = Agent(
         list_friends,
         call_friend,
         call_agent,
+        cancel_friend_task,
         export_dna,
         import_dna,
         broadcast_address_update,

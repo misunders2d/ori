@@ -1,3 +1,4 @@
+import asyncio
 import os
 import json
 import logging
@@ -220,39 +221,113 @@ def list_friends(tool_context: ToolContext) -> Dict[str, Any]:
 # A2A Communication (JSON-RPC client)
 # ---------------------------------------------------------------------------
 
+_TERMINAL_STATES = {"completed", "failed", "canceled", "rejected", "input_required"}
+
+
+def _a2a_headers(api_key: Optional[str] = None) -> Dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["x-a2a-api-key"] = api_key
+    return headers
+
+
 async def _send_a2a_message(
     endpoint_url: str,
     message_text: str,
     task_id: Optional[str] = None,
     api_key: Optional[str] = None,
+    blocking: bool = True,
 ) -> Dict[str, Any]:
-    """Send a JSON-RPC message/send request to a remote A2A agent."""
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["x-a2a-api-key"] = api_key
+    """Send a JSON-RPC message/send request to a remote A2A agent.
 
+    When blocking=False, includes configuration.blocking=false so the server
+    returns immediately with a task in 'working' state.
+    """
     message_obj: Dict[str, Any] = {
         "messageId": str(uuid.uuid4()),
         "role": "user",
         "parts": [{"text": message_text}],
     }
-    
+
     if task_id:
         message_obj["taskId"] = task_id
+
+    params: Dict[str, Any] = {"message": message_obj}
+    if not blocking:
+        params["configuration"] = {"blocking": False}
 
     payload = {
         "jsonrpc": "2.0",
         "id": str(uuid.uuid4()),
         "method": "message/send",
-        "params": {
-            "message": message_obj,
-        },
+        "params": params,
     }
 
-    async with httpx.AsyncClient(timeout=300.0) as client:
-        resp = await client.post(endpoint_url, json=payload, headers=headers)
+    timeout = 30.0 if not blocking else 300.0
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(endpoint_url, json=payload, headers=_a2a_headers(api_key))
         resp.raise_for_status()
         return resp.json()
+
+
+async def _get_task(
+    endpoint_url: str,
+    task_id: str,
+    api_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Fetch task state via JSON-RPC tasks/get."""
+    payload = {
+        "jsonrpc": "2.0",
+        "id": str(uuid.uuid4()),
+        "method": "tasks/get",
+        "params": {"id": task_id},
+    }
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(endpoint_url, json=payload, headers=_a2a_headers(api_key))
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def _cancel_task_rpc(
+    endpoint_url: str,
+    task_id: str,
+    api_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Cancel a running task via JSON-RPC tasks/cancel."""
+    payload = {
+        "jsonrpc": "2.0",
+        "id": str(uuid.uuid4()),
+        "method": "tasks/cancel",
+        "params": {"id": task_id},
+    }
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(endpoint_url, json=payload, headers=_a2a_headers(api_key))
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def _poll_until_terminal(
+    endpoint_url: str,
+    task_id: str,
+    api_key: Optional[str] = None,
+    max_polls: int = 60,
+    initial_interval: float = 2.0,
+    max_interval: float = 15.0,
+) -> Dict[str, Any]:
+    """Poll tasks/get until the task reaches a terminal state."""
+    interval = initial_interval
+    for _ in range(max_polls):
+        await asyncio.sleep(interval)
+        result = await _get_task(endpoint_url, task_id, api_key)
+        if "error" in result:
+            return result
+        task = result.get("result", {})
+        state = (task.get("status", {}).get("state") or "").lower()
+        if state in _TERMINAL_STATES:
+            return result
+        interval = min(interval * 1.5, max_interval)
+    # Timed out — return last known state
+    return result
 
 
 def _to_string(val: Any) -> str:
@@ -308,6 +383,8 @@ def _extract_response_text(task: Dict[str, Any]) -> str:
 async def call_friend(friend_name: str, message: str, tool_context: ToolContext = None) -> Dict[str, Any]:
     """
     Sends a message to a registered friend via the A2A protocol and returns their response.
+    Uses async task polling — the message is sent non-blocking, then the task is polled
+    until the friend finishes processing. Falls back to blocking for non-ADK agents.
 
     Args:
         friend_name: The local nickname of the friend to contact.
@@ -327,18 +404,33 @@ async def call_friend(friend_name: str, message: str, tool_context: ToolContext 
         endpoint_url = friend.get("endpoint_url", friend.get("base_url"))
         api_key = _load_friend_key(friend_name)
 
-        result = await _send_a2a_message(endpoint_url, message, api_key=api_key)
+        # Try non-blocking send first
+        try:
+            result = await _send_a2a_message(endpoint_url, message, api_key=api_key, blocking=False)
+        except Exception:
+            # Fallback to blocking for agents that don't support async
+            result = await _send_a2a_message(endpoint_url, message, api_key=api_key, blocking=True)
 
         if "error" in result:
             return {"status": "error", "message": f"Remote agent error: {result['error']}"}
 
         task = result.get("result", {})
+        task_id = task.get("id")
+        state = (task.get("status", {}).get("state") or "").lower()
+
+        # If not terminal yet, poll until done
+        if task_id and state not in _TERMINAL_STATES:
+            logger.info("A2A task %s in state '%s', polling for completion...", task_id, state)
+            poll_result = await _poll_until_terminal(endpoint_url, task_id, api_key)
+            if "error" not in poll_result:
+                task = poll_result.get("result", task)
+
         response_text = _extract_response_text(task)
 
         return {
             "status": "success",
             "friend": friend_name,
-            "task_id": task.get("id"),
+            "task_id": task_id,
             "response": response_text,
         }
     except Exception as e:
@@ -376,20 +468,65 @@ async def call_agent(url: str, message: str, tool_context: ToolContext, api_key:
                     api_key = _load_friend_key(nick)
                     break
 
-        result = await _send_a2a_message(endpoint_url, message, api_key=api_key)
+        try:
+            result = await _send_a2a_message(endpoint_url, message, api_key=api_key, blocking=False)
+        except Exception:
+            result = await _send_a2a_message(endpoint_url, message, api_key=api_key, blocking=True)
 
         if "error" in result:
             return {"status": "error", "message": f"Remote agent error: {result['error']}"}
 
         task = result.get("result", {})
+        task_id = task.get("id")
+        state = (task.get("status", {}).get("state") or "").lower()
+
+        if task_id and state not in _TERMINAL_STATES:
+            poll_result = await _poll_until_terminal(endpoint_url, task_id, api_key)
+            if "error" not in poll_result:
+                task = poll_result.get("result", task)
+
         return {
             "status": "success",
             "agent_name": card.get("name", "unknown"),
+            "task_id": task_id,
             "response": _extract_response_text(task),
         }
     except Exception as e:
         logger.error("A2A one-off call to %s failed: %s", url, e)
         return {"status": "error", "message": f"A2A call failed: {e}"}
+
+
+async def cancel_friend_task(friend_name: str, task_id: str, tool_context: ToolContext) -> Dict[str, Any]:
+    """
+    Cancels a running task on a friend agent. Use this when a task is taking
+    too long or is no longer needed.
+
+    Args:
+        friend_name: The local nickname of the friend running the task.
+        task_id: The task ID to cancel (returned by call_friend).
+    """
+    try:
+        if not os.path.exists(FRIENDS_FILE):
+            return {"status": "error", "message": "No friends registered."}
+        with open(FRIENDS_FILE, "r") as f:
+            friends = json.load(f)
+        if friend_name not in friends:
+            return {"status": "error", "message": f"Friend '{friend_name}' not found."}
+
+        friend = friends[friend_name]
+        endpoint_url = friend.get("endpoint_url", friend.get("base_url"))
+        api_key = _load_friend_key(friend_name)
+
+        result = await _cancel_task_rpc(endpoint_url, task_id, api_key)
+        if "error" in result:
+            return {"status": "error", "message": f"Cancel failed: {result['error']}"}
+
+        task = result.get("result", {})
+        state = (task.get("status", {}).get("state") or "unknown").lower()
+        return {"status": "success", "message": f"Task {task_id} is now '{state}'."}
+    except Exception as e:
+        logger.error("Failed to cancel task %s on %s: %s", task_id, friend_name, e)
+        return {"status": "error", "message": f"Cancel failed: {e}"}
 
 
 # ---------------------------------------------------------------------------
