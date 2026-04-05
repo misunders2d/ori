@@ -262,6 +262,19 @@ def main():
     ensure_secrets()
     copy_adc()
 
+    # Auto-assign A2A_PORT if not configured — find a free port starting from 8000
+    if not get("A2A_PORT"):
+        import socket
+        port = 8000
+        for _ in range(100):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                if s.connect_ex(("127.0.0.1", port)) != 0:
+                    break
+            port += 1
+        vault_set("A2A_PORT", str(port))
+        os.environ["A2A_PORT"] = str(port)
+        logger.info("Auto-assigned A2A_PORT=%d", port)
+
     # Signal to run_bot.py that vault is already loaded (skip double-load)
     os.environ["_VAULT_LOADED"] = "1"
 
