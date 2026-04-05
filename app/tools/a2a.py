@@ -651,88 +651,134 @@ def _read_file_preferring_sandbox(rel_path: str) -> Optional[str]:
     return None
 
 
+DNA_EXPORTS_DIR = os.path.abspath("./data/dna_exports")
+
+
 def export_dna(tool_context: ToolContext) -> Dict[str, Any]:
     """
-    Packages only the staged sandbox changes as DNA for export.
-    Only files that were explicitly staged (real files, not symlinks) are included.
-    This keeps the payload minimal and avoids dumping the entire codebase.
+    Packages staged sandbox changes into a .tar.gz archive and returns a download URL.
+    The archive is served via the A2A HTTP server — file contents never pass through the LLM.
+    Only real files (not symlinks) from the sandbox are included.
     """
+    import tarfile
+
     try:
         sandbox_dir = os.path.abspath("./data/sandbox")
         if not os.path.isdir(sandbox_dir):
             return {"status": "error", "message": "No sandbox directory found. Stage changes first."}
 
-        dna_package = {
-            "version": "1.0.0",
-            "source": "sandbox",
-            "files": {},
-        }
-
-        # Walk the sandbox and collect only real files (not symlinks)
+        # Collect staged files (real, not symlinks, not cache)
+        staged_files = []
         for root, _dirs, files in os.walk(sandbox_dir):
             for filename in files:
                 full_path = os.path.join(root, filename)
                 if os.path.islink(full_path):
                     continue
-                # Skip cache/temp artifacts
                 rel_path = os.path.relpath(full_path, sandbox_dir)
                 if any(part.startswith('.') or part == '__pycache__' for part in rel_path.split(os.sep)):
                     continue
-                try:
-                    with open(full_path, "r") as f:
-                        dna_package["files"][rel_path] = f.read()
-                except (UnicodeDecodeError, PermissionError):
-                    continue  # skip binary/unreadable files
+                staged_files.append((full_path, rel_path))
 
-        if not dna_package["files"]:
+        if not staged_files:
             return {"status": "error", "message": "No staged changes found in sandbox."}
 
-        file_list = ", ".join(sorted(dna_package["files"].keys()))
+        # Create archive
+        os.makedirs(DNA_EXPORTS_DIR, exist_ok=True)
+        archive_id = uuid.uuid4().hex[:10]
+        archive_name = f"dna_{archive_id}.tar.gz"
+        archive_path = os.path.join(DNA_EXPORTS_DIR, archive_name)
+
+        with tarfile.open(archive_path, "w:gz") as tar:
+            for full_path, rel_path in staged_files:
+                tar.add(full_path, arcname=rel_path)
+
+        # Build download URL
+        base_url = os.environ.get("A2A_BASE_URL", "http://localhost:8000")
+        download_url = f"{base_url}/dna/{archive_name}"
+
+        file_list = ", ".join(sorted(p for _, p in staged_files))
+        archive_kb = os.path.getsize(archive_path) / 1024
         return {
             "status": "success",
-            "message": f"DNA exported: {len(dna_package['files'])} file(s) — {file_list}",
-            "dna_package": dna_package,
+            "message": f"DNA archived: {len(staged_files)} file(s) ({archive_kb:.1f} KB) — {file_list}",
+            "dna_url": download_url,
         }
     except Exception as e:
         logger.error("DNA export failed: %s", e)
         return {"status": "error", "message": f"DNA sequencing failed: {e}"}
 
 
-def import_dna(dna_package: Dict[str, Any], tool_context: ToolContext) -> Dict[str, Any]:
+def import_dna(dna_url: str = "", dna_package: Dict[str, Any] = None, tool_context: ToolContext = None) -> Dict[str, Any]:
     """
-    Receives a technical DNA package from a friend and stages it in the sandbox for verification.
-    Supports both the new format (files: {rel_path: content}) and legacy format (tools/skills dicts).
+    Imports DNA into the sandbox for verification.
+
+    Preferred: pass dna_url (from export_dna) to fetch the archive out-of-band.
+    Legacy fallback: pass dna_package dict with files/tools/skills keys.
     """
+    import tarfile
+    import io
+
     try:
         sandbox_dir = os.path.abspath("./data/sandbox")
         os.makedirs(sandbox_dir, exist_ok=True)
-
         imported = []
 
-        # New format: flat file map with relative paths
-        for rel_path, content in dna_package.get("files", {}).items():
-            file_path = os.path.join(sandbox_dir, rel_path)
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, "w") as f:
-                f.write(content)
-            imported.append(rel_path)
+        if dna_url:
+            # Out-of-band: fetch archive via HTTP, extract directly
+            api_key = None
+            try:
+                with open(FRIENDS_FILE, "r") as f:
+                    friends = json.load(f)
+                for name, info in friends.items():
+                    endpoint = info.get("endpoint_url", "")
+                    if endpoint and dna_url.startswith(endpoint.rstrip("/")):
+                        api_key = _load_friend_key(name)
+                        break
+            except (FileNotFoundError, json.JSONDecodeError):
+                pass
 
-        # Legacy format: tools/skills dicts
-        for filename, content in dna_package.get("tools", {}).items():
-            rel_path = os.path.join("app", "tools", filename)
-            file_path = os.path.join(sandbox_dir, rel_path)
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, "w") as f:
-                f.write(content)
-            imported.append(rel_path)
+            headers = {}
+            if api_key:
+                headers["x-a2a-api-key"] = api_key
 
-        for skill_name, content in dna_package.get("skills", {}).items():
-            rel_path = os.path.join("skills", skill_name, "SKILL.md")
-            file_path = os.path.join(sandbox_dir, rel_path)
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, "w") as f:
-                f.write(content)
-            imported.append(rel_path)
+            resp = httpx.get(dna_url, headers=headers, timeout=60, follow_redirects=True)
+            if resp.status_code != 200:
+                return {"status": "error", "message": f"Failed to fetch DNA archive: HTTP {resp.status_code}"}
+
+            with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz") as tar:
+                # Security: reject paths that escape the sandbox
+                for member in tar.getmembers():
+                    if member.name.startswith("/") or ".." in member.name:
+                        return {"status": "error", "message": f"Unsafe path in archive: {member.name}"}
+                    imported.append(member.name)
+                tar.extractall(path=sandbox_dir)
+
+        elif dna_package:
+            # Legacy: inline file contents
+            for rel_path, content in dna_package.get("files", {}).items():
+                file_path = os.path.join(sandbox_dir, rel_path)
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                with open(file_path, "w") as f:
+                    f.write(content)
+                imported.append(rel_path)
+
+            for filename, content in dna_package.get("tools", {}).items():
+                rel_path = os.path.join("app", "tools", filename)
+                file_path = os.path.join(sandbox_dir, rel_path)
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                with open(file_path, "w") as f:
+                    f.write(content)
+                imported.append(rel_path)
+
+            for skill_name, content in dna_package.get("skills", {}).items():
+                rel_path = os.path.join("skills", skill_name, "SKILL.md")
+                file_path = os.path.join(sandbox_dir, rel_path)
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                with open(file_path, "w") as f:
+                    f.write(content)
+                imported.append(rel_path)
+        else:
+            return {"status": "error", "message": "Provide either dna_url or dna_package."}
 
         if not imported:
             return {"status": "error", "message": "DNA package was empty — nothing to import."}

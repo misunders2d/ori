@@ -3,7 +3,7 @@ import json
 import logging
 
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, FileResponse, Response
 
 from google.adk.a2a.utils.agent_to_a2a import to_a2a
 from app.sub_agents.coordinator_agent import root_agent
@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 
 # Discovery paths that remain publicly accessible (no auth required)
 _PUBLIC_PATHS = {"/.well-known/agent.json", "/.well-known/agent-card.json"}
+
+DNA_EXPORTS_DIR = os.path.abspath("data/dna_exports")
 
 
 class A2AApiKeyMiddleware(BaseHTTPMiddleware):
@@ -35,6 +37,17 @@ class A2AApiKeyMiddleware(BaseHTTPMiddleware):
                 },
                 status_code=401,
             )
+        # Serve DNA archives directly (authenticated, out-of-band transfer)
+        if request.url.path.startswith("/dna/"):
+            filename = request.url.path[len("/dna/"):]
+            # Security: reject path traversal
+            if "/" in filename or ".." in filename or not filename.endswith(".tar.gz"):
+                return Response("Not found", status_code=404)
+            archive_path = os.path.join(DNA_EXPORTS_DIR, filename)
+            if os.path.isfile(archive_path):
+                return FileResponse(archive_path, media_type="application/gzip", filename=filename)
+            return Response("Not found", status_code=404)
+
         return await call_next(request)
 
 
