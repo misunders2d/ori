@@ -1,0 +1,9 @@
+# Ori Deploy — Tunnel only
+# The parent agent runs natively (not in Docker). This compose file
+# manages only the Cloudflare tunnel and optionally the child image build.
+services:
+  cloudflare-tunnel:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --url http://localhost:${A2A_PORT:-8000} --metrics 0.0.0.0:2000
+    restart: unless-stopped
+    network_mode: host

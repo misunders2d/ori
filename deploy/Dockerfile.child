@@ -1,0 +1,37 @@
+FROM mirror.gcr.io/library/python:3.11-slim
+
+LABEL project="ori" role="child"
+
+# Minimal system deps for child agents (no git, no Docker CLI, no Node.js)
+RUN apt-get update && apt-get install -y --no-install-recommends curl sqlite3 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir uv==0.5.10
+
+WORKDIR /code
+
+# Dependencies
+COPY ./pyproject.toml ./README.md ./uv.lock* ./
+
+# Code
+COPY ./app ./app
+COPY ./skills ./skills
+COPY ./interfaces ./interfaces
+COPY ./deploy/vault.py ./deploy/vault.py
+COPY ./run_bot.py ./
+
+RUN uv sync --frozen
+
+ENV PYTHONUNBUFFERED=1
+
+# Non-root user
+RUN groupadd -r agentgroup && useradd -m -r -g agentgroup agentuser \
+    && mkdir -p /code/data \
+    && chown -R agentuser:agentgroup /code
+
+USER agentuser
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -sf http://localhost:8000/.well-known/agent-card.json || exit 1
+
+CMD ["/code/.venv/bin/python", "run_bot.py"]

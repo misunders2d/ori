@@ -1,0 +1,20 @@
+# Secrets & Vault
+.env
+data/vault/
+
+# Databases & Runtime State
+data/.env
+data/*
+data/.*
+!data/agent.json
+!data/agent-card.json
+
+# Temporary Folders
+.pytest_cache/
+__pycache__/
+*.pyc
+
+# Environment
+.venv/
+node_modules/
+.DS_Store
