@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 ACTIVE_TASKS = {}
 
 
-async def run_scheduled_task(task_prompt: str, notify: dict, is_actionable: bool = False, task_id: str = None):
+async def run_scheduled_task(task_prompt: str, notify: dict, task_id: str = None):
     """
     Executed by APScheduler when a scheduled task fires.
     Runs the agent with the task prompt and delivers the response
@@ -32,12 +32,7 @@ async def run_scheduled_task(task_prompt: str, notify: dict, is_actionable: bool
 
     runner = get_runner()
 
-    # Build the response — either from the agent or just the raw prompt for simple reminders
-    if not is_actionable:
-        response = f"Reminder: {task_prompt}"
-        ACTIVE_TASKS[task_id]["status"] = "Completed"
-        ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
-    elif runner:
+    if runner:
         user_id = "system_scheduler"
         session_id = "scheduled_task"
         query = (

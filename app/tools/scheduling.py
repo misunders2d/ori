@@ -53,18 +53,21 @@ def _get_session_notify_info(tool_context: ToolContext) -> dict:
 
 
 def schedule_one_off_task(
-    task_prompt: str, run_at_iso_datetime: str, timezone: str, tool_context: ToolContext, is_actionable: bool = False
+    task_prompt: str, run_at_iso_datetime: str, timezone: str, tool_context: ToolContext
 ) -> dict:
     """Schedules the agent to execute a specific task once at a specific date and time.
+
+    When the scheduled time arrives, the agent will fully process the task_prompt —
+    generating content, running tools, or fetching data as needed — and deliver the
+    result to the user. Write the prompt as an instruction for your future self.
 
     Use this tool when the user asks to "remind me", "check this tomorrow", or "do X at Y time".
     IMPORTANT: Always call get_current_time first to know the current time before scheduling.
 
     Args:
-        task_prompt (str): The exact instruction the agent should execute when the time comes (e.g. 'Remind the user to check Keepa for ASIN B08X').
+        task_prompt (str): The instruction the agent should execute when the time comes (e.g. 'Tell the user a funny joke to start their morning' or 'Check Keepa for ASIN B08X and report the price').
         run_at_iso_datetime (str): The date and time to run the task, in ISO 8601 format (e.g., '2026-03-25T10:00:00'). This is in the timezone specified.
         timezone (str): IANA timezone for the scheduled time (e.g., 'Europe/Kyiv', 'UTC').
-        is_actionable (bool): Set True if the task requires the agent to run background scripts or check APIs. Set False if it's purely a textual notification reminder.
 
     Returns:
         dict: Status of the scheduling operation.
@@ -97,7 +100,7 @@ def schedule_one_off_task(
         run_scheduled_task,
         "date",
         run_date=run_date,
-        kwargs={"task_prompt": task_prompt, "notify": notify, "is_actionable": is_actionable},
+        kwargs={"task_prompt": task_prompt, "notify": notify},
         id=job_id,
     )
 
@@ -109,18 +112,21 @@ def schedule_one_off_task(
 
 
 def schedule_recurring_task(
-    task_prompt: str, cron_expression: str, timezone: str, tool_context: ToolContext, is_actionable: bool = False
+    task_prompt: str, cron_expression: str, timezone: str, tool_context: ToolContext
 ) -> dict:
     """Schedules the agent to execute a task automatically on a recurring schedule.
+
+    When the scheduled time arrives, the agent will fully process the task_prompt —
+    generating content, running tools, or fetching data as needed — and deliver the
+    result to the user. Write the prompt as an instruction for your future self.
 
     Use this tool when the user asks to "regularly monitor", "do X every day", or "check X every Monday".
     IMPORTANT: Always call get_current_time first to confirm the user's timezone.
 
     Args:
-        task_prompt (str): The exact instruction the agent should execute (e.g. 'Perform a management check for ASIN B08X').
+        task_prompt (str): The instruction the agent should execute (e.g. 'Perform a management check for ASIN B08X').
         cron_expression (str): A standard 5-part cron expression defining the schedule (e.g., '0 10 * * *' for every day at 10 AM).
         timezone (str): IANA timezone for the cron schedule (e.g., 'Europe/Kyiv', 'UTC').
-        is_actionable (bool): Set True if the task requires the agent to run background scripts or check APIs. Set False if it's purely a textual notification reminder.
 
     Returns:
         dict: Status of the scheduling operation.
@@ -149,7 +155,7 @@ def schedule_recurring_task(
     scheduler.add_job(
         run_scheduled_task,
         trigger=trigger,
-        kwargs={"task_prompt": task_prompt, "notify": notify, "is_actionable": is_actionable},
+        kwargs={"task_prompt": task_prompt, "notify": notify},
         id=job_id,
     )
 
@@ -217,7 +223,7 @@ def delete_scheduled_task(job_id: str, tool_context: ToolContext) -> dict:
 
 def edit_scheduled_task(
     job_id: str, new_task_prompt: str, new_run_at_iso_datetime: str,
-    timezone: str, tool_context: ToolContext, is_actionable: bool = False
+    timezone: str, tool_context: ToolContext
 ) -> dict:
     """Edits an existing one-off scheduled task — changes its prompt and/or time.
 
@@ -228,7 +234,6 @@ def edit_scheduled_task(
         new_task_prompt (str): The updated task instruction.
         new_run_at_iso_datetime (str): The new date and time in ISO 8601 format.
         timezone (str): IANA timezone for the new time.
-        is_actionable (bool): Set True if the task requires the agent to run background scripts or check APIs. Set False if it's purely a textual notification reminder.
 
     Returns:
         dict: Status of the edit.
@@ -263,7 +268,7 @@ def edit_scheduled_task(
         run_scheduled_task,
         "date",
         run_date=run_date,
-        kwargs={"task_prompt": new_task_prompt, "notify": notify, "is_actionable": is_actionable},
+        kwargs={"task_prompt": new_task_prompt, "notify": notify},
         id=job_id,
     )
 
