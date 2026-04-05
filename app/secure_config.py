@@ -70,6 +70,10 @@ def capture_key(session_id: str, value: str) -> dict:
         except Exception:
             pass
 
+    # Log Slack token updates (poller restart requires process restart via exit signal)
+    if key_name in ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"):
+        logger.info("Slack config updated (%s). Restart required to apply.", key_name)
+
     return {
         "status": "success",
         "key_name": key_name,

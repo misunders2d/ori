@@ -1,8 +1,9 @@
 import httpx
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any
 
 from google.adk.tools.tool_context import ToolContext
 from deploy import vault
+
 
 def _get_headers():
     token = vault.get("SLACK_BOT_TOKEN")
@@ -13,7 +14,8 @@ def _get_headers():
         headers["Authorization"] = f"Bearer {token}"
     return headers
 
-def slack_post_message(channel: str, text: str, thread_ts: Optional[str] = None, tool_context: ToolContext = None) -> Dict[str, Any]:
+
+async def slack_post_message(channel: str, text: str, thread_ts: Optional[str] = None, tool_context: ToolContext = None) -> Dict[str, Any]:
     """Sends a message to a Slack channel.
 
     Args:
@@ -32,8 +34,8 @@ def slack_post_message(channel: str, text: str, thread_ts: Optional[str] = None,
         payload["thread_ts"] = thread_ts
 
     try:
-        with httpx.Client(timeout=10.0) as client:
-            response = client.post("https://slack.com/api/chat.postMessage", json=payload, headers=_get_headers())
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post("https://slack.com/api/chat.postMessage", json=payload, headers=_get_headers())
             data = response.json()
             if data.get("ok"):
                 return {"status": "success", "ts": data["ts"], "channel": data["channel"]}
@@ -42,7 +44,7 @@ def slack_post_message(channel: str, text: str, thread_ts: Optional[str] = None,
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-def slack_list_channels(types: str = "public_channel,private_channel", tool_context: ToolContext = None) -> Dict[str, Any]:
+async def slack_list_channels(types: str = "public_channel,private_channel", tool_context: ToolContext = None) -> Dict[str, Any]:
     """Lists all channels the bot has access to.
 
     Args:
@@ -54,18 +56,18 @@ def slack_list_channels(types: str = "public_channel,private_channel", tool_cont
     channels = []
     cursor = None
     try:
-        with httpx.Client(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             while True:
                 params = {"types": types, "limit": 200}
                 if cursor:
                     params["cursor"] = cursor
-                
-                response = client.get("https://slack.com/api/conversations.list", params=params, headers=_get_headers())
+
+                response = await client.get("https://slack.com/api/conversations.list", params=params, headers=_get_headers())
                 data = response.json()
-                
+
                 if not data.get("ok"):
                     return {"status": "error", "message": data.get("error", "Unknown error")}
-                
+
                 channels.extend(data.get("channels", []))
                 cursor = data.get("response_metadata", {}).get("next_cursor")
                 if not cursor:
@@ -74,7 +76,7 @@ def slack_list_channels(types: str = "public_channel,private_channel", tool_cont
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-def slack_read_history(channel: str, limit: int = 10, tool_context: ToolContext = None) -> Dict[str, Any]:
+async def slack_read_history(channel: str, limit: int = 10, tool_context: ToolContext = None) -> Dict[str, Any]:
     """Reads the most recent messages from a channel.
 
     Args:
@@ -85,11 +87,11 @@ def slack_read_history(channel: str, limit: int = 10, tool_context: ToolContext 
         dict: List of messages.
     """
     try:
-        with httpx.Client(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             params = {"channel": channel, "limit": limit}
-            response = client.get("https://slack.com/api/conversations.history", params=params, headers=_get_headers())
+            response = await client.get("https://slack.com/api/conversations.history", params=params, headers=_get_headers())
             data = response.json()
-            
+
             if data.get("ok"):
                 return {"status": "success", "messages": data["messages"]}
             else:
@@ -97,7 +99,7 @@ def slack_read_history(channel: str, limit: int = 10, tool_context: ToolContext 
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-def slack_read_replies(channel: str, thread_ts: str, tool_context: ToolContext = None) -> Dict[str, Any]:
+async def slack_read_replies(channel: str, thread_ts: str, tool_context: ToolContext = None) -> Dict[str, Any]:
     """Retrieves all messages in a specific thread.
 
     Args:
@@ -108,11 +110,11 @@ def slack_read_replies(channel: str, thread_ts: str, tool_context: ToolContext =
         dict: List of messages in the thread.
     """
     try:
-        with httpx.Client(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             params = {"channel": channel, "ts": thread_ts}
-            response = client.get("https://slack.com/api/conversations.replies", params=params, headers=_get_headers())
+            response = await client.get("https://slack.com/api/conversations.replies", params=params, headers=_get_headers())
             data = response.json()
-            
+
             if data.get("ok"):
                 return {"status": "success", "messages": data["messages"]}
             else:
@@ -120,7 +122,7 @@ def slack_read_replies(channel: str, thread_ts: str, tool_context: ToolContext =
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-def slack_get_user_info(user: str, tool_context: ToolContext = None) -> Dict[str, Any]:
+async def slack_get_user_info(user: str, tool_context: ToolContext = None) -> Dict[str, Any]:
     """Retrieves profile information for a Slack user ID.
 
     Args:
@@ -130,11 +132,11 @@ def slack_get_user_info(user: str, tool_context: ToolContext = None) -> Dict[str
         dict: User profile information.
     """
     try:
-        with httpx.Client(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             params = {"user": user}
-            response = client.get("https://slack.com/api/users.info", params=params, headers=_get_headers())
+            response = await client.get("https://slack.com/api/users.info", params=params, headers=_get_headers())
             data = response.json()
-            
+
             if data.get("ok"):
                 return {"status": "success", "user": data["user"]}
             else:
