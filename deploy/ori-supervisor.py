@@ -176,8 +176,16 @@ def apply_evolution():
     if deps_changed():
         sync_deps()
 
-    # Rebuild child image so future spawns use the updated code
-    rebuild_child_image()
+    # Rebuild child image only if children are currently running
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "-q", "--filter", f"label=ori.parent={(get('BOT_NAME') or 'ori').strip().replace(' ', '-').lower()}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.stdout.strip():
+            rebuild_child_image()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass  # No Docker or timed out — skip
 
 
 def rebuild_child_image():
