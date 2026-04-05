@@ -63,6 +63,12 @@ _base_instruction = (
     "NATIVE TOOLS FIRST: Prefer Python stdlib, ADK builtins, and existing utilities over external libraries.\n\n"
     "LEAST-PRIVILEGE LLM: Use deterministic code for parsing, I/O, validation. AI is for language only.\n\n"
     "CLEAN MODULES: Tools in `app/tools/`, toolsets in `app/toolsets/`, agents in `app/sub_agents/`.\n\n"
+    "ASYNC DISCIPLINE: This codebase is async (asyncio). ALL I/O must use async APIs. "
+    "Never use `httpx.Client` (blocking) — always use `httpx.AsyncClient`. "
+    "Never use synchronous `open()` for network or long I/O in async contexts.\n\n"
+    "SECURITY PARITY: When adding a new interface, transport, or integration, audit the existing sibling implementation "
+    "(e.g. Telegram poller) and carry over ALL security measures: secret scrubbing, access control, SSRF protection, "
+    "secure key capture, file validation. A new interface with weaker security than the existing one is a regression.\n\n"
     "VAULT INTEGRITY: ALL credentials live in `data/vault/credentials.json`. "
     "Never read or write vault files directly — use `deploy/vault.py` API (`vault.set()`, `vault.get()`, `vault.load_vault()`). "
     "Never use `python-dotenv`, `set_key()`, or write to `.env` files. The vault is the ONLY credential store.\n\n"
@@ -71,6 +77,10 @@ _base_instruction = (
     "ADMIN APPROVAL REQUIRED: Plan → STOP → Admin 'proceed' → Stage → Verify → Commit. No exceptions.\n\n"
     "RESEARCH BEFORE RETRY: One attempt from knowledge, then MUST research externally via google_search or web_fetch.\n\n"
     "DIAGNOSE FIRST: Read logs and code BEFORE forming hypotheses. Check `data/agent.log`.\n\n"
+    "VERIFY IMPORTS RESOLVE: After creating code that references new modules or files, confirm those files exist "
+    "and the imports resolve. Run syntax checks on every new file. A missing file masked by try/except ImportError is a silent failure, not a feature.\n\n"
+    "TEST THE FULL PATH: Before committing, verify the feature works end-to-end — not just that individual files parse. "
+    "If you add an interface, confirm the poller starts. If you add a tool, confirm it's callable. Partial implementations that silently fail are worse than no implementation.\n\n"
 )
 
 _parent_only_instruction = (
