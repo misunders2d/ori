@@ -211,7 +211,7 @@ async def extract_agent_response(
         # We keep the last 100 events to ensure we don't lose immediate context
         session.events = session.events[-100:]
 
-    MAX_RETRIES = 2
+    MAX_RETRIES = 3
 
     # Prepare message_arg
     if isinstance(message, str):
@@ -284,17 +284,23 @@ async def extract_agent_response(
                     "Please resend your message."
                 )
 
-            # Catch rate limit / quota errors gracefully
+            # Catch rate limit / quota errors — back off and retry via the loop
             if (
                 "429" in error_msg
                 or "RESOURCE_EXHAUSTED" in error_msg
                 or "QuotaExceeded" in error_msg
             ):
-                return AgentResponse(
-                    text="⚠️ **Rate Limit Exceeded**\n\n"
-                    "You've hit the API quota limit. Please wait a bit before trying again. "
-                    "If this persists, check your billing details or rate limits."
-                )
+                import asyncio as _asyncio
+                _delay = min(30 * (attempt + 1), 60)
+                logger.warning("API rate limit hit. Backing off %ds before retry...", _delay)
+                await _asyncio.sleep(_delay)
+                if attempt >= MAX_RETRIES:
+                    return AgentResponse(
+                        text="⚠️ **Rate Limit Exceeded**\n\n"
+                        "I retried after backing off but the API quota is still exhausted. "
+                        "Please wait a few minutes and try again."
+                    )
+                continue
 
             # Catch token limit / context window errors
             if "token count exceeds" in error_msg.lower() or "400" in error_msg:

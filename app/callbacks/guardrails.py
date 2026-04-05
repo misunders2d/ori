@@ -174,10 +174,13 @@ def prompt_injection_guardrail(
     """
     # Per-container rate throttle — prevents one agent from exhausting shared API quota
     if not _throttle.acquire():
-        logger.warning("Rate throttle hit (%d RPM). Delaying request for %s.", _throttle.rpm, callback_context.agent_name)
-        # Sleep briefly to let tokens refill rather than hard-failing
-        time.sleep(2.0)
-        if not _throttle.acquire():
+        logger.warning("Rate throttle hit (%d RPM). Waiting for token refill for %s.", _throttle.rpm, callback_context.agent_name)
+        # Back off with increasing delays, up to ~60s total
+        for delay in (2, 5, 10, 15, 30):
+            time.sleep(delay)
+            if _throttle.acquire():
+                break
+        else:
             return LlmResponse(
                 content=types.Content(
                     parts=[types.Part(text="I'm being rate-limited to protect shared API quota. Please wait a moment and try again.")]
