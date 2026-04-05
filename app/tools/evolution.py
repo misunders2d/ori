@@ -174,14 +174,16 @@ def evolution_verify_sandbox(
     """Runs verification checks on staged sandbox changes.
 
     ALWAYS run 'syntax' check after staging a Python file, then 'pytest' for full tests.
+    When adding or changing dependencies, run 'deps' then 'security' before committing.
 
     Args:
         check (str): The type of check to run. One of:
             - 'syntax' — Parse a Python file for syntax errors (requires target).
             - 'deps' — Resolve dependencies when pyproject.toml is staged. Runs uv lock and stages uv.lock.
+            - 'security' — Audit resolved dependencies for known CVEs (requires 'deps' first).
             - 'pytest' — Run the full test suite.
             - 'import' — Try importing a module (requires target, e.g., 'app.tools').
-        target (str): The file path (for 'syntax') or module name (for 'import'). Not needed for 'pytest' or 'deps'.
+        target (str): The file path (for 'syntax') or module name (for 'import'). Not needed for 'pytest', 'deps', or 'security'.
 
     Returns:
         dict: Verification status and output.
@@ -266,6 +268,49 @@ def evolution_verify_sandbox(
                 "output": result.stdout[-500:] if result.stdout else "",
             }
 
+        elif check == "security":
+            # Audit installed packages for known vulnerabilities (CVEs).
+            # Requires 'deps' check to have run first so the sandbox venv exists.
+            sandbox_venv = os.path.join(sandbox_dir, ".venv")
+            if not os.path.isdir(sandbox_venv):
+                return {"status": "error", "message": "No sandbox .venv found. Run 'deps' check first to install packages."}
+
+            # Export frozen requirements from sandbox, then audit them
+            uv = _find_uv()
+            export = subprocess.run(
+                [uv, "export", "--frozen", "--no-hashes", "--no-header"],
+                cwd=sandbox_dir,
+                capture_output=True, text=True, timeout=30,
+            )
+            if export.returncode != 0:
+                return {"status": "error", "message": "Could not export requirements from sandbox.", "output": (export.stderr or "")[-500:]}
+
+            reqs_file = os.path.join(sandbox_dir, ".audit-requirements.txt")
+            with open(reqs_file, "w") as f:
+                f.write(export.stdout)
+
+            result = subprocess.run(
+                [sys.executable, "-m", "pip_audit", "--strict", "--desc", "on",
+                 "--no-deps", "--disable-pip", "-r", reqs_file],
+                cwd=sandbox_dir,
+                capture_output=True, text=True, timeout=120,
+            )
+            os.unlink(reqs_file)
+
+            if result.returncode == 0:
+                return {
+                    "status": "success",
+                    "message": "Security audit PASSED — no known vulnerabilities found.",
+                    "output": result.stdout[-500:] if result.stdout else "",
+                }
+            else:
+                combined = (result.stdout or "") + "\n" + (result.stderr or "")
+                return {
+                    "status": "error",
+                    "message": "Security audit FAILED — vulnerable packages detected. Review output and update or replace affected dependencies before committing.",
+                    "output": combined[-1500:],
+                }
+
         elif check == "import" or check == "pytest":
             # Auto-bootstrap: symlink project structure to backfill missing files
             links_created = []
@@ -346,7 +391,7 @@ def evolution_verify_sandbox(
                         pass
 
         else:
-            return {"status": "error", "message": f"Unknown check type: '{check}'. Use 'syntax', 'pytest', or 'import'."}
+            return {"status": "error", "message": f"Unknown check type: '{check}'. Use 'syntax', 'deps', 'security', 'pytest', or 'import'."}
 
         if result.returncode == 0:
             return {
