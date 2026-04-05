@@ -23,6 +23,8 @@ ALLOWED_CONFIG_KEYS = frozenset({
     "BOT_NAME",
     "APP_NAME",
     "REQUIRE_2FA",
+    "SLACK_BOT_TOKEN",
+    "SLACK_APP_TOKEN",
 })
 
 # Keys the agent can set via configure_integration (conversational flow).
@@ -39,6 +41,8 @@ AGENT_CONFIG_KEYS = frozenset({
     "GITHUB_REPO",
     "BOT_NAME",
     "APP_NAME",
+    "SLACK_BOT_TOKEN",
+    "SLACK_APP_TOKEN",
 })
 
 
