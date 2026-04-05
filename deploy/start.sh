@@ -121,6 +121,13 @@ if is_service_installed; then
             ;;
     esac
     echo ":: $SERVICE_NAME restarted."
+
+    # Ensure Cloudflare tunnel is running with the correct port
+    if command -v docker &>/dev/null; then
+        _a2a_port=$("$PYTHON" -c "import json; print(json.load(open('$VAULT_FILE')).get('A2A_PORT','8000'))" 2>/dev/null || echo "8000")
+        A2A_PORT="$_a2a_port" docker compose -f "$SCRIPT_DIR/docker-compose.yml" up -d 2>/dev/null || true
+    fi
+
     echo "   Logs:  deploy/logs.sh"
     echo "   Stop:  deploy/stop.sh"
 else
