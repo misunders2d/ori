@@ -137,8 +137,14 @@ async def detect_tunnel_url(timeout=30) -> str | None:
         logger.warning("httpx not available, cannot detect tunnel URL")
         return None
 
-    metrics_port = os.environ.get("TUNNEL_METRICS_PORT", "2000")
+    # Derive metrics port: A2A_PORT + 1000, or explicitly configured TUNNEL_METRICS_PORT
+    a2a_port = int(os.environ.get("A2A_PORT", "8000"))
+    default_metrics = str(a2a_port + 1000)
+    metrics_port = os.environ.get("TUNNEL_METRICS_PORT", default_metrics)
+    
     metrics_url = f"http://localhost:{metrics_port}/metrics"
+    logger.info("Polling tunnel metrics at %s...", metrics_url)
+    
     for attempt in range(timeout):
         try:
             async with httpx.AsyncClient() as client:
