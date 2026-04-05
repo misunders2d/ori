@@ -63,5 +63,17 @@
                 "exchange"
             ]
         }
+    ],
+    "securitySchemes": {
+        "apiKey": {
+            "type": "apiKey",
+            "name": "x-a2a-api-key",
+            "in": "header"
+        }
+    },
+    "security": [
+        {
+            "apiKey": []
+        }
     ]
 }

@@ -247,10 +247,14 @@ async def main():
                 refresh_agent_card()
             except Exception as e:
                 logger.warning("Could not refresh agent card: %s", e)
-        try:
-            from app.tools.a2a import perform_a2a_broadcast
-            await perform_a2a_broadcast()
-        except Exception: pass
+            # Broadcast only after tunnel URL is confirmed
+            try:
+                from app.tools.a2a import perform_a2a_broadcast
+                await perform_a2a_broadcast()
+            except Exception:
+                pass
+        else:
+            logger.warning("Tunnel URL not detected — skipping A2A broadcast")
     tasks.append(asyncio.create_task(detect_and_broadcast()))
 
     # 3. Telegram Interface (Core)

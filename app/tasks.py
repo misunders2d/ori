@@ -62,6 +62,7 @@ async def run_scheduled_task(task_prompt: str, notify: dict, is_actionable: bool
                 )
 
             response = await extract_agent_response(runner, user_id, session_id, query)
+            response = response.text if hasattr(response, "text") else str(response)
             if "Guardrail Intervention:" in response:
                 response = f"Reminder: {task_prompt}\n\n[Warning]: {response}"
             ACTIVE_TASKS[task_id]["status"] = "Completed"
@@ -143,6 +144,7 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
 
         logger.info("System Task: Executing agent for %s", task_id)
         response = await extract_agent_response(runner, user_id, session_id, query)
+        response = response.text if hasattr(response, "text") else str(response)
 
         is_failure = any(
             indicator in response
