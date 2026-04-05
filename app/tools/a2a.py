@@ -249,7 +249,7 @@ async def _send_a2a_message(
         },
     }
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(timeout=300.0) as client:
         resp = await client.post(endpoint_url, json=payload, headers=headers)
         resp.raise_for_status()
         return resp.json()
