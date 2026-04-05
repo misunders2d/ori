@@ -793,3 +793,165 @@ def evolution_sync_local_to_upstream(tool_context: ToolContext) -> dict:
         
     except Exception as e:
         return {"status": "error", "message": f"Synchronization failed: {str(e).replace(github_token, '***')}"}
+
+
+
+def evolution_git_fetch(remote: str = "origin", tool_context: ToolContext = None) -> dict:
+    """Fetches latest refs from a remote without merging anything.
+
+    Use this to see what's new on origin or upstream before deciding to pull/merge.
+
+    Args:
+        remote (str): Remote name to fetch from (e.g. 'origin', 'upstream'). Default: 'origin'.
+
+    Returns:
+        dict: Fetch result and list of updated refs.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "fetch", remote],
+            cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=60,
+        )
+        if result.returncode != 0:
+            return {"status": "error", "message": f"Fetch failed: {(result.stderr or result.stdout)[-500:]}"}
+
+        return {"status": "success", "message": f"Fetched from {remote}.", "output": (result.stderr or "").strip()[-500:]}
+    except Exception as e:
+        return {"status": "error", "message": f"Fetch error: {e}"}
+
+
+def evolution_git_log(ref: str = "HEAD", count: int = 10, tool_context: ToolContext = None) -> dict:
+    """Shows compact commit history for a branch or ref.
+
+    Args:
+        ref (str): Branch, tag, or commit ref (e.g. 'HEAD', 'origin/master', 'upstream/master'). Default: 'HEAD'.
+        count (int): Number of commits to show. Default: 10. Max: 50.
+
+    Returns:
+        dict: List of commits with hash, date, author, and subject.
+    """
+    count = min(max(count, 1), 50)
+    try:
+        result = subprocess.run(
+            ["git", "log", ref, f"-{count}", "--format=%H|%ad|%an|%s", "--date=short"],
+            cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            return {"status": "error", "message": f"Git log failed: {(result.stderr or result.stdout)[-500:]}"}
+
+        commits = []
+        for line in result.stdout.strip().splitlines():
+            parts = line.split("|", 3)
+            if len(parts) == 4:
+                commits.append({"hash": parts[0][:8], "date": parts[1], "author": parts[2], "subject": parts[3]})
+
+        return {"status": "success", "ref": ref, "commits": commits}
+    except Exception as e:
+        return {"status": "error", "message": f"Git log error: {e}"}
+
+
+def evolution_git_diff_summary(base: str, head: str = "HEAD", tool_context: ToolContext = None) -> dict:
+    """Shows a compact summary of changes between two refs (files changed, insertions, deletions).
+
+    Use this to quickly see what changed between branches without reading full diffs.
+
+    Args:
+        base (str): Base ref to compare from (e.g. 'origin/master', 'upstream/master', 'HEAD~5').
+        head (str): Head ref to compare to. Default: 'HEAD'.
+
+    Returns:
+        dict: Summary with file stats and total counts.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--stat", f"{base}...{head}"],
+            cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            # Try two-dot diff as fallback (for unrelated histories)
+            result = subprocess.run(
+                ["git", "diff", "--stat", f"{base}..{head}"],
+                cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=30,
+            )
+
+        if result.returncode != 0:
+            return {"status": "error", "message": f"Diff failed: {(result.stderr or result.stdout)[-500:]}"}
+
+        lines = result.stdout.strip().splitlines()
+        summary_line = lines[-1] if lines else "No changes"
+
+        files = []
+        for line in lines[:-1]:
+            line = line.strip()
+            if line and "|" in line:
+                parts = line.split("|", 1)
+                files.append({"file": parts[0].strip(), "changes": parts[1].strip()})
+
+        return {"status": "success", "base": base, "head": head, "summary": summary_line, "files": files}
+    except Exception as e:
+        return {"status": "error", "message": f"Diff error: {e}"}
+
+
+def evolution_git_diff_file(file_path: str, base: str, head: str = "HEAD", tool_context: ToolContext = None) -> dict:
+    """Shows the actual diff for a specific file between two refs.
+
+    Use this after evolution_git_diff_summary to inspect individual file changes.
+
+    Args:
+        file_path (str): Path to the file to diff (e.g. 'app/tools/scheduling.py').
+        base (str): Base ref (e.g. 'origin/master', 'upstream/master').
+        head (str): Head ref. Default: 'HEAD'.
+
+    Returns:
+        dict: The diff content for the specified file.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "diff", f"{base}...{head}", "--", file_path],
+            cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            result = subprocess.run(
+                ["git", "diff", f"{base}..{head}", "--", file_path],
+                cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=30,
+            )
+
+        if result.returncode != 0:
+            return {"status": "error", "message": f"Diff failed: {(result.stderr or result.stdout)[-500:]}"}
+
+        diff_text = result.stdout.strip()
+        if not diff_text:
+            return {"status": "success", "message": f"No changes to {file_path} between {base} and {head}."}
+
+        # Truncate very large diffs
+        if len(diff_text) > 3000:
+            diff_text = diff_text[:3000] + "\n... [truncated, use evolution_read_file for full content]"
+
+        return {"status": "success", "file": file_path, "base": base, "head": head, "diff": diff_text}
+    except Exception as e:
+        return {"status": "error", "message": f"Diff error: {e}"}
+
+
+def evolution_git_branches(tool_context: ToolContext = None) -> dict:
+    """Lists all local and remote branches with their latest commit.
+
+    Returns:
+        dict: List of branches with ref, last commit hash, and subject.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "branch", "-a", "--format=%(refname:short)|%(objectname:short)|%(subject)"],
+            cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            return {"status": "error", "message": f"Branch list failed: {(result.stderr or result.stdout)[-500:]}"}
+
+        branches = []
+        for line in result.stdout.strip().splitlines():
+            parts = line.split("|", 2)
+            if len(parts) >= 2:
+                branches.append({"branch": parts[0], "hash": parts[1], "subject": parts[2] if len(parts) > 2 else ""})
+
+        return {"status": "success", "branches": branches}
+    except Exception as e:
+        return {"status": "error", "message": f"Branch list error: {e}"}

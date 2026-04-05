@@ -53,12 +53,22 @@ class EvolutionToolset(BaseToolset):
                 evolution_git_pull,
                 evolution_git_reset,
                 evolution_sync_local_to_upstream,
+                evolution_git_fetch,
+                evolution_git_log,
+                evolution_git_diff_summary,
+                evolution_git_diff_file,
+                evolution_git_branches,
             )
             tools.extend([
                 FunctionTool(func=evolution_commit_and_push),
                 FunctionTool(func=evolution_git_pull),
                 FunctionTool(func=evolution_git_reset),
                 FunctionTool(func=evolution_sync_local_to_upstream),
+                FunctionTool(func=evolution_git_fetch),
+                FunctionTool(func=evolution_git_log),
+                FunctionTool(func=evolution_git_diff_summary),
+                FunctionTool(func=evolution_git_diff_file),
+                FunctionTool(func=evolution_git_branches),
             ])
 
         return tools
