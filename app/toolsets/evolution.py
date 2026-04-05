@@ -32,29 +32,33 @@ class EvolutionToolset(BaseToolset):
             FunctionTool(func=check_installed_package),
         ]
 
+        # Catalog tools available everywhere (local file I/O only, no git)
+        from app.tools.evolution_catalog import (
+            evolution_catalog,
+            evolution_search,
+            evolution_share,
+            evolution_import,
+        )
+        tools.extend([
+            FunctionTool(func=evolution_catalog),
+            FunctionTool(func=evolution_search),
+            FunctionTool(func=evolution_share),
+            FunctionTool(func=evolution_import),
+        ])
+
         if not _is_child_container():
-            # Parent-only: git ops and catalog (require .git repo)
+            # Parent-only: git ops (require .git repo)
             from app.tools.evolution import (
                 evolution_commit_and_push,
                 evolution_git_pull,
                 evolution_git_reset,
                 evolution_sync_local_to_upstream,
             )
-            from app.tools.evolution_catalog import (
-                evolution_catalog,
-                evolution_search,
-                evolution_share,
-                evolution_import,
-            )
             tools.extend([
                 FunctionTool(func=evolution_commit_and_push),
                 FunctionTool(func=evolution_git_pull),
                 FunctionTool(func=evolution_git_reset),
                 FunctionTool(func=evolution_sync_local_to_upstream),
-                FunctionTool(func=evolution_catalog),
-                FunctionTool(func=evolution_search),
-                FunctionTool(func=evolution_share),
-                FunctionTool(func=evolution_import),
             ])
 
         return tools

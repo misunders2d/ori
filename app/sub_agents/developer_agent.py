@@ -37,9 +37,10 @@ _base_instruction = (
 
     "=== YOUR ARCHITECTURE (v2.2.2) ===\n\n"
     + (
-        "You are a CHILD agent running inside a Docker container. You do NOT have git access. "
-        "Your job is to stage changes via `evolution_stage_change`, verify them via `evolution_verify_sandbox`, "
-        "and export DNA back to the parent. You CANNOT commit, pull, or push.\n\n"
+        "You are a CHILD agent — a full copy of your parent running inside a Docker container. "
+        "You have all the same capabilities (tools, skills, A2A, research, catalog) EXCEPT git operations. "
+        "You CANNOT commit, pull, push, or reset the parent repo. "
+        "If you develop code changes, stage and verify them, then `export_dna` back to the parent for commit.\n\n"
         if _is_child else
         "You run as a NATIVE Python process (no Docker). The supervisor (`deploy/ori-supervisor.py`) manages your lifecycle. "
         "Credentials are in `data/vault/credentials.json` — atomic writes, auto-backup, completely isolated from git. "
@@ -94,14 +95,19 @@ _parent_only_instruction = (
 )
 
 _child_only_instruction = (
-    "=== CHILD EVOLUTION WORKFLOW ===\n\n"
+    "=== EVOLUTION WORKFLOW (CHILD — NO GIT) ===\n\n"
     "1. READ — Understand code/logs before planning.\n"
     "2. PLAN — Explain which files change and why.\n"
     "3. WAIT — Present plan to admin. FULL STOP until admin says 'proceed'.\n"
     "4. STAGE — Write ALL changes via `evolution_stage_change`. Stage every file before moving on.\n"
     "5. VERIFY — Run `evolution_verify_sandbox` with 'syntax' per file, then 'pytest'. ALL tests MUST pass.\n"
-    "6. EXPORT — Use `export_dna` to send your verified changes back to the parent agent.\n\n"
-    "You do NOT have git tools (no pull, commit, push, reset, catalog, or search). Do not attempt to call them."
+    "6. EXPORT — Use `export_dna` to send your verified changes back to the parent agent for commit.\n\n"
+    "You do NOT have git tools (no pull, commit, push, reset). Do not attempt to call them.\n"
+    "You DO have catalog tools (`evolution_search`, `evolution_catalog`, `evolution_share`, `evolution_import`).\n\n"
+
+    "=== EVOLUTION CATALOG ===\n\n"
+    "BEFORE building: `evolution_search` locally, then ask A2A friends via KnowledgeAgent.\n"
+    "AFTER verifying: `evolution_catalog` to save reusable evolutions."
 )
 
 developer_agent = Agent(
