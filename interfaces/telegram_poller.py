@@ -506,16 +506,17 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                         file_data = await adapter.download_file(file_id)
                         if file_data:
                             blob_bytes, mime_type, filename = file_data
-                            from app.app_utils.file_convert import is_convertible, to_text
+                            from app.app_utils.file_convert import is_convertible, to_text, save_upload
                             if is_convertible(mime_type):
+                                saved_path = save_upload(blob_bytes, filename)
                                 text_content = to_text(blob_bytes, mime_type, filename)
                                 if text_content:
                                     message_content.parts.append(types.Part.from_text(
-                                        text=f"[File: {filename}]\n{text_content}"
+                                        text=f"[File: {filename} | saved to: {saved_path}]\n{text_content}"
                                     ))
                                 else:
                                     message_content.parts.append(types.Part.from_text(
-                                        text=f"[File: {filename}] (could not parse)"
+                                        text=f"[File: {filename} | saved to: {saved_path}] (could not parse preview)"
                                     ))
                             else:
                                 message_content.parts.append(

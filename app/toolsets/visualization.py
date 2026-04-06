@@ -8,8 +8,10 @@ class VisualizationToolset(BaseToolset):
     async def get_tools(self, readonly_context=None):
         from app.tools.visualize import generate_chart
         from app.tools.export_file import generate_file
+        from app.tools.analyze_data import analyze_data
 
         return [
             FunctionTool(func=generate_chart),
             FunctionTool(func=generate_file),
+            FunctionTool(func=analyze_data),
         ]
