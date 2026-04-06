@@ -7,6 +7,7 @@ class KeepaToolset(BaseToolset):
 
     async def get_tools(self, readonly_context=None):
         from app.tools.keepa_api import (
+            keepa_check_tokens,
             keepa_get_product_data,
             keepa_product_finder,
             keepa_get_categories,
@@ -16,6 +17,7 @@ class KeepaToolset(BaseToolset):
         )
 
         return [
+            FunctionTool(func=keepa_check_tokens),
             FunctionTool(func=keepa_get_product_data),
             FunctionTool(func=keepa_product_finder),
             FunctionTool(func=keepa_get_categories),
