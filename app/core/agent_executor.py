@@ -302,8 +302,15 @@ async def extract_agent_response(
                     )
                 continue
 
-            # Catch token limit / context window errors
-            if "token count exceeds" in error_msg.lower() or "400" in error_msg:
+            # Catch token limit / context window errors (specific patterns only)
+            _context_patterns = [
+                "token count exceeds",
+                "request payload size exceeds",
+                "context length exceeded",
+                "maximum context length",
+                "content too large",
+            ]
+            if any(p in error_msg.lower() for p in _context_patterns):
                 logger.error(
                     "Context limit reached for session %s: %s", session_id, error_msg
                 )
