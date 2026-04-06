@@ -205,11 +205,17 @@ async def extract_agent_response(
             app_name=runner.app_name, user_id=user_id, session_id=session_id
         )
 
-    # Prune session if it exceeds 200 events (approx 100 exchanges)
+    # Prune session if it exceeds 200 events — persist to DB via delete+recreate
     if session and len(session.events) > 200:
-        logger.info("Pruning large session %s", session_id)
-        # We keep the last 100 events to ensure we don't lose immediate context
-        session.events = session.events[-100:]
+        logger.info("Pruning session %s (%d events → 100)", session_id, len(session.events))
+        preserved_state = dict(session.state) if session.state else {}
+        await runner.session_service.delete_session(
+            app_name=runner.app_name, user_id=user_id, session_id=session_id
+        )
+        session = await runner.session_service.create_session(
+            app_name=runner.app_name, user_id=user_id, session_id=session_id,
+            state=preserved_state,
+        )
 
     MAX_RETRIES = 3
 
@@ -374,9 +380,17 @@ async def process_message_for_context(runner, user_id: str, session_id: str, mes
             app_name=runner.app_name, user_id=user_id, session_id=session_id
         )
 
-    # Hard truncate if it exceeds 100 messages (approx 200 events)
+    # Prune if session exceeds 200 events — persist to DB via delete+recreate
     if session and len(session.events) > 200:
-        session.events = session.events[-100:]
+        logger.info("Pruning context session %s (%d events)", session_id, len(session.events))
+        preserved_state = dict(session.state) if session.state else {}
+        await runner.session_service.delete_session(
+            app_name=runner.app_name, user_id=user_id, session_id=session_id
+        )
+        session = await runner.session_service.create_session(
+            app_name=runner.app_name, user_id=user_id, session_id=session_id,
+            state=preserved_state,
+        )
 
     if isinstance(message, str):
         content = types.Content(role="user", parts=[types.Part.from_text(text=message)])
