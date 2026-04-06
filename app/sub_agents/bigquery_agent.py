@@ -20,6 +20,7 @@ from app.app_utils.models import get_model
 from app.callbacks.guardrails import prompt_injection_guardrail
 from app.tools.bigquery_data import get_table_data, table_data
 from app.tools.bigquery_tools import create_bigquery_toolset
+from app.toolsets import ScratchpadToolset
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +139,7 @@ if _bq_toolset:
         tools=[
             _bq_toolset,
             FunctionTool(func=get_table_data),
+            ScratchpadToolset(),
         ],
         before_model_callback=prompt_injection_guardrail,
         before_tool_callback=before_bq_callback,

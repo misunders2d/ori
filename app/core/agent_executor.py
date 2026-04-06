@@ -143,6 +143,12 @@ async def _perform_session_refresh(
         await runner.session_service.create_session(
             app_name=runner.app_name, user_id=user_id, session_id=session_id
         )
+
+    # Clean up scratchpads for this session
+    from app.tools.scratchpad import cleanup_session_scratchpads
+    cleanup_session_scratchpads(session_id)
+
+    if mode != "summarize":
         return "Fresh session started."
 
 

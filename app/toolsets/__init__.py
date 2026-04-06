@@ -5,6 +5,7 @@ from .system import SystemToolset
 from .evolution import EvolutionToolset
 from .github import GitHubToolset
 from .keepa import KeepaToolset
+from .scratchpad import ScratchpadToolset
 
 __all__ = [
     "SchedulingToolset",
@@ -14,4 +15,5 @@ __all__ = [
     "EvolutionToolset",
     "GitHubToolset",
     "KeepaToolset",
+    "ScratchpadToolset",
 ]
