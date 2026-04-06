@@ -1,3 +1,6 @@
+# Ephemeral working data (caches, scratchpads)
+tmp/
+
 # Secrets & Vault
 .env
 data/vault/

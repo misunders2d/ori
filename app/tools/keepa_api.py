@@ -18,7 +18,7 @@ from google.adk.tools.tool_context import ToolContext
 logger = logging.getLogger(__name__)
 
 _API_BASE = "https://api.keepa.com"
-_CACHE_DIR = os.path.abspath("./data/keepa_cache")
+_CACHE_DIR = os.path.abspath("./tmp/keepa_cache")
 _CACHE_TTL = 3600  # 1 hour
 _MIN_TOKENS = 5
 

@@ -13,7 +13,7 @@ from google.adk.tools.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
-_SCRATCHPAD_DIR = os.path.abspath("./data/scratchpads")
+_SCRATCHPAD_DIR = os.path.abspath("./tmp/scratchpads")
 
 
 def _pad_path(session_id: str, name: str) -> str:
