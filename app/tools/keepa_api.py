@@ -611,6 +611,10 @@ def keepa_extract_sales_analysis(
     ld_segments = _segments_from_csv(csv_data[8] if len(csv_data) > 8 else None, 2)
     ld_daily = _daily_accumulate(ld_segments, days, mode="value")
 
+    # --- Prime Exclusive price (index 33) ---
+    pe_segments = _segments_from_csv(csv_data[33] if len(csv_data) > 33 else None, 2)
+    pe_daily = _daily_accumulate(pe_segments, days, mode="value")
+
     # --- BSR (index 3) ---
     bsr_segments = _segments_from_csv(csv_data[3] if len(csv_data) > 3 else None, 2)
     bsr_daily = _daily_accumulate(bsr_segments, days, mode="raw")
@@ -651,6 +655,7 @@ def keepa_extract_sales_analysis(
         price_bucket = price_daily.get(d, {})
         bb_bucket = bb_daily.get(d, {})
         ld_bucket = ld_daily.get(d, {})
+        pe_bucket = pe_daily.get(d, {})
         sales_bucket = sales_daily.get(d, {})
         bsr_bucket = bsr_daily.get(d, {})
         coupon_bucket = coupon_daily.get(d, {})
@@ -668,10 +673,19 @@ def keepa_extract_sales_analysis(
         if ld_bucket.get("weight", 0) > 0:
             ld_price = round(ld_bucket["value_sum"] / ld_bucket["weight"], 2)
 
-        # Effective price: LD overrides if active, otherwise buy box or new
-        effective_price = ld_price or bb_price or avg_price
+        pe_price = None
+        if pe_bucket.get("weight", 0) > 0:
+            pe_price = round(pe_bucket["value_sum"] / pe_bucket["weight"], 2)
 
-        # Apply coupon to effective price
+        # Effective price priority: LD > Prime Exclusive > Buy Box > New 3P
+        # Pick the lowest active special price, fall back to buy box or new
+        special_prices = [p for p in [ld_price, pe_price] if p is not None]
+        if special_prices:
+            effective_price = min(special_prices)
+        else:
+            effective_price = bb_price or avg_price
+
+        # Apply coupon on top of effective price
         coupon_raw = coupon_bucket.get("last_raw")
         coupon_str = None
         if coupon_raw and effective_price:
@@ -698,6 +712,8 @@ def keepa_extract_sales_analysis(
             row["new_price"] = avg_price
         if bb_price:
             row["buy_box_price"] = bb_price
+        if pe_price:
+            row["prime_exclusive_price"] = pe_price
         if ld_price:
             row["ld_price"] = ld_price
         if effective_price:
