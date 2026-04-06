@@ -195,8 +195,11 @@ async def poll_slack(get_runner_fn, process_init_fn):
         "message_metadata_posted", "message_metadata_updated", "message_metadata_deleted",
     ]
 
+    async def _noop_handler(event, say):
+        pass
+
     for _evt in _SILENCED_EVENTS:
-        slack_app.event(_evt)(lambda event, say: None)
+        slack_app.event(_evt)(_noop_handler)
 
     @slack_app.event("message")
     async def handle_message(event, say):
