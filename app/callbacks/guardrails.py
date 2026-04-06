@@ -58,13 +58,16 @@ def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
     if not tool or not tool_context:
         return None
 
-    # Block non-admins from transferring to developer-level agents to prevent session traps
+    # Whitelist-based transfer guard: non-admins can only transfer to explicitly safe agents.
+    # New sub-agents are blocked by default until added here.
     if tool.name == "transfer_to_agent":
-        agent_target = args.get("agent_name", "")
-        if agent_target in ["DeveloperAgent", "SkillCreatorAgent"]:
+        _NONADMIN_ALLOWED_AGENTS = set()  # Currently no sub-agents are safe for non-admins
+        agent_target = args.get("agent_name", "").strip()
+
+        if agent_target.lower() not in {a.lower() for a in _NONADMIN_ALLOWED_AGENTS}:
             current_state = tool_context.state.to_dict()
             user_id = current_state.get("user_id", "")
-            
+
             admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
             admin_users = [u.strip() for u in admin_users_str.split(",") if u.strip()]
 
