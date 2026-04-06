@@ -506,13 +506,25 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                         file_data = await adapter.download_file(file_id)
                         if file_data:
                             blob_bytes, mime_type, filename = file_data
-                            message_content.parts.append(
-                                types.Part(
-                                    inline_data=types.Blob(
-                                        data=blob_bytes, mime_type=mime_type
+                            from app.app_utils.file_convert import is_convertible, to_text
+                            if is_convertible(mime_type):
+                                text_content = to_text(blob_bytes, mime_type, filename)
+                                if text_content:
+                                    message_content.parts.append(types.Part.from_text(
+                                        text=f"[File: {filename}]\n{text_content}"
+                                    ))
+                                else:
+                                    message_content.parts.append(types.Part.from_text(
+                                        text=f"[File: {filename}] (could not parse)"
+                                    ))
+                            else:
+                                message_content.parts.append(
+                                    types.Part(
+                                        inline_data=types.Blob(
+                                            data=blob_bytes, mime_type=mime_type
+                                        )
                                     )
                                 )
-                            )
 
                     # Handle whitelist/blacklist shortcuts from authorized users
                     if is_allowed(user_id):

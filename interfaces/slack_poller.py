@@ -440,11 +440,23 @@ async def poll_slack(get_runner_fn, process_init_fn):
             file_data = await adapter.download_file(url_private)
             if file_data:
                 blob_bytes, mime_type, filename = file_data
-                file_parts.append(
-                    types.Part(
-                        inline_data=types.Blob(data=blob_bytes, mime_type=mime_type)
+                from app.app_utils.file_convert import is_convertible, to_text
+                if is_convertible(mime_type):
+                    text_content = to_text(blob_bytes, mime_type, filename)
+                    if text_content:
+                        file_parts.append(types.Part.from_text(
+                            text=f"[File: {filename}]\n{text_content}"
+                        ))
+                    else:
+                        file_parts.append(types.Part.from_text(
+                            text=f"[File: {filename}] (could not parse)"
+                        ))
+                else:
+                    file_parts.append(
+                        types.Part(
+                            inline_data=types.Blob(data=blob_bytes, mime_type=mime_type)
+                        )
                     )
-                )
                 file_info_text += f" [{file_obj.get('filetype', 'file').upper()}: {filename}]"
 
         # Skip empty messages
