@@ -116,10 +116,19 @@ async def poll_slack(get_runner_fn, process_init_fn):
         return lock
 
     async def _process_and_send(
-        _runner, _session_user_id, _session_id, _message_content, _user_id, _channel_id, _thread_ts=""
+        _runner, _session_user_id, _session_id, _message_content, _user_id, _channel_id, _thread_ts="", _user_email=""
     ):
         async with await _get_lock(_session_id):
             try:
+                # Inject email into session state before agent execution
+                if _user_email:
+                    from app.core.agent_executor import update_session_state
+                    await update_session_state(
+                        runner=_runner,
+                        user_id=_session_user_id,
+                        session_id=_session_id,
+                        state_delta={"user_email": _user_email},
+                    )
                 response = await extract_agent_response(
                     _runner,
                     _session_user_id,
@@ -178,8 +187,9 @@ async def poll_slack(get_runner_fn, process_init_fn):
         session_id = adapter.make_session_id(channel_id)
         session_user_id = session_id
 
-        # Extract display name (best-effort from Slack Web API)
+        # Extract display name and email (best-effort from Slack Web API)
         display_name = user_raw
+        user_email = ""
         try:
             resp = await http_client.get(
                 "https://slack.com/api/users.info",
@@ -190,6 +200,7 @@ async def poll_slack(get_runner_fn, process_init_fn):
             if user_data.get("ok"):
                 profile = user_data["user"].get("profile", {})
                 display_name = profile.get("display_name") or profile.get("real_name") or user_raw
+                user_email = profile.get("email", "")
         except Exception:
             pass
 
@@ -422,6 +433,7 @@ async def poll_slack(get_runner_fn, process_init_fn):
                 user_id,
                 channel_id,
                 reply_thread_ts,
+                user_email,
             )
         )
         _active_tasks[session_id] = (task, message_content)
