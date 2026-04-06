@@ -201,6 +201,26 @@ async def poll_slack(get_runner_fn, process_init_fn):
     for _evt in _SILENCED_EVENTS:
         slack_app.event(_evt)(_noop_handler)
 
+    # Slash command: /reset
+    @slack_app.command("/reset")
+    async def handle_reset_command(ack, body, respond):
+        await ack()
+        channel_id = body.get("channel_id", "")
+        session_id = adapter.make_session_id(channel_id)
+        session_user_id = session_id
+        bot_name = os.environ.get("BOT_NAME", "Ori")
+        runner_check = get_runner_fn()
+        if runner_check:
+            from app.core.agent_executor import _perform_session_refresh
+
+            if session_id in _active_tasks and not _active_tasks[session_id][0].done():
+                _active_tasks[session_id][0].cancel()
+
+            await _perform_session_refresh(runner_check, session_user_id, session_id, "fresh")
+            await respond(f"Session reset. {bot_name} is ready for a fresh conversation.")
+        else:
+            await respond(f"{bot_name} is not configured yet — nothing to reset.")
+
     @slack_app.event("message")
     async def handle_message(event, say):
         _update_heartbeat()
