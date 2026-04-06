@@ -24,7 +24,7 @@ def configure_integration(key_name: str, tool_context: ToolContext) -> dict:
     Args:
         key_name (str): The configuration key name. Must be one of: GOOGLE_API_KEY,
             TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET, 
-            GITHUB_TOKEN, GITHUB_REPO.
+            GITHUB_TOKEN, GITHUB_REPO, KEEPA_API_KEY.
 
     Returns:
         dict: Status and instructions to relay to the user.

@@ -25,6 +25,7 @@ ALLOWED_CONFIG_KEYS = frozenset({
     "REQUIRE_2FA",
     "SLACK_BOT_TOKEN",
     "SLACK_APP_TOKEN",
+    "KEEPA_API_KEY",
 })
 
 # Keys the agent can set via configure_integration (conversational flow).
@@ -43,6 +44,7 @@ AGENT_CONFIG_KEYS = frozenset({
     "APP_NAME",
     "SLACK_BOT_TOKEN",
     "SLACK_APP_TOKEN",
+    "KEEPA_API_KEY",
 })
 
 
