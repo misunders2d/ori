@@ -177,6 +177,10 @@ async def poll_slack(get_runner_fn, process_init_fn):
     async def handle_reaction_removed(event, say):
         pass
 
+    @slack_app.event("app_mention")
+    async def handle_app_mention(event, say):
+        pass  # Handled by the "message" event listener
+
     @slack_app.event("message")
     async def handle_message(event, say):
         _update_heartbeat()
