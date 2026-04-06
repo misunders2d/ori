@@ -3,67 +3,62 @@ import os
 from unittest.mock import AsyncMock, patch, MagicMock as SyncMagicMock
 
 from app.tools.keepa_api import (
-    keepa_get_product_data,
-    get_latest_price_from_csv
+    keepa_fetch_product,
+    keepa_extract_pricing,
+    _price_from_csv,
+    _history_from_csv,
 )
 
-# Mock token check response (always healthy)
+# Mock token check response
 _MOCK_TOKEN_RESP = SyncMagicMock()
 _MOCK_TOKEN_RESP.status_code = 200
 _MOCK_TOKEN_RESP.json.return_value = {"tokensLeft": 100, "refillRate": 5, "refillIn": 60000}
 _MOCK_TOKEN_RESP.raise_for_status = SyncMagicMock()
 
 
-@pytest.mark.asyncio
-async def test_get_latest_price_from_csv():
-    # 2 items per row: latest is active
-    csv = [100, 1000, 200, 2000]
-    assert get_latest_price_from_csv(csv, 2) == 20.0
+def test_price_from_csv():
+    # Active price
+    csv = [100, 2000, 200, 1500]
+    assert _price_from_csv(csv, 2) == 15.0
 
-    # 2 items per row: latest is -1 (inactive) — should return None
-    csv = [100, 1000, 200, 2000, 300, -1]
-    assert get_latest_price_from_csv(csv, 2) is None
+    # Inactive (-1)
+    csv = [100, 2000, 200, -1]
+    assert _price_from_csv(csv, 2) is None
 
-    # 3 items per row: latest is active
-    csv = [100, 1000, 50, 200, 2000, 60]
-    assert get_latest_price_from_csv(csv, 3) == 20.0
+    # Empty
+    assert _price_from_csv([], 2) is None
+    assert _price_from_csv(None, 2) is None
 
-    # 3 items per row: latest is -1 (inactive)
-    csv = [100, 1000, 50, 200, -1, 60]
-    assert get_latest_price_from_csv(csv, 3) is None
 
 @pytest.mark.asyncio
-async def test_keepa_get_product_data_no_key():
+async def test_fetch_product_no_key():
     with patch.dict(os.environ, {"KEEPA_API_KEY": ""}):
-        result = await keepa_get_product_data("B00000", domain=1)
+        result = await keepa_fetch_product("B00000", domain=1)
         assert result["status"] == "error"
         assert "KEEPA_API_KEY" in result["message"]
 
+
 @pytest.mark.asyncio
-async def test_keepa_get_product_data_success():
+async def test_fetch_product_returns_summary():
     mock_response_data = {
         "tokensLeft": 95,
         "products": [
             {
-                "asin": "B00000",
+                "asin": "B00TEST",
                 "title": "Test Product",
+                "brand": "TestBrand",
+                "categoryTree": [{"name": "Home"}, {"name": "Bedding"}],
+                "monthlySold": 500,
                 "csv": [
-                    [100, 2000, 200, 1500], # Amazon (Index 0)
-                    [100, 2100, 200, 1600], # New (Index 1)
+                    [100, 2000, 200, 1500],  # Amazon (idx 0)
+                    [100, 2100, 200, 1600],  # New (idx 1)
                 ],
-                "coupon": 100, # $1.00 off (applies to buy box only)
-                "offers": [
-                    {
-                        "isPrimeExcl": True,
-                        "primeExclCSV": [100, 1400],
-                        "offerCSV": [100, 1400, 0]
-                    }
-                ]
+                "coupon": 100,
+                "offers": [],
             }
         ]
     }
 
-    # Mock Response object
     mock_resp = SyncMagicMock()
     mock_resp.status_code = 200
     mock_resp.json.return_value = mock_response_data
@@ -71,18 +66,15 @@ async def test_keepa_get_product_data_success():
 
     with patch.dict(os.environ, {"KEEPA_API_KEY": "fake_key"}):
         with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
-            # First call is token check, second is product data
             mock_get.side_effect = [_MOCK_TOKEN_RESP, mock_resp]
+            with patch("app.tools.keepa_api._load_cached", return_value=None):
+                with patch("app.tools.keepa_api._save_cache"):
+                    result = await keepa_fetch_product("B00TEST", domain=1)
 
-            result = await keepa_get_product_data("B00000", domain=1)
-
-            assert result["status"] == "success"
-            assert result["asin"] == "B00000"
-            pricing = result["pricing"]
-            assert pricing["amazon_price"] == 15.0
-            assert pricing["new_price"] == 16.0
-            assert pricing["prime_exclusive_price"] == 14.0
-            # Coupon only applies to buy box, not prime exclusive
-            # Best offer is 14.0 (Prime Exclusive, no coupon applied)
-            assert pricing["best_current_offer"] == 14.0
-            assert pricing["best_offer_source"] == "prime_exclusive"
+                    assert result["status"] == "success"
+                    assert result["asin"] == "B00TEST"
+                    assert result["title"] == "Test Product"
+                    assert result["current_prices"]["amazon"] == 15.0
+                    # No massive raw data in response
+                    assert "csv" not in result
+                    assert "offers" not in str(result) or "hint" in result
