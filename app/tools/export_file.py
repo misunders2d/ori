@@ -43,12 +43,24 @@ def _get_module(name: str):
     return None
 
 
-def _restricted_import(name, *args, **kwargs):
+def _restricted_import(name, globals=None, locals=None, fromlist=(), level=0):
     mod = _get_module(name)
-    if mod is not None:
+    if mod is None:
+        raise ImportError(f"Import '{name}' is not allowed. "
+                          f"Allowed: pandas, openpyxl, reportlab, numpy, json, csv, datetime, io, textwrap, collections.")
+    if fromlist:
         return mod
-    raise ImportError(f"Import '{name}' is not allowed. "
-                      f"Allowed: pandas, openpyxl, reportlab, numpy, json, csv, datetime, io, textwrap, collections.")
+    parts = name.split(".")
+    if len(parts) > 1:
+        top = _get_module(parts[0])
+        if top is not None:
+            for i in range(1, len(parts)):
+                subname = ".".join(parts[:i + 1])
+                submod = _get_module(subname)
+                if submod is not None:
+                    setattr(_get_module(".".join(parts[:i])), parts[i], submod)
+            return top
+    return mod
 
 
 def generate_file(
