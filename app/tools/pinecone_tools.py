@@ -96,8 +96,22 @@ async def search_knowledge(
         if results:
             hits = results.to_dict().get("result", {}).get("hits", [])
             if hits:
-                return {"status": "success", "results": hits}
-        return {"status": "success", "results": [], "message": "No matches found."}
+                # Flatten for readability
+                summaries = []
+                for hit in hits:
+                    fields = hit.get("fields", {})
+                    summaries.append({
+                        "id": hit.get("_id", ""),
+                        "score": hit.get("_score", 0),
+                        "short_description": fields.get("short_description", ""),
+                        "category": fields.get("category", ""),
+                        "text": fields.get("text", ""),
+                        "tags": fields.get("tags", []),
+                        "user_id": fields.get("user_id", ""),
+                        "created_at": fields.get("created_at", ""),
+                    })
+                return {"status": "success", "count": len(summaries), "results": summaries}
+        return {"status": "success", "count": 0, "results": [], "message": "No matches found."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
