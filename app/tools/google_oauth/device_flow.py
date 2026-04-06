@@ -70,7 +70,7 @@ async def poll_for_token(device_code: str, interval: int = 5, timeout: int = 300
                 "client_id": client_id,
                 "client_secret": client_secret,
                 "device_code": device_code,
-                "grant_type": "urn:ietf:params:oauth:grant_type:device_code",
+                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
             })
             data = resp.json()
 
