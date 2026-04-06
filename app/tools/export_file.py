@@ -78,10 +78,12 @@ def generate_file(
     Returns:
         dict: Status and file path for delivery to the user.
     """
-    os.makedirs(_EXPORTS_DIR, exist_ok=True)
-
+    if not code or not code.strip():
+        return {"status": "error", "message": "No code provided. Write Python code that creates a file at OUTPUT_PATH."}
     if not filename:
-        filename = f"export_{uuid.uuid4().hex[:8]}.csv"
+        return {"status": "error", "message": "Filename is required (e.g., 'report.csv', 'data.xlsx', 'summary.pdf')."}
+
+    os.makedirs(_EXPORTS_DIR, exist_ok=True)
     output_path = os.path.join(_EXPORTS_DIR, filename)
 
     scope = {

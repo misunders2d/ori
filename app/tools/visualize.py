@@ -86,6 +86,9 @@ def generate_chart(
     Returns:
         dict: Status and file path of the generated chart.
     """
+    if not code or not code.strip():
+        return {"status": "error", "message": "No code provided. Write Python plotting code using matplotlib, plotly, or seaborn."}
+
     os.makedirs(_PLOTS_DIR, exist_ok=True)
 
     # Determine output path
