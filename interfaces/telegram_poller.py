@@ -602,9 +602,9 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                             # Cancel any in-flight task for this session
                             if (
                                 session_id in _active_tasks
-                                and not _active_tasks[session_id].done()
+                                and not _active_tasks[session_id][0].done()
                             ):
-                                _active_tasks[session_id].cancel()
+                                _active_tasks[session_id][0].cancel()
 
                             refresh_msg = await _perform_session_refresh(
                                 runner_check, session_user_id, session_id, "fresh"
