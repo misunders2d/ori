@@ -116,7 +116,7 @@ async def poll_slack(get_runner_fn, process_init_fn):
         return lock
 
     async def _process_and_send(
-        _runner, _session_user_id, _session_id, _message_content, _user_id, _channel_id
+        _runner, _session_user_id, _session_id, _message_content, _user_id, _channel_id, _thread_ts=""
     ):
         async with await _get_lock(_session_id):
             try:
@@ -129,12 +129,13 @@ async def poll_slack(get_runner_fn, process_init_fn):
                 )
                 if response.text:
                     scrubbed = _scrub_secrets(response.text)
-                    await adapter.send_message(_channel_id, scrubbed)
+                    await adapter.send_message(_channel_id, scrubbed, thread_ts=_thread_ts)
                 for media_item in response.media_items:
                     await adapter.send_media(
                         _channel_id,
                         media_item["data"],
                         media_item["mime_type"],
+                        thread_ts=_thread_ts,
                     )
             except asyncio.CancelledError:
                 pass
@@ -409,6 +410,9 @@ async def poll_slack(get_runner_fn, process_init_fn):
             else:
                 await say("Aborting previous task to prioritize new input...")
 
+        # Use thread_ts if this message is already in a thread, otherwise reply in a thread to this message
+        reply_thread_ts = event.get("thread_ts") or ts
+
         task = asyncio.create_task(
             _process_and_send(
                 runner,
@@ -417,6 +421,7 @@ async def poll_slack(get_runner_fn, process_init_fn):
                 message_content,
                 user_id,
                 channel_id,
+                reply_thread_ts,
             )
         )
         _active_tasks[session_id] = (task, message_content)

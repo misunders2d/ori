@@ -78,8 +78,26 @@ def trigger_rollback(tool_context: ToolContext) -> dict:
     return {"status": "success", "message": "Rollback signal dispatched. The system will shut down cleanly after this response is delivered."}
 
 def session_refresh(mode: str, tool_context: ToolContext) -> dict:
-    """Wipes conversation history."""
-    return {"status": "success", "message": "Session refreshed."}
+    """Wipes conversation history.
+
+    Args:
+        mode: 'fresh' for a clean wipe, 'summarize' to condense history first.
+    """
+    from app.session_signals import request_refresh
+
+    session = getattr(tool_context, "session", None)
+    if not session:
+        return {"status": "error", "message": "No active session to refresh."}
+
+    session_id = getattr(session, "session_id", None) or getattr(session, "id", None)
+    if not session_id:
+        return {"status": "error", "message": "Could not determine session ID."}
+
+    if mode not in ("fresh", "summarize"):
+        mode = "fresh"
+
+    request_refresh(session_id, mode)
+    return {"status": "success", "message": f"Session refresh ({mode}) scheduled. It will take effect after this response."}
 
 async def set_planner_mode(enabled: bool, tool_context: ToolContext) -> dict:
     """Toggle deep thought."""

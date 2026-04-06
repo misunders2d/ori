@@ -184,7 +184,7 @@ def list_scheduled_tasks(tool_context: ToolContext) -> dict:
     for job in jobs:
         task_info = {
             "job_id": job.id,
-            "task": job.args[0] if job.args else "Unknown",
+            "task": job.kwargs.get("task_prompt") if job.kwargs else (job.args[0] if job.args else "Unknown"),
             "next_run": str(job.next_run_time) if job.next_run_time else "N/A",
             "type": (
                 "system (recurring)" if job.id.startswith("sys_cron_")

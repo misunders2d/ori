@@ -67,7 +67,7 @@ class SlackAdapter(TransportAdapter):
         if session_id.startswith("sl_"):
             return {
                 "type": "slack",
-                "channel_id": session_id.replace("sl_", ""),
+                "chat_id": session_id.replace("sl_", ""),
             }
         return {}
 
@@ -77,7 +77,7 @@ class SlackAdapter(TransportAdapter):
             "Content-Type": "application/json; charset=utf-8"
         }
 
-    async def send_message(self, target_id: str | int, text: str) -> None:
+    async def send_message(self, target_id: str | int, text: str, *, thread_ts: str = "") -> None:
         url = SLACK_API_URL.format(method="chat.postMessage")
 
         # SECURITY: Scrub any leaked secrets before they reach the user
@@ -87,6 +87,8 @@ class SlackAdapter(TransportAdapter):
             "channel": str(target_id),
             "text": text
         }
+        if thread_ts:
+            payload["thread_ts"] = thread_ts
         try:
             resp = await self._client.post(url, json=payload, headers=self._headers())
             data = resp.json()
@@ -113,7 +115,7 @@ class SlackAdapter(TransportAdapter):
         except Exception:
             logger.exception("Failed to delete Slack message %s in %s", message_id, target_id)
 
-    async def send_media(self, target_id: str | int, data: bytes, mime_type: str, caption: str = "") -> None:
+    async def send_media(self, target_id: str | int, data: bytes, mime_type: str, caption: str = "", *, thread_ts: str = "") -> None:
         url = SLACK_API_URL.format(method="files.upload")
         headers = {"Authorization": f"Bearer {self._token}"}
 
@@ -129,6 +131,8 @@ class SlackAdapter(TransportAdapter):
             "channels": str(target_id),
             "initial_comment": caption
         }
+        if thread_ts:
+            data_dict["thread_ts"] = thread_ts
         files = {
             "file": (filename, data, mime_type)
         }
