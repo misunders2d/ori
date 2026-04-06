@@ -7,6 +7,7 @@ from .github import GitHubToolset
 from .keepa import KeepaToolset
 from .scratchpad import ScratchpadToolset
 from .visualization import VisualizationToolset
+from .google_workspace import GoogleWorkspaceToolset
 
 __all__ = [
     "SchedulingToolset",
@@ -18,4 +19,5 @@ __all__ = [
     "KeepaToolset",
     "ScratchpadToolset",
     "VisualizationToolset",
+    "GoogleWorkspaceToolset",
 ]
