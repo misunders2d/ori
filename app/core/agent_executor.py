@@ -211,8 +211,8 @@ async def extract_agent_response(
             app_name=runner.app_name, user_id=user_id, session_id=session_id
         )
 
-    # Prune session if it exceeds 50 events — persist to DB via delete+recreate
-    if session and len(session.events) > 50:
+    # Prune session if it exceeds 500 events — persist to DB via delete+recreate
+    if session and len(session.events) > 500:
         logger.info("Pruning session %s (%d events)", session_id, len(session.events))
         preserved_state = dict(session.state) if session.state else {}
         await runner.session_service.delete_session(
