@@ -31,6 +31,10 @@ ALLOWED_CONFIG_KEYS = frozenset({
     "GOOGLE_OAUTH_CLIENT_SECRET",
     "PINECONE_API_KEY",
     "PINECONE_INDEX_NAME",
+    "SP_API_CLIENT_ID",
+    "SP_API_CLIENT_SECRET",
+    "SP_API_REFRESH_TOKEN",
+    "SP_API_SELLER_ID",
 })
 
 # Keys the agent can set via configure_integration (conversational flow).

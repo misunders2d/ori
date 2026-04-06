@@ -9,6 +9,7 @@ from .scratchpad import ScratchpadToolset
 from .visualization import VisualizationToolset
 from .google_workspace import GoogleWorkspaceToolset
 from .pinecone import PineconeToolset
+from .sp_api import SPApiToolset
 
 __all__ = [
     "SchedulingToolset",
@@ -22,4 +23,5 @@ __all__ = [
     "VisualizationToolset",
     "GoogleWorkspaceToolset",
     "PineconeToolset",
+    "SPApiToolset",
 ]
