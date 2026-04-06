@@ -8,10 +8,13 @@ all table restrictions.
 
 import logging
 import os
+import pathlib
 import re
 from typing import Any
 
 from google.adk.agents import Agent
+from google.adk.skills import load_skill_from_dir
+from google.adk.tools import skill_toolset
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.tool_context import ToolContext
@@ -108,6 +111,10 @@ def before_bq_callback(
     return None
 
 
+_base_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
+_scratchpad_skill = load_skill_from_dir(_base_dir / "scratchpad-skill")
+_visualization_skill = load_skill_from_dir(_base_dir / "visualization-skill")
+
 # Load instructions from the bigquery-skill
 _SKILL_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "skills", "bigquery-skill")
 _SKILL_MD = os.path.join(_SKILL_DIR, "SKILL.md")
@@ -137,6 +144,7 @@ if _bq_toolset:
         ),
         instruction=_bq_instruction,
         tools=[
+            skill_toolset.SkillToolset(skills=[_scratchpad_skill, _visualization_skill]),
             _bq_toolset,
             FunctionTool(func=get_table_data),
             ScratchpadToolset(),

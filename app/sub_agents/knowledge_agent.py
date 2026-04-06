@@ -24,6 +24,7 @@ from app.callbacks.guardrails import a2a_privacy_guardrail, prompt_injection_gua
 base_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 google_adk_a2a_skill = load_skill_from_dir(base_dir / "google-adk-a2a-skill")
 scratchpad_skill = load_skill_from_dir(base_dir / "scratchpad-skill")
+visualization_skill = load_skill_from_dir(base_dir / "visualization-skill")
 
 knowledge_agent = Agent(
     name="KnowledgeAgent",
@@ -88,7 +89,7 @@ knowledge_agent = Agent(
         "4. **Stability**: If your URL changes, run `broadcast_address_update` to let friends know.\n"
     ),
     tools=[
-        skill_toolset.SkillToolset(skills=[google_adk_a2a_skill, scratchpad_skill]),
+        skill_toolset.SkillToolset(skills=[google_adk_a2a_skill, scratchpad_skill, visualization_skill]),
         ScratchpadToolset(),
         get_agent_identity,
         add_friend,

@@ -16,6 +16,7 @@ from app.toolsets import KeepaToolset, ScratchpadToolset, VisualizationToolset
 base_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 keepa_skill = load_skill_from_dir(base_dir / "keepa-skill")
 scratchpad_skill = load_skill_from_dir(base_dir / "scratchpad-skill")
+visualization_skill = load_skill_from_dir(base_dir / "visualization-skill")
 
 amazon_agent = Agent(
     name="AmazonAgent",
@@ -48,7 +49,7 @@ amazon_agent = Agent(
         "- BSR is shared across variations. Use `keepa_extract_sales_analysis` to compare variation performance.\n"
     ),
     tools=[
-        skill_toolset.SkillToolset(skills=[keepa_skill, scratchpad_skill]),
+        skill_toolset.SkillToolset(skills=[keepa_skill, scratchpad_skill, visualization_skill]),
         KeepaToolset(),
         ScratchpadToolset(),
         VisualizationToolset(),
