@@ -569,7 +569,14 @@ async def keepa_get_bestsellers(
             resp = await client.get(f"{_API_BASE}/bestsellers", params=params)
             resp.raise_for_status()
             data = resp.json()
-            return {"status": "success", "tokens_left": data.get("tokensLeft"), "data": data}
+            asins = data.get("bestSellersList", {}).get("asinList", [])
+            return {
+                "status": "success",
+                "tokens_left": data.get("tokensLeft"),
+                "category": category,
+                "count": len(asins),
+                "asins": asins,
+            }
     except Exception as e:
         return {"status": "error", "message": f"Keepa API error: {e}"}
 
