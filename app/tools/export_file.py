@@ -35,8 +35,7 @@ def _get_module(name: str):
         return _ALLOWED_MODULES[name]
     if name in _LAZY_MODULES:
         try:
-            parts = name.split(".")
-            mod = __import__(name, fromlist=[parts[-1]] if len(parts) > 1 else [])
+            mod = __import__(name, fromlist=["_"])
             _ALLOWED_MODULES[name] = mod
             return mod
         except ImportError:
@@ -114,7 +113,22 @@ def generate_file(
             "isinstance": isinstance,
             "hasattr": hasattr,
             "getattr": getattr,
+            "setattr": setattr,
+            "map": map,
+            "filter": filter,
+            "any": any,
+            "all": all,
+            "reversed": reversed,
+            "type": type,
             "open": open,
+            "ValueError": ValueError,
+            "TypeError": TypeError,
+            "KeyError": KeyError,
+            "IndexError": IndexError,
+            "RuntimeError": RuntimeError,
+            "Exception": Exception,
+            "StopIteration": StopIteration,
+            "AttributeError": AttributeError,
         },
         "OUTPUT_PATH": output_path,
     }

@@ -44,8 +44,8 @@ def _get_module(name: str):
         return _MODULE_CACHE[name]
     if name in _ALLOWED_MODULE_NAMES:
         try:
-            parts = name.split(".")
-            mod = __import__(name, fromlist=[parts[-1]] if len(parts) > 1 else [])
+            # Use fromlist=["_"] to force import of the deepest submodule
+            mod = __import__(name, fromlist=["_"])
             _MODULE_CACHE[name] = mod
             return mod
         except ImportError as e:
@@ -54,13 +54,37 @@ def _get_module(name: str):
     return None
 
 
-def _restricted_import(name, *args, **kwargs):
-    """Custom __import__ that only allows plotting-related modules."""
+def _restricted_import(name, globals=None, locals=None, fromlist=(), level=0):
+    """Custom __import__ that only allows plotting-related modules.
+
+    Mimics real __import__ behavior:
+    - `import matplotlib.pyplot` → returns `matplotlib` (top-level), with pyplot accessible
+    - `from matplotlib import pyplot` → returns `matplotlib`, fromlist triggers getattr
+    - `import matplotlib.pyplot as plt` → returns `matplotlib`, Python resolves .pyplot
+    """
     mod = _get_module(name)
-    if mod is not None:
+    if mod is None:
+        raise ImportError(f"Import '{name}' is not allowed in the visualization sandbox. "
+                          f"Allowed: matplotlib, plotly, seaborn, pandas, numpy, json, math, datetime.")
+
+    # If fromlist is set, return the deepest module (like real __import__ with fromlist)
+    if fromlist:
         return mod
-    raise ImportError(f"Import '{name}' is not allowed in the visualization sandbox. "
-                      f"Allowed: matplotlib, plotly, seaborn, pandas, numpy, json, math, datetime.")
+
+    # Without fromlist, `import X.Y.Z` should return the top-level module X
+    # with Y and Z accessible as attributes (standard Python behavior)
+    parts = name.split(".")
+    if len(parts) > 1:
+        top = _get_module(parts[0])
+        if top is not None:
+            # Ensure intermediate submodules are set as attributes
+            for i in range(1, len(parts)):
+                subname = ".".join(parts[:i + 1])
+                submod = _get_module(subname)
+                if submod is not None:
+                    setattr(_get_module(".".join(parts[:i])), parts[i], submod)
+            return top
+    return mod
 
 
 def generate_chart(
@@ -125,6 +149,21 @@ def generate_chart(
             "isinstance": isinstance,
             "hasattr": hasattr,
             "getattr": getattr,
+            "setattr": setattr,
+            "map": map,
+            "filter": filter,
+            "any": any,
+            "all": all,
+            "reversed": reversed,
+            "type": type,
+            "ValueError": ValueError,
+            "TypeError": TypeError,
+            "KeyError": KeyError,
+            "IndexError": IndexError,
+            "RuntimeError": RuntimeError,
+            "Exception": Exception,
+            "StopIteration": StopIteration,
+            "AttributeError": AttributeError,
         },
         "OUTPUT_PATH": output_path,
     }
