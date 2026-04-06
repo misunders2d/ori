@@ -27,7 +27,7 @@ dependencies = [
     "seaborn>=0.13.0",
     "pandas>=2.1.0",
     "openpyxl>=3.1.0",
-    "pinecone>=7.0.0",
+    "pinecone[asyncio]>=7.0.0",
 ]
 requires-python = ">=3.10,<3.14"
 
