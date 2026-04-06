@@ -7,7 +7,6 @@ from google.genai import types
 
 from app.app_utils.models import get_model
 from app.callbacks.guardrails import (
-    admin_only_guardrail,
     admin_tool_guardrail,
     prompt_injection_guardrail,
     tool_output_injection_guardrail,
@@ -145,7 +144,6 @@ developer_agent = Agent(
         list_available_models,
         set_agent_model,
     ],
-    before_agent_callback=admin_only_guardrail,
     before_model_callback=prompt_injection_guardrail,
     before_tool_callback=admin_tool_guardrail,
     after_tool_callback=[tool_output_injection_guardrail, verify_retry_guardrail],
