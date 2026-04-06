@@ -1,6 +1,7 @@
 import subprocess
 import pytest
 
+@pytest.mark.infra
 def test_docker_status():
     try:
         res = subprocess.run(["docker", "ps", "--all"], capture_output=True, text=True, timeout=10)

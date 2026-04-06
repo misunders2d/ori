@@ -3,11 +3,12 @@ import re
 import pytest
 import socket
 
+@pytest.mark.infra
 def test_check_local_and_tunnel():
     # 1. Check if the agent is actually listening on 8002
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         listening = (s.connect_ex(('localhost', 8002)) == 0)
-    
+
     # 2. Get latest tunnel URL
     try:
         result = subprocess.run(

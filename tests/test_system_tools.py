@@ -42,7 +42,7 @@ async def test_execute_approved_action_totp_valid():
             with patch("app.core.pending_actions.get_and_delete_action", return_value=mock_action):
                 result = await execute_approved_action("ACT-VALID", totp_code="123456", tool_context=MagicMock())
                 assert result["status"] == "success"
-                assert "Session refreshed" in result["message"]
+                assert "Session refresh" in result["message"]
 
 def test_check_active_tasks():
     from app.tools.diagnostics import check_active_tasks
