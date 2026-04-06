@@ -378,8 +378,13 @@ async def poll_slack(get_runner_fn, process_init_fn):
             await say(result)
             return
 
-        # /reset command
-        if text.strip().lower() in ("/reset", "reset session"):
+        # Reset command — strip bot mention prefix if present
+        # Note: /slash commands are intercepted by Slack and don't arrive as messages,
+        # so we match plain text variants only.
+        _clean_text = text.strip()
+        if _bot_user_id:
+            _clean_text = _clean_text.replace(f"<@{_bot_user_id}>", "").strip()
+        if _clean_text.lower() in ("reset", "reset session"):
             runner_check = get_runner_fn()
             if runner_check:
                 from app.core.agent_executor import _perform_session_refresh
@@ -451,7 +456,17 @@ async def poll_slack(get_runner_fn, process_init_fn):
             return
 
         # In groups/channels: silently absorb context if not mentioned
+        # Skip context save if session is already large (>150 events) to prevent token overflow
         if not is_dm and not is_mentioned:
+            try:
+                session = await runner.session_service.get_session(
+                    app_name=runner.app_name, user_id=session_user_id, session_id=session_id
+                )
+                if session and len(session.events) > 150:
+                    logger.info("Skipping context save for %s — session too large (%d events)", session_id, len(session.events))
+                    return
+            except Exception:
+                pass
             logger.info("Silently adding group message for context to session %s", session_id)
             asyncio.create_task(
                 _save_context(runner, session_user_id, session_id, message_content)
