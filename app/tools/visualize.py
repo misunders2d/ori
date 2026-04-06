@@ -10,6 +10,7 @@ import os
 import time
 import traceback
 import uuid
+from typing import Any
 
 from google.adk.tools.tool_context import ToolContext
 
@@ -17,34 +18,38 @@ logger = logging.getLogger(__name__)
 
 _PLOTS_DIR = os.path.abspath("./tmp/plots")
 
-# Restricted set of allowed imports for the plotting sandbox
-_ALLOWED_MODULES = {
-    "matplotlib": __import__("matplotlib"),
-    "matplotlib.pyplot": __import__("matplotlib.pyplot", fromlist=["pyplot"]),
-    "matplotlib.dates": __import__("matplotlib.dates", fromlist=["dates"]),
-    "matplotlib.ticker": __import__("matplotlib.ticker", fromlist=["ticker"]),
-    "matplotlib.colors": __import__("matplotlib.colors", fromlist=["colors"]),
-    "numpy": __import__("numpy"),
+# Force matplotlib to non-interactive backend BEFORE any matplotlib imports
+import matplotlib
+matplotlib.use("Agg")
+
+# All modules are lazy-loaded on first use to avoid import-time failures on headless servers
+_ALLOWED_MODULE_NAMES = {
+    "matplotlib", "matplotlib.pyplot", "matplotlib.dates", "matplotlib.ticker",
+    "matplotlib.colors", "matplotlib.patches", "matplotlib.lines",
+    "numpy", "json", "math", "datetime",
+    "plotly", "plotly.graph_objects", "plotly.express", "plotly.io",
+    "seaborn", "pandas",
+}
+
+_MODULE_CACHE: dict[str, Any] = {
     "json": __import__("json"),
     "math": __import__("math"),
     "datetime": __import__("datetime"),
 }
 
-# Lazy imports — only loaded if the agent uses them
-_LAZY_MODULES = {"plotly", "plotly.graph_objects", "plotly.express", "plotly.io", "seaborn", "pandas"}
-
 
 def _get_module(name: str):
-    """Get a module from allowed set, lazy-loading plotly/seaborn/pandas on demand."""
-    if name in _ALLOWED_MODULES:
-        return _ALLOWED_MODULES[name]
-    if name in _LAZY_MODULES:
+    """Lazy-load a module from the allowed set."""
+    if name in _MODULE_CACHE:
+        return _MODULE_CACHE[name]
+    if name in _ALLOWED_MODULE_NAMES:
         try:
             parts = name.split(".")
             mod = __import__(name, fromlist=[parts[-1]] if len(parts) > 1 else [])
-            _ALLOWED_MODULES[name] = mod
+            _MODULE_CACHE[name] = mod
             return mod
-        except ImportError:
+        except ImportError as e:
+            logger.warning("Failed to import %s: %s", name, e)
             return None
     return None
 
@@ -56,11 +61,6 @@ def _restricted_import(name, *args, **kwargs):
         return mod
     raise ImportError(f"Import '{name}' is not allowed in the visualization sandbox. "
                       f"Allowed: matplotlib, plotly, seaborn, pandas, numpy, json, math, datetime.")
-
-
-# Force matplotlib to non-interactive backend
-import matplotlib
-matplotlib.use("Agg")
 
 
 def generate_chart(
