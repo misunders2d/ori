@@ -90,6 +90,98 @@ def _history_from_csv(csv: list | None, items_per_row: int, days: int = 90) -> l
     return result
 
 
+# Keepa monthlySold is a tier indicator, not exact units.
+# Map tier value → (min, max) monthly units.
+_SALES_TIERS = {
+    -1: (0, 0), 0: (0, 50), 50: (50, 100), 100: (100, 200), 200: (200, 300),
+    300: (300, 400), 400: (400, 500), 500: (500, 600), 600: (600, 700),
+    700: (700, 800), 800: (800, 900), 900: (900, 1000), 1000: (1000, 2000),
+    2000: (2000, 3000), 3000: (3000, 4000), 4000: (4000, 5000),
+    5000: (5000, 6000), 6000: (6000, 7000), 7000: (7000, 8000),
+    8000: (8000, 9000), 9000: (9000, 10000), 10000: (10000, 20000),
+    20000: (20000, 30000), 30000: (30000, 40000), 40000: (40000, 50000),
+    50000: (50000, 60000), 60000: (60000, 70000), 70000: (70000, 80000),
+    80000: (80000, 90000), 90000: (90000, 100000), 100000: (100000, 150000),
+}
+
+
+def _keepa_minutes_to_unix(keepa_min: int) -> float:
+    return _KEEPA_EPOCH + keepa_min * 60
+
+
+def _segments_from_csv(csv: list | None, items_per_row: int) -> list[tuple]:
+    """Convert a Keepa CSV into [(unix_start, unix_end, value), ...] segments."""
+    if not csv or len(csv) < items_per_row:
+        return []
+    segments = []
+    n = len(csv) // items_per_row
+    for i in range(n):
+        offset = i * items_per_row
+        t_start = _keepa_minutes_to_unix(csv[offset])
+        value = csv[offset + 1]
+        if i + 1 < n:
+            t_end = _keepa_minutes_to_unix(csv[(i + 1) * items_per_row])
+        else:
+            t_end = time.time()  # Last segment extends to now
+        segments.append((t_start, t_end, value))
+    return segments
+
+
+def _daily_accumulate(segments: list[tuple], days: int, mode: str = "value") -> dict[str, Any]:
+    """Accumulate segment data into daily buckets.
+
+    mode="value": weighted average (for prices) — weight by duration
+    mode="sales": sum of (daily_rate × duration) using sales tiers
+    mode="raw": last value per day (for BSR, counts)
+    """
+    now = time.time()
+    cutoff = now - days * 86400
+    daily: dict[str, dict] = {}  # date_str -> accumulator
+
+    for t_start, t_end, raw_value in segments:
+        # Clip to analysis window
+        seg_start = max(t_start, cutoff)
+        seg_end = min(t_end, now)
+        if seg_start >= seg_end:
+            continue
+
+        if raw_value <= 0 and mode == "value":
+            continue  # -1 means unavailable for prices
+
+        # Walk day by day through this segment
+        cursor = seg_start
+        while cursor < seg_end:
+            day_str = datetime.fromtimestamp(cursor, tz=timezone.utc).strftime("%Y-%m-%d")
+            # End of this calendar day
+            day_start = datetime.fromtimestamp(cursor, tz=timezone.utc).replace(
+                hour=0, minute=0, second=0
+            )
+            day_end_ts = (day_start.timestamp()) + 86400
+            chunk_end = min(seg_end, day_end_ts)
+            duration_hours = (chunk_end - cursor) / 3600
+
+            if day_str not in daily:
+                daily[day_str] = {"value_sum": 0, "weight": 0, "sales_min": 0, "sales_max": 0, "last_raw": None}
+
+            bucket = daily[day_str]
+
+            if mode == "value":
+                # Weighted average: price × hours
+                bucket["value_sum"] += (raw_value / 100.0) * duration_hours
+                bucket["weight"] += duration_hours
+            elif mode == "sales":
+                tier_min, tier_max = _SALES_TIERS.get(raw_value, (0, 0))
+                # Convert monthly rate to hourly rate, multiply by duration
+                bucket["sales_min"] += (tier_min / 30 / 24) * duration_hours
+                bucket["sales_max"] += (tier_max / 30 / 24) * duration_hours
+            elif mode == "raw":
+                bucket["last_raw"] = raw_value
+
+            cursor = chunk_end
+
+    return daily
+
+
 async def _check_token_balance(client: httpx.AsyncClient, api_key: str) -> dict:
     try:
         resp = await client.get(f"{_API_BASE}/token", params={"key": api_key})
@@ -477,6 +569,164 @@ def keepa_extract_competitors(asin: str, tool_context: Optional[ToolContext] = N
         "buy_box_sellers_historical": list(bb_sellers),
         "buy_box_seller_count": len(bb_sellers),
         "current_offer_sellers": offer_sellers,
+    }
+
+
+def keepa_extract_sales_analysis(
+    asin: str,
+    days: int = 90,
+    tool_context: Optional[ToolContext] = None,
+) -> dict:
+    """Extract comprehensive sales analysis from cached Keepa data.
+
+    Computes REAL daily sales estimates, average prices (accounting for coupons
+    and lightning deals), and BSR history. Uses Keepa's change-only data with
+    proper time-weighted interpolation — no guessing.
+
+    Call keepa_fetch_product first.
+
+    Args:
+        asin: The ASIN (must be fetched first).
+        days: Analysis period in days (default 90).
+
+    Returns:
+        dict: Daily sales (min/max/avg), revenue estimates, price history,
+              coupon impact, and summary statistics.
+    """
+    product = _load_cached(asin.strip().upper())
+    if not product:
+        return {"status": "error", "message": f"No cached data for {asin}. Call keepa_fetch_product first."}
+
+    csv_data = product.get("csv", [])
+
+    # --- Price history (NEW price, index 1) ---
+    price_segments = _segments_from_csv(csv_data[1] if len(csv_data) > 1 else None, 2)
+    price_daily = _daily_accumulate(price_segments, days, mode="value")
+
+    # --- Buy box price (index 18) ---
+    bb_segments = _segments_from_csv(csv_data[18] if len(csv_data) > 18 else None, 2)
+    bb_daily = _daily_accumulate(bb_segments, days, mode="value")
+
+    # --- Lightning deal price (index 8) ---
+    ld_segments = _segments_from_csv(csv_data[8] if len(csv_data) > 8 else None, 2)
+    ld_daily = _daily_accumulate(ld_segments, days, mode="value")
+
+    # --- BSR (index 3) ---
+    bsr_segments = _segments_from_csv(csv_data[3] if len(csv_data) > 3 else None, 2)
+    bsr_daily = _daily_accumulate(bsr_segments, days, mode="raw")
+
+    # --- Monthly sold history ---
+    monthly_sold_history = product.get("monthlySoldHistory", [])
+    sold_segments = _segments_from_csv(monthly_sold_history, 2) if monthly_sold_history else []
+    sales_daily = _daily_accumulate(sold_segments, days, mode="sales")
+
+    # --- Coupon history ---
+    coupon_history = product.get("couponHistory", [])
+    coupon_segments = []
+    if coupon_history:
+        # couponHistory: [time, oneTime, sns, time, oneTime, sns, ...]
+        for i in range(0, len(coupon_history) - 2, 3):
+            t = _keepa_minutes_to_unix(coupon_history[i])
+            discount = coupon_history[i + 1]  # positive = cents off, negative = % off
+            if i + 3 < len(coupon_history):
+                t_next = _keepa_minutes_to_unix(coupon_history[i + 3])
+            else:
+                t_next = time.time()
+            coupon_segments.append((t, t_next, discount))
+    coupon_daily = _daily_accumulate(coupon_segments, days, mode="raw")
+
+    # --- Build daily summary ---
+    all_dates = sorted(set(
+        list(price_daily.keys()) + list(sales_daily.keys()) +
+        list(bsr_daily.keys()) + list(bb_daily.keys())
+    ))
+
+    daily_rows = []
+    total_sales_min = 0
+    total_sales_max = 0
+    total_revenue_min = 0
+    total_revenue_max = 0
+
+    for d in all_dates:
+        price_bucket = price_daily.get(d, {})
+        bb_bucket = bb_daily.get(d, {})
+        ld_bucket = ld_daily.get(d, {})
+        sales_bucket = sales_daily.get(d, {})
+        bsr_bucket = bsr_daily.get(d, {})
+        coupon_bucket = coupon_daily.get(d, {})
+
+        # Weighted average price for the day
+        avg_price = None
+        if price_bucket.get("weight", 0) > 0:
+            avg_price = round(price_bucket["value_sum"] / price_bucket["weight"], 2)
+
+        bb_price = None
+        if bb_bucket.get("weight", 0) > 0:
+            bb_price = round(bb_bucket["value_sum"] / bb_bucket["weight"], 2)
+
+        ld_price = None
+        if ld_bucket.get("weight", 0) > 0:
+            ld_price = round(ld_bucket["value_sum"] / ld_bucket["weight"], 2)
+
+        # Effective price: LD overrides if active, otherwise buy box or new
+        effective_price = ld_price or bb_price or avg_price
+
+        # Apply coupon to effective price
+        coupon_raw = coupon_bucket.get("last_raw")
+        coupon_str = None
+        if coupon_raw and effective_price:
+            if coupon_raw > 0:
+                effective_price = effective_price - coupon_raw / 100.0
+                coupon_str = f"${coupon_raw / 100:.2f} off"
+            elif coupon_raw < 0:
+                effective_price = effective_price * (1 + coupon_raw / 100.0)
+                coupon_str = f"{abs(coupon_raw)}% off"
+            effective_price = round(effective_price, 2)
+
+        sales_min = round(sales_bucket.get("sales_min", 0), 1)
+        sales_max = round(sales_bucket.get("sales_max", 0), 1)
+        bsr = bsr_bucket.get("last_raw")
+
+        total_sales_min += sales_min
+        total_sales_max += sales_max
+        if effective_price:
+            total_revenue_min += sales_min * effective_price
+            total_revenue_max += sales_max * effective_price
+
+        row = {"date": d, "sales_min": sales_min, "sales_max": sales_max}
+        if avg_price:
+            row["new_price"] = avg_price
+        if bb_price:
+            row["buy_box_price"] = bb_price
+        if ld_price:
+            row["ld_price"] = ld_price
+        if effective_price:
+            row["effective_price"] = effective_price
+        if coupon_str:
+            row["coupon"] = coupon_str
+        if bsr and bsr > 0:
+            row["bsr"] = int(bsr)
+        daily_rows.append(row)
+
+    num_days = len(all_dates) or 1
+    avg_daily_min = round(total_sales_min / num_days, 1)
+    avg_daily_max = round(total_sales_max / num_days, 1)
+
+    return {
+        "status": "success",
+        "asin": asin.upper(),
+        "period_days": days,
+        "actual_days_with_data": len(all_dates),
+        "summary": {
+            "total_sales_min": round(total_sales_min),
+            "total_sales_max": round(total_sales_max),
+            "avg_daily_sales_min": avg_daily_min,
+            "avg_daily_sales_max": avg_daily_max,
+            "avg_daily_sales": round((avg_daily_min + avg_daily_max) / 2, 1),
+            "total_revenue_min": round(total_revenue_min, 2),
+            "total_revenue_max": round(total_revenue_max, 2),
+        },
+        "daily": daily_rows,
     }
 
 

@@ -17,7 +17,8 @@ class KeepaToolset(BaseToolset):
             keepa_extract_offers,
             keepa_extract_stats,
             keepa_extract_competitors,
-            # Other endpoints
+            keepa_extract_sales_analysis,
+            # Other API endpoints
             keepa_product_finder,
             keepa_get_categories,
             keepa_get_bestsellers,
@@ -33,6 +34,7 @@ class KeepaToolset(BaseToolset):
             FunctionTool(func=keepa_extract_offers),
             FunctionTool(func=keepa_extract_stats),
             FunctionTool(func=keepa_extract_competitors),
+            FunctionTool(func=keepa_extract_sales_analysis),
             FunctionTool(func=keepa_product_finder),
             FunctionTool(func=keepa_get_categories),
             FunctionTool(func=keepa_get_bestsellers),
