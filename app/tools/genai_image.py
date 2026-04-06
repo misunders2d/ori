@@ -58,7 +58,13 @@ async def generate_image(
             if part.inline_data:
                 generated_image = part.as_image()
                 generated_image.save(output_path)
-                return {"status": "success", "image_path": output_path, "resolution": resolution, "thinking_effort": thinking_effort}
+                return {
+                    "status": "success", 
+                    "file_path": output_path, 
+                    "image_path": output_path, 
+                    "resolution": resolution, 
+                    "thinking_effort": thinking_effort
+                }
                 
         return {"status": "error", "message": "No image data found in response"}
     except Exception as e:
