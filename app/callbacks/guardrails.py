@@ -212,30 +212,34 @@ def _estimate_tokens(llm_request: LlmRequest) -> int:
     return total_chars // _CHARS_PER_TOKEN
 
 
-def _prune_to_fit(llm_request: LlmRequest) -> None:
-    """Remove oldest conversation events until estimated tokens fit under the limit."""
-    if not llm_request.contents:
-        return
-    while _estimate_tokens(llm_request) > _TOKEN_LIMIT and len(llm_request.contents) > 2:
-        llm_request.contents.pop(0)
-    logger.info("Context pruned to %d messages (~%d tokens)", len(llm_request.contents), _estimate_tokens(llm_request))
-
-
 def prompt_injection_guardrail(
     callback_context: CallbackContext, llm_request: LlmRequest
 ) -> LlmResponse | None:
     """
     Runtime Guardrail: Inspects the LLM request before hitting the model.
-    - Token gatekeeper: prunes context if estimated tokens exceed 900K
+    - Token gatekeeper: rejects if context exceeds 900K tokens
     - Prompt injection detection via semantic cosine similarity
     - Planner toggle and model hot-swap
     """
-    # Token gatekeeper — prune oldest events to stay under model limit
+    # Token gatekeeper — reject and instruct agent to reduce context
     est_tokens = _estimate_tokens(llm_request)
     if est_tokens > _TOKEN_LIMIT:
-        logger.warning("Token estimate %d exceeds %d for %s. Pruning context.",
+        logger.warning("Token estimate %d exceeds %d for %s. Rejecting.",
                        est_tokens, _TOKEN_LIMIT, callback_context.agent_name)
-        _prune_to_fit(llm_request)
+        return LlmResponse(
+            content=types.Content(
+                parts=[types.Part(
+                    text=(
+                        f"CONTEXT OVERFLOW: Your request is ~{est_tokens:,} tokens, which exceeds the "
+                        f"{_TOKEN_LIMIT:,} token safety limit. You MUST reduce your context before retrying:\n"
+                        "1. Use `scratchpad_write` to save your intermediate findings to disk.\n"
+                        "2. Summarize large tool outputs instead of keeping them in conversation.\n"
+                        "3. If the session is too bloated, ask the user to /reset.\n"
+                        "Do NOT retry the same request — it will fail again."
+                    )
+                )]
+            )
+        )
 
     # Per-container rate throttle — prevents one agent from exhausting shared API quota
     if not _throttle.acquire():
