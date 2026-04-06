@@ -1,6 +1,8 @@
 """Platform-agnostic agent execution, session management, and context handling."""
 
 import logging
+import mimetypes
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -259,7 +261,6 @@ async def extract_agent_response(
                             if isinstance(res, dict) and res.get("file_path"):
                                 fp = res["file_path"]
                                 if os.path.isfile(fp):
-                                    import mimetypes
                                     mime, _ = mimetypes.guess_type(fp)
                                     with open(fp, "rb") as f:
                                         media_items.append({
