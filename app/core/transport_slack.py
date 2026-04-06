@@ -52,6 +52,8 @@ class SlackAdapter(TransportAdapter):
     def __init__(self, client: httpx.AsyncClient, bot_token: str):
         self._client = client
         self._token = bot_token
+        # Lazy-initialized Slack SDK client for file uploads
+        self._sdk_client = None
 
     @property
     def platform_name(self) -> str:
@@ -116,7 +118,7 @@ class SlackAdapter(TransportAdapter):
             logger.exception("Failed to delete Slack message %s in %s", message_id, target_id)
 
     async def send_media(self, target_id: str | int, data: bytes, mime_type: str, caption: str = "", *, thread_ts: str = "") -> None:
-        """Upload a file using Slack's v2 upload flow (getUploadURLExternal + completeUploadExternal)."""
+        """Upload a file using the Slack SDK's files_upload_v2 (handles the full 3-step flow)."""
         import mimetypes as _mt
         ext = _mt.guess_extension(mime_type) or ".bin"
         filename = f"file{ext}"
@@ -125,45 +127,24 @@ class SlackAdapter(TransportAdapter):
             caption = _scrub_secrets(caption)
 
         try:
-            # Step 1: Get an upload URL from Slack
-            url_resp = await self._client.post(
-                SLACK_API_URL.format(method="files.getUploadURLExternal"),
-                json={"filename": filename, "length": len(data)},
-                headers=self._headers(),
-            )
-            url_data = url_resp.json()
-            if not url_data.get("ok"):
-                logger.error("Slack getUploadURLExternal failed: %s", url_data.get("error", url_data))
-                return
+            if self._sdk_client is None:
+                from slack_sdk.web.async_client import AsyncWebClient
+                self._sdk_client = AsyncWebClient(token=self._token)
 
-            upload_url = url_data["upload_url"]
-            file_id = url_data["file_id"]
-
-            # Step 2: Upload the file content to the provided URL
-            await self._client.post(
-                upload_url,
-                content=data,
-                headers={"Content-Type": mime_type},
-            )
-
-            # Step 3: Complete the upload and share to channel
-            complete_payload = {
-                "files": [{"id": file_id, "title": filename}],
-                "channel_id": str(target_id),
+            kwargs = {
+                "content": data,
+                "filename": filename,
+                "title": filename,
+                "channel": str(target_id),
             }
             if caption:
-                complete_payload["initial_comment"] = caption
+                kwargs["initial_comment"] = caption
             if thread_ts:
-                complete_payload["thread_ts"] = thread_ts
+                kwargs["thread_ts"] = thread_ts
 
-            complete_resp = await self._client.post(
-                SLACK_API_URL.format(method="files.completeUploadExternal"),
-                json=complete_payload,
-                headers=self._headers(),
-            )
-            complete_data = complete_resp.json()
-            if not complete_data.get("ok"):
-                logger.error("Slack completeUploadExternal failed: %s", complete_data.get("error", complete_data))
+            resp = await self._sdk_client.files_upload_v2(**kwargs)
+            if not resp.get("ok"):
+                logger.error("Slack files_upload_v2 failed: %s", resp.get("error", resp))
         except Exception:
             logger.exception("Failed to upload media to Slack channel %s", target_id)
 
