@@ -15,7 +15,7 @@ from app.callbacks.guardrails import (
 from app.tools.google_search import google_search_agent_tool
 from app.tools.model_tools import list_available_models, set_agent_model
 from app.tools.web import web_fetch
-from app.toolsets import EvolutionToolset, IntegrationToolset, GitHubToolset
+from app.toolsets import EvolutionToolset, IntegrationToolset, GitHubToolset, ScratchpadToolset
 from app.toolsets.evolution import _is_child_container
 
 base_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
@@ -23,6 +23,7 @@ google_adk_skill = load_skill_from_dir(base_dir / "google-adk-skill")
 google_adk_a2a_skill = load_skill_from_dir(base_dir / "google-adk-a2a-skill")
 skill_creator_skill = load_skill_from_dir(base_dir / "skill-creator-skill")
 external_research_skill = load_skill_from_dir(base_dir / "external-research-skill")
+scratchpad_skill = load_skill_from_dir(base_dir / "scratchpad-skill")
 
 model_config = get_model(
     "DeveloperAgent", retry_options=types.HttpRetryOptions(attempts=3)
@@ -132,12 +133,14 @@ developer_agent = Agent(
                 google_adk_a2a_skill,
                 skill_creator_skill,
                 external_research_skill,
+                scratchpad_skill,
             ]
         ),
         # Toolsets
         EvolutionToolset(),
         IntegrationToolset(),
         GitHubToolset(),
+        ScratchpadToolset(),
         # Individual tools
         *([google_search_agent_tool] if google_search_agent_tool else []),
         web_fetch,

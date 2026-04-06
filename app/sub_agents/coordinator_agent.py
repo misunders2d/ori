@@ -55,6 +55,10 @@ root_agent = Agent(
         "When the user says 'Approve ACT-XXXXXX', call `execute_approved_action` with that token. "
         "If they provide a 6-digit code, pass both the token and `totp_code`.\n\n"
 
+        "SCRATCHPAD: For multi-step research tasks (competitor analysis, multi-ASIN lookups, "
+        "complex data gathering), use `scratchpad_write` to record intermediate findings as you go. "
+        "Call `scratchpad_read` when ready to synthesize. This keeps your context clean.\n\n"
+
         "EAGER DELEGATION: Answer questions directly first. "
         "Delegate to DeveloperAgent ONLY on explicit action requests ('fix it', 'write the code').\n\n"
 

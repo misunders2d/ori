@@ -49,6 +49,10 @@ Load `references/table_data.json` to see the full catalog with per-table descrip
 
 Some tables in `references/table_data.json` have an `authorized_users` field — a list of email addresses allowed to query that table. The `before_tool_callback` enforces this automatically. Admin users bypass all restrictions. If a user is denied, tell them to contact an admin.
 
+## Working Memory
+
+For multi-step queries (e.g., "compare sales across 5 ASINs", "build a P&L report"), use the scratchpad to record intermediate query results. Write findings after each query, read when ready to synthesize the final answer. See `scratchpad-skill` for the full protocol.
+
 ## Gotchas
 
 - **Read-only**: WriteMode is BLOCKED. Never attempt INSERT, UPDATE, DELETE, CREATE, or DROP. The toolset will reject it.
