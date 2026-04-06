@@ -195,11 +195,9 @@ async def poll_slack(get_runner_fn, process_init_fn):
         if not channel_id or not user_raw:
             return
 
-        # In group chats / channels / multi-party DMs, only respond if directly mentioned
+        # Determine if this is a direct message or a group/channel
         is_dm = channel_type == "im"
-        if not is_dm:
-            if not _bot_user_id or f"<@{_bot_user_id}>" not in text:
-                return
+        is_mentioned = _bot_user_id and f"<@{_bot_user_id}>" in text
 
         # Build canonical IDs (session is channel-scoped, user_id upgraded to email below)
         session_id = adapter.make_session_id(channel_id)
@@ -425,6 +423,14 @@ async def poll_slack(get_runner_fn, process_init_fn):
                 "`/init YOUR_PASSCODE GOOGLE_API_KEY=your-key`\n"
                 "or\n"
                 "`/init YOUR_PASSCODE ANTHROPIC_API_KEY=your-key`"
+            )
+            return
+
+        # In groups/channels: silently absorb context if not mentioned
+        if not is_dm and not is_mentioned:
+            logger.info("Silently adding group message for context to session %s", session_id)
+            asyncio.create_task(
+                _save_context(runner, session_user_id, session_id, message_content)
             )
             return
 
