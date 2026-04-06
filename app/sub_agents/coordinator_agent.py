@@ -9,6 +9,7 @@ from app.callbacks.guardrails import (
     state_setter,
     tool_output_injection_guardrail,
 )
+from app.sub_agents.amazon_agent import amazon_agent
 from app.sub_agents.bigquery_agent import bigquery_agent
 from app.sub_agents.developer_agent import developer_agent
 from app.sub_agents.knowledge_agent import knowledge_agent
@@ -16,7 +17,6 @@ from app.toolsets import (
     MemoryToolset,
     SchedulingToolset,
     SystemToolset,
-    KeepaToolset,
     ScratchpadToolset,
 )
 from app.tools.a2a import get_agent_identity
@@ -36,8 +36,9 @@ root_agent = Agent(
         "DELEGATION:\n"
         "1. For self-evolution (code changes, bug fixes, adding features): Delegate to DeveloperAgent.\n"
         "2. For A2A communication, friend management, DNA exchange: Delegate to KnowledgeAgent.\n"
-        "3. For business data, sales, inventory, ASINs, SKUs, BigQuery queries: Delegate to BigQueryAgent.\n"
-        "4. For everything else (research, scheduling, memory, access control): Handle directly.\n\n"
+        "3. For Amazon product research, ASINs, pricing, Keepa, competitors, listings: Delegate to AmazonAgent.\n"
+        "4. For business data, BigQuery queries, sales reports, inventory reports: Delegate to BigQueryAgent.\n"
+        "5. For everything else (research, scheduling, memory, access control): Handle directly.\n\n"
 
         "SPAWNING: You can spawn child agents (`spawn_agent`) for dedicated workflows. "
         "Children are disposable Docker sandboxes — they stage, verify, and export DNA back to you. "
@@ -60,10 +61,6 @@ root_agent = Agent(
         "fabricate data, or guess. Say 'the tool returned an error' and show the error. "
         "This is especially critical for Keepa and BigQuery — if the data isn't there, say so.\n\n"
 
-        "SCRATCHPAD: For multi-step research tasks (competitor analysis, multi-ASIN lookups, "
-        "complex data gathering), use `scratchpad_write` to record intermediate findings as you go. "
-        "Call `scratchpad_read` when ready to synthesize. This keeps your context clean.\n\n"
-
         "EAGER DELEGATION: Answer questions directly first. "
         "Delegate to DeveloperAgent ONLY on explicit action requests ('fix it', 'write the code').\n\n"
 
@@ -72,6 +69,7 @@ root_agent = Agent(
     sub_agents=[
         developer_agent,
         knowledge_agent,
+        amazon_agent,
         *([bigquery_agent] if bigquery_agent else []),
     ],
     tools=[
@@ -79,7 +77,6 @@ root_agent = Agent(
         SchedulingToolset(),
         MemoryToolset(),
         SystemToolset(),
-        KeepaToolset(),
         ScratchpadToolset(),
         # Individual tools
         *([google_search_agent_tool] if google_search_agent_tool else []),
