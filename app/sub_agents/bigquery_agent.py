@@ -45,13 +45,15 @@ def before_bq_callback(
         return None
 
     state = tool_context.state.to_dict() if hasattr(tool_context.state, "to_dict") else {}
-    user_email = state.get("user_email", "")
     user_id = state.get("user_id", "")
 
     # Admin users bypass table-level restrictions
     admin_ids = _get_admin_emails()
     if user_id in admin_ids:
         return None
+
+    # user_id is the email for Slack users, tg_XXX for Telegram
+    user_email = user_id
 
     # Extract table references from SQL query
     tables_to_check = []

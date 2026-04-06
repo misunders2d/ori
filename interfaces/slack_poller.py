@@ -116,19 +116,10 @@ async def poll_slack(get_runner_fn, process_init_fn):
         return lock
 
     async def _process_and_send(
-        _runner, _session_user_id, _session_id, _message_content, _user_id, _channel_id, _thread_ts="", _user_email=""
+        _runner, _session_user_id, _session_id, _message_content, _user_id, _channel_id, _thread_ts=""
     ):
         async with await _get_lock(_session_id):
             try:
-                # Inject email into session state before agent execution
-                if _user_email:
-                    from app.core.agent_executor import update_session_state
-                    await update_session_state(
-                        runner=_runner,
-                        user_id=_session_user_id,
-                        session_id=_session_id,
-                        state_delta={"user_email": _user_email},
-                    )
                 response = await extract_agent_response(
                     _runner,
                     _session_user_id,
@@ -164,6 +155,15 @@ async def poll_slack(get_runner_fn, process_init_fn):
             except Exception:
                 logger.exception("Failed to save context for session %s", _session_id)
 
+    # Acknowledge non-message events to suppress "unhandled request" warnings
+    @slack_app.event("reaction_added")
+    async def handle_reaction_added(event, say):
+        pass
+
+    @slack_app.event("reaction_removed")
+    async def handle_reaction_removed(event, say):
+        pass
+
     @slack_app.event("message")
     async def handle_message(event, say):
         _update_heartbeat()
@@ -182,8 +182,7 @@ async def poll_slack(get_runner_fn, process_init_fn):
         if not channel_id or not user_raw:
             return
 
-        # Build canonical IDs
-        user_id = adapter.make_user_id(user_raw)
+        # Build canonical IDs (session is channel-scoped, user_id upgraded to email below)
         session_id = adapter.make_session_id(channel_id)
         session_user_id = session_id
 
@@ -203,6 +202,9 @@ async def poll_slack(get_runner_fn, process_init_fn):
                 user_email = profile.get("email", "")
         except Exception:
             pass
+
+        # Use email as canonical user_id if available, fall back to sl_ prefix
+        user_id = user_email if user_email else adapter.make_user_id(user_raw)
 
         # Extract timestamp
         try:
@@ -433,7 +435,6 @@ async def poll_slack(get_runner_fn, process_init_fn):
                 user_id,
                 channel_id,
                 reply_thread_ts,
-                user_email,
             )
         )
         _active_tasks[session_id] = (task, message_content)
