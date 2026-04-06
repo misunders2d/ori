@@ -103,7 +103,7 @@ async def keepa_get_product_data(
     domain: int = 1,
     stats: Optional[int] = None,
     update: Optional[int] = None,
-    offers: Optional[int] = 1,
+    offers: int = 1,
     tool_context: Optional[ToolContext] = None,
 ) -> dict:
     """Retrieves detailed product data from Keepa, including real selling price analysis.
@@ -113,7 +113,7 @@ async def keepa_get_product_data(
         domain: Amazon locale (1: US, 2: GB, 3: DE, 4: FR, 5: JP, 6: CA, 7: CN, 8: IT, 9: ES, 10: IN, 11: MX).
         stats: If set, returns statistics for the specified period (days).
         update: If set (0 to 24), forces an update of the product data if older than X hours.
-        offers: If set to 1, retrieves live offer data including Prime Exclusive discounts.
+        offers: Number of offer pages to retrieve (0-3). Each page has up to 10 offers and costs 6 extra tokens. Default 1. Do NOT set higher than 3.
 
     Returns:
         dict: Product data and pricing analysis.
@@ -132,7 +132,7 @@ async def keepa_get_product_data(
     if update is not None:
         params["update"] = update
     if offers is not None:
-        params["offers"] = offers
+        params["offers"] = min(int(offers), 3)  # Hard cap to prevent token/context explosion
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:

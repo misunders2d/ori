@@ -211,9 +211,9 @@ async def extract_agent_response(
             app_name=runner.app_name, user_id=user_id, session_id=session_id
         )
 
-    # Prune session if it exceeds 200 events — persist to DB via delete+recreate
-    if session and len(session.events) > 200:
-        logger.info("Pruning session %s (%d events → 100)", session_id, len(session.events))
+    # Prune session if it exceeds 50 events — persist to DB via delete+recreate
+    if session and len(session.events) > 50:
+        logger.info("Pruning session %s (%d events)", session_id, len(session.events))
         preserved_state = dict(session.state) if session.state else {}
         await runner.session_service.delete_session(
             app_name=runner.app_name, user_id=user_id, session_id=session_id
@@ -386,8 +386,8 @@ async def process_message_for_context(runner, user_id: str, session_id: str, mes
             app_name=runner.app_name, user_id=user_id, session_id=session_id
         )
 
-    # Prune if session exceeds 200 events — persist to DB via delete+recreate
-    if session and len(session.events) > 200:
+    # Prune if session exceeds 50 events — persist to DB via delete+recreate
+    if session and len(session.events) > 50:
         logger.info("Pruning context session %s (%d events)", session_id, len(session.events))
         preserved_state = dict(session.state) if session.state else {}
         await runner.session_service.delete_session(
