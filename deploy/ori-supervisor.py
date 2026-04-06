@@ -320,6 +320,9 @@ def main():
         os.environ["A2A_PORT"] = str(port)
         logger.info("Auto-assigned A2A_PORT=%d", port)
 
+    # Start/refresh tunnel with the correct port before launching the bot
+    refresh_tunnel()
+
     # Signal to run_bot.py that vault is already loaded (skip double-load)
     os.environ["_VAULT_LOADED"] = "1"
 
