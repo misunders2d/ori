@@ -168,18 +168,35 @@ async def poll_slack(get_runner_fn, process_init_fn):
             except Exception:
                 logger.exception("Failed to save context for session %s", _session_id)
 
-    # Acknowledge non-message events to suppress "unhandled request" warnings
-    @slack_app.event("reaction_added")
-    async def handle_reaction_added(event, say):
-        pass
+    # Acknowledge all non-message events to suppress "unhandled request" warnings.
+    # Slack sends ~129 event types; we only actively process "message".
+    _SILENCED_EVENTS = [
+        "app_mention", "app_home_opened",
+        "reaction_added", "reaction_removed",
+        "pin_added", "pin_removed",
+        "file_shared", "file_created", "file_change", "file_deleted",
+        "file_public", "file_unshared", "file_comment_deleted",
+        "channel_archive", "channel_created", "channel_deleted",
+        "channel_rename", "channel_joined", "channel_left",
+        "channel_unarchive", "channel_shared", "channel_unshared",
+        "channel_id_changed", "channel_history_changed",
+        "group_archive", "group_close", "group_deleted",
+        "group_joined", "group_left", "group_open",
+        "group_rename", "group_unarchive",
+        "im_close", "im_created", "im_open",
+        "member_joined_channel", "member_left_channel",
+        "team_join", "user_change", "user_typing",
+        "emoji_changed", "link_shared",
+        "star_added", "star_removed",
+        "dnd_updated", "dnd_updated_user",
+        "subteam_created", "subteam_updated",
+        "subteam_members_changed", "subteam_self_added", "subteam_self_removed",
+        "tokens_revoked",
+        "message_metadata_posted", "message_metadata_updated", "message_metadata_deleted",
+    ]
 
-    @slack_app.event("reaction_removed")
-    async def handle_reaction_removed(event, say):
-        pass
-
-    @slack_app.event("app_mention")
-    async def handle_app_mention(event, say):
-        pass  # Handled by the "message" event listener
+    for _evt in _SILENCED_EVENTS:
+        slack_app.event(_evt)(lambda event, say: None)
 
     @slack_app.event("message")
     async def handle_message(event, say):
