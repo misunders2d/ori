@@ -6,6 +6,7 @@ from .evolution import EvolutionToolset
 from .github import GitHubToolset
 from .keepa import KeepaToolset
 from .scratchpad import ScratchpadToolset
+from .visualization import VisualizationToolset
 
 __all__ = [
     "SchedulingToolset",
@@ -16,4 +17,5 @@ __all__ = [
     "GitHubToolset",
     "KeepaToolset",
     "ScratchpadToolset",
+    "VisualizationToolset",
 ]

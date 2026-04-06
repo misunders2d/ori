@@ -18,6 +18,7 @@ from app.toolsets import (
     SchedulingToolset,
     SystemToolset,
     ScratchpadToolset,
+    VisualizationToolset,
 )
 from app.tools.a2a import get_agent_identity
 from app.tools.google_search import google_search_agent_tool
@@ -78,6 +79,7 @@ root_agent = Agent(
         MemoryToolset(),
         SystemToolset(),
         ScratchpadToolset(),
+        VisualizationToolset(),
         # Individual tools
         *([google_search_agent_tool] if google_search_agent_tool else []),
         web_fetch,

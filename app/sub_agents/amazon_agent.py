@@ -11,7 +11,7 @@ from google.adk.tools import skill_toolset
 
 from app.app_utils.models import get_model
 from app.callbacks.guardrails import prompt_injection_guardrail
-from app.toolsets import KeepaToolset, ScratchpadToolset
+from app.toolsets import KeepaToolset, ScratchpadToolset, VisualizationToolset
 
 base_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 keepa_skill = load_skill_from_dir(base_dir / "keepa-skill")
@@ -51,6 +51,7 @@ amazon_agent = Agent(
         skill_toolset.SkillToolset(skills=[keepa_skill, scratchpad_skill]),
         KeepaToolset(),
         ScratchpadToolset(),
+        VisualizationToolset(),
     ],
     before_model_callback=prompt_injection_guardrail,
 )

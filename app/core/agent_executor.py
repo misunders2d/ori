@@ -248,13 +248,24 @@ async def extract_agent_response(
                     for part in event.content.parts:
                         if hasattr(part, "text") and part.text:
                             agent_text_parts.append(part.text)
-                        # Capture tool results for fallback feedback
+                        # Capture tool results for fallback feedback + file attachments
                         elif hasattr(part, "function_response") and part.function_response:
                             res = part.function_response.response
                             if isinstance(res, dict) and "message" in res:
                                 latest_tool_results.append(res["message"])
                             elif isinstance(res, dict) and "status" in res:
                                 latest_tool_results.append(f"Status: {res['status']}")
+                            # Detect file paths from tool responses (charts, exports)
+                            if isinstance(res, dict) and res.get("file_path"):
+                                fp = res["file_path"]
+                                if os.path.isfile(fp):
+                                    import mimetypes
+                                    mime, _ = mimetypes.guess_type(fp)
+                                    with open(fp, "rb") as f:
+                                        media_items.append({
+                                            "data": f.read(),
+                                            "mime_type": mime or "application/octet-stream",
+                                        })
                         # Capture inline binary data (images, audio, etc.)
                         elif hasattr(part, "inline_data") and part.inline_data:
                             media_items.append({
