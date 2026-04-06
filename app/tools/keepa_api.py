@@ -144,7 +144,13 @@ async def keepa_get_product_data(
             data = resp.json()
 
             if not data.get("products"):
-                return {"status": "error", "message": "No product data found for ASIN."}
+                return {
+                    "status": "error",
+                    "message": "No product data found for ASIN.",
+                    "tokens_left": data.get("tokensLeft"),
+                    "raw_response_keys": list(data.keys()),
+                    "error_detail": data.get("error"),
+                }
 
             product = data["products"][0]
 
