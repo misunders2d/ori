@@ -456,18 +456,7 @@ async def poll_slack(get_runner_fn, process_init_fn):
             return
 
         # In groups/channels: silently absorb context if not mentioned
-        # Skip context save if session is already large (>150 events) to prevent token overflow
         if not is_dm and not is_mentioned:
-            try:
-                session = await runner.session_service.get_session(
-                    app_name=runner.app_name, user_id=session_user_id, session_id=session_id
-                )
-                if session and len(session.events) > 150:
-                    logger.info("Skipping context save for %s — session too large (%d events)", session_id, len(session.events))
-                    return
-            except Exception:
-                pass
-            logger.info("Silently adding group message for context to session %s", session_id)
             asyncio.create_task(
                 _save_context(runner, session_user_id, session_id, message_content)
             )
