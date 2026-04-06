@@ -569,7 +569,18 @@ async def keepa_get_bestsellers(
             resp = await client.get(f"{_API_BASE}/bestsellers", params=params)
             resp.raise_for_status()
             data = resp.json()
-            asins = data.get("bestSellersList", {}).get("asinList", [])
+            # Keepa may nest under "bestSellersList" or return asinList at top level
+            asins = (
+                data.get("bestSellersList", {}).get("asinList", [])
+                or data.get("asinList", [])
+            )
+            if not asins:
+                return {
+                    "status": "error",
+                    "message": f"No bestsellers found for category {category}.",
+                    "tokens_left": data.get("tokensLeft"),
+                    "response_keys": list(data.keys()),
+                }
             return {
                 "status": "success",
                 "tokens_left": data.get("tokensLeft"),
