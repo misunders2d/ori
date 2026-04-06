@@ -8,6 +8,7 @@ from .keepa import KeepaToolset
 from .scratchpad import ScratchpadToolset
 from .visualization import VisualizationToolset
 from .google_workspace import GoogleWorkspaceToolset
+from .pinecone import PineconeToolset
 
 __all__ = [
     "SchedulingToolset",
@@ -20,4 +21,5 @@ __all__ = [
     "ScratchpadToolset",
     "VisualizationToolset",
     "GoogleWorkspaceToolset",
+    "PineconeToolset",
 ]

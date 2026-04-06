@@ -29,6 +29,8 @@ ALLOWED_CONFIG_KEYS = frozenset({
     "BQ_GCP_SERVICE_ACCOUNT_INFO",
     "GOOGLE_OAUTH_CLIENT_ID",
     "GOOGLE_OAUTH_CLIENT_SECRET",
+    "PINECONE_API_KEY",
+    "PINECONE_INDEX_NAME",
 })
 
 # Keys the agent can set via configure_integration (conversational flow).

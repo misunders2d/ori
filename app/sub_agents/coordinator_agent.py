@@ -25,6 +25,7 @@ from app.toolsets import (
     VisualizationToolset,
     GoogleWorkspaceToolset,
 )
+from app.toolsets.pinecone import PineconeToolset
 from app.tools.a2a import get_agent_identity
 from app.tools.google_search import google_search_agent_tool
 from app.tools.web import web_fetch
@@ -93,6 +94,7 @@ root_agent = Agent(
         ScratchpadToolset(),
         VisualizationToolset(),
         GoogleWorkspaceToolset(),
+        PineconeToolset(),
         # Individual tools
         *([google_search_agent_tool] if google_search_agent_tool else []),
         web_fetch,
