@@ -184,14 +184,59 @@ def _cosine_similarity(v1, v2):
     return dot_product / (magnitude1 * magnitude2)
 
 
+_TOKEN_LIMIT = 900_000  # ~10% safety margin under 1M model limit
+_CHARS_PER_TOKEN = 4    # Conservative estimate
+
+
+def _estimate_tokens(llm_request: LlmRequest) -> int:
+    """Estimate total token count from all contents in the LLM request."""
+    total_chars = 0
+    # System instruction
+    if getattr(llm_request, "config", None) and getattr(llm_request.config, "system_instruction", None):
+        si = llm_request.config.system_instruction
+        if hasattr(si, "parts"):
+            for part in si.parts:
+                if hasattr(part, "text") and part.text:
+                    total_chars += len(part.text)
+    # Conversation contents
+    if llm_request.contents:
+        for content in llm_request.contents:
+            if content.parts:
+                for part in content.parts:
+                    if hasattr(part, "text") and part.text:
+                        total_chars += len(part.text)
+                    elif hasattr(part, "function_call") and part.function_call:
+                        total_chars += len(str(part.function_call))
+                    elif hasattr(part, "function_response") and part.function_response:
+                        total_chars += len(str(part.function_response))
+    return total_chars // _CHARS_PER_TOKEN
+
+
+def _prune_to_fit(llm_request: LlmRequest) -> None:
+    """Remove oldest conversation events until estimated tokens fit under the limit."""
+    if not llm_request.contents:
+        return
+    while _estimate_tokens(llm_request) > _TOKEN_LIMIT and len(llm_request.contents) > 2:
+        llm_request.contents.pop(0)
+    logger.info("Context pruned to %d messages (~%d tokens)", len(llm_request.contents), _estimate_tokens(llm_request))
+
+
 def prompt_injection_guardrail(
     callback_context: CallbackContext, llm_request: LlmRequest
 ) -> LlmResponse | None:
     """
     Runtime Guardrail: Inspects the LLM request before hitting the model.
-    Dynamically tracks Prompt Injection across any language using Semantic Cosine Similarity dot products against known anchor spaces (vector clusters).
-    Dynamically strips the BuiltInPlanner's thinking_config from the payload if use_planner was explicitly set to False in the DB session.
+    - Token gatekeeper: prunes context if estimated tokens exceed 900K
+    - Prompt injection detection via semantic cosine similarity
+    - Planner toggle and model hot-swap
     """
+    # Token gatekeeper — prune oldest events to stay under model limit
+    est_tokens = _estimate_tokens(llm_request)
+    if est_tokens > _TOKEN_LIMIT:
+        logger.warning("Token estimate %d exceeds %d for %s. Pruning context.",
+                       est_tokens, _TOKEN_LIMIT, callback_context.agent_name)
+        _prune_to_fit(llm_request)
+
     # Per-container rate throttle — prevents one agent from exhausting shared API quota
     if not _throttle.acquire():
         logger.warning("Rate throttle hit (%d RPM). Waiting for token refill for %s.", _throttle.rpm, callback_context.agent_name)
