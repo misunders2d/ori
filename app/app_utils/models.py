@@ -31,6 +31,7 @@ MODEL_DEFAULTS: dict[str, str] = {
     "channel_summarizer": "google/gemini-3.1-flash-lite-preview",
     "embedding":          "google/gemini-embedding-001",
     "youtube_summarizer": "google/gemini-3-flash-preview",
+    "BigQueryAgent":      "google/gemini-3-flash-preview",
 }
 
 VALID_COMPONENTS = frozenset(MODEL_DEFAULTS.keys())

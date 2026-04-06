@@ -26,6 +26,7 @@ ALLOWED_CONFIG_KEYS = frozenset({
     "SLACK_BOT_TOKEN",
     "SLACK_APP_TOKEN",
     "KEEPA_API_KEY",
+    "BQ_GCP_SERVICE_ACCOUNT_INFO",
 })
 
 # Keys the agent can set via configure_integration (conversational flow).

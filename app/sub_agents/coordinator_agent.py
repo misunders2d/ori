@@ -9,6 +9,7 @@ from app.callbacks.guardrails import (
     state_setter,
     tool_output_injection_guardrail,
 )
+from app.sub_agents.bigquery_agent import bigquery_agent
 from app.sub_agents.developer_agent import developer_agent
 from app.sub_agents.knowledge_agent import knowledge_agent
 from app.toolsets import (
@@ -34,7 +35,8 @@ root_agent = Agent(
         "DELEGATION:\n"
         "1. For self-evolution (code changes, bug fixes, adding features): Delegate to DeveloperAgent.\n"
         "2. For A2A communication, friend management, DNA exchange: Delegate to KnowledgeAgent.\n"
-        "3. For everything else (research, scheduling, memory, access control): Handle directly.\n\n"
+        "3. For business data, sales, inventory, ASINs, SKUs, BigQuery queries: Delegate to BigQueryAgent.\n"
+        "4. For everything else (research, scheduling, memory, access control): Handle directly.\n\n"
 
         "SPAWNING: You can spawn child agents (`spawn_agent`) for dedicated workflows. "
         "Children are disposable Docker sandboxes — they stage, verify, and export DNA back to you. "
@@ -60,6 +62,7 @@ root_agent = Agent(
     sub_agents=[
         developer_agent,
         knowledge_agent,
+        *([bigquery_agent] if bigquery_agent else []),
     ],
     tools=[
         # Toolsets
