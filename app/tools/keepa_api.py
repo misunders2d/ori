@@ -59,15 +59,18 @@ def _check_tokens_or_error(token_info: dict) -> dict | None:
 
 
 def get_latest_price_from_csv(csv: Optional[List[int]], items_per_row: int) -> Optional[float]:
-    """Helper to extract the latest valid price from a Keepa CSV array."""
+    """Helper to extract the current price from a Keepa CSV array.
+
+    Only checks the most recent entry. Returns None if the latest price
+    is -1 (not available / no longer active) or missing.
+    """
     if not csv or len(csv) < items_per_row:
         return None
-    # Keepa CSVs are flattened arrays of [time, price, ...]
-    # We iterate backwards to find the latest non-negative price
-    for i in range(len(csv) - items_per_row, -1, -items_per_row):
-        p = csv[i + 1]
-        if p > 0:
-            return p / 100.0
+    # Keepa CSVs are flattened: [time, price, ...], [time, price, ...], ...
+    # Only the last entry reflects the current state
+    last_price = csv[-items_per_row + 1]
+    if last_price > 0:
+        return last_price / 100.0
     return None
 
 

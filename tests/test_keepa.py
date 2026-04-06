@@ -16,13 +16,21 @@ _MOCK_TOKEN_RESP.raise_for_status = SyncMagicMock()
 
 @pytest.mark.asyncio
 async def test_get_latest_price_from_csv():
-    # 2 items per row: [time, price]
-    csv = [100, 1000, 200, 2000, 300, -1]
+    # 2 items per row: latest is active
+    csv = [100, 1000, 200, 2000]
     assert get_latest_price_from_csv(csv, 2) == 20.0
 
-    # 3 items per row: [time, price, shipping]
+    # 2 items per row: latest is -1 (inactive) — should return None
+    csv = [100, 1000, 200, 2000, 300, -1]
+    assert get_latest_price_from_csv(csv, 2) is None
+
+    # 3 items per row: latest is active
     csv = [100, 1000, 50, 200, 2000, 60]
     assert get_latest_price_from_csv(csv, 3) == 20.0
+
+    # 3 items per row: latest is -1 (inactive)
+    csv = [100, 1000, 50, 200, -1, 60]
+    assert get_latest_price_from_csv(csv, 3) is None
 
 @pytest.mark.asyncio
 async def test_keepa_get_product_data_no_key():
