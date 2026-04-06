@@ -441,8 +441,8 @@ async def poll_slack(get_runner_fn, process_init_fn):
             if file_data:
                 blob_bytes, mime_type, filename = file_data
                 from app.app_utils.file_convert import is_convertible, to_text, save_upload
+                saved_path = save_upload(blob_bytes, filename)
                 if is_convertible(mime_type):
-                    saved_path = save_upload(blob_bytes, filename)
                     text_content = to_text(blob_bytes, mime_type, filename)
                     if text_content:
                         file_parts.append(types.Part.from_text(
@@ -453,6 +453,9 @@ async def poll_slack(get_runner_fn, process_init_fn):
                             text=f"[File: {filename} | saved to: {saved_path}] (could not parse preview)"
                         ))
                 else:
+                    file_parts.append(types.Part.from_text(
+                        text=f"[Media: {filename} | saved to: {saved_path}]"
+                    ))
                     file_parts.append(
                         types.Part(
                             inline_data=types.Blob(data=blob_bytes, mime_type=mime_type)
