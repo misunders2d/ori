@@ -1,4 +1,8 @@
+import pathlib
+
 from google.adk.agents import Agent
+from google.adk.skills import load_skill_from_dir
+from google.adk.tools import skill_toolset
 
 from app.app_utils.models import get_model
 
@@ -26,6 +30,11 @@ from app.tools.google_search import google_search_agent_tool
 from app.tools.web import web_fetch
 from app.tools.whitelist import whitelist_chat, blacklist_chat
 from app.tools.youtube import youtube_summary
+
+_skills_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
+_google_workspace_skill = load_skill_from_dir(_skills_dir / "google-workspace-skill")
+_scratchpad_skill = load_skill_from_dir(_skills_dir / "scratchpad-skill")
+_visualization_skill = load_skill_from_dir(_skills_dir / "visualization-skill")
 
 root_agent = Agent(
     name="CoordinatorAgent",
@@ -75,6 +84,8 @@ root_agent = Agent(
         *([bigquery_agent] if bigquery_agent else []),
     ],
     tools=[
+        # Skills
+        skill_toolset.SkillToolset(skills=[_google_workspace_skill, _scratchpad_skill, _visualization_skill]),
         # Toolsets
         SchedulingToolset(),
         MemoryToolset(),
