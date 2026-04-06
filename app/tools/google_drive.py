@@ -273,7 +273,7 @@ async def sheets_read(
 async def sheets_write(
     spreadsheet_id: str,
     range: str,
-    values: list,
+    values: list[list[str]],
     tool_context: ToolContext = None,
 ) -> dict:
     """Write data to a Google Spreadsheet.
