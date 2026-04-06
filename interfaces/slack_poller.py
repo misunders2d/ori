@@ -104,6 +104,19 @@ async def poll_slack(get_runner_fn, process_init_fn):
     # Bolt app handles Socket Mode auth and event routing
     slack_app = AsyncApp(token=bot_token)
 
+    # Resolve bot's own user ID for mention detection
+    _bot_user_id = None
+    try:
+        auth_resp = await http_client.post(
+            "https://slack.com/api/auth.test",
+            headers={"Authorization": f"Bearer {bot_token}"},
+        )
+        auth_data = auth_resp.json()
+        if auth_data.get("ok"):
+            _bot_user_id = auth_data.get("user_id")
+    except Exception:
+        pass
+
     # Session management
     _active_tasks: dict[str, tuple[asyncio.Task, types.Content]] = {}
     _session_locks: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
@@ -182,6 +195,12 @@ async def poll_slack(get_runner_fn, process_init_fn):
         if not channel_id or not user_raw:
             return
 
+        # In group chats / channels / multi-party DMs, only respond if directly mentioned
+        is_dm = channel_type == "im"
+        if not is_dm:
+            if not _bot_user_id or f"<@{_bot_user_id}>" not in text:
+                return
+
         # Build canonical IDs (session is channel-scoped, user_id upgraded to email below)
         session_id = adapter.make_session_id(channel_id)
         session_user_id = session_id
@@ -213,7 +232,6 @@ async def poll_slack(get_runner_fn, process_init_fn):
             msg_timestamp = datetime.now(tz=timezone.utc)
 
         # --- ACCESS CONTROL GATE ---
-        is_dm = channel_type == "im"
         user_authorized = is_allowed(user_id)
         channel_authorized = not is_dm and is_allowed(session_id)
 
