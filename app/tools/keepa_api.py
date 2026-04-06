@@ -154,7 +154,7 @@ async def keepa_fetch_product(
     if not api_key:
         return {"status": "error", "message": "KEEPA_API_KEY not configured."}
 
-    params = {"key": api_key, "asin": asin, "domain": domain, "offers": 1}
+    params = {"key": api_key, "asin": asin, "domain": domain, "offers": 20}
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
