@@ -96,7 +96,7 @@ async def generate_image(
 
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-2.5-flash-image",
+            model="gemini-3.1-flash-image-preview",
             contents=contents,
             config=config,
         )
