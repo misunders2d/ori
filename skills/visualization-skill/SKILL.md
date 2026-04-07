@@ -61,3 +61,55 @@ plt.savefig(OUTPUT_PATH, dpi=150)
 - **Large datasets** — if plotting hundreds of points, aggregate first. Don't dump 10,000 rows into the code string.
 - **Clean aesthetics** — use readable fonts, clear labels, proper axis formatting. The user will see this in a chat window — make it count.
 - **Auto-save fallback** — if you forget `plt.savefig()`, matplotlib figures are auto-saved. But always be explicit.
+
+---
+
+# AI Image Generation (`generate_image`)
+
+Use `generate_image` for AI-powered image creation and editing — like an AI Photoshop. This is NOT for data charts (use `generate_chart` for those).
+
+## Three modes
+
+| Mode | When to use | What to pass |
+|------|-------------|-------------|
+| **Text-to-image** | User asks you to create/draw/design something from scratch | `prompt` only |
+| **Image-to-image** | User sends an image and asks you to edit/modify it | `prompt` + `base_image_path` |
+| **Reference-guided** | User sends an image to edit AND reference images for style/content guidance | `prompt` + `base_image_path` + `reference_images` |
+
+## Parameters
+
+- `prompt` (required): Detailed description of what to generate or how to edit.
+- `base_image_path`: Path to the user's uploaded image (from the `[saved to: ...]` tag in the message). Omit for pure text-to-image.
+- `reference_images`: List of `{"path": "...", "description": "what this reference is for"}`. The description helps the model understand the role of each reference (e.g. "target color scheme", "desired style").
+- `aspect_ratio`: `"1:1"` (default), `"1:4"`, `"1:8"`, `"2:3"`, `"3:2"`, `"3:4"`, `"4:1"`, `"4:3"`, `"4:5"`, `"5:4"`, `"8:1"`, `"9:16"`, `"16:9"`, `"21:9"`.
+- `resolution`: `"1K"` (default), `"512"`, `"2K"`, `"4K"`. Higher = better quality + higher cost.
+- `thinking`: `"MINIMAL"` (default), `"LOW"`, `"MEDIUM"`, `"HIGH"`. Higher = better quality but slower.
+
+## Examples
+
+```python
+# Text-to-image
+generate_image(prompt="A photorealistic product shot of a navy blue bedsheet set on a king bed, warm lighting")
+
+# Image-to-image (edit user's uploaded photo)
+generate_image(
+    prompt="Change the bedsheet color to sage green, keep everything else the same",
+    base_image_path="/path/from/saved_to/tag.jpg"
+)
+
+# Reference-guided editing
+generate_image(
+    prompt="Redecorate this bedroom using the style and color palette from the reference",
+    base_image_path="/path/to/users/bedroom.jpg",
+    reference_images=[
+        {"path": "/path/to/style_ref.jpg", "description": "Target style and color palette"}
+    ]
+)
+```
+
+## Important
+
+- The generated image is **automatically delivered** to the user's chat — you don't need to do anything extra.
+- Write a **detailed prompt** — the more specific, the better the output.
+- For image-to-image, the `base_image_path` comes from the `[saved to: ...]` tag that appears when users upload files.
+- If the user sends multiple images, figure out which is the base and which are references from context.
