@@ -13,7 +13,7 @@ from app.callbacks.guardrails import (
     verify_retry_guardrail,
 )
 from app.tools.google_search import google_search_agent_tool
-from app.tools.model_tools import list_available_models, set_agent_model
+from app.tools.model_tools import list_available_models, set_agent_model, get_llm_provider, switch_llm_provider
 from app.tools.web import web_fetch
 from app.toolsets import EvolutionToolset, IntegrationToolset, GitHubToolset, ScratchpadToolset
 from app.toolsets.evolution import _is_child_container
@@ -148,6 +148,8 @@ developer_agent = Agent(
         web_fetch,
         list_available_models,
         set_agent_model,
+        get_llm_provider,
+        switch_llm_provider,
     ],
     before_model_callback=prompt_injection_guardrail,
     before_tool_callback=admin_tool_guardrail,
