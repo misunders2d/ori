@@ -58,6 +58,18 @@ def get_agent_identity(tool_context: ToolContext) -> Dict[str, Any]:
         return {"status": "error", "message": f"Failed to read Agent Card: {e}"}
 
 
+def get_my_a2a_key(tool_context: ToolContext) -> Dict[str, Any]:
+    """Returns this agent's own A2A API key so the admin can share it with friends.
+
+    The key is what remote agents must send in the x-a2a-api-key header to authenticate.
+    Only show this to the admin — never to other users or agents.
+    """
+    key = os.environ.get("A2A_API_KEY", "")
+    if not key:
+        return {"status": "error", "message": "A2A_API_KEY not configured."}
+    return {"status": "success", "a2a_api_key": key}
+
+
 # ---------------------------------------------------------------------------
 # Discovery & Friendship
 # ---------------------------------------------------------------------------
@@ -154,6 +166,55 @@ async def add_friend(url: str, friend_name: str, tool_context: ToolContext) -> D
     except Exception as e:
         logger.error("Failed to save friend %s: %s", friend_name, e)
         return {"status": "error", "message": f"Discovery succeeded but save failed: {e}"}
+
+
+async def refresh_friend(friend_name: str, new_url: str, tool_context: ToolContext) -> Dict[str, Any]:
+    """Re-discover a friend at a new URL and update the stored connection info.
+
+    Use this when a friend's URL has changed (e.g. tunnel URL rotated after restart).
+    The API key is preserved — only the URL and agent card are updated.
+
+    Args:
+        friend_name: The local nickname of the friend to refresh.
+        new_url: The friend's new base URL.
+    """
+    try:
+        if not os.path.exists(FRIENDS_FILE):
+            return {"status": "error", "message": "No friends registered yet."}
+        with open(FRIENDS_FILE, "r") as f:
+            friends = json.load(f)
+        if friend_name not in friends:
+            return {"status": "error", "message": f"Friend '{friend_name}' not found."}
+
+        card = await _discover_agent_card(new_url)
+        if not card:
+            return {"status": "error", "message": f"No valid Agent Card found at {new_url}. Is the agent online?"}
+
+        base_url = new_url.rstrip("/")
+        endpoint_url = base_url
+        for ep in card.get("endpoints", []):
+            if ep.get("type") in ("json-rpc", "http+json"):
+                endpoint_url = ep["url"]
+                break
+
+        friends[friend_name].update({
+            "base_url": base_url,
+            "endpoint_url": endpoint_url,
+            "card": card,
+            "required_security": card.get("security", []),
+            "last_discovered_at": datetime.now().isoformat(),
+        })
+
+        with open(FRIENDS_FILE, "w") as f:
+            json.dump(friends, f, indent=4)
+
+        has_key = bool(_load_friend_key(friend_name))
+        return {
+            "status": "success",
+            "message": f"Updated '{friend_name}' to {base_url}. Key {'preserved' if has_key else 'missing — use update_friend_key'}.",
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 def update_friend_key(friend_name: str, tool_context: ToolContext) -> Dict[str, Any]:
