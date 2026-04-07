@@ -50,16 +50,27 @@ def _get_session_notify_info(tool_context: ToolContext) -> dict:
     return parse_notify_from_session_id(sid)
 
 
+def _resolve_notify(tool_context: ToolContext, deliver_to: str = "") -> dict:
+    """Resolve notification target — use deliver_to if provided, otherwise fall back to current session."""
+    if deliver_to:
+        from app.core.transport import parse_notify_from_session_id
+        notify = parse_notify_from_session_id(deliver_to)
+        if notify:
+            return notify
+    return _get_session_notify_info(tool_context)
+
+
 
 
 def schedule_one_off_task(
-    task_prompt: str, run_at_iso_datetime: str, timezone: str, tool_context: ToolContext
+    task_prompt: str, run_at_iso_datetime: str, timezone: str, tool_context: ToolContext,
+    deliver_to: str = "",
 ) -> dict:
     """Schedules the agent to execute a specific task once at a specific date and time.
 
     When the scheduled time arrives, the agent will fully process the task_prompt —
     generating content, running tools, or fetching data as needed — and deliver the
-    result to the user. Write the prompt as an instruction for your future self.
+    result to the destination channel. Write the prompt as an instruction for your future self.
 
     Use this tool when the user asks to "remind me", "check this tomorrow", or "do X at Y time".
     IMPORTANT: Always call get_current_time first to know the current time before scheduling.
@@ -68,6 +79,7 @@ def schedule_one_off_task(
         task_prompt (str): The instruction the agent should execute when the time comes (e.g. 'Tell the user a funny joke to start their morning' or 'Check Keepa for ASIN B08X and report the price').
         run_at_iso_datetime (str): The date and time to run the task, in ISO 8601 format (e.g., '2026-03-25T10:00:00'). This is in the timezone specified.
         timezone (str): IANA timezone for the scheduled time (e.g., 'Europe/Kyiv', 'UTC').
+        deliver_to (str): Optional session ID to deliver results to instead of the current chat. Use this to post to a different platform or channel (e.g. 'sl_C01234ABC' for a Slack channel, 'tg_123456' for a Telegram chat). If empty, delivers to the current chat.
 
     Returns:
         dict: Status of the scheduling operation.
@@ -94,7 +106,7 @@ def schedule_one_off_task(
     if run_date <= datetime.now(tz):
         return {"status": "error", "message": "Scheduled time is in the past."}
 
-    notify = _get_session_notify_info(tool_context)
+    notify = _resolve_notify(tool_context, deliver_to)
 
     scheduler.add_job(
         run_scheduled_task,
@@ -104,21 +116,23 @@ def schedule_one_off_task(
         id=job_id,
     )
 
+    dest = deliver_to or "current chat"
     return {
         "status": "success",
-        "message": f"Scheduled: '{task_prompt}' for {run_date.strftime('%Y-%m-%d %H:%M')} ({timezone}). Job ID: {job_id}",
+        "message": f"Scheduled: '{task_prompt}' for {run_date.strftime('%Y-%m-%d %H:%M')} ({timezone}). Delivers to: {dest}. Job ID: {job_id}",
     }
 
 
 
 def schedule_recurring_task(
-    task_prompt: str, cron_expression: str, timezone: str, tool_context: ToolContext
+    task_prompt: str, cron_expression: str, timezone: str, tool_context: ToolContext,
+    deliver_to: str = "",
 ) -> dict:
     """Schedules the agent to execute a task automatically on a recurring schedule.
 
     When the scheduled time arrives, the agent will fully process the task_prompt —
     generating content, running tools, or fetching data as needed — and deliver the
-    result to the user. Write the prompt as an instruction for your future self.
+    result to the destination channel. Write the prompt as an instruction for your future self.
 
     Use this tool when the user asks to "regularly monitor", "do X every day", or "check X every Monday".
     IMPORTANT: Always call get_current_time first to confirm the user's timezone.
@@ -127,6 +141,7 @@ def schedule_recurring_task(
         task_prompt (str): The instruction the agent should execute (e.g. 'Perform a management check for ASIN B08X').
         cron_expression (str): A standard 5-part cron expression defining the schedule (e.g., '0 10 * * *' for every day at 10 AM).
         timezone (str): IANA timezone for the cron schedule (e.g., 'Europe/Kyiv', 'UTC').
+        deliver_to (str): Optional session ID to deliver results to instead of the current chat. Use this to post to a different platform or channel (e.g. 'sl_C01234ABC' for a Slack channel, 'tg_123456' for a Telegram chat). If empty, delivers to the current chat.
 
     Returns:
         dict: Status of the scheduling operation.
@@ -150,7 +165,7 @@ def schedule_recurring_task(
     except ValueError:
         return {"status": "error", "message": "Invalid cron expression."}
 
-    notify = _get_session_notify_info(tool_context)
+    notify = _resolve_notify(tool_context, deliver_to)
 
     scheduler.add_job(
         run_scheduled_task,
@@ -159,9 +174,10 @@ def schedule_recurring_task(
         id=job_id,
     )
 
+    dest = deliver_to or "current chat"
     return {
         "status": "success",
-        "message": f"Scheduled recurring: '{task_prompt}' with cron '{cron_expression}' ({timezone}). Job ID: {job_id}",
+        "message": f"Scheduled recurring: '{task_prompt}' with cron '{cron_expression}' ({timezone}). Delivers to: {dest}. Job ID: {job_id}",
     }
 
 
@@ -298,7 +314,8 @@ def _require_admin(tool_context: ToolContext) -> str | None:
 
 
 def schedule_system_task(
-    task_prompt: str, run_at_iso_datetime: str, timezone: str, tool_context: ToolContext, silent: bool = False
+    task_prompt: str, run_at_iso_datetime: str, timezone: str, tool_context: ToolContext,
+    silent: bool = False, deliver_to: str = "",
 ) -> dict:
     """Schedules a one-off system maintenance task that runs with admin privileges.
 
@@ -311,6 +328,7 @@ def schedule_system_task(
         run_at_iso_datetime (str): When to run, in ISO 8601 format (e.g., '2026-03-28T03:00:00').
         timezone (str): IANA timezone for the scheduled time (e.g., 'Europe/Kyiv', 'UTC').
         silent (bool): If True, only notify the admin on failure/warnings. Successes are logged silently. Default: False.
+        deliver_to (str): Optional session ID to deliver results to instead of the current chat (e.g. 'sl_C01234ABC' for a Slack channel). If empty, delivers to the current chat.
 
     Returns:
         dict: Status of the scheduling operation.
@@ -341,7 +359,7 @@ def schedule_system_task(
     if run_date <= datetime.now(tz):
         return {"status": "error", "message": "Scheduled time is in the past."}
 
-    notify = _get_session_notify_info(tool_context)
+    notify = _resolve_notify(tool_context, deliver_to)
 
     scheduler.add_job(
         run_system_task,
@@ -356,15 +374,16 @@ def schedule_system_task(
         id=job_id,
     )
 
+    dest = deliver_to or "current chat"
     mode = "silent (notify on failure only)" if silent else "verbose (always notify)"
     return {
         "status": "success",
-        "message": f"System task scheduled: '{task_prompt}' for {run_date.strftime('%Y-%m-%d %H:%M')} ({timezone}). Mode: {mode}. Job ID: {job_id}",
+        "message": f"System task scheduled: '{task_prompt}' for {run_date.strftime('%Y-%m-%d %H:%M')} ({timezone}). Delivers to: {dest}. Mode: {mode}. Job ID: {job_id}",
     }
 
 
 def run_system_task_now(
-    task_prompt: str, tool_context: ToolContext, silent: bool = False
+    task_prompt: str, tool_context: ToolContext, silent: bool = False, deliver_to: str = "",
 ) -> dict:
     """Immediately launches a system maintenance task in the background with admin privileges.
 
@@ -376,6 +395,7 @@ def run_system_task_now(
     Args:
         task_prompt (str): The exact system task instruction (e.g. 'Analyze and fix the failing test in tests/test_structure.py').
         silent (bool): If True, only notify the admin on failure/warnings. Successes are logged silently. Default: False.
+        deliver_to (str): Optional session ID to deliver results to instead of the current chat (e.g. 'sl_C01234ABC' for a Slack channel). If empty, delivers to the current chat.
 
     Returns:
         dict: Confirmation that the task has been launched.
@@ -389,7 +409,7 @@ def run_system_task_now(
     if not admin_user_id:
         return {"status": "error", "message": "Only admin users can run system tasks."}
 
-    notify = _get_session_notify_info(tool_context)
+    notify = _resolve_notify(tool_context, deliver_to)
     task_id = f"immediate_{uuid.uuid4().hex[:8]}"
 
     asyncio.create_task(
@@ -403,15 +423,17 @@ def run_system_task_now(
         name=task_id,
     )
 
+    dest = deliver_to or "current chat"
     mode = "silent (notify on failure only)" if silent else "verbose (always notify)"
     return {
         "status": "success",
-        "message": f"System task launched immediately: '{task_prompt}'. Mode: {mode}. Task ID: {task_id}",
+        "message": f"System task launched immediately: '{task_prompt}'. Delivers to: {dest}. Mode: {mode}. Task ID: {task_id}",
     }
 
 
 def schedule_recurring_system_task(
-    task_prompt: str, cron_expression: str, timezone: str, tool_context: ToolContext, silent: bool = False
+    task_prompt: str, cron_expression: str, timezone: str, tool_context: ToolContext,
+    silent: bool = False, deliver_to: str = "",
 ) -> dict:
     """Schedules a recurring system maintenance task that runs with admin privileges on a cron schedule.
 
@@ -424,6 +446,7 @@ def schedule_recurring_system_task(
         cron_expression (str): A standard 5-part cron expression (e.g., '0 3 * * *' for every day at 3 AM).
         timezone (str): IANA timezone for the cron schedule (e.g., 'Europe/Kyiv', 'UTC').
         silent (bool): If True, only notify the admin on failure/warnings. Successes are logged silently. Default: False.
+        deliver_to (str): Optional session ID to deliver results to instead of the current chat (e.g. 'sl_C01234ABC' for a Slack channel). If empty, delivers to the current chat.
 
     Returns:
         dict: Status of the scheduling operation.
@@ -452,7 +475,7 @@ def schedule_recurring_system_task(
     except ValueError:
         return {"status": "error", "message": "Invalid cron expression."}
 
-    notify = _get_session_notify_info(tool_context)
+    notify = _resolve_notify(tool_context, deliver_to)
 
     scheduler.add_job(
         run_system_task,
@@ -466,9 +489,10 @@ def schedule_recurring_system_task(
         id=job_id,
     )
 
+    dest = deliver_to or "current chat"
     mode = "silent (notify on failure only)" if silent else "verbose (always notify)"
     return {
         "status": "success",
-        "message": f"Recurring system task scheduled: '{task_prompt}' with cron '{cron_expression}' ({timezone}). Mode: {mode}. Job ID: {job_id}",
+        "message": f"Recurring system task scheduled: '{task_prompt}' with cron '{cron_expression}' ({timezone}). Delivers to: {dest}. Mode: {mode}. Job ID: {job_id}",
     }
 
