@@ -628,13 +628,28 @@ async def perform_a2a_broadcast(force: bool = False) -> Dict[str, Any]:
         friends = json.load(f)
 
     results = {}
-    msg = f"PROTOCOL NOTICE: My base address has changed. Please update your registry for me. NEW_BASE_URL={my_url}"
+    my_name = os.environ.get("BOT_NAME", "Unknown")
 
     logger.info("Broadcasting A2A address update to %d friends...", len(friends))
-    for nickname in friends:
+    for nickname, data in friends.items():
+        friend_url = data.get("endpoint_url") or data.get("base_url", "")
+        friend_key = _load_friend_key(nickname)
+        if not friend_url:
+            results[nickname] = "skipped: no URL"
+            continue
+        # Use the deterministic /a2a/address-update endpoint (no agent involvement)
         try:
-            res = await call_friend(nickname, msg)
-            results[nickname] = res.get("status")
+            headers = _a2a_headers(friend_key)
+            payload = {"sender_name": my_name, "new_base_url": my_url}
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(f"{friend_url.rstrip('/')}/a2a/address-update", json=payload, headers=headers)
+                if resp.status_code == 200:
+                    results[nickname] = "success"
+                else:
+                    # Fallback: send as agent message (old protocol)
+                    msg = f"PROTOCOL NOTICE: My base address has changed. Please update your registry for me. NEW_BASE_URL={my_url}"
+                    res = await call_friend(nickname, msg)
+                    results[nickname] = f"fallback: {res.get('status')}"
         except Exception as e:
             results[nickname] = f"failed: {e}"
 
