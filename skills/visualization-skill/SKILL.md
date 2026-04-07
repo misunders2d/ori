@@ -107,6 +107,22 @@ generate_image(
 )
 ```
 
+## Precise editing with `enhance_image_prompt`
+
+When the user wants to change **specific parts** of an image (not regenerate the whole thing), use the two-step workflow:
+
+1. **Call `enhance_image_prompt`** with the user's request and the image path. This analyzes the image and returns a highly detailed JSON prompt describing every aspect — colors, materials, lighting, composition, textures, spatial geometry, etc.
+2. **Modify the returned prompt** — change only the parts the user asked to edit (e.g. swap a color HEX, change a material description), keeping everything else intact.
+3. **Call `generate_image`** with the modified prompt + the original base image.
+
+This ensures the AI preserves all details the user didn't ask to change.
+
+### When to use `enhance_image_prompt`
+- "Change the bedsheet color to green" → YES (partial edit)
+- "Make the lighting warmer" → YES (partial edit)
+- "Generate a photo of a sunset" → NO (text-to-image, just use `generate_image` directly)
+- "Completely redesign this bedroom" → NO (full edit, use `generate_image` directly)
+
 ## Important
 
 - The generated image is **automatically delivered** to the user's chat — you don't need to do anything extra.
