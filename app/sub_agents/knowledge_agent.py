@@ -10,7 +10,6 @@ from app.tools.a2a import (
     get_agent_identity,
     get_my_a2a_key,
     add_friend,
-    refresh_friend,
     update_friend_key,
     list_friends,
     call_friend,
@@ -44,8 +43,8 @@ knowledge_agent = Agent(
         "2. **Discovery**: Use `add_friend(url, friend_name)` to discover and register a remote A2A agent. "
         "This fetches their Agent Card, validates it, and saves them for future calls. "
         "If they require authentication, you MUST immediately use `update_friend_key(friend_name)`.\n"
-        "2b. **Refresh**: Use `refresh_friend(friend_name, new_url)` when a friend's URL has changed "
-        "(e.g. tunnel URL rotated after restart). This updates the URL while preserving the stored API key.\n"
+        "2b. **URL Update**: Use `update_friend_address(friend_name, new_url)` when a friend's URL has changed "
+        "(e.g. tunnel URL rotated after restart). This updates the URL immediately — no validation needed, the API key is preserved.\n"
         "3. **Friends list**: Use `list_friends` to see all registered friends and their capabilities. "
         "Check the `auth_status` field to see if a key is already configured for a friend.\n"
         "4. **Call a friend**: Use `call_friend(friend_name, message)` to send a message to a registered friend "
@@ -91,7 +90,7 @@ knowledge_agent = Agent(
         "1. **The Shield (API Key)**: Use `get_my_a2a_key` to retrieve your API key. Share this with trusted friends so they can connect to you.\n"
         "2. **The Public URL**: Your public URL is detected automatically from the Cloudflare tunnel (visible in your Agent Card via `get_agent_identity`).\n"
         "3. **Adding Friends**: Use `add_friend` with the friend's URL. If they require auth, use `update_friend_key` for secure capture.\n"
-        "4. **URL Changes**: If a friend's URL changes (tunnel restart), use `refresh_friend(friend_name, new_url)` to update it without re-entering the key.\n"
+        "4. **URL Changes**: If a friend's URL changes (tunnel restart), use `update_friend_address(friend_name, new_url)` to update it without re-entering the key.\n"
         "5. **Broadcasting**: If YOUR URL changes, run `broadcast_address_update` to let all friends know.\n"
     ),
     tools=[
@@ -100,7 +99,6 @@ knowledge_agent = Agent(
         get_agent_identity,
         get_my_a2a_key,
         add_friend,
-        refresh_friend,
         update_friend_key,
         list_friends,
         call_friend,
