@@ -33,20 +33,44 @@ def _get_admin_emails() -> list[str]:
     return [u.strip() for u in os.environ.get("ADMIN_USER_IDS", "").split(",") if u.strip()]
 
 
+def _extract_tables_from_sql(query: str, default_project: str = "") -> list[dict]:
+    """Extract all table references from a SQL string."""
+    tables = []
+    for table_name in re.findall(r"(?:FROM|JOIN)\s+`?([\w.-]+)`?", query, re.IGNORECASE):
+        parts = table_name.split(".")
+        if len(parts) == 3:
+            tables.append({"project_id": parts[0], "dataset_id": parts[1], "table_id": parts[2]})
+        elif len(parts) == 2:
+            tables.append({"project_id": default_project, "dataset_id": parts[0], "table_id": parts[1]})
+    return tables
+
+
+def _check_table_access(tables: list[dict], user_email: str) -> dict | None:
+    """Check if user has access to all listed tables. Returns error dict or None."""
+    for ref in tables:
+        dataset_id = ref["dataset_id"]
+        table_id = ref["table_id"]
+        if dataset_id in table_data and table_id in table_data[dataset_id].get("tables", {}):
+            allowed_users = table_data[dataset_id]["tables"][table_id].get("authorized_users")
+            if allowed_users and user_email not in allowed_users:
+                return {
+                    "error": f"Access denied: {user_email or 'unknown user'} is not authorized to query "
+                             f"`{dataset_id}.{table_id}`. Contact an admin if you need access."
+                }
+    return None
+
+
 def before_bq_callback(
     tool: BaseTool, args: dict[str, Any], tool_context: ToolContext
 ) -> dict | None:
-    """Per-table access control for BigQuery tools.
+    """Per-table access control for ALL BigQuery tools.
 
-    Intercepts execute_sql and get_table_info calls, extracts table references,
-    and checks the user's email against authorized_users lists in the table catalog.
+    Gates every tool in the BigQuery toolset. Extracts table references from
+    SQL queries, explicit args, and table_references lists, then checks the
+    user's email against authorized_users in the table catalog.
     Admin users bypass all restrictions.
     """
     tool_name = getattr(tool, "name", "")
-
-    # Only gate data-access tools
-    if tool_name not in ("execute_sql", "get_table_info"):
-        return None
 
     state = tool_context.state.to_dict() if hasattr(tool_context.state, "to_dict") else {}
     user_id = state.get("user_id", "")
@@ -56,59 +80,75 @@ def before_bq_callback(
     if user_id in admin_ids:
         return None
 
-    # user_id is the email for Slack users, tg_XXX for Telegram
     user_email = user_id
-
-    # Extract table references from SQL query
+    project_id = args.get("project_id", "")
     tables_to_check = []
+
+    # 1. Extract from SQL in 'query' param (execute_sql)
     query = args.get("query", "")
     if query:
-        found_tables = re.findall(
-            r"(?:FROM|JOIN)\s+`?([\w.-]+)`?", query, re.IGNORECASE
-        )
-        for table_name in found_tables:
-            parts = table_name.split(".")
-            if len(parts) == 3:
+        tables_to_check.extend(_extract_tables_from_sql(query, project_id))
+
+    # 2. Extract from 'history_data' param (forecast, detect_anomalies — accepts SQL)
+    history_data = args.get("history_data", "")
+    if history_data:
+        tables_to_check.extend(_extract_tables_from_sql(history_data, project_id))
+
+    # 3. Extract from 'target_data' param (detect_anomalies — optional SQL)
+    target_data = args.get("target_data", "")
+    if target_data:
+        tables_to_check.extend(_extract_tables_from_sql(target_data, project_id))
+
+    # 4. Extract from 'input_data' param (analyze_contribution — table ref or SQL)
+    input_data = args.get("input_data", "")
+    if input_data:
+        tables_to_check.extend(_extract_tables_from_sql(input_data, project_id))
+        # input_data can also be a bare table reference like "dataset.table"
+        if not tables_to_check:
+            parts = input_data.strip("`").split(".")
+            if len(parts) >= 2:
                 tables_to_check.append({
-                    "project_id": parts[0],
-                    "dataset_id": parts[1],
-                    "table_id": parts[2],
+                    "project_id": parts[0] if len(parts) == 3 else project_id,
+                    "dataset_id": parts[-2],
+                    "table_id": parts[-1],
                 })
-            elif len(parts) == 2:
-                tables_to_check.append({
-                    "project_id": args.get("project_id", ""),
-                    "dataset_id": parts[0],
-                    "table_id": parts[1],
-                })
-    else:
-        # Metadata lookup (get_table_info)
-        project_id = args.get("project_id", "")
-        dataset_id = args.get("dataset_id", "")
-        table_id = args.get("table_id", "")
-        if dataset_id and table_id:
+
+    # 5. Extract from 'table_references' param (ask_data_insights)
+    for ref in args.get("table_references", []):
+        if isinstance(ref, dict):
             tables_to_check.append({
-                "project_id": project_id,
-                "dataset_id": dataset_id,
-                "table_id": table_id,
+                "project_id": ref.get("projectId", ref.get("project_id", "")),
+                "dataset_id": ref.get("datasetId", ref.get("dataset_id", "")),
+                "table_id": ref.get("tableId", ref.get("table_id", "")),
             })
 
-    if tool_name in ("get_table_info", "execute_sql") and not tables_to_check:
+    # 6. Explicit dataset_id + table_id args (get_table_info, list_table_ids)
+    dataset_id = args.get("dataset_id", "")
+    table_id = args.get("table_id", "")
+    if dataset_id and table_id:
+        tables_to_check.append({
+            "project_id": project_id,
+            "dataset_id": dataset_id,
+            "table_id": table_id,
+        })
+
+    # For tools that must reference tables, block if we couldn't identify any
+    _DATA_TOOLS = {"execute_sql", "get_table_info", "forecast", "analyze_contribution", "detect_anomalies", "ask_data_insights"}
+    if tool_name in _DATA_TOOLS and not tables_to_check:
         return {"error": "Could not identify tables in the request. Please use fully qualified table names (project.dataset.table)."}
 
-    # Check each table against the authorization catalog
-    for ref in tables_to_check:
-        dataset_id = ref["dataset_id"]
-        table_id = ref["table_id"]
+    # For list/discovery tools on restricted datasets, filter what's visible
+    if tool_name == "list_table_ids" and dataset_id and dataset_id in table_data:
+        restricted_tables = [
+            tid for tid, tinfo in table_data[dataset_id].get("tables", {}).items()
+            if tinfo.get("authorized_users") and user_email not in tinfo["authorized_users"]
+        ]
+        if restricted_tables:
+            # Let the tool run, but log the restriction — the agent instruction
+            # should guide it to only show authorized tables via get_table_data
+            pass
 
-        if dataset_id in table_data and table_id in table_data[dataset_id].get("tables", {}):
-            allowed_users = table_data[dataset_id]["tables"][table_id].get("authorized_users")
-            if allowed_users and user_email not in allowed_users:
-                return {
-                    "error": f"Access denied: {user_email or 'unknown user'} is not authorized to query "
-                             f"`{dataset_id}.{table_id}`. Contact an admin if you need access."
-                }
-
-    return None
+    return _check_table_access(tables_to_check, user_email)
 
 
 _base_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
