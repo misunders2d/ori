@@ -177,10 +177,10 @@ def update_friend_key(friend_name: str, tool_context: ToolContext) -> Dict[str, 
             return {"status": "error", "message": f"Friend '{friend_name}' not found."}
 
         from app.secure_config import expect_friend_key
-        
-        current_state = tool_context.state.to_dict() if tool_context and hasattr(tool_context, "state") else {}
-        session_id = current_state.get("session_id") or str(getattr(tool_context.session, "id", "default"))
-        
+
+        session = getattr(tool_context, "session", None)
+        session_id = getattr(session, "session_id", None) or getattr(session, "id", None) or "default"
+
         expect_friend_key(session_id, friend_name)
 
         return {
@@ -204,13 +204,16 @@ def list_friends(tool_context: ToolContext) -> Dict[str, Any]:
             friends = json.load(f)
         summary = {}
         for nickname, data in friends.items():
-            has_key = bool(_load_friend_key(nickname))
+            key = _load_friend_key(nickname)
+            key_info = "key_missing"
+            if key:
+                key_info = f"key_configured (len={len(key)}, prefix={key[:6]}...)"
             summary[nickname] = {
                 "name": data.get("name"),
                 "base_url": data.get("base_url"),
                 "endpoint_url": data.get("endpoint_url"),
                 "last_active": data.get("last_discovered_at"),
-                "auth_status": "key_configured" if has_key else "key_missing",
+                "auth_status": key_info,
             }
         return {"status": "success", "friends": summary}
     except Exception as e:
