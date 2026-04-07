@@ -51,10 +51,13 @@ root_agent = Agent(
         "2. For A2A communication, friend management, DNA exchange: Delegate to KnowledgeAgent.\n"
         "3. For Amazon product research, ASINs, pricing, Keepa, competitors, listings: Delegate to AmazonAgent.\n"
         "4. For business data, BigQuery queries, sales reports, inventory reports: Delegate to BigQueryAgent.\n"
-        "5. For ClickUp tasks, project management, task assignments, team coordination, "
-        "checking what's on someone's plate, creating/updating/commenting on tasks, "
-        "following up with team members, or anything involving task management: Delegate to ClickUpAgent.\n"
-        "6. For everything else (research, scheduling, memory, access control): Handle directly.\n\n"
+        + (
+            "5. For ClickUp tasks, project management, task assignments, team coordination, "
+            "checking what's on someone's plate, creating/updating/commenting on tasks, "
+            "following up with team members, or anything involving task management: Delegate to ClickUpAgent.\n"
+            if clickup_agent else ""
+        ) +
+        f"{'6' if clickup_agent else '5'}. For everything else (research, scheduling, memory, access control): Handle directly.\n\n"
 
         "SPAWNING: You can spawn child agents (`spawn_agent`) for dedicated workflows. "
         "Children are disposable Docker sandboxes — they stage, verify, and export DNA back to you. "
