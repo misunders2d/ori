@@ -15,6 +15,7 @@ from app.callbacks.guardrails import (
 )
 from app.sub_agents.amazon_agent import amazon_agent
 from app.sub_agents.bigquery_agent import bigquery_agent
+from app.sub_agents.clickup_agent import clickup_agent
 from app.sub_agents.developer_agent import developer_agent
 from app.sub_agents.knowledge_agent import knowledge_agent
 from app.toolsets import (
@@ -50,7 +51,8 @@ root_agent = Agent(
         "2. For A2A communication, friend management, DNA exchange: Delegate to KnowledgeAgent.\n"
         "3. For Amazon product research, ASINs, pricing, Keepa, competitors, listings: Delegate to AmazonAgent.\n"
         "4. For business data, BigQuery queries, sales reports, inventory reports: Delegate to BigQueryAgent.\n"
-        "5. For everything else (research, scheduling, memory, access control): Handle directly.\n\n"
+        "5. For ClickUp tasks, project management, task assignments, team coordination: Delegate to ClickUpAgent.\n"
+        "6. For everything else (research, scheduling, memory, access control): Handle directly.\n\n"
 
         "SPAWNING: You can spawn child agents (`spawn_agent`) for dedicated workflows. "
         "Children are disposable Docker sandboxes — they stage, verify, and export DNA back to you. "
@@ -83,6 +85,7 @@ root_agent = Agent(
         knowledge_agent,
         amazon_agent,
         *([bigquery_agent] if bigquery_agent else []),
+        *([clickup_agent] if clickup_agent else []),
     ],
     tools=[
         # Skills

@@ -35,6 +35,7 @@ ALLOWED_CONFIG_KEYS = frozenset({
     "SP_API_CLIENT_SECRET",
     "SP_API_REFRESH_TOKEN",
     "SP_API_SELLER_ID",
+    "CLICKUP_API_TOKEN",
 })
 
 # Keys the agent can set via configure_integration (conversational flow).
@@ -54,6 +55,7 @@ AGENT_CONFIG_KEYS = frozenset({
     "SLACK_BOT_TOKEN",
     "SLACK_APP_TOKEN",
     "KEEPA_API_KEY",
+    "CLICKUP_API_TOKEN",
 })
 
 

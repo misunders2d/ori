@@ -10,6 +10,7 @@ from .visualization import VisualizationToolset
 from .google_workspace import GoogleWorkspaceToolset
 from .pinecone import PineconeToolset
 from .sp_api import SPApiToolset
+from .clickup import ClickUpToolset
 
 __all__ = [
     "SchedulingToolset",
@@ -24,4 +25,5 @@ __all__ = [
     "GoogleWorkspaceToolset",
     "PineconeToolset",
     "SPApiToolset",
+    "ClickUpToolset",
 ]
