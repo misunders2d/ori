@@ -2,9 +2,10 @@ import logging
 import os
 import random
 import re
-import httpx
 from typing import Optional, Tuple
 from urllib.parse import urlparse
+
+import httpx
 
 from app.core.transport import TransportAdapter
 
@@ -12,14 +13,29 @@ logger = logging.getLogger(__name__)
 
 # Thinking/working indicator GIFs — shown while the agent processes a request
 _THINKING_GIFS = [
-    "https://media.giphy.com/media/3o7bu3XilJ5BOiSGic/giphy.gif",
     "https://media.giphy.com/media/l0HlBO7eyXzSZkJri/giphy.gif",
     "https://media.giphy.com/media/WoWm8YzFQJg5i/giphy.gif",
-    "https://media.giphy.com/media/3oEjI6SIIHBdRxXI40/giphy.gif",
     "https://media.giphy.com/media/JIX9t2j0ZTN9S/giphy.gif",
     "https://media.giphy.com/media/l3nWhI38IWDofyDrW/giphy.gif",
     "https://media.giphy.com/media/tXL4FHPSnVJ0A/giphy.gif",
-    "https://media.giphy.com/media/l0HlMPcbD4jdARjRC/giphy.gif",
+    "https://media.giphy.com/media/QKkV58ufpV4ksJ1Okh/giphy.gif",
+    "https://media.giphy.com/media/Yl5nlnrtpQIrI1AfhD/giphy.gif",
+    "https://media.giphy.com/media/S675CRFMUX7el7gyu7/giphy.gif",
+    "https://media.giphy.com/media/eGNRUOkpiBoJi8VQMN/giphy.gif",
+    "https://media.giphy.com/media/L3X9GvVhP1nY23Ah6u/giphy.gif",
+    "https://media.giphy.com/media/1FMaabePDEfgk/giphy.gif",
+    "https://media.giphy.com/media/H6cmWzp6LGFvqjidB7/giphy.gif",
+    "https://media.giphy.com/media/z4lwT4QTkK3sYITR7Z/giphy.gif",
+    "https://media.giphy.com/media/L17xM7PvLcqJggsCYa/giphy.gif",
+    "https://media.giphy.com/media/VFYJXIuuFl6pO/giphy.gif",
+    "https://media.giphy.com/media/WRQBXSCnEFJIuxktnw/giphy.gif",
+    "https://media.giphy.com/media/Qs1uMrvmHAKIUXxO2g/giphy.gif",
+    "https://media.giphy.com/media/ZBK7b4vHYyb0n70zJq/giphy.gif",
+    "https://media.giphy.com/media/APqEbxBsVlkWSuFpth/giphy.gif",
+    "https://media.giphy.com/media/kDf0eEXhOhlZgdp2dy/giphy.gif",
+    "https://media.giphy.com/media/Zxzr2pp6qU64g/giphy.gif",
+    "https://media.giphy.com/media/xCwYFe19SldXLrJlwm/giphy.gif",
+    "https://media.giphy.com/media/Nde7zlveRCWPu/giphy.gif",
 ]
 
 SLACK_API_URL = "https://slack.com/api/{method}"
@@ -89,19 +105,18 @@ class SlackAdapter(TransportAdapter):
     def _headers(self) -> dict:
         return {
             "Authorization": f"Bearer {self._token}",
-            "Content-Type": "application/json; charset=utf-8"
+            "Content-Type": "application/json; charset=utf-8",
         }
 
-    async def send_message(self, target_id: str | int, text: str, *, thread_ts: str = "") -> None:
+    async def send_message(
+        self, target_id: str | int, text: str, *, thread_ts: str = ""
+    ) -> None:
         url = SLACK_API_URL.format(method="chat.postMessage")
 
         # SECURITY: Scrub any leaked secrets before they reach the user
         text = _scrub_secrets(text)
 
-        payload = {
-            "channel": str(target_id),
-            "text": text
-        }
+        payload = {"channel": str(target_id), "text": text}
         if thread_ts:
             payload["thread_ts"] = thread_ts
         try:
@@ -116,7 +131,9 @@ class SlackAdapter(TransportAdapter):
         # Slack Web API does not support a REST-based typing indicator for bots.
         pass
 
-    async def send_thinking_indicator(self, target_id: str | int, *, thread_ts: str = "") -> str | None:
+    async def send_thinking_indicator(
+        self, target_id: str | int, *, thread_ts: str = ""
+    ) -> str | None:
         """Post a random 'thinking' GIF and return its message ts for later deletion."""
         gif_url = random.choice(_THINKING_GIFS)
         url = SLACK_API_URL.format(method="chat.postMessage")
@@ -140,21 +157,31 @@ class SlackAdapter(TransportAdapter):
 
     async def delete_message(self, target_id: str | int, message_id: int | str) -> None:
         url = SLACK_API_URL.format(method="chat.delete")
-        payload = {
-            "channel": str(target_id),
-            "ts": str(message_id)
-        }
+        payload = {"channel": str(target_id), "ts": str(message_id)}
         try:
             resp = await self._client.post(url, json=payload, headers=self._headers())
             data = resp.json()
             if not data.get("ok"):
-                logger.warning("Slack deleteMessage failed: %s", data.get("error", data))
+                logger.warning(
+                    "Slack deleteMessage failed: %s", data.get("error", data)
+                )
         except Exception:
-            logger.exception("Failed to delete Slack message %s in %s", message_id, target_id)
+            logger.exception(
+                "Failed to delete Slack message %s in %s", message_id, target_id
+            )
 
-    async def send_media(self, target_id: str | int, data: bytes, mime_type: str, caption: str = "", *, thread_ts: str = "") -> None:
+    async def send_media(
+        self,
+        target_id: str | int,
+        data: bytes,
+        mime_type: str,
+        caption: str = "",
+        *,
+        thread_ts: str = "",
+    ) -> None:
         """Upload a file using the Slack SDK's files_upload_v2 (handles the full 3-step flow)."""
         import mimetypes as _mt
+
         ext = _mt.guess_extension(mime_type) or ".bin"
         filename = f"file{ext}"
 
@@ -164,6 +191,7 @@ class SlackAdapter(TransportAdapter):
         try:
             if self._sdk_client is None:
                 from slack_sdk.web.async_client import AsyncWebClient
+
                 self._sdk_client = AsyncWebClient(token=self._token)
 
             kwargs = {
@@ -179,7 +207,9 @@ class SlackAdapter(TransportAdapter):
 
             resp = await self._sdk_client.files_upload_v2(**kwargs)
             if not resp.get("ok"):
-                logger.error("Slack files_upload_v2 failed: %s", resp.get("error", resp))
+                logger.error(
+                    "Slack files_upload_v2 failed: %s", resp.get("error", resp)
+                )
         except Exception:
             logger.exception("Failed to upload media to Slack channel %s", target_id)
 
@@ -194,16 +224,25 @@ class SlackAdapter(TransportAdapter):
         try:
             resp = await self._client.get(file_url, headers=headers)
             if resp.status_code != 200:
-                logger.error("Failed to download Slack file from %s, status: %s", file_url, resp.status_code)
+                logger.error(
+                    "Failed to download Slack file from %s, status: %s",
+                    file_url,
+                    resp.status_code,
+                )
                 return None
 
             # Enforce file size limit
             if len(resp.content) > _MAX_DOWNLOAD_BYTES:
-                logger.warning("Slack file too large (%d bytes), skipping: %s", len(resp.content), file_url)
+                logger.warning(
+                    "Slack file too large (%d bytes), skipping: %s",
+                    len(resp.content),
+                    file_url,
+                )
                 return None
 
             import mimetypes
             import os as _os
+
             filename = _os.path.basename(parsed.path)
             mime_type, _ = mimetypes.guess_type(filename)
             return resp.content, mime_type or "application/octet-stream", filename
