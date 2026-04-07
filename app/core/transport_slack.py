@@ -122,13 +122,9 @@ class SlackAdapter(TransportAdapter):
         url = SLACK_API_URL.format(method="chat.postMessage")
         payload = {
             "channel": str(target_id),
-            "text": "",
-            "attachments": [
-                {
-                    "fallback": "Thinking...",
-                    "image_url": gif_url,
-                }
-            ],
+            "text": gif_url,
+            "unfurl_media": True,
+            "unfurl_links": True,
         }
         if thread_ts:
             payload["thread_ts"] = thread_ts
