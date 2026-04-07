@@ -132,6 +132,8 @@ async def poll_slack(get_runner_fn, process_init_fn):
         _runner, _session_user_id, _session_id, _message_content, _user_id, _channel_id, _thread_ts=""
     ):
         async with await _get_lock(_session_id):
+            # Show a thinking GIF while the agent works
+            thinking_ts = await adapter.send_thinking_indicator(_channel_id, thread_ts=_thread_ts)
             try:
                 response = await extract_agent_response(
                     _runner,
@@ -140,6 +142,9 @@ async def poll_slack(get_runner_fn, process_init_fn):
                     _message_content,
                     _user_id,
                 )
+                # Remove the thinking indicator before posting the real response
+                if thinking_ts:
+                    await adapter.delete_message(_channel_id, thinking_ts)
                 if response.text:
                     scrubbed = _scrub_secrets(response.text)
                     await adapter.send_message(_channel_id, scrubbed, thread_ts=_thread_ts)
@@ -151,7 +156,9 @@ async def poll_slack(get_runner_fn, process_init_fn):
                         thread_ts=_thread_ts,
                     )
             except asyncio.CancelledError:
-                pass
+                # Clean up the thinking indicator on cancellation too
+                if thinking_ts:
+                    await adapter.delete_message(_channel_id, thinking_ts)
             finally:
                 if (
                     _session_id in _active_tasks

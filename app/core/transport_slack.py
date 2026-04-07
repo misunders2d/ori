@@ -1,5 +1,6 @@
 import logging
 import os
+import random
 import re
 import httpx
 from typing import Optional, Tuple
@@ -8,6 +9,18 @@ from urllib.parse import urlparse
 from app.core.transport import TransportAdapter
 
 logger = logging.getLogger(__name__)
+
+# Thinking/working indicator GIFs — shown while the agent processes a request
+_THINKING_GIFS = [
+    "https://media.giphy.com/media/3o7bu3XilJ5BOiSGic/giphy.gif",
+    "https://media.giphy.com/media/l0HlBO7eyXzSZkJri/giphy.gif",
+    "https://media.giphy.com/media/WoWm8YzFQJg5i/giphy.gif",
+    "https://media.giphy.com/media/3oEjI6SIIHBdRxXI40/giphy.gif",
+    "https://media.giphy.com/media/JIX9t2j0ZTN9S/giphy.gif",
+    "https://media.giphy.com/media/l3nWhI38IWDofyDrW/giphy.gif",
+    "https://media.giphy.com/media/tXL4FHPSnVJ0A/giphy.gif",
+    "https://media.giphy.com/media/l0HlMPcbD4jdARjRC/giphy.gif",
+]
 
 SLACK_API_URL = "https://slack.com/api/{method}"
 
@@ -102,6 +115,33 @@ class SlackAdapter(TransportAdapter):
     async def send_typing(self, target_id: str | int) -> None:
         # Slack Web API does not support a REST-based typing indicator for bots.
         pass
+
+    async def send_thinking_indicator(self, target_id: str | int, *, thread_ts: str = "") -> str | None:
+        """Post a random 'thinking' GIF and return its message ts for later deletion."""
+        gif_url = random.choice(_THINKING_GIFS)
+        url = SLACK_API_URL.format(method="chat.postMessage")
+        payload = {
+            "channel": str(target_id),
+            "blocks": [
+                {
+                    "type": "image",
+                    "image_url": gif_url,
+                    "alt_text": "Thinking...",
+                }
+            ],
+            "text": "Thinking...",  # fallback for notifications
+        }
+        if thread_ts:
+            payload["thread_ts"] = thread_ts
+        try:
+            resp = await self._client.post(url, json=payload, headers=self._headers())
+            data = resp.json()
+            if data.get("ok"):
+                return data.get("ts")
+            logger.error("Slack thinking indicator failed: %s", data.get("error", data))
+        except Exception:
+            logger.exception("Failed to send thinking indicator to %s", target_id)
+        return None
 
     async def delete_message(self, target_id: str | int, message_id: int | str) -> None:
         url = SLACK_API_URL.format(method="chat.delete")
