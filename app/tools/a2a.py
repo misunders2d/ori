@@ -58,6 +58,18 @@ def get_agent_identity(tool_context: ToolContext) -> Dict[str, Any]:
         return {"status": "error", "message": f"Failed to read Agent Card: {e}"}
 
 
+def get_my_a2a_key(tool_context: ToolContext) -> Dict[str, Any]:
+    """Returns this agent's own A2A API key so the admin can share it with friends.
+
+    The key is what remote agents must send in the x-a2a-api-key header to authenticate.
+    Only show this to the admin — never to other users or agents.
+    """
+    key = os.environ.get("A2A_API_KEY", "")
+    if not key:
+        return {"status": "error", "message": "A2A_API_KEY not configured."}
+    return {"status": "success", "a2a_api_key": key}
+
+
 # ---------------------------------------------------------------------------
 # Discovery & Friendship
 # ---------------------------------------------------------------------------
@@ -156,6 +168,55 @@ async def add_friend(url: str, friend_name: str, tool_context: ToolContext) -> D
         return {"status": "error", "message": f"Discovery succeeded but save failed: {e}"}
 
 
+async def refresh_friend(friend_name: str, new_url: str, tool_context: ToolContext) -> Dict[str, Any]:
+    """Re-discover a friend at a new URL and update the stored connection info.
+
+    Use this when a friend's URL has changed (e.g. tunnel URL rotated after restart).
+    The API key is preserved — only the URL and agent card are updated.
+
+    Args:
+        friend_name: The local nickname of the friend to refresh.
+        new_url: The friend's new base URL.
+    """
+    try:
+        if not os.path.exists(FRIENDS_FILE):
+            return {"status": "error", "message": "No friends registered yet."}
+        with open(FRIENDS_FILE, "r") as f:
+            friends = json.load(f)
+        if friend_name not in friends:
+            return {"status": "error", "message": f"Friend '{friend_name}' not found."}
+
+        card = await _discover_agent_card(new_url)
+        if not card:
+            return {"status": "error", "message": f"No valid Agent Card found at {new_url}. Is the agent online?"}
+
+        base_url = new_url.rstrip("/")
+        endpoint_url = base_url
+        for ep in card.get("endpoints", []):
+            if ep.get("type") in ("json-rpc", "http+json"):
+                endpoint_url = ep["url"]
+                break
+
+        friends[friend_name].update({
+            "base_url": base_url,
+            "endpoint_url": endpoint_url,
+            "card": card,
+            "required_security": card.get("security", []),
+            "last_discovered_at": datetime.now().isoformat(),
+        })
+
+        with open(FRIENDS_FILE, "w") as f:
+            json.dump(friends, f, indent=4)
+
+        has_key = bool(_load_friend_key(friend_name))
+        return {
+            "status": "success",
+            "message": f"Updated '{friend_name}' to {base_url}. Key {'preserved' if has_key else 'missing — use update_friend_key'}.",
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 def update_friend_key(friend_name: str, tool_context: ToolContext) -> Dict[str, Any]:
     """
     Initiates a secure capture flow to configure an API key for a registered A2A friend.
@@ -177,10 +238,10 @@ def update_friend_key(friend_name: str, tool_context: ToolContext) -> Dict[str, 
             return {"status": "error", "message": f"Friend '{friend_name}' not found."}
 
         from app.secure_config import expect_friend_key
-        
-        current_state = tool_context.state.to_dict() if tool_context and hasattr(tool_context, "state") else {}
-        session_id = current_state.get("session_id") or str(getattr(tool_context.session, "id", "default"))
-        
+
+        session = getattr(tool_context, "session", None)
+        session_id = getattr(session, "session_id", None) or getattr(session, "id", None) or "default"
+
         expect_friend_key(session_id, friend_name)
 
         return {
@@ -204,13 +265,16 @@ def list_friends(tool_context: ToolContext) -> Dict[str, Any]:
             friends = json.load(f)
         summary = {}
         for nickname, data in friends.items():
-            has_key = bool(_load_friend_key(nickname))
+            key = _load_friend_key(nickname)
+            key_info = "key_missing"
+            if key:
+                key_info = f"key_configured (len={len(key)}, prefix={key[:6]}...)"
             summary[nickname] = {
                 "name": data.get("name"),
                 "base_url": data.get("base_url"),
                 "endpoint_url": data.get("endpoint_url"),
                 "last_active": data.get("last_discovered_at"),
-                "auth_status": "key_configured" if has_key else "key_missing",
+                "auth_status": key_info,
             }
         return {"status": "success", "friends": summary}
     except Exception as e:
@@ -564,13 +628,28 @@ async def perform_a2a_broadcast(force: bool = False) -> Dict[str, Any]:
         friends = json.load(f)
 
     results = {}
-    msg = f"PROTOCOL NOTICE: My base address has changed. Please update your registry for me. NEW_BASE_URL={my_url}"
+    my_name = os.environ.get("BOT_NAME", "Unknown")
 
     logger.info("Broadcasting A2A address update to %d friends...", len(friends))
-    for nickname in friends:
+    for nickname, data in friends.items():
+        friend_url = data.get("endpoint_url") or data.get("base_url", "")
+        friend_key = _load_friend_key(nickname)
+        if not friend_url:
+            results[nickname] = "skipped: no URL"
+            continue
+        # Use the deterministic /a2a/address-update endpoint (no agent involvement)
         try:
-            res = await call_friend(nickname, msg)
-            results[nickname] = res.get("status")
+            headers = _a2a_headers(friend_key)
+            payload = {"sender_name": my_name, "new_base_url": my_url}
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(f"{friend_url.rstrip('/')}/a2a/address-update", json=payload, headers=headers)
+                if resp.status_code == 200:
+                    results[nickname] = "success"
+                else:
+                    # Fallback: send as agent message (old protocol)
+                    msg = f"PROTOCOL NOTICE: My base address has changed. Please update your registry for me. NEW_BASE_URL={my_url}"
+                    res = await call_friend(nickname, msg)
+                    results[nickname] = f"fallback: {res.get('status')}"
         except Exception as e:
             results[nickname] = f"failed: {e}"
 

@@ -7,7 +7,9 @@ from google.adk.tools import skill_toolset
 
 from app.tools.a2a import (
     get_agent_identity,
+    get_my_a2a_key,
     add_friend,
+    refresh_friend,
     update_friend_key,
     list_friends,
     call_friend,
@@ -34,10 +36,12 @@ knowledge_agent = Agent(
         "You are the KnowledgeAgent, the A2A communication and DNA exchange specialist for Ori.\n\n"
 
         "A2A COMMUNICATION:\n"
-        "1. **Identity**: Use `get_agent_identity` to read (not regenerate) this agent's public Agent Card.\n"
+        "1. **Identity**: Use `get_agent_identity` to read this agent's public Agent Card. Use `get_my_a2a_key` to retrieve this agent's own API key (for sharing with friends).\n"
         "2. **Discovery**: Use `add_friend(url, friend_name)` to discover and register a remote A2A agent. "
         "This fetches their Agent Card, validates it, and saves them for future calls. "
         "If they require authentication, you MUST immediately use `update_friend_key(friend_name)`.\n"
+        "2b. **Refresh**: Use `refresh_friend(friend_name, new_url)` when a friend's URL has changed "
+        "(e.g. tunnel URL rotated after restart). This updates the URL while preserving the stored API key.\n"
         "3. **Friends list**: Use `list_friends` to see all registered friends and their capabilities. "
         "Check the `auth_status` field to see if a key is already configured for a friend.\n"
         "4. **Call a friend**: Use `call_friend(friend_name, message)` to send a message to a registered friend "
@@ -80,15 +84,20 @@ knowledge_agent = Agent(
 
         "SETUP HELP — HOW TO ENABLE A2A COMMUNICATION:\n"
         "When the user asks how to enable, find, or connect to other agents via A2A, explain these steps:\n"
-        "1. **The Shield (API Key)**: Ori has an `A2A_API_KEY` in the credential vault. Share this with trusted friends.\n"
+        "1. **The Shield (API Key)**: Use `get_my_a2a_key` to retrieve your API key. Share this with trusted friends.\n"
         "2. **The Public URL**: Your public URL is detected automatically from the Cloudflare tunnel.\n"
         "3. **Adding Friends**: Use `add_friend` with the friend's URL. You will use a secure capture for the key.\n"
-        "4. **Stability**: If your URL changes, run `broadcast_address_update` to let friends know.\n"
+        "4. **URL Changes**: If a friend's URL changes, use `refresh_friend(friend_name, new_url)` to update without re-entering the key.\n"
+        "5. **Broadcasting**: If YOUR URL changes, run `broadcast_address_update` to let all friends know.\n"
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[google_adk_a2a_skill]),
         get_agent_identity,
+        get_my_a2a_key,
+    get_my_a2a_key,
         add_friend,
+        refresh_friend,
+    refresh_friend,
         update_friend_key,
         list_friends,
         call_friend,

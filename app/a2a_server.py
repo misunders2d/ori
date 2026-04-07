@@ -37,6 +37,11 @@ class A2AApiKeyMiddleware(BaseHTTPMiddleware):
                 },
                 status_code=401,
             )
+
+        # Deterministic address update endpoint (no agent involved)
+        if request.url.path == "/a2a/address-update" and request.method == "POST":
+            return await _handle_address_update(request)
+
         # Serve DNA archives directly (authenticated, out-of-band transfer)
         if request.url.path.startswith("/dna/"):
             filename = request.url.path[len("/dna/"):]
@@ -49,6 +54,57 @@ class A2AApiKeyMiddleware(BaseHTTPMiddleware):
             return Response("Not found", status_code=404)
 
         return await call_next(request)
+
+
+FRIENDS_FILE = os.path.abspath("./data/a2a_friends.json")
+
+
+async def _handle_address_update(request) -> JSONResponse:
+    """Deterministic handler: update a friend's URL when they broadcast a new address.
+
+    Expects JSON: {"sender_name": "...", "new_base_url": "https://..."}
+    Authenticated via x-a2a-api-key header (already validated by middleware).
+    """
+    try:
+        body = await request.json()
+        sender_name = body.get("sender_name", "")
+        new_url = body.get("new_base_url", "").rstrip("/")
+
+        if not sender_name or not new_url:
+            return JSONResponse({"status": "error", "message": "Missing sender_name or new_base_url"}, status_code=400)
+
+        if not os.path.exists(FRIENDS_FILE):
+            return JSONResponse({"status": "ignored", "message": "No friends registered"})
+
+        with open(FRIENDS_FILE, "r") as f:
+            friends = json.load(f)
+
+        # Find the friend by matching their registered name (case-insensitive)
+        matched_key = None
+        for key, data in friends.items():
+            if key.lower() == sender_name.lower() or (data.get("name", "").lower() == sender_name.lower()):
+                matched_key = key
+                break
+
+        if not matched_key:
+            logger.info("Address update from unknown sender '%s' — ignored", sender_name)
+            return JSONResponse({"status": "ignored", "message": f"Unknown sender: {sender_name}"})
+
+        old_url = friends[matched_key].get("base_url", "")
+        friends[matched_key]["base_url"] = new_url
+        friends[matched_key]["endpoint_url"] = new_url
+        from datetime import datetime
+        friends[matched_key]["last_address_update"] = datetime.now().isoformat()
+
+        with open(FRIENDS_FILE, "w") as f:
+            json.dump(friends, f, indent=4)
+
+        logger.info("Auto-updated friend '%s' URL: %s → %s", matched_key, old_url, new_url)
+        return JSONResponse({"status": "success", "message": f"Updated {matched_key} to {new_url}"})
+
+    except Exception as e:
+        logger.error("Address update handler failed: %s", e)
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
 def _build_agent_card() -> dict:
