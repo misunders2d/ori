@@ -16,7 +16,7 @@ from app.toolsets import (
     SchedulingToolset,
     SystemToolset,
 )
-from app.tools.a2a import get_agent_identity
+from app.tools.a2a import get_agent_identity, get_my_a2a_key
 from app.tools.google_search import google_search_agent_tool
 from app.tools.web import web_fetch
 from app.tools.whitelist import whitelist_chat, blacklist_chat
@@ -68,6 +68,7 @@ root_agent = Agent(
         *([google_search_agent_tool] if google_search_agent_tool else []),
         web_fetch,
         get_agent_identity,
+        get_my_a2a_key,
         whitelist_chat,
         blacklist_chat,
     ],
