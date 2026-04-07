@@ -28,11 +28,6 @@ from app.toolsets import ScratchpadToolset, VisualizationToolset
 logger = logging.getLogger(__name__)
 
 
-def _get_admin_emails() -> list[str]:
-    """Return admin user IDs from environment."""
-    return [u.strip() for u in os.environ.get("ADMIN_USER_IDS", "").split(",") if u.strip()]
-
-
 def _extract_tables_from_sql(query: str, default_project: str = "") -> list[dict]:
     """Extract all table references from a SQL string."""
     tables = []
@@ -73,14 +68,7 @@ def before_bq_callback(
     tool_name = getattr(tool, "name", "")
 
     state = tool_context.state.to_dict() if hasattr(tool_context.state, "to_dict") else {}
-    user_id = state.get("user_id", "")
-
-    # Admin users bypass table-level restrictions
-    admin_ids = _get_admin_emails()
-    if user_id in admin_ids:
-        return None
-
-    user_email = user_id
+    user_email = state.get("user_id", "")
     project_id = args.get("project_id", "")
     tables_to_check = []
 
