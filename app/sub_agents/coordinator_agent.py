@@ -9,6 +9,7 @@ from app.app_utils.models import get_model
 from app.callbacks.guardrails import (
     a2a_privacy_guardrail,
     admin_tool_guardrail,
+    plan_enforcer,
     prompt_injection_guardrail,
     state_setter,
     tool_output_injection_guardrail,
@@ -27,6 +28,7 @@ from app.toolsets import (
     GoogleWorkspaceToolset,
 )
 from app.toolsets.pinecone import PineconeToolset
+from app.toolsets.planner import PlannerToolset
 from app.tools.a2a import get_agent_identity, get_my_a2a_key
 from app.tools.google_search import google_search_agent_tool
 from app.tools.web import web_fetch
@@ -62,6 +64,12 @@ root_agent = Agent(
         "SPAWNING: You can spawn child agents (`spawn_agent`) for dedicated workflows. "
         "Children are disposable Docker sandboxes — they stage, verify, and export DNA back to you. "
         "They cannot commit or reboot. You are automatically their admin.\n\n"
+
+        "PLANNING: For complex multi-step tasks (research + analysis + action, or anything with 3+ steps), "
+        "use `create_plan` to break it into steps BEFORE starting. Then execute one step at a time with "
+        "`get_next_step` and `complete_step`. Never skip steps or work on multiple at once. "
+        "The user can check progress anytime with `get_plan_status`. "
+        "For simple tasks (single question, quick lookup), just do them directly — no plan needed.\n\n"
 
         "SCHEDULING: ALWAYS call `get_current_time` before scheduling. "
         "Respect the user's preferred timezone from `{user_preferences}`.\n\n"
@@ -103,6 +111,7 @@ root_agent = Agent(
         VisualizationToolset(),
         GoogleWorkspaceToolset(),
         PineconeToolset(),
+        PlannerToolset(),
         # Individual tools
         *([google_search_agent_tool] if google_search_agent_tool else []),
         web_fetch,
@@ -113,7 +122,7 @@ root_agent = Agent(
         blacklist_chat,
     ],
     before_agent_callback=[state_setter],
-    before_model_callback=prompt_injection_guardrail,
+    before_model_callback=[prompt_injection_guardrail, plan_enforcer],
     before_tool_callback=[admin_tool_guardrail, a2a_privacy_guardrail],
     after_tool_callback=[tool_output_injection_guardrail, a2a_privacy_guardrail],
 )

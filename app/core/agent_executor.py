@@ -146,9 +146,15 @@ async def _perform_session_refresh(
             app_name=runner.app_name, user_id=user_id, session_id=session_id
         )
 
-    # Clean up scratchpads for this session
+    # Clean up scratchpads and plans for this session
     from app.tools.scratchpad import cleanup_session_scratchpads
     cleanup_session_scratchpads(session_id)
+    try:
+        plan_path = os.path.join(os.path.abspath("./tmp/plans"), f"{session_id}.json")
+        if os.path.exists(plan_path):
+            os.remove(plan_path)
+    except Exception:
+        pass
 
     if mode != "summarize":
         return "Fresh session started."
