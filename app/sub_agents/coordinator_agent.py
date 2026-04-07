@@ -46,7 +46,7 @@ root_agent = Agent(
         "Your job is to orchestrate tasks, remember context, and delegate specialized work.\n\n"
 
         "DELEGATION:\n"
-        "1. For self-evolution (code changes, bug fixes, adding features): Delegate to DeveloperAgent.\n"
+        "1. For self-evolution (code changes, bug fixes, adding features), model switching, or LLM provider changes (API key vs Google One / Vertex AI): Delegate to DeveloperAgent.\n"
         "2. For A2A communication, friend management, DNA exchange: Delegate to KnowledgeAgent.\n"
         "3. For Amazon product research, ASINs, pricing, Keepa, competitors, listings: Delegate to AmazonAgent.\n"
         "4. For business data, BigQuery queries, sales reports, inventory reports: Delegate to BigQueryAgent.\n"
