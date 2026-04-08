@@ -12,7 +12,6 @@ from app.app_utils.models import (
     get_auth_mode,
     get_model_string,
     set_model,
-    validate_model,
     list_provider_models,
     _parse_model_str,
 )
@@ -39,10 +38,18 @@ async def list_available_models(
 
 async def set_agent_model(
     component_name: Annotated[str, "Target component (e.g. 'DeveloperAgent', 'channel_summarizer')"],
-    model_name: Annotated[str, "Model identifier, e.g. 'google/gemini-2.5-pro', 'anthropic/claude-sonnet-4-20250514', or bare name"],
+    model_name: Annotated[str, (
+        "Model identifier. MUST call list_available_models first and pick from the returned list. "
+        "Do NOT guess or invent model names. "
+        "Use 'google/' or 'anthropic/' prefix, or bare name (auto-inferred)."
+    )],
     tool_context: ToolContext = None,
 ) -> dict:
-    """Switch the model for a specific agent or component. Validates against the live API."""
+    """Switch the model for a specific agent or component.
+
+    IMPORTANT: You MUST call list_available_models first, then pick a model
+    name from the returned list. Arbitrary model names are rejected.
+    """
     if component_name not in VALID_COMPONENTS:
         return {
             "status": "error",
@@ -51,23 +58,41 @@ async def set_agent_model(
 
     # Normalize: require provider prefix
     if "/" not in model_name:
-        # Infer provider from model name prefix
         if model_name.startswith("claude"):
             model_name = f"anthropic/{model_name}"
         else:
             model_name = f"google/{model_name}"
 
-    # Validate against live API
-    info = await validate_model(model_name)
-    if info is None:
+    provider, bare_name = _parse_model_str(model_name)
+
+    # Fetch the live model list and validate against it
+    available = await list_provider_models(provider=provider)
+    if not available or (len(available) == 1 and "error" in available[0]):
         return {
             "status": "error",
-            "message": f"Model '{model_name}' not found or unreachable on the provider API. Check spelling.",
+            "message": f"Could not fetch model list from '{provider}'. Try again later.",
+        }
+
+    valid_names = set()
+    for m in available:
+        name = m.get("name", "")
+        valid_names.add(name)
+        valid_names.add(name.replace("models/", ""))
+
+    if bare_name not in valid_names and f"models/{bare_name}" not in valid_names:
+        # Show a few similar names to help
+        suggestions = sorted(n.replace("models/", "") for n in valid_names if any(
+            k in n.lower() for k in bare_name.lower().split("-")[:2]
+        ))[:5]
+        hint = f" Similar: {suggestions}" if suggestions else " Use list_available_models to see valid options."
+        return {
+            "status": "error",
+            "message": f"Model '{bare_name}' not found on {provider}.{hint}",
         }
 
     old_model = get_model_string(component_name)
 
-    # Persist to env + .env
+    # Persist to env + vault
     set_model(component_name, model_name)
 
     # Write to session state for immediate hot-swap (picked up by before_model_callback)
@@ -85,6 +110,5 @@ async def set_agent_model(
     return {
         "status": "success",
         "message": msg,
-        "model_info": info,
         "restart_required": cross_provider,
     }
