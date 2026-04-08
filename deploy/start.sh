@@ -122,13 +122,17 @@ if is_service_installed; then
     esac
     echo ":: $SERVICE_NAME restarted."
 
-    # Ensure Cloudflare tunnel is running with the correct port
+    # Restart Cloudflare tunnel with a fresh URL
     if command -v docker &>/dev/null; then
         _a2a_port=$("$PYTHON" -c "import json; print(json.load(open('$VAULT_FILE')).get('A2A_PORT','8000'))" 2>/dev/null || echo "8000")
         _tunnel_name="$(echo "$_bot_name" | tr '[:upper:]' '[:lower:]' | tr ' _' '-' | sed 's/[^a-z0-9-]//g')"
         _metrics_port=$("$PYTHON" -c "import json; v=json.load(open('$VAULT_FILE')); print(v.get('TUNNEL_METRICS_PORT', int(v.get('A2A_PORT','8000'))+1000))" 2>/dev/null || echo "9000")
-        A2A_PORT="$_a2a_port" BOT_NAME="$_tunnel_name" TUNNEL_METRICS_PORT="$_metrics_port" docker compose -p "$_tunnel_name" -f "$SCRIPT_DIR/docker-compose.yml" down
-        A2A_PORT="$_a2a_port" BOT_NAME="$_tunnel_name" TUNNEL_METRICS_PORT="$_metrics_port" docker compose -p "$_tunnel_name" -f "$SCRIPT_DIR/docker-compose.yml" up -d
+        # Kill any existing tunnel container for this bot (by name, regardless of how it was created)
+        docker rm -f "${_tunnel_name}-tunnel" 2>/dev/null || true
+        # Start fresh tunnel scoped by bot name
+        A2A_PORT="$_a2a_port" BOT_NAME="$_tunnel_name" TUNNEL_METRICS_PORT="$_metrics_port" \
+            docker compose -p "$_tunnel_name" -f "$SCRIPT_DIR/docker-compose.yml" up -d || \
+            echo "   Warning: Cloudflare tunnel failed to start. A2A will not be reachable externally."
     fi
 
     echo "   Logs:  deploy/logs.sh"
