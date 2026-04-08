@@ -16,6 +16,10 @@ class SPApiToolset(BaseToolset):
             sp_download_report,
             sp_list_reports,
         )
+        from app.tools.sp_api_export import (
+            export_report_to_csv,
+            data_to_csv,
+        )
 
         return [
             FunctionTool(func=sp_get_catalog_item),
@@ -26,4 +30,6 @@ class SPApiToolset(BaseToolset):
             FunctionTool(func=sp_check_report),
             FunctionTool(func=sp_download_report),
             FunctionTool(func=sp_list_reports),
+            FunctionTool(func=export_report_to_csv),
+            FunctionTool(func=data_to_csv),
         ]

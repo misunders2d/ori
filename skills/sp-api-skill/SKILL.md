@@ -19,6 +19,8 @@ You have access to Amazon Selling Partner API tools for product data, listing de
 | `sp_check_report(report_id)` | Check report processing status | 1 call |
 | `sp_download_report(report_document_id)` | Download completed report data | 1 call |
 | `sp_list_reports(report_type, status, days)` | List existing reports | 1 call |
+| `export_report_to_csv(report_type, days)` | **One-shot report→CSV pipeline** (preferred for exports) | 3 calls (auto) |
+| `data_to_csv(data, filename)` | Convert any JSON data to CSV directly | 0 calls |
 
 ## Key Concepts
 
@@ -34,7 +36,19 @@ You have access to Amazon Selling Partner API tools for product data, listing de
 
 ## Report Workflow
 
-Reports are **asynchronous**. Always follow this sequence:
+### Preferred: Direct CSV Export (one tool call, zero LLM overhead)
+
+For CSV exports, **ALWAYS use `export_report_to_csv`**. It handles the entire pipeline in one call:
+request → poll → download → parse → CSV. No data passes through the conversation.
+
+```
+export_report_to_csv(report_type="GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA", days=30)
+→ returns: {"file_path": "./tmp/exports/fba_myi_unsuppressed_inventory_20260408_1430.csv", "rows": 1234}
+```
+
+Use `data_to_csv` to convert any JSON data you already have into a CSV file directly.
+
+### Manual flow (only when you need to inspect raw data first)
 
 - [ ] Step 1: `sp_request_report(report_type, days)` — returns a `report_id`
 - [ ] Step 2: Wait 30-60 seconds, then `sp_check_report(report_id)`
