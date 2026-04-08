@@ -42,6 +42,30 @@ def _get_config():
     return api_key, index_name
 
 
+# Reuse a single async client + cached host to avoid unclosed aiohttp sessions
+_pc_client: PineconeAsyncio | None = None
+_pc_host: str | None = None
+
+
+async def _get_client_and_host():
+    """Return a shared (PineconeAsyncio, host) pair, creating on first call."""
+    global _pc_client, _pc_host
+    api_key, index_name = _get_config()
+    if not api_key:
+        return None, None, "PINECONE_API_KEY not configured. Set via /init."
+
+    if _pc_client is None:
+        _pc_client = PineconeAsyncio(api_key=api_key)
+
+    if _pc_host is None:
+        host, err = await _get_index(_pc_client, index_name)
+        if err:
+            return None, None, err
+        _pc_host = host
+
+    return _pc_client, _pc_host, None
+
+
 def _get_admin_ids() -> list[str]:
     raw = os.environ.get("ADMIN_USER_IDS", "")
     return [x.strip() for x in raw.split(",") if x.strip()]
@@ -77,17 +101,13 @@ async def search_knowledge(
         namespace: Namespace to search in. One of: personal, professional, people, technical.
         top_k: Number of results to return (default 5, max 20).
     """
-    api_key, index_name = _get_config()
-    if not api_key:
-        return {"status": "error", "message": "PINECONE_API_KEY not configured. Set via /init."}
     if namespace not in NAMESPACES:
         return {"status": "error", "message": f"Invalid namespace. Must be one of: {', '.join(NAMESPACES)}"}
 
     top_k = min(max(top_k, 1), 20)
 
     try:
-        pc = PineconeAsyncio(api_key=api_key)
-        host, err = await _get_index(pc, index_name)
+        pc, host, err = await _get_client_and_host()
         if err:
             return {"status": "error", "message": err}
 
@@ -133,15 +153,11 @@ async def get_records(
         record_ids: List of record IDs to fetch.
         namespace: Namespace to fetch from. One of: personal, professional, people, technical.
     """
-    api_key, index_name = _get_config()
-    if not api_key:
-        return {"status": "error", "message": "PINECONE_API_KEY not configured."}
     if namespace not in NAMESPACES:
         return {"status": "error", "message": f"Invalid namespace. Must be one of: {', '.join(NAMESPACES)}"}
 
     try:
-        pc = PineconeAsyncio(api_key=api_key)
-        host, err = await _get_index(pc, index_name)
+        pc, host, err = await _get_client_and_host()
         if err:
             return {"status": "error", "message": err}
 
@@ -172,15 +188,11 @@ async def list_records(
     Args:
         namespace: Namespace to list. One of: personal, professional, people, technical.
     """
-    api_key, index_name = _get_config()
-    if not api_key:
-        return {"status": "error", "message": "PINECONE_API_KEY not configured."}
     if namespace not in NAMESPACES:
         return {"status": "error", "message": f"Invalid namespace. Must be one of: {', '.join(NAMESPACES)}"}
 
     try:
-        pc = PineconeAsyncio(api_key=api_key)
-        host, err = await _get_index(pc, index_name)
+        pc, host, err = await _get_client_and_host()
         if err:
             return {"status": "error", "message": err}
 
@@ -204,8 +216,7 @@ async def list_records(
         # Fetch short descriptions in batches
         summaries = []
         batch_size = 50
-        pc2 = PineconeAsyncio(api_key=api_key)
-        async with pc2.IndexAsyncio(host) as index:
+        async with pc.IndexAsyncio(host) as index:
             for i in range(0, len(all_ids), batch_size):
                 batch = all_ids[i:i + batch_size]
                 result = await index.fetch(ids=batch, namespace=namespace)
@@ -253,9 +264,6 @@ async def create_record(
                 to remember something. Use 'agent' when you decide to store something
                 on your own without the user asking. Leave empty to auto-detect from context.
     """
-    api_key, index_name = _get_config()
-    if not api_key:
-        return {"status": "error", "message": "PINECONE_API_KEY not configured."}
     if namespace not in NAMESPACES:
         return {"status": "error", "message": f"Invalid namespace. Must be one of: {', '.join(NAMESPACES)}"}
     if not text or not short_description:
@@ -284,8 +292,7 @@ async def create_record(
         record["related_memories"] = json.dumps(related_memories)
 
     try:
-        pc = PineconeAsyncio(api_key=api_key)
-        host, err = await _get_index(pc, index_name)
+        pc, host, err = await _get_client_and_host()
         if err:
             return {"status": "error", "message": err}
 
@@ -335,9 +342,6 @@ async def create_person(
         author: Who initiated this. Use the user's ID when they explicitly ask, 'agent' when
                 you decide on your own, or leave empty to auto-detect.
     """
-    api_key, index_name = _get_config()
-    if not api_key:
-        return {"status": "error", "message": "PINECONE_API_KEY not configured."}
     if not first_name:
         return {"status": "error", "message": "'first_name' is required."}
 
@@ -367,8 +371,7 @@ async def create_person(
     }
 
     try:
-        pc = PineconeAsyncio(api_key=api_key)
-        host, err = await _get_index(pc, index_name)
+        pc, host, err = await _get_client_and_host()
         if err:
             return {"status": "error", "message": err}
 
@@ -421,9 +424,6 @@ async def update_record(
         namespace: Namespace of the record. One of: personal, professional, people, technical.
         updates: JSON string of fields to update, e.g. {"text": "new content", "tags": ["new", "tags"]}.
     """
-    api_key, index_name = _get_config()
-    if not api_key:
-        return {"status": "error", "message": "PINECONE_API_KEY not configured."}
     if namespace not in NAMESPACES:
         return {"status": "error", "message": f"Invalid namespace. Must be one of: {', '.join(NAMESPACES)}"}
 
@@ -445,8 +445,7 @@ async def update_record(
     admin_ids = _get_admin_ids()
 
     try:
-        pc = PineconeAsyncio(api_key=api_key)
-        host, err = await _get_index(pc, index_name)
+        pc, host, err = await _get_client_and_host()
         if err:
             return {"status": "error", "message": err}
 
@@ -500,9 +499,6 @@ async def delete_record(
         record_id: ID of the record to delete.
         namespace: Namespace of the record. One of: personal, professional, people, technical.
     """
-    api_key, index_name = _get_config()
-    if not api_key:
-        return {"status": "error", "message": "PINECONE_API_KEY not configured."}
     if namespace not in NAMESPACES:
         return {"status": "error", "message": f"Invalid namespace. Must be one of: {', '.join(NAMESPACES)}"}
 
@@ -510,8 +506,7 @@ async def delete_record(
     admin_ids = _get_admin_ids()
 
     try:
-        pc = PineconeAsyncio(api_key=api_key)
-        host, err = await _get_index(pc, index_name)
+        pc, host, err = await _get_client_and_host()
         if err:
             return {"status": "error", "message": err}
 

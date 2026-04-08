@@ -66,7 +66,7 @@
         {
             "id": "knowledge-graph",
             "name": "knowledge-graph",
-            "description": "Tracks entities and relationships in a Neo4j knowledge graph. Supports graph queries, path finding, and temporal relationship tracking alongside Pinecone vector search.",
+            "description": "Tracks entities and relationships in a Neo4j knowledge graph.",
             "tags": [
                 "memory",
                 "graph",
