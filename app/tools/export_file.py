@@ -94,6 +94,11 @@ def generate_file(
     if not filename:
         return {"status": "error", "message": "Filename is required (e.g., 'report.csv', 'data.xlsx', 'summary.pdf')."}
 
+    # Inject timestamp to prevent accidental overwrites
+    from datetime import datetime as _dt
+    base, ext = os.path.splitext(filename)
+    filename = f"{base}_{_dt.now().strftime('%Y%m%d_%H%M%S')}{ext}"
+
     os.makedirs(_EXPORTS_DIR, exist_ok=True)
     output_path = os.path.join(_EXPORTS_DIR, filename)
 
