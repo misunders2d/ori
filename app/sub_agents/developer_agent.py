@@ -24,7 +24,6 @@ google_adk_a2a_skill = load_skill_from_dir(base_dir / "google-adk-a2a-skill")
 skill_creator_skill = load_skill_from_dir(base_dir / "skill-creator-skill")
 external_research_skill = load_skill_from_dir(base_dir / "external-research-skill")
 scratchpad_skill = load_skill_from_dir(base_dir / "scratchpad-skill")
-visualization_skill = load_skill_from_dir(base_dir / "visualization-skill")
 
 model_config = get_model(
     "DeveloperAgent", retry_options=types.HttpRetryOptions(attempts=3)
@@ -135,7 +134,6 @@ developer_agent = Agent(
                 skill_creator_skill,
                 external_research_skill,
                 scratchpad_skill,
-                visualization_skill,
             ]
         ),
         # Toolsets

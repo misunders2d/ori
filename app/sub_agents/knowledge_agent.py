@@ -26,7 +26,6 @@ base_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 google_adk_a2a_skill = load_skill_from_dir(base_dir / "google-adk-a2a-skill")
 dna_exchange_skill = load_skill_from_dir(base_dir / "dna-exchange-skill")
 scratchpad_skill = load_skill_from_dir(base_dir / "scratchpad-skill")
-visualization_skill = load_skill_from_dir(base_dir / "visualization-skill")
 
 knowledge_agent = Agent(
     name="KnowledgeAgent",
@@ -94,7 +93,7 @@ knowledge_agent = Agent(
         "5. **Broadcasting**: If YOUR URL changes, run `broadcast_address_update` to let all friends know.\n"
     ),
     tools=[
-        skill_toolset.SkillToolset(skills=[google_adk_a2a_skill, dna_exchange_skill, scratchpad_skill, visualization_skill]),
+        skill_toolset.SkillToolset(skills=[google_adk_a2a_skill, dna_exchange_skill, scratchpad_skill]),
         ScratchpadToolset(),
         get_agent_identity,
         get_my_a2a_key,
