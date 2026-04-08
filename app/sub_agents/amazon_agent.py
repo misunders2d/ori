@@ -13,10 +13,12 @@ from app.app_utils.models import get_model
 from app.callbacks.guardrails import prompt_injection_guardrail
 from app.toolsets import KeepaToolset, ScratchpadToolset, VisualizationToolset
 from app.toolsets.sp_api import SPApiToolset
+from app.toolsets.h10 import H10Toolset
 
 base_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 keepa_skill = load_skill_from_dir(base_dir / "keepa-skill")
 sp_api_skill = load_skill_from_dir(base_dir / "sp-api-skill")
+h10_skill = load_skill_from_dir(base_dir / "h10-keyword-skill")
 scratchpad_skill = load_skill_from_dir(base_dir / "scratchpad-skill")
 visualization_skill = load_skill_from_dir(base_dir / "visualization-skill")
 
@@ -40,6 +42,10 @@ amazon_agent = Agent(
         "sp_get_listing for your SKU details, sp_get_competitive_pricing for price comparisons.\n"
         "- **SP-API Reports**: Request any Amazon report type with sp_request_report, "
         "check status with sp_check_report, download with sp_download_report.\n"
+        "- **Helium10 Analysis**: Analyze uploaded Cerebro/Magnet keyword exports. "
+        "Start with `keyword_summary`, then use `analyze_keywords`, `find_keyword_gaps`, "
+        "`find_trending_keywords`, `find_long_tail_opportunities`, or `keyword_score_report`. "
+        "The tools auto-detect Cerebro vs Magnet format from column headers.\n"
         "- **Scratchpad**: For multi-ASIN research, write findings between fetches, read to synthesize.\n\n"
 
         "WORKFLOW:\n"
@@ -59,9 +65,10 @@ amazon_agent = Agent(
         "Never spam retries — use progressive backoff.\n"
     ),
     tools=[
-        skill_toolset.SkillToolset(skills=[keepa_skill, sp_api_skill, scratchpad_skill, visualization_skill]),
+        skill_toolset.SkillToolset(skills=[keepa_skill, sp_api_skill, h10_skill, scratchpad_skill, visualization_skill]),
         KeepaToolset(),
         SPApiToolset(),
+        H10Toolset(),
         ScratchpadToolset(),
         VisualizationToolset(),
     ],

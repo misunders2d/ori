@@ -13,6 +13,7 @@ from .sp_api import SPApiToolset
 from .clickup import ClickUpToolset
 from .planner import PlannerToolset
 from .graph import GraphToolset
+from .h10 import H10Toolset
 
 __all__ = [
     "SchedulingToolset",
@@ -30,4 +31,5 @@ __all__ = [
     "ClickUpToolset",
     "PlannerToolset",
     "GraphToolset",
+    "H10Toolset",
 ]
