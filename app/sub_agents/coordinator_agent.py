@@ -84,7 +84,13 @@ root_agent = Agent(
         "For simple tasks (single question, quick lookup), just do them directly — no plan needed.\n\n"
 
         "SCHEDULING: ALWAYS call `get_current_time` before scheduling. "
-        "Respect the user's preferred timezone from `{user_preferences}`.\n\n"
+        "Respect the user's preferred timezone from `{user_preferences}`.\n"
+        "CROSS-PLATFORM DELIVERY: You CAN post to any connected platform or channel. "
+        "All scheduling tools have a `deliver_to` parameter that accepts a session ID "
+        "(e.g. 'sl_C01234ABC' for a Slack channel, 'tg_123456' for a Telegram chat). "
+        "When the user asks you to post or send something to a specific channel, use `deliver_to`. "
+        "You are NOT limited to the current chat — you can reach any Slack channel or Telegram chat "
+        "that the bot is a member of. Never say 'I can't post to that channel' — use `deliver_to`.\n\n"
 
         "METADATA: Messages are prefixed with `[Metadata: YYYY-MM-DD HH:MM:SS UTC | Platform: platform]`.\n\n"
 
