@@ -39,6 +39,7 @@ ALLOWED_CONFIG_KEYS = frozenset({
     "NEO4J_URI",
     "NEO4J_USERNAME",
     "NEO4J_PASSWORD",
+    "COMPANY_DOMAIN",
 })
 
 # Keys the agent can set via configure_integration (conversational flow).

@@ -55,20 +55,35 @@ def _check_table_access(tables: list[dict], user_email: str) -> dict | None:
     return None
 
 
+def _get_company_domain() -> str:
+    """Return the company domain for BQ access gating (e.g. 'mellanni.com')."""
+    return os.environ.get("COMPANY_DOMAIN", "").strip().lower()
+
+
 def before_bq_callback(
     tool: BaseTool, args: dict[str, Any], tool_context: ToolContext
 ) -> dict | None:
     """Per-table access control for ALL BigQuery tools.
 
-    Gates every tool in the BigQuery toolset. Extracts table references from
-    SQL queries, explicit args, and table_references lists, then checks the
-    user's email against authorized_users in the table catalog.
-    Admin users bypass all restrictions.
+    Gates every tool in the BigQuery toolset. First checks that the user
+    belongs to the company domain (COMPANY_DOMAIN env var). Then extracts
+    table references from SQL queries, explicit args, and table_references
+    lists, and checks the user's email against authorized_users in the
+    table catalog.
     """
     tool_name = getattr(tool, "name", "")
 
     state = tool_context.state.to_dict() if hasattr(tool_context.state, "to_dict") else {}
     user_email = state.get("user_id", "")
+
+    # Domain-level gate: user must belong to the company
+    company_domain = _get_company_domain()
+    if company_domain:
+        if not user_email or not user_email.lower().endswith(f"@{company_domain}"):
+            return {
+                "error": f"Access denied: BigQuery is only available to @{company_domain} users. "
+                         f"Your identity ({user_email or 'unknown'}) is not authorized."
+            }
     project_id = args.get("project_id", "")
     tables_to_check = []
 
