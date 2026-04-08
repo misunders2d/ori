@@ -40,10 +40,20 @@ async def list_available_models(
 
 async def set_agent_model(
     component_name: Annotated[str, "Target component (e.g. 'DeveloperAgent', 'channel_summarizer')"],
-    model_name: Annotated[str, "Model identifier, e.g. 'google/gemini-2.5-pro', 'anthropic/claude-sonnet-4-20250514', or bare name"],
+    model_name: Annotated[str, (
+        "Model identifier with provider prefix. Known models:\n"
+        "Google Gemini: gemini-3-flash-preview, gemini-3-pro-preview, gemini-3.1-flash-lite-preview\n"
+        "Google Gemma: gemma-4-31b-it (dense flagship), gemma-4-26b-a4b-it (MoE, faster/cheaper)\n"
+        "Anthropic: claude-sonnet-4-20250514, claude-haiku-4-20250414\n"
+        "Use 'google/' or 'anthropic/' prefix, or bare name (auto-inferred)."
+    )],
     tool_context: ToolContext = None,
 ) -> dict:
-    """Switch the model for a specific agent or component. Validates against the live API."""
+    """Switch the model for a specific agent or component. Validates against the live API.
+
+    Use list_available_models to discover all available models from a provider.
+    The model is validated against the live API before applying — misspelled names are rejected.
+    """
     if component_name not in VALID_COMPONENTS:
         return {
             "status": "error",
