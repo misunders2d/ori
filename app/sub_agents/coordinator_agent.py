@@ -29,6 +29,7 @@ from app.toolsets import (
 )
 from app.toolsets.pinecone import PineconeToolset
 from app.toolsets.planner import PlannerToolset
+from app.toolsets.graph import GraphToolset
 from app.tools.a2a import get_agent_identity, get_my_a2a_key
 from app.tools.google_search import google_search_agent_tool
 from app.tools.web import web_fetch
@@ -39,6 +40,7 @@ _skills_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 _google_workspace_skill = load_skill_from_dir(_skills_dir / "google-workspace-skill")
 _scratchpad_skill = load_skill_from_dir(_skills_dir / "scratchpad-skill")
 _visualization_skill = load_skill_from_dir(_skills_dir / "visualization-skill")
+_knowledge_graph_skill = load_skill_from_dir(_skills_dir / "knowledge-graph-skill")
 
 root_agent = Agent(
     name="CoordinatorAgent",
@@ -64,6 +66,16 @@ root_agent = Agent(
         "SPAWNING: You can spawn child agents (`spawn_agent`) for dedicated workflows. "
         "Children are disposable Docker sandboxes — they stage, verify, and export DNA back to you. "
         "They cannot commit or reboot. You are automatically their admin.\n\n"
+
+        "KNOWLEDGE GRAPH: You have a Neo4j graph database for tracking entities and relationships. "
+        "When creating Pinecone records, relationships are automatically synced to the graph. "
+        "Use graph tools (`add_entity`, `link_entities`, `query_connections`, `find_connection_path`, "
+        "`entity_timeline`, `search_graph`) to explore how people, projects, and concepts relate. "
+        "For semantic content search, use Pinecone. For relationship queries, use the graph.\n\n"
+
+        "MEMORY AUTHORSHIP: When the user explicitly asks you to remember something, set author to "
+        "their user ID. When YOU decide to store something without being asked, set author to 'agent'. "
+        "This lets the user filter agent-created memories later.\n\n"
 
         "PLANNING: For complex multi-step tasks (research + analysis + action, or anything with 3+ steps), "
         "use `create_plan` to break it into steps BEFORE starting. Then execute one step at a time with "
@@ -102,7 +114,7 @@ root_agent = Agent(
     ],
     tools=[
         # Skills
-        skill_toolset.SkillToolset(skills=[_google_workspace_skill, _scratchpad_skill, _visualization_skill]),
+        skill_toolset.SkillToolset(skills=[_google_workspace_skill, _scratchpad_skill, _visualization_skill, _knowledge_graph_skill]),
         # Toolsets
         SchedulingToolset(),
         MemoryToolset(),
@@ -112,6 +124,7 @@ root_agent = Agent(
         GoogleWorkspaceToolset(),
         PineconeToolset(),
         PlannerToolset(),
+        GraphToolset(),
         # Individual tools
         *([google_search_agent_tool] if google_search_agent_tool else []),
         web_fetch,

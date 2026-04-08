@@ -1,5 +1,6 @@
 """Platform-agnostic agent execution, session management, and context handling."""
 
+import asyncio
 import logging
 import mimetypes
 import os
@@ -373,6 +374,20 @@ async def extract_agent_response(
         final_text = "I processed your request but have no response to show."
     else:
         final_text = "\n".join(agent_text_parts)
+
+    # Fire-and-forget background entity extraction
+    try:
+        from app.callbacks.entity_extraction import extract_entities_background
+        user_text = message if isinstance(message, str) else (
+            " ".join(p.text for p in message.parts if hasattr(p, "text") and p.text)
+            if message.parts else ""
+        )
+        if user_text and final_text:
+            asyncio.create_task(
+                extract_entities_background(user_text, final_text, session_id)
+            )
+    except Exception:
+        pass  # entity extraction is best-effort
 
     # Check for manual session refresh signal
     refresh_mode = get_pending_refresh(session_id)

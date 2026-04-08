@@ -1,12 +1,12 @@
 {
-    "id": "ori-bezos",
-    "name": "bezos",
+    "id": "ori-ori",
+    "name": "Ori",
     "version": "1.0.0",
     "description": "An autonomous self-evolving digital organism.",
-    "url": "https://logical-making-float-pie.trycloudflare.com",
+    "url": "http://localhost:8000",
     "provider": {
         "organization": "Ori Project",
-        "url": "https://logical-making-float-pie.trycloudflare.com"
+        "url": "http://localhost:8000"
     },
     "defaultInputModes": [
         "text/plain"
@@ -17,7 +17,7 @@
     "endpoints": [
         {
             "type": "json-rpc",
-            "url": "https://logical-making-float-pie.trycloudflare.com"
+            "url": "http://localhost:8000"
         }
     ],
     "capabilities": {
@@ -62,18 +62,16 @@
                 "a2a",
                 "exchange"
             ]
-        }
-    ],
-    "securitySchemes": {
-        "apiKey": {
-            "type": "apiKey",
-            "name": "x-a2a-api-key",
-            "in": "header"
-        }
-    },
-    "security": [
+        },
         {
-            "apiKey": []
+            "id": "knowledge-graph",
+            "name": "knowledge-graph",
+            "description": "Tracks entities and relationships in a Neo4j knowledge graph. Supports graph queries, path finding, and temporal relationship tracking alongside Pinecone vector search.",
+            "tags": [
+                "memory",
+                "graph",
+                "knowledge"
+            ]
         }
     ]
 }

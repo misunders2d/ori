@@ -14,6 +14,8 @@ from datetime import datetime
 from google.adk.tools.tool_context import ToolContext
 from pinecone import PineconeAsyncio, SearchQuery
 
+from app.core import graph as neo4j_graph
+
 logger = logging.getLogger(__name__)
 
 NAMESPACES = ("personal", "professional", "people", "technical")
@@ -233,6 +235,7 @@ async def create_record(
     tags: list[str],
     related_people: list[str] = None,
     related_memories: list[str] = None,
+    author: str = "",
     tool_context: ToolContext = None,
 ) -> dict:
     """Create a new knowledge record in Pinecone.
@@ -246,6 +249,9 @@ async def create_record(
         tags: List of keyword tags for the record.
         related_people: Optional list of person record IDs this relates to.
         related_memories: Optional list of memory record IDs this relates to.
+        author: Who initiated this memory. Use the user's ID when they explicitly ask
+                to remember something. Use 'agent' when you decide to store something
+                on your own without the user asking. Leave empty to auto-detect from context.
     """
     api_key, index_name = _get_config()
     if not api_key:
@@ -258,12 +264,14 @@ async def create_record(
         return {"status": "error", "message": f"Invalid category. Must be one of: {', '.join(MEMORY_CATEGORIES.keys())}"}
 
     user_id = _get_user_id(tool_context) if tool_context else "unknown"
+    resolved_author = author if author else user_id
     now = datetime.now()
     record_id = f"mem_{now.strftime('%Y_%m_%d')}_{uuid.uuid4().hex[:8]}"
 
     record = {
         "id": record_id,
         "user_id": user_id,
+        "author": resolved_author,
         "created_at": int(now.timestamp()),
         "text": text,
         "short_description": short_description,
@@ -284,6 +292,16 @@ async def create_record(
         async with pc.IndexAsyncio(host) as index:
             await index.upsert_records(namespace=namespace, records=[record])
 
+        # Dual-write: create a corresponding entity in Neo4j graph
+        await _sync_record_to_graph(
+            record_id=record_id,
+            short_description=short_description,
+            category=category,
+            related_people=related_people,
+            related_memories=related_memories,
+            author=resolved_author,
+        )
+
         return {
             "status": "success",
             "record_id": record_id,
@@ -303,6 +321,7 @@ async def create_person(
     role: str,
     user_ids: str,
     relations: str = "[]",
+    author: str = "",
     tool_context: ToolContext = None,
 ) -> dict:
     """Create a new person record in the people directory.
@@ -313,6 +332,8 @@ async def create_person(
         role: Relationship role (e.g., friend, colleague, mentor, manager).
         user_ids: JSON string of identifiers, e.g. [{"id_type": "email", "id_value": "user@example.com"}].
         relations: Optional JSON string of relationships, e.g. [{"related_person_id": "per_...", "relation_type": "colleague"}].
+        author: Who initiated this. Use the user's ID when they explicitly ask, 'agent' when
+                you decide on your own, or leave empty to auto-detect.
     """
     api_key, index_name = _get_config()
     if not api_key:
@@ -321,6 +342,7 @@ async def create_person(
         return {"status": "error", "message": "'first_name' is required."}
 
     user_id = _get_user_id(tool_context) if tool_context else "unknown"
+    resolved_author = author if author else user_id
     now = datetime.now()
     person_id = f"per_{now.strftime('%Y_%m_%d')}_{uuid.uuid4().hex[:8]}"
 
@@ -334,6 +356,7 @@ async def create_person(
     record = {
         "id": person_id,
         "user_id": user_id,
+        "author": resolved_author,
         "created_at": int(now.timestamp()),
         "first_name": first_name,
         "last_name": last_name or "",
@@ -351,6 +374,16 @@ async def create_person(
 
         async with pc.IndexAsyncio(host) as index:
             await index.upsert_records(namespace="people", records=[record])
+
+        # Dual-write: create person entity in Neo4j graph
+        await _sync_person_to_graph(
+            person_id=person_id,
+            first_name=first_name,
+            last_name=last_name or "",
+            role=role,
+            relations=relations,
+            author=resolved_author,
+        )
 
         return {
             "status": "success",
@@ -502,9 +535,116 @@ async def delete_record(
 
             await index.delete(ids=[record_id], namespace=namespace)
 
+        # Clean up corresponding Neo4j entity (best-effort)
+        if neo4j_graph.is_configured():
+            try:
+                await neo4j_graph.delete_entity(record_id)
+            except Exception:
+                pass  # graph cleanup is best-effort
+
         return {
             "status": "success",
             "message": f"Record {record_id} deleted from {namespace}. Backup stored in session state.",
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Neo4j dual-write helpers (best-effort — Pinecone is source of truth)
+# ---------------------------------------------------------------------------
+
+async def _sync_record_to_graph(
+    record_id: str,
+    short_description: str,
+    category: str,
+    related_people: list[str] | None,
+    related_memories: list[str] | None,
+    author: str,
+) -> None:
+    """Create a Neo4j entity for a Pinecone record and link related entities."""
+    if not neo4j_graph.is_configured():
+        return
+
+    try:
+        # Map Pinecone categories to graph entity types
+        type_map = {
+            "idea": "concept", "memory": "event", "knowledge": "concept",
+            "procedure": "concept", "experiment": "event", "incident": "event",
+            "project": "project", "technical": "concept", "strategy": "concept",
+            "communication_style": "concept", "policy": "concept", "operational": "event",
+        }
+        entity_type = type_map.get(category, "concept")
+
+        await neo4j_graph.upsert_entity(
+            entity_id=record_id,
+            name=short_description,
+            entity_type=entity_type,
+            properties={"category": category, "source": "pinecone"},
+            pinecone_id=record_id,
+            author=author,
+        )
+
+        # Link to related people
+        if related_people:
+            for person_id in related_people:
+                await neo4j_graph.add_relationship(
+                    from_entity_id=record_id,
+                    to_entity_id=person_id,
+                    relation_type="INVOLVES",
+                    author=author,
+                )
+
+        # Link to related memories
+        if related_memories:
+            for mem_id in related_memories:
+                await neo4j_graph.add_relationship(
+                    from_entity_id=record_id,
+                    to_entity_id=mem_id,
+                    relation_type="RELATED_TO",
+                    author=author,
+                )
+    except Exception as e:
+        logger.warning("Neo4j dual-write failed for record %s: %s", record_id, e)
+
+
+async def _sync_person_to_graph(
+    person_id: str,
+    first_name: str,
+    last_name: str,
+    role: str,
+    relations: str,
+    author: str,
+) -> None:
+    """Create a Neo4j entity for a Pinecone person and link relations."""
+    if not neo4j_graph.is_configured():
+        return
+
+    try:
+        full_name = f"{first_name} {last_name}".strip()
+        await neo4j_graph.upsert_entity(
+            entity_id=person_id,
+            name=full_name,
+            entity_type="person",
+            properties={"role": role, "source": "pinecone"},
+            pinecone_id=person_id,
+            author=author,
+        )
+
+        # Parse and create relationship edges
+        try:
+            rels = json.loads(relations) if isinstance(relations, str) else relations
+        except (json.JSONDecodeError, TypeError):
+            rels = []
+
+        for rel in rels:
+            if isinstance(rel, dict) and "related_person_id" in rel:
+                rel_type = rel.get("relation_type", "RELATED_TO")
+                await neo4j_graph.add_relationship(
+                    from_entity_id=person_id,
+                    to_entity_id=rel["related_person_id"],
+                    relation_type=rel_type,
+                    author=author,
+                )
+    except Exception as e:
+        logger.warning("Neo4j dual-write failed for person %s: %s", person_id, e)

@@ -36,6 +36,9 @@ ALLOWED_CONFIG_KEYS = frozenset({
     "SP_API_REFRESH_TOKEN",
     "SP_API_SELLER_ID",
     "CLICKUP_API_TOKEN",
+    "NEO4J_URI",
+    "NEO4J_USERNAME",
+    "NEO4J_PASSWORD",
 })
 
 # Keys the agent can set via configure_integration (conversational flow).

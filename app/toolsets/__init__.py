@@ -12,6 +12,7 @@ from .pinecone import PineconeToolset
 from .sp_api import SPApiToolset
 from .clickup import ClickUpToolset
 from .planner import PlannerToolset
+from .graph import GraphToolset
 
 __all__ = [
     "SchedulingToolset",
@@ -28,4 +29,5 @@ __all__ = [
     "SPApiToolset",
     "ClickUpToolset",
     "PlannerToolset",
+    "GraphToolset",
 ]
