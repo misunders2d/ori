@@ -249,12 +249,13 @@ async def main():
                 refresh_agent_card()
             except Exception as e:
                 logger.warning("Could not refresh agent card: %s", e)
-            # Broadcast only after tunnel URL is confirmed
+            # Broadcast new URL to all friends (retries in background for slow friends)
             try:
                 from app.tools.a2a import perform_a2a_broadcast
-                await perform_a2a_broadcast()
-            except Exception:
-                pass
+                result = await perform_a2a_broadcast()
+                logger.info("A2A broadcast result: %s", result.get("message", result.get("status")))
+            except Exception as e:
+                logger.error("A2A broadcast failed: %s", e)
         else:
             logger.warning("Tunnel URL not detected — skipping A2A broadcast")
     tasks.append(asyncio.create_task(detect_and_broadcast()))

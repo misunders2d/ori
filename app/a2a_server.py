@@ -64,6 +64,10 @@ async def _handle_address_update(request) -> JSONResponse:
 
     Expects JSON: {"sender_name": "...", "new_base_url": "https://..."}
     Authenticated via x-a2a-api-key header (already validated by middleware).
+
+    Matching priority:
+      1. Sender's API key matches a stored friend key (definitive)
+      2. sender_name matches a friend's registry key or card name (case-insensitive)
     """
     try:
         body = await request.json()
@@ -79,12 +83,32 @@ async def _handle_address_update(request) -> JSONResponse:
         with open(FRIENDS_FILE, "r") as f:
             friends = json.load(f)
 
-        # Find the friend by matching their registered name (case-insensitive)
+        # Load stored friend keys for matching
+        sender_api_key = request.headers.get("x-a2a-api-key", "")
+        stored_keys = {}
+        keys_file = os.path.abspath("./data/a2a_keys.json")
+        if os.path.exists(keys_file):
+            try:
+                with open(keys_file, "r") as f:
+                    stored_keys = json.load(f)
+            except Exception:
+                pass
+
+        # Match by API key first (most reliable — keys are unique per friend)
         matched_key = None
-        for key, data in friends.items():
-            if key.lower() == sender_name.lower() or (data.get("name", "").lower() == sender_name.lower()):
-                matched_key = key
-                break
+        if sender_api_key:
+            for nickname, key in stored_keys.items():
+                if key == sender_api_key and nickname in friends:
+                    matched_key = nickname
+                    break
+
+        # Fallback: match by name
+        if not matched_key:
+            for key, data in friends.items():
+                if (key.lower() == sender_name.lower()
+                        or data.get("name", "").lower() == sender_name.lower()):
+                    matched_key = key
+                    break
 
         if not matched_key:
             logger.info("Address update from unknown sender '%s' — ignored", sender_name)
