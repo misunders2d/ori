@@ -549,11 +549,37 @@ async def cancel_friend_task(friend_name: str, task_id: str, tool_context: ToolC
 # Ori-Net Protocol Extensions: Presence & Address Updates
 # ---------------------------------------------------------------------------
 
-async def perform_a2a_broadcast(force: bool = False) -> Dict[str, Any]:
+async def _broadcast_to_friend(
+    nickname: str, friend_url: str, friend_key: str | None,
+    my_name: str, my_url: str,
+) -> str:
+    """Send address update to a single friend. Returns status string."""
+    if not friend_url:
+        return "skipped: no URL"
+    try:
+        headers = _a2a_headers(friend_key)
+        payload = {"sender_name": my_name, "new_base_url": my_url}
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{friend_url.rstrip('/')}/a2a/address-update",
+                json=payload, headers=headers,
+            )
+            if resp.status_code == 200:
+                return "success"
+            return f"http_{resp.status_code}"
+    except Exception as e:
+        return f"failed: {e}"
+
+
+async def perform_a2a_broadcast(force: bool = False, retries: int = 5, retry_delay: int = 15) -> Dict[str, Any]:
     """
-    System helper to broadcast the current A2A_BASE_URL to all friends.
-    Stores state in data/a2a_state.json to prevent redundant broadcasts.
+    Broadcast current A2A_BASE_URL to all friends, retrying failed deliveries.
+
+    On startup, friends may still be booting. Retries with increasing delay
+    ensure the broadcast eventually reaches everyone.
     """
+    import asyncio
+
     my_url = os.environ.get("A2A_BASE_URL")
     if not my_url:
         logger.debug("A2A broadcast skipped: A2A_BASE_URL not set.")
@@ -578,33 +604,48 @@ async def perform_a2a_broadcast(force: bool = False) -> Dict[str, Any]:
     with open(FRIENDS_FILE, "r") as f:
         friends = json.load(f)
 
-    results = {}
-    my_name = os.environ.get("BOT_NAME", "Unknown")
+    if not friends:
+        return {"status": "success", "message": "No friends to notify."}
 
-    logger.info("Broadcasting A2A address update to %d friends...", len(friends))
+    my_name = os.environ.get("BOT_NAME", "Unknown")
+    results = {}
+
+    # Build pending set: all friends that need notification
+    pending = {}
     for nickname, data in friends.items():
         friend_url = data.get("endpoint_url") or data.get("base_url", "")
         friend_key = _load_friend_key(nickname)
-        if not friend_url:
-            results[nickname] = "skipped: no URL"
-            continue
-        # Use the deterministic /a2a/address-update endpoint (no agent involvement)
-        try:
-            headers = _a2a_headers(friend_key)
-            payload = {"sender_name": my_name, "new_base_url": my_url}
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(f"{friend_url.rstrip('/')}/a2a/address-update", json=payload, headers=headers)
-                if resp.status_code == 200:
-                    results[nickname] = "success"
-                else:
-                    # Fallback: send as agent message (old protocol)
-                    msg = f"PROTOCOL NOTICE: My base address has changed. Please update your registry for me. NEW_BASE_URL={my_url}"
-                    res = await call_friend(nickname, msg)
-                    results[nickname] = f"fallback: {res.get('status')}"
-        except Exception as e:
-            results[nickname] = f"failed: {e}"
+        pending[nickname] = (friend_url, friend_key)
 
-    # Update state
+    for attempt in range(retries):
+        if not pending:
+            break
+
+        if attempt == 0:
+            logger.info("Broadcasting address update to %d friend(s)...", len(pending))
+        else:
+            delay = retry_delay * attempt
+            logger.info("Broadcast retry %d/%d for %d friend(s) in %ds...",
+                        attempt, retries - 1, len(pending), delay)
+            await asyncio.sleep(delay)
+
+        still_pending = {}
+        for nickname, (friend_url, friend_key) in pending.items():
+            status = await _broadcast_to_friend(nickname, friend_url, friend_key, my_name, my_url)
+            results[nickname] = status
+            if status != "success":
+                still_pending[nickname] = (friend_url, friend_key)
+                logger.warning("Broadcast to '%s' failed (attempt %d): %s", nickname, attempt + 1, status)
+            else:
+                logger.info("Broadcast to '%s' succeeded", nickname)
+
+        pending = still_pending
+
+    if pending:
+        logger.error("Broadcast failed for %d friend(s) after %d attempts: %s",
+                      len(pending), retries, list(pending.keys()))
+
+    # Save state
     try:
         with open(A2A_STATE_FILE, "w") as f:
             json.dump({"last_broadcast_url": my_url, "last_broadcast_at": datetime.now().isoformat()}, f)
@@ -612,9 +653,9 @@ async def perform_a2a_broadcast(force: bool = False) -> Dict[str, Any]:
         logger.error("Failed to save A2A state: %s", e)
 
     return {
-        "status": "success",
-        "message": f"Broadcasted address update to {len(friends)} friends.",
-        "details": results
+        "status": "success" if not pending else "partial",
+        "message": f"Broadcasted to {len(friends)} friend(s), {len(pending)} failed.",
+        "details": results,
     }
 
 
