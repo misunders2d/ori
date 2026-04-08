@@ -94,10 +94,7 @@ knowledge_agent = Agent(
         skill_toolset.SkillToolset(skills=[google_adk_a2a_skill]),
         get_agent_identity,
         get_my_a2a_key,
-    get_my_a2a_key,
         add_friend,
-    
-
         update_friend_key,
         list_friends,
         call_friend,

@@ -303,7 +303,7 @@ async def extract_agent_response(
                 continue
 
             # Catch token limit / context window errors
-            if "token count exceeds" in error_msg.lower() or "400" in error_msg:
+            if "token count exceeds" in error_msg.lower() or "input too large" in error_msg.lower():
                 logger.error(
                     "Context limit reached for session %s: %s", session_id, error_msg
                 )
