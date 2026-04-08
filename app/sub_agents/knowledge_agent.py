@@ -24,6 +24,7 @@ from app.callbacks.guardrails import a2a_privacy_guardrail, prompt_injection_gua
 
 base_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 google_adk_a2a_skill = load_skill_from_dir(base_dir / "google-adk-a2a-skill")
+dna_exchange_skill = load_skill_from_dir(base_dir / "dna-exchange-skill")
 
 knowledge_agent = Agent(
     name="KnowledgeAgent",
@@ -67,9 +68,8 @@ knowledge_agent = Agent(
         "a 'NEW_BASE_URL', you MUST automatically call `update_friend_address(friend_name, new_url)` to update your registry.\n\n"
 
         "DNA EXCHANGE (Ori-specific, not A2A standard):\n"
-        "9. Use `export_dna` to package sanitized technical improvements (tools and skills) for sharing.\n"
-        "10. Use `import_dna` to receive a DNA package from a friend and stage it in the sandbox.\n"
-        "11. Once DNA is staged, inform the `DeveloperAgent` to run verification before final integration.\n\n"
+        "9. For DNA export/import, follow the `dna-exchange-skill` procedure EXACTLY. "
+        "DNA exchange is a communication event — NEVER commit, evolve, or reboot during a transfer.\n\n"
 
         "TASK STATE AWARENESS: When calling a remote agent, check the `task_state` in the response. "
         "If it is `INPUT_REQUIRED`, the remote agent needs more information — follow up accordingly. "
@@ -91,7 +91,7 @@ knowledge_agent = Agent(
         "5. **Broadcasting**: If YOUR URL changes, run `broadcast_address_update` to let all friends know.\n"
     ),
     tools=[
-        skill_toolset.SkillToolset(skills=[google_adk_a2a_skill]),
+        skill_toolset.SkillToolset(skills=[google_adk_a2a_skill, dna_exchange_skill]),
         get_agent_identity,
         get_my_a2a_key,
         add_friend,

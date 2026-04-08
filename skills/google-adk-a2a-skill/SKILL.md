@@ -18,15 +18,15 @@ Covers inter-agent communication via the A2A standard.
 | `list_friends()` | Returns all registered friends with capabilities. |
 | `call_friend(name, msg)` | Sends JSON-RPC `message/send` to a known friend. |
 | `call_agent(url, msg)` | One-off query to an unknown agent (no friendship needed). |
-| `export_dna()` | Packages local tools + skills for sharing. |
-| `import_dna(package)` | Stages inbound DNA in sandbox for verification. |
+| `export_dna(source_paths)` | Packages project files for sharing. See `dna-exchange-skill`. |
+| `import_dna(url)` | Fetches DNA archive into sandbox. See `dna-exchange-skill`. |
 
 ## Procedures
 
 1. **Adding a friend**: `add_friend(url, name)` -> verify card loads -> `list_friends()` to confirm.
 2. **Talking to a friend**: `call_friend(name, message)` -> check response `status.state` -> handle `INPUT_REQUIRED` if present.
 3. **Scouting an unknown agent**: `call_agent(url, message)` — no friendship required.
-4. **DNA exchange**: `export_dna()` or `import_dna(pkg)` -> MUST run `evolution_verify_sandbox` before integrating inbound DNA.
+4. **DNA exchange**: Follow the `dna-exchange-skill` step-by-step procedure. DNA is a communication event — never commit or reboot.
 
 ## Gotchas
 
