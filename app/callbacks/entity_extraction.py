@@ -42,6 +42,13 @@ Rules:
 - Relationship types should be UPPER_SNAKE_CASE (e.g. WORKS_WITH, MANAGES, SUPPLIES, INVOLVED_IN)
 - If no entities or relationships are found, return {{"entities": [], "relationships": []}}
 - Keep it minimal — only extract what's clearly stated, don't infer
+- SKIP these — they are NOT entities:
+  - File names, file paths, URLs, temp files (e.g. file_20.jpg, /tmp/uploads/...)
+  - Technical artifacts: record IDs, session IDs, API keys, error codes
+  - Tool names, function names, code references
+  - Generic nouns: "the database", "the bot", "the system"
+- ONLY extract things that would matter in a business/personal knowledge graph:
+  people, companies, products, projects, strategies, events, real-world concepts
 """
 
 
