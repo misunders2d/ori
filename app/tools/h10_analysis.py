@@ -86,8 +86,13 @@ def _detect_format(df: pd.DataFrame) -> str:
 
 
 def _df_to_records(df: pd.DataFrame, max_rows: int = 50) -> list[dict]:
-    """Convert DataFrame to list of dicts, capped at max_rows."""
-    return df.head(max_rows).to_dict(orient="records")
+    """Convert DataFrame to list of dicts, capped at max_rows. NaN → None for valid JSON."""
+    records = df.head(max_rows).to_dict(orient="records")
+    for record in records:
+        for k, v in record.items():
+            if isinstance(v, float) and (pd.isna(v) or v != v):
+                record[k] = None
+    return records
 
 
 # ---------------------------------------------------------------------------
