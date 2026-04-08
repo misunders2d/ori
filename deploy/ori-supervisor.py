@@ -249,11 +249,12 @@ def refresh_tunnel():
     # Export so run_bot.py can detect the tunnel on the correct port
     os.environ["TUNNEL_METRICS_PORT"] = metrics_port
     try:
-        # Use -p to scope by bot name so multiple bots don't interfere
+        # Kill any existing tunnel container for this bot (by name, regardless of how it was created)
         subprocess.run(
-            ["docker", "compose", "-p", tunnel_name, "-f", compose_file, "down"],
-            env=env, capture_output=True, text=True, timeout=30,
+            ["docker", "rm", "-f", f"{tunnel_name}-tunnel"],
+            capture_output=True, text=True, timeout=15,
         )
+        # Start fresh tunnel scoped by bot name
         subprocess.run(
             ["docker", "compose", "-p", tunnel_name, "-f", compose_file, "up", "-d"],
             env=env, capture_output=True, text=True, timeout=60,
