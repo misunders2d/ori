@@ -56,7 +56,7 @@ class A2AApiKeyMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-FRIENDS_FILE = os.path.abspath("./data/a2a_friends.json")
+FRIENDS_FILE = os.path.abspath("./data/friends.json")
 
 
 async def _handle_address_update(request) -> JSONResponse:
