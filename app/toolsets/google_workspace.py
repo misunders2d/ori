@@ -3,7 +3,7 @@ from google.adk.tools.function_tool import FunctionTool
 
 
 class GoogleWorkspaceToolset(BaseToolset):
-    """Google Drive and Sheets tools with per-user OAuth2."""
+    """Google Drive, Sheets, and Calendar tools with per-user OAuth2."""
 
     async def get_tools(self, readonly_context=None):
         from app.tools.google_drive import (
@@ -16,6 +16,13 @@ class GoogleWorkspaceToolset(BaseToolset):
             sheets_write,
             sheets_create,
         )
+        from app.tools.google_calendar import (
+            calendar_list,
+            calendar_list_events,
+            calendar_create_event,
+            calendar_update_event,
+            calendar_delete_event,
+        )
 
         return [
             FunctionTool(func=google_connect),
@@ -26,4 +33,9 @@ class GoogleWorkspaceToolset(BaseToolset):
             FunctionTool(func=sheets_read),
             FunctionTool(func=sheets_write),
             FunctionTool(func=sheets_create),
+            FunctionTool(func=calendar_list),
+            FunctionTool(func=calendar_list_events),
+            FunctionTool(func=calendar_create_event),
+            FunctionTool(func=calendar_update_event),
+            FunctionTool(func=calendar_delete_event),
         ]
