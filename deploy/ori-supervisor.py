@@ -251,7 +251,11 @@ def refresh_tunnel():
     os.environ["TUNNEL_METRICS_PORT"] = metrics_port
     try:
         subprocess.run(
-            ["docker", "compose", "-f", compose_file, "up", "-d", "--force-recreate"],
+            ["docker", "compose", "-p", tunnel_name, "-f", compose_file, "down"],
+            env=env, capture_output=True, text=True, timeout=60,
+        )
+        subprocess.run(
+            ["docker", "compose", "-p", tunnel_name, "-f", compose_file, "up", "-d"],
             env=env, capture_output=True, text=True, timeout=60,
         )
         logger.info("Tunnel refreshed (port %s, metrics %s)", a2a_port, metrics_port)

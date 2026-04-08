@@ -127,8 +127,8 @@ if is_service_installed; then
         _a2a_port=$("$PYTHON" -c "import json; print(json.load(open('$VAULT_FILE')).get('A2A_PORT','8000'))" 2>/dev/null || echo "8000")
         _tunnel_name="$(echo "$_bot_name" | tr '[:upper:]' '[:lower:]' | tr ' _' '-' | sed 's/[^a-z0-9-]//g')"
         _metrics_port=$("$PYTHON" -c "import json; v=json.load(open('$VAULT_FILE')); print(v.get('TUNNEL_METRICS_PORT', int(v.get('A2A_PORT','8000'))+1000))" 2>/dev/null || echo "9000")
-        A2A_PORT="$_a2a_port" BOT_NAME="$_tunnel_name" TUNNEL_METRICS_PORT="$_metrics_port" docker compose -f "$SCRIPT_DIR/docker-compose.yml" down
-        A2A_PORT="$_a2a_port" BOT_NAME="$_tunnel_name" TUNNEL_METRICS_PORT="$_metrics_port" docker compose -f "$SCRIPT_DIR/docker-compose.yml" up -d
+        A2A_PORT="$_a2a_port" BOT_NAME="$_tunnel_name" TUNNEL_METRICS_PORT="$_metrics_port" docker compose -p "$_tunnel_name" -f "$SCRIPT_DIR/docker-compose.yml" down
+        A2A_PORT="$_a2a_port" BOT_NAME="$_tunnel_name" TUNNEL_METRICS_PORT="$_metrics_port" docker compose -p "$_tunnel_name" -f "$SCRIPT_DIR/docker-compose.yml" up -d
     fi
 
     echo "   Logs:  deploy/logs.sh"
