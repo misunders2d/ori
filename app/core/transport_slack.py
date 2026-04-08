@@ -181,9 +181,10 @@ class SlackAdapter(TransportAdapter):
     ) -> None:
         """Upload a file using the Slack SDK's files_upload_v2 (handles the full 3-step flow)."""
         import mimetypes as _mt
+        from datetime import datetime as _dt
 
         ext = _mt.guess_extension(mime_type) or ".bin"
-        filename = f"file{ext}"
+        filename = f"attachment_{_dt.now().strftime('%Y%m%d_%H%M%S')}{ext}"
 
         if caption:
             caption = _scrub_secrets(caption)

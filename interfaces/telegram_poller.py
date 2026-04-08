@@ -172,8 +172,9 @@ class TelegramAdapter(TransportAdapter):
             method, field = "sendDocument", "document"
 
         # Derive a sensible filename from the MIME type
+        from datetime import datetime as _dt
         ext = mimetypes.guess_extension(mime_type) or ""
-        filename = f"file{ext}"
+        filename = f"attachment_{_dt.now().strftime('%Y%m%d_%H%M%S')}{ext}"
 
         url = TELEGRAM_API.format(token=self._token, method=method)
         form_data = {"chat_id": str(chat_id)}
