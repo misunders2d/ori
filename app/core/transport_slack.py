@@ -18,7 +18,6 @@ _THINKING_GIFS = [
     "https://media.giphy.com/media/JIX9t2j0ZTN9S/giphy.gif",
     "https://media.giphy.com/media/l3nWhI38IWDofyDrW/giphy.gif",
     "https://media.giphy.com/media/tXL4FHPSnVJ0A/giphy.gif",
-    "https://media.giphy.com/media/QKkV58ufpV4ksJ1Okh/giphy.gif",
     "https://media.giphy.com/media/Yl5nlnrtpQIrI1AfhD/giphy.gif",
     "https://media.giphy.com/media/S675CRFMUX7el7gyu7/giphy.gif",
     "https://media.giphy.com/media/eGNRUOkpiBoJi8VQMN/giphy.gif",
