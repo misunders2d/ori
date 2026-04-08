@@ -733,38 +733,53 @@ def _scan_for_secrets(file_path: str, rel_path: str) -> list:
     return findings
 
 
-def export_dna(tool_context: ToolContext) -> Dict[str, Any]:
+def export_dna(source_paths: list[str], tool_context: ToolContext) -> Dict[str, Any]:
     """
-    Packages staged sandbox changes into a .tar.gz archive and returns a download URL.
-    The archive is served via the A2A HTTP server — file contents never pass through the LLM.
-    Only real files (not symlinks) from the sandbox are included.
-    Files are scanned for hardcoded secrets before archiving — export is blocked if any are found.
+    Packages project files into a .tar.gz archive and returns a download URL.
+    Reads directly from the project tree — no sandbox staging needed.
+    Files are scanned for hardcoded secrets before archiving.
+
+    Args:
+        source_paths: List of project-relative paths to include
+            (e.g. ["app/tools/keepa.py", "skills/keepa-skill/SKILL.md"]).
+            Directories are included recursively.
     """
     import tarfile
 
     try:
-        sandbox_dir = os.path.abspath("./data/sandbox")
-        if not os.path.isdir(sandbox_dir):
-            return {"status": "error", "message": "No sandbox directory found. Stage changes first."}
+        project_root = os.path.abspath(".")
 
-        # Collect staged files (real, not symlinks, not cache)
-        staged_files = []
-        for root, _dirs, files in os.walk(sandbox_dir):
-            for filename in files:
-                full_path = os.path.join(root, filename)
-                if os.path.islink(full_path):
-                    continue
-                rel_path = os.path.relpath(full_path, sandbox_dir)
-                if any(part.startswith('.') or part == '__pycache__' for part in rel_path.split(os.sep)):
-                    continue
-                staged_files.append((full_path, rel_path))
+        if not source_paths:
+            return {"status": "error", "message": "source_paths is required. Provide a list of project-relative paths to export."}
 
-        if not staged_files:
-            return {"status": "error", "message": "No staged changes found in sandbox."}
+        # Resolve and collect files
+        collected = []  # (absolute_path, archive_relative_path)
+        for src in source_paths:
+            full = os.path.normpath(os.path.join(project_root, src))
+            # Block path traversal
+            if not full.startswith(project_root):
+                return {"status": "error", "message": f"Path escapes project root: {src}"}
+            if os.path.isfile(full):
+                collected.append((full, src))
+            elif os.path.isdir(full):
+                for root, _dirs, files in os.walk(full):
+                    for fname in files:
+                        fpath = os.path.join(root, fname)
+                        if os.path.islink(fpath):
+                            continue
+                        rel = os.path.relpath(fpath, project_root)
+                        if any(p.startswith('.') or p == '__pycache__' for p in rel.split(os.sep)):
+                            continue
+                        collected.append((fpath, rel))
+            else:
+                return {"status": "error", "message": f"Path not found: {src}"}
 
-        # Pre-archive secret scan — block export if secrets are found
+        if not collected:
+            return {"status": "error", "message": "No files found at the given paths."}
+
+        # Pre-archive secret scan
         all_findings = []
-        for full_path, rel_path in staged_files:
+        for full_path, rel_path in collected:
             findings = _scan_for_secrets(full_path, rel_path)
             for line_num, hint in findings:
                 all_findings.append(f"  {rel_path}:{line_num} ({hint})")
@@ -786,18 +801,18 @@ def export_dna(tool_context: ToolContext) -> Dict[str, Any]:
         archive_path = os.path.join(DNA_EXPORTS_DIR, archive_name)
 
         with tarfile.open(archive_path, "w:gz") as tar:
-            for full_path, rel_path in staged_files:
+            for full_path, rel_path in collected:
                 tar.add(full_path, arcname=rel_path)
 
         # Build download URL
         base_url = os.environ.get("A2A_BASE_URL", "http://localhost:8000")
         download_url = f"{base_url}/dna/{archive_name}"
 
-        file_list = ", ".join(sorted(p for _, p in staged_files))
+        file_list = ", ".join(sorted(p for _, p in collected))
         archive_kb = os.path.getsize(archive_path) / 1024
         return {
             "status": "success",
-            "message": f"DNA archived: {len(staged_files)} file(s) ({archive_kb:.1f} KB) — {file_list}",
+            "message": f"DNA archived: {len(collected)} file(s) ({archive_kb:.1f} KB) — {file_list}",
             "dna_url": download_url,
         }
     except Exception as e:

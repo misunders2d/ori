@@ -15,9 +15,8 @@ DNA exchange shares technical improvements (tools, skills, files) between Ori ag
 
 | Tool | Purpose | Agent |
 |------|---------|-------|
-| `export_dna()` | Archive sandbox files into `.tar.gz`, return download URL | KnowledgeAgent |
+| `export_dna(source_paths)` | Archive project files into `.tar.gz`, return download URL | KnowledgeAgent |
 | `import_dna(url)` | Fetch archive from URL, extract into sandbox | KnowledgeAgent |
-| `evolution_stage_change(path, content)` | Copy/write files into sandbox for export | DeveloperAgent |
 | `evolution_verify_sandbox()` | Test imported code (syntax, imports, pytest) | DeveloperAgent |
 | `call_friend(name, message)` | Send the download URL to the receiving agent | KnowledgeAgent |
 
@@ -25,18 +24,16 @@ DNA exchange shares technical improvements (tools, skills, files) between Ori ag
 
 Follow these steps **in exact order**. Do not skip or combine steps.
 
-- [ ] **Step 1 — IDENTIFY**: Determine which modules the friend needs. List the specific files (e.g. `app/tools/clickup.py`, `skills/clickup-skill/SKILL.md`). Confirm the list before proceeding.
-- [ ] **Step 2 — STAGE**: Ensure target files exist in `data/sandbox/`. If not already staged, delegate to DeveloperAgent to use `evolution_stage_change` to copy them there. Only sandbox files are archived — never modify live code in `app/`.
-- [ ] **Step 3 — ARCHIVE**: Call `export_dna()`. It scans for hardcoded secrets, then creates a `.tar.gz` archive and returns a download URL. If the secret scan fails, fix the flagged files and retry.
-- [ ] **Step 4 — DELIVER**: Send the download URL to the friend via `call_friend(name, message)`. Include the file manifest so they know what they're receiving.
-- [ ] **Step 5 — CONFIRM**: Wait for the friend to acknowledge receipt and successful unpacking. If they report errors, troubleshoot. Report final status to the user.
+- [ ] **Step 1 — IDENTIFY**: Determine which modules the friend needs. List the specific project-relative paths (e.g. `app/tools/clickup.py`, `skills/clickup-skill/SKILL.md`). Directories are included recursively. Confirm the list before proceeding.
+- [ ] **Step 2 — ARCHIVE**: Call `export_dna(source_paths=["app/tools/keepa.py", "skills/keepa-skill/"])`. It reads directly from the project tree, scans for secrets, and returns a download URL. No staging or sandbox needed.
+- [ ] **Step 3 — DELIVER**: Send the download URL to the friend via `call_friend(name, message)`. Include the file manifest so they know what they're receiving.
+- [ ] **Step 4 — CONFIRM**: Wait for the friend to acknowledge receipt and successful unpacking. If they report errors, troubleshoot. Report final status to the user.
 
 ### What NOT to do during export
 
-- Do NOT commit sandbox files to git — they are temporary staging, not permanent code.
 - Do NOT call `evolution_commit_and_push` — export is not evolution.
 - Do NOT restart or reboot — the A2A link must stay alive for the transfer.
-- Do NOT copy files into `sandbox/` at the repo root — use `data/sandbox/` only.
+- Do NOT delegate to DeveloperAgent — KnowledgeAgent handles the entire export.
 
 ## Import Procedure (receiving code from a friend)
 
