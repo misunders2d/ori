@@ -11,7 +11,10 @@ import httpx
 from google.adk.tools.tool_context import ToolContext
 
 from app.tools.google_oauth.device_flow import refresh_access_token, start_device_flow, poll_for_token
-from app.tools.google_oauth.token_store import get_token, save_token, delete_token
+from app.tools.google_oauth.token_store import (
+    get_token, save_token, delete_token,
+    save_user_mapping, resolve_email, delete_user_mapping,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,11 +23,21 @@ _SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets"
 
 
 def _get_user_email(tool_context: ToolContext) -> str:
-    """Extract user email from session state."""
+    """Resolve the current user's Google email.
+
+    For Slack users, user_id is already an email. For Telegram users,
+    user_id is a platform ID (e.g. tg_330959414) which we resolve to
+    their Google email via the mapping table.
+    """
     if not tool_context:
         return ""
     state = tool_context.state.to_dict() if hasattr(tool_context.state, "to_dict") else {}
-    return state.get("user_id", "")  # user_id is email for Slack users
+    user_id = state.get("user_id", "")
+    if not user_id:
+        return ""
+    # resolve_email returns the ID as-is if it's already an email,
+    # otherwise looks up the platform_id → email mapping
+    return resolve_email(user_id)
 
 
 async def _get_valid_token(email: str) -> Optional[str]:
@@ -109,6 +122,11 @@ async def google_connect_complete(tool_context: ToolContext = None) -> dict:
     from app.tools.google_oauth.device_flow import SCOPES
     save_token(email, result["access_token"], result["refresh_token"], result["expires_in"], SCOPES)
 
+    # Map the platform user ID to this Google email
+    user_id = state.get("user_id", "")
+    if user_id and user_id != email:
+        save_user_mapping(user_id, email)
+
     # Clean up session state
     tool_context.state["_google_device_code"] = None
     tool_context.state["_google_poll_interval"] = None
@@ -120,11 +138,19 @@ async def google_connect_complete(tool_context: ToolContext = None) -> dict:
 
 
 async def google_disconnect(tool_context: ToolContext = None) -> dict:
-    """Disconnect Google Drive/Sheets for the current user. Removes stored tokens."""
+    """Disconnect Google Drive/Sheets for the current user. Removes stored tokens and mapping."""
     email = _get_user_email(tool_context)
     if not email:
-        return {"status": "error", "message": "Could not determine user."}
+        return {"status": "error", "message": "Could not determine user. No Google account linked."}
+
+    # Clean up both the token and the platform ID mapping
     delete_token(email)
+    if tool_context:
+        state = tool_context.state.to_dict() if hasattr(tool_context.state, "to_dict") else {}
+        user_id = state.get("user_id", "")
+        if user_id and user_id != email:
+            delete_user_mapping(user_id)
+
     return {"status": "success", "message": f"Google account disconnected for {email}."}
 
 

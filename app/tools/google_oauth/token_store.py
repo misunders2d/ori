@@ -28,6 +28,12 @@ def _get_conn() -> sqlite3.Connection:
             scopes TEXT NOT NULL
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS user_email_map (
+            platform_id TEXT PRIMARY KEY,
+            email TEXT NOT NULL
+        )
+    """)
     conn.commit()
     return conn
 
@@ -81,5 +87,52 @@ def list_connected_users() -> list[str]:
     try:
         rows = conn.execute("SELECT email FROM tokens").fetchall()
         return [r[0] for r in rows]
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Platform ID → Google email mapping
+# ---------------------------------------------------------------------------
+
+def save_user_mapping(platform_id: str, email: str):
+    """Map a platform user ID (e.g. tg_330959414, sl_U0ABC) to a Google email."""
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO user_email_map (platform_id, email) VALUES (?, ?)",
+            (platform_id, email),
+        )
+        conn.commit()
+        logger.info("User mapping saved: %s → %s", platform_id, email)
+    finally:
+        conn.close()
+
+
+def resolve_email(platform_id: str) -> str:
+    """Resolve a platform user ID to a Google email.
+
+    If the platform_id looks like an email already, returns it as-is.
+    Otherwise looks up the mapping table.
+    """
+    if "@" in platform_id:
+        return platform_id
+
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT email FROM user_email_map WHERE platform_id = ?", (platform_id,)
+        ).fetchone()
+        return row[0] if row else ""
+    finally:
+        conn.close()
+
+
+def delete_user_mapping(platform_id: str):
+    """Remove a platform ID → email mapping."""
+    conn = _get_conn()
+    try:
+        conn.execute("DELETE FROM user_email_map WHERE platform_id = ?", (platform_id,))
+        conn.commit()
     finally:
         conn.close()
