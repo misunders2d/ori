@@ -19,6 +19,7 @@ from app.toolsets import (
     SchedulingToolset,
     SystemToolset,
     ScratchpadToolset,
+    VisualizationToolset,
 )
 from app.toolsets.planner import PlannerToolset
 from app.tools.a2a import get_agent_identity, get_my_a2a_key
@@ -37,7 +38,7 @@ root_agent = Agent(
 
         "DELEGATION:\n"
         "1. **AmazonHeadAgent** — ALL Amazon business: product research, BigQuery analytics, "
-        "professional knowledge (Pinecone/Neo4j), Google Workspace, visualization/charts.\n"
+        "professional knowledge (Pinecone/Neo4j), Google Workspace, data analysis/charts.\n"
         "2. **DeveloperAgent** — Code changes, bug fixes, model switching. Only on explicit requests.\n"
         "3. **KnowledgeAgent** — A2A communication, friend management, DNA exchange.\n"
         + (
@@ -45,7 +46,7 @@ root_agent = Agent(
             if clickup_agent else ""
         ) +
         f"{'5' if clickup_agent else '4'}. **Handle directly** — Web research, scheduling, "
-        "quick memory, system operations, access control.\n\n"
+        "quick memory, image generation, system operations, access control.\n\n"
 
         "MEMORY ROUTING:\n"
         "- 'Remember that...' (simple fact) → `remember_info` directly.\n"
@@ -78,6 +79,7 @@ root_agent = Agent(
         SystemToolset(),
         ScratchpadToolset(),
         PlannerToolset(),
+        VisualizationToolset(),
         # Individual tools
         *([google_search_agent_tool] if google_search_agent_tool else []),
         web_fetch,
