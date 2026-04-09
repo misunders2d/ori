@@ -106,6 +106,93 @@ def _save_csv(records: list[dict], filename: str) -> str:
     return path
 
 
+async def _poll_download_and_deliver(
+    report_id: str, report_type: str, filename: str, notify: dict,
+):
+    """Background task: poll report status, download, convert to CSV, deliver to user."""
+    creds = _get_credentials()
+    if not creds:
+        return
+
+    from sp_api.api import Reports
+    reports = Reports(credentials=creds)
+
+    # Poll until ready
+    document_id = None
+    for poll in range(1, _MAX_POLL_ATTEMPTS + 1):
+        await asyncio.sleep(_POLL_INTERVAL)
+        try:
+            payload = await _sp_call(reports.get_report, reportId=report_id)
+            status = payload.get("processingStatus", "")
+
+            if status == "DONE":
+                document_id = payload.get("reportDocumentId")
+                break
+            elif status in ("CANCELLED", "FATAL"):
+                await _notify(notify, f"Report `{report_type}` failed with status: **{status}**.")
+                return
+        except Exception as e:
+            await _notify(notify, f"Failed to check report status: {e}")
+            return
+
+    if not document_id:
+        await _notify(
+            notify,
+            f"Report `{report_type}` not ready after {_MAX_POLL_ATTEMPTS * _POLL_INTERVAL}s. "
+            f"Report ID: `{report_id}` — use `sp_check_report` to check manually.",
+        )
+        return
+
+    # Download
+    try:
+        payload = await _sp_call(
+            reports.get_report_document, reportDocumentId=document_id, download=True
+        )
+        raw_document = payload.get("document", "")
+    except Exception as e:
+        await _notify(notify, f"Report ready but download failed: {e}")
+        return
+
+    if not raw_document:
+        await _notify(notify, "Report document is empty.")
+        return
+
+    # Parse
+    try:
+        records = json.loads(raw_document)
+        if isinstance(records, dict):
+            records = _parse_json_report(json.dumps(records))
+        elif not isinstance(records, list):
+            records = _parse_json_report(raw_document)
+    except (json.JSONDecodeError, TypeError):
+        records = _parse_flat_file(str(raw_document))
+
+    if not records:
+        await _notify(notify, "Report downloaded but contained no data rows.")
+        return
+
+    # Write CSV
+    if not filename.endswith(".csv"):
+        filename += ".csv"
+
+    path = _save_csv(records, filename)
+    file_size = os.path.getsize(path)
+
+    await _notify(
+        notify,
+        f"**Report ready:** `{report_type}`\n"
+        f"Exported **{len(records)} rows** to `{filename}` ({file_size:,} bytes).\n"
+        f"File: `{path}`\n"
+        f"Use `analyze_data` to inspect the file.",
+    )
+
+
+async def _notify(notify: dict, message: str):
+    """Send a notification to the user's channel."""
+    from app.tasks import _deliver_message
+    await _deliver_message(notify, message)
+
+
 async def export_report_to_csv(
     report_type: str,
     days: int = 30,
@@ -113,11 +200,11 @@ async def export_report_to_csv(
     report_options: str = "{}",
     tool_context: ToolContext = None,
 ) -> dict:
-    """Request an Amazon report and export it directly as a CSV file.
+    """Request an Amazon report and export it as a CSV file in the background.
 
-    This is a one-shot pipeline: request → wait → download → CSV. No intermediate
-    LLM calls needed. The data never passes through the conversation — only the
-    file path is returned.
+    Requests the report from Amazon and immediately returns. The report is polled,
+    downloaded, and converted to CSV in a background task. The user is notified
+    in their chat when the file is ready.
 
     Args:
         report_type: SP-API report type. Common types:
@@ -151,7 +238,7 @@ async def export_report_to_csv(
     from sp_api.api import Reports
     reports = Reports(credentials=creds)
 
-    # Step 1: Request the report
+    # Step 1: Request the report (synchronous — fast)
     try:
         kwargs = {
             "reportType": report_type,
@@ -169,73 +256,32 @@ async def export_report_to_csv(
     except Exception as e:
         return {"status": "error", "message": f"Failed to request report: {e}"}
 
-    # Step 2: Poll until ready
-    document_id = None
-    for poll in range(1, _MAX_POLL_ATTEMPTS + 1):
-        await asyncio.sleep(_POLL_INTERVAL)
-        try:
-            payload = await _sp_call(reports.get_report, reportId=report_id)
-            status = payload.get("processingStatus", "")
-
-            if status == "DONE":
-                document_id = payload.get("reportDocumentId")
-                break
-            elif status in ("CANCELLED", "FATAL"):
-                return {"status": "error", "message": f"Report failed with status: {status}"}
-            # IN_PROGRESS / IN_QUEUE — keep polling
-        except Exception as e:
-            return {"status": "error", "message": f"Failed to check report status: {e}"}
-
-    if not document_id:
-        return {"status": "error", "message": f"Report not ready after {_MAX_POLL_ATTEMPTS * _POLL_INTERVAL}s. Try sp_check_report('{report_id}') later."}
-
-    # Step 3: Download
-    try:
-        payload = await _sp_call(
-            reports.get_report_document, reportDocumentId=document_id, download=True
-        )
-        raw_document = payload.get("document", "")
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to download report: {e}"}
-
-    if not raw_document:
-        return {"status": "error", "message": "Report document is empty."}
-
-    # Step 4: Parse into records
-    try:
-        records = json.loads(raw_document)
-        if isinstance(records, dict):
-            records = _parse_json_report(json.dumps(records))
-        elif not isinstance(records, list):
-            records = _parse_json_report(raw_document)
-    except (json.JSONDecodeError, TypeError):
-        # Most reports are tab-delimited flat files
-        records = _parse_flat_file(str(raw_document))
-
-    if not records:
-        return {"status": "error", "message": "Report parsed but contained no data rows."}
-
-    # Step 5: Write CSV
+    # Step 2: Generate filename
     if not filename:
         short_type = report_type.replace("GET_", "").replace("_DATA", "").lower()[:40]
         date_str = datetime.now().strftime("%Y%m%d_%H%M")
         filename = f"{short_type}_{date_str}.csv"
 
-    if not filename.endswith(".csv"):
-        filename += ".csv"
+    # Step 3: Determine delivery channel from session ID
+    notify = {}
+    if tool_context:
+        session_id = getattr(tool_context, "session", None)
+        session_id = session_id.id if session_id else ""
+        if session_id.startswith("tg_"):
+            notify = {"type": "telegram", "chat_id": session_id.replace("tg_", "")}
+        elif session_id.startswith("sl_"):
+            notify = {"type": "slack", "chat_id": session_id.replace("sl_", "")}
 
-    path = _save_csv(records, filename)
-    file_size = os.path.getsize(path)
+    # Step 4: Fire background poll + download + deliver
+    asyncio.create_task(
+        _poll_download_and_deliver(report_id, report_type, filename, notify)
+    )
 
     return {
-        "status": "success",
-        "file_path": path,
-        "filename": filename,
-        "rows": len(records),
-        "columns": len(records[0]) if records else 0,
-        "size_bytes": file_size,
-        "message": f"Exported {len(records)} rows to {filename} ({file_size:,} bytes). "
-                   f"Use analyze_data or H10 tools to inspect the file.",
+        "status": "accepted",
+        "report_id": report_id,
+        "message": f"Report `{report_type}` requested (ID: `{report_id}`). "
+                   f"I'll notify you when the CSV is ready — you can keep chatting in the meantime.",
     }
 
 
