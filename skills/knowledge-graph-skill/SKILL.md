@@ -12,23 +12,29 @@ You have a dual-layer memory system: **Pinecone** for semantic content search, *
 | Question Type | Use | Tool |
 |--------------|-----|------|
 | "What do I know about X?" | Pinecone | `search_knowledge` |
+| "Find records about topic Z" | Pinecone | `search_knowledge` |
 | "How is X related to Y?" | Neo4j | `find_connection_path` |
 | "Who/what is connected to X?" | Neo4j | `query_connections` |
-| "When did relationships change?" | Neo4j | `entity_timeline` |
+| "Show me the network around Alice" | Neo4j | `query_connections` |
+| "When did X's relationships change?" | Neo4j | `entity_timeline` |
 | "Find entities named X" | Neo4j | `search_graph` |
-| "Get full text of record X" | Pinecone | `get_records` |
+| "What's the full text of record mem_123?" | Pinecone | `get_records` |
 
 For entity types, relationship types, creation workflow, and auto-extraction details, read `references/entity-relationship-guide.md`.
 
 ## Authorship Rules
 
-Every memory record has an `author` field — critical for audit:
+Every memory record has an `author` field. This is critical for audit:
 
 | Scenario | Author Value |
 |----------|-------------|
-| User explicitly asks to remember | User's ID (leave `author` empty — defaults to their ID) |
-| You store something proactively | `"agent"` |
+| User explicitly says "remember this" | User's ID (e.g. `valerii@mellanni.com`) |
+| You decide to store something on your own | `"agent"` |
 | Background auto-extraction | `"agent:auto"` |
+
+Always set `author` correctly when calling `create_record` or `create_person`:
+- If the user asked you to remember it: leave `author` empty (defaults to their ID)
+- If you're storing something proactively: set `author="agent"`
 
 ## Architecture
 

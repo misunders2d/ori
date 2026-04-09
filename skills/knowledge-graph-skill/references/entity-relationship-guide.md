@@ -43,6 +43,8 @@ Pinecone records created before the graph was enabled have no Neo4j nodes. Use `
 import_pinecone_record(record_id="mem_2025_04_07_abc123", namespace="professional")
 ```
 
+This fetches the Pinecone metadata and creates the corresponding entity + relationship edges in Neo4j. You can do this one at a time or as a bulk operation via a plan.
+
 ## Background Auto-Extraction
 
 A background process automatically extracts named entities and relationships from conversation turns and writes them to Neo4j with `author="agent:auto"`. This happens silently. The graph builds itself over time from natural conversations.
