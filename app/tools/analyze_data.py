@@ -12,7 +12,10 @@ from google.adk.tools.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
-_UPLOADS_DIR = os.path.abspath("./tmp/uploads")
+_ALLOWED_DIRS = [
+    os.path.abspath("./tmp/uploads"),
+    os.path.abspath("./tmp/exports"),
+]
 
 _ALLOWED_MODULES = {
     "json": __import__("json"),
@@ -23,7 +26,7 @@ _ALLOWED_MODULES = {
     "os.path": __import__("os.path"),
 }
 
-_LAZY_MODULES = {"pandas", "openpyxl", "numpy", "collections", "re", "statistics"}
+_LAZY_MODULES = {"pandas", "openpyxl", "numpy", "collections", "re", "statistics", "scipy", "scipy.stats"}
 
 
 def _get_module(name: str):
@@ -66,21 +69,15 @@ def analyze_data(
 ) -> dict:
     """Run Python/pandas analysis code on a data file and return the printed output.
 
-    Use this tool to analyze uploaded spreadsheets and CSV files. The file is
-    pre-loaded as a pandas DataFrame in the variable `df`. For Excel files with
-    multiple sheets, `sheets` is a dict of {sheet_name: DataFrame}.
+    Use this tool to analyze data files (uploads, SP-API exports, generated CSVs).
+    The file is pre-loaded as a pandas DataFrame in the variable `df`. For Excel
+    files with multiple sheets, `sheets` is a dict of {sheet_name: DataFrame}.
 
-    Common operations:
-    - Shape & columns: `print(df.shape); print(df.columns.tolist())`
-    - Preview: `print(df.head(10))`
-    - Statistics: `print(df.describe())`
-    - Value counts: `print(df['column'].value_counts())`
-    - Filtering: `print(df[df['column'] > 100])`
-    - Groupby: `print(df.groupby('category')['sales'].sum())`
-    - Missing values: `print(df.isnull().sum())`
+    Available libraries: pandas (pd), numpy, scipy.stats, statistics, collections, re.
+    Load the `data-analysis-skill` for statistical methodology and Amazon data gotchas.
 
     Args:
-        file_path: Path to the data file (provided when the file was uploaded).
+        file_path: Path to the data file (uploads or exports directory).
         code: Python code to analyze the data. The DataFrame is available as `df`.
               For multi-sheet Excel, use `sheets` dict. Print results to see them.
     """
@@ -89,10 +86,10 @@ def analyze_data(
     if not code or not code.strip():
         return {"status": "error", "message": "No analysis code provided."}
 
-    # Security: only allow access to uploads dir
+    # Security: only allow access to approved data directories
     abs_path = os.path.abspath(file_path)
-    if not abs_path.startswith(_UPLOADS_DIR):
-        return {"status": "error", "message": f"Access denied. Only files in {_UPLOADS_DIR} can be analyzed."}
+    if not any(abs_path.startswith(d) for d in _ALLOWED_DIRS):
+        return {"status": "error", "message": f"Access denied. Only files in {_ALLOWED_DIRS} can be analyzed."}
     if not os.path.isfile(abs_path):
         return {"status": "error", "message": f"File not found: {file_path}"}
 

@@ -62,7 +62,8 @@ amazon_head_agent = Agent(
         "Load the `scratchpad-skill` when coordinating data handoffs between agents.\n\n"
         "Your team: AmazonAgent (product research), AmazonMemoryAgent (knowledge/graph), "
         + ("BigQueryAgent (business analytics), " if bigquery_agent else "")
-        + "AmazonWorkspaceAgent (Drive/Sheets/Calendar), AmazonDataAnalystAgent (charts/visualization).\n\n"
+        + "AmazonWorkspaceAgent (Drive/Sheets/Calendar), "
+        "AmazonDataAnalystAgent (data analysis, statistics, charts — handles large files other agents can't read).\n\n"
         "For simple tasks, route directly to the right agent. "
         "For multi-step tasks, use the scratchpad as shared state between agents."
     ),
