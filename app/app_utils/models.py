@@ -146,9 +146,21 @@ SUPPORTED_PROVIDERS = frozenset({"google", "anthropic"})
 # ---------------------------------------------------------------------------
 
 def get_model_string(component: str) -> str:
-    """Return the effective "provider/model" string for a component."""
+    """Return the effective "provider/model" string for a component.
+
+    Resolution order: os.environ (hot-swap) -> model_config.json -> defaults.
+    """
     env_key = f"MODEL_{component.upper()}"
-    return os.environ.get(env_key, MODEL_DEFAULTS.get(component, ""))
+    env_val = os.environ.get(env_key, "")
+    if env_val:
+        return env_val
+
+    from app.app_utils.model_config import get_assignment
+    config_val = get_assignment(component)
+    if config_val:
+        return config_val
+
+    return MODEL_DEFAULTS.get(component, "")
 
 
 def get_model_name(component: str) -> str:
@@ -171,18 +183,17 @@ def get_model(component: str, **kwargs):
 
 
 def set_model(component: str, model_str: str) -> None:
-    """Persist a model assignment to runtime config."""
+    """Persist a model assignment to model_config.json (not the vault)."""
     if component not in VALID_COMPONENTS:
         raise ValueError(f"Invalid component: '{component}'. Valid: {sorted(VALID_COMPONENTS)}")
 
-    from deploy.vault import set as vault_set
-    env_key = f"MODEL_{component.upper()}"
-    vault_set(env_key, model_str)
+    from app.app_utils.model_config import set_assignment
+    set_assignment(component, model_str)
     logger.info("Model for %s set to %s", component, model_str)
 
 
 def get_all_assignments() -> dict[str, str]:
-    """Return {component: "provider/model"} for all components."""
+    """Return {component: "provider/model"} for all components (resolved)."""
     return {c: get_model_string(c) for c in MODEL_DEFAULTS}
 
 

@@ -25,9 +25,19 @@ async def list_available_models(
     filter: Annotated[str, "Optional substring filter (e.g. 'flash', 'pro')"] = "",
     tool_context: ToolContext = None,
 ) -> dict:
-    """List available models from a provider and show current agent assignments."""
+    """List available models from a provider and show current agent assignments.
+
+    Also refreshes the local model cache used for validation during switches.
+    """
+    from app.app_utils.model_config import update_model_cache
+
     models = await list_provider_models(provider=provider, filter_str=filter)
     assignments = get_all_assignments()
+
+    # Update the cache with fresh results (if the API call succeeded)
+    if models and not (len(models) == 1 and "error" in models[0]):
+        model_names = [m.get("name", "").replace("models/", "") for m in models if m.get("name")]
+        update_model_cache(provider, model_names)
 
     return {
         "available_models": models,
@@ -48,9 +58,11 @@ async def set_agent_model(
 ) -> dict:
     """Switch the model for a specific agent or component.
 
-    IMPORTANT: You MUST call list_available_models first, then pick a model
-    name from the returned list. Arbitrary model names are rejected.
+    Validates against a local cache of known models (no live API call).
+    Call list_available_models first to refresh the cache if needed.
     """
+    from app.app_utils.model_config import get_known_models
+
     if component_name not in VALID_COMPONENTS:
         return {
             "status": "error",
@@ -66,34 +78,27 @@ async def set_agent_model(
 
     provider, bare_name = _parse_model_str(model_name)
 
-    # Fetch the live model list and validate against it
-    available = await list_provider_models(provider=provider)
-    if not available or (len(available) == 1 and "error" in available[0]):
-        return {
-            "status": "error",
-            "message": f"Could not fetch model list from '{provider}'. Try again later.",
-        }
+    # Validate against cached model list (no API call)
+    known = get_known_models(provider)
+    if known:
+        valid_names = set()
+        for name in known:
+            valid_names.add(name)
+            valid_names.add(name.replace("models/", ""))
 
-    valid_names = set()
-    for m in available:
-        name = m.get("name", "")
-        valid_names.add(name)
-        valid_names.add(name.replace("models/", ""))
-
-    if bare_name not in valid_names and f"models/{bare_name}" not in valid_names:
-        # Show a few similar names to help
-        suggestions = sorted(n.replace("models/", "") for n in valid_names if any(
-            k in n.lower() for k in bare_name.lower().split("-")[:2]
-        ))[:5]
-        hint = f" Similar: {suggestions}" if suggestions else " Use list_available_models to see valid options."
-        return {
-            "status": "error",
-            "message": f"Model '{bare_name}' not found on {provider}.{hint}",
-        }
+        if bare_name not in valid_names and f"models/{bare_name}" not in valid_names:
+            suggestions = sorted(n.replace("models/", "") for n in valid_names if any(
+                k in n.lower() for k in bare_name.lower().split("-")[:2]
+            ))[:5]
+            hint = f" Similar: {suggestions}" if suggestions else " Call list_available_models to refresh the cache."
+            return {
+                "status": "error",
+                "message": f"Model '{bare_name}' not found in cached {provider} models.{hint}",
+            }
 
     old_model = get_model_string(component_name)
 
-    # Persist to env + vault
+    # Persist to model_config.json + os.environ
     set_model(component_name, model_name)
 
     # Write to session state for immediate hot-swap (picked up by before_model_callback)

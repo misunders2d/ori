@@ -22,6 +22,13 @@ if not os.environ.get("_VAULT_LOADED"):
         except (PermissionError, OSError):
             pass  # Child container without vault access — credentials from -e flags
 
+# Migrate model assignments from vault to model_config.json (one-time)
+try:
+    from app.app_utils.model_config import migrate_from_vault
+    migrate_from_vault()
+except Exception:
+    pass
+
 from logging.handlers import RotatingFileHandler
 LOG_FILE_PATH = os.path.abspath("./data/agent.log")
 os.makedirs(os.path.dirname(LOG_FILE_PATH), exist_ok=True)
