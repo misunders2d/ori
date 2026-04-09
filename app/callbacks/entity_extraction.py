@@ -58,8 +58,14 @@ async def extract_entities_background(
     """Fire-and-forget entity extraction from a conversation turn.
 
     Call this with asyncio.create_task() — it logs errors but never raises.
+    Only runs for sessions explicitly opted in via extraction_config.
     """
     if not neo4j_graph.is_configured():
+        return
+
+    # Only extract from explicitly enabled sessions
+    from app.core.extraction_config import is_extraction_enabled
+    if not is_extraction_enabled(session_id):
         return
 
     # Skip very short exchanges — nothing useful to extract

@@ -292,3 +292,48 @@ async def _resolve_entity(identifier: str) -> str | None:
 
     # If the original identifier looked like an ID but wasn't found, return None
     return None
+
+
+# ---------------------------------------------------------------------------
+# Auto-extraction management
+# ---------------------------------------------------------------------------
+
+async def enable_auto_extraction(
+    session_id: str,
+    tool_context: ToolContext = None,
+) -> dict:
+    """Enable automatic entity extraction for a chat/channel.
+
+    When enabled, every conversation turn in this session will be analyzed and
+    entities/relationships will be added to the knowledge graph automatically.
+
+    Args:
+        session_id: The session ID to enable extraction for (e.g. 'sl_C01ABC', 'tg_-100123').
+                    Use the current session's ID to enable for this chat.
+    """
+    from app.core.extraction_config import enable_extraction
+    enable_extraction(session_id)
+    return {"status": "success", "message": f"Auto entity extraction enabled for `{session_id}`."}
+
+
+async def disable_auto_extraction(
+    session_id: str,
+    tool_context: ToolContext = None,
+) -> dict:
+    """Disable automatic entity extraction for a chat/channel.
+
+    Args:
+        session_id: The session ID to disable extraction for.
+    """
+    from app.core.extraction_config import disable_extraction
+    disable_extraction(session_id)
+    return {"status": "success", "message": f"Auto entity extraction disabled for `{session_id}`."}
+
+
+async def list_auto_extraction_sessions(
+    tool_context: ToolContext = None,
+) -> dict:
+    """List all sessions that have automatic entity extraction enabled."""
+    from app.core.extraction_config import list_extraction_sessions
+    sessions = list_extraction_sessions()
+    return {"status": "success", "sessions": sessions, "count": len(sessions)}

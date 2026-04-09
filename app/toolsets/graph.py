@@ -14,6 +14,9 @@ class GraphToolset(BaseToolset):
             entity_timeline,
             search_graph,
             import_pinecone_record,
+            enable_auto_extraction,
+            disable_auto_extraction,
+            list_auto_extraction_sessions,
         )
 
         return [
@@ -24,4 +27,7 @@ class GraphToolset(BaseToolset):
             FunctionTool(func=entity_timeline),
             FunctionTool(func=search_graph),
             FunctionTool(func=import_pinecone_record),
+            FunctionTool(func=enable_auto_extraction),
+            FunctionTool(func=disable_auto_extraction),
+            FunctionTool(func=list_auto_extraction_sessions),
         ]
