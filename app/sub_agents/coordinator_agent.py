@@ -19,7 +19,7 @@ from app.toolsets import (
     SchedulingToolset,
     SystemToolset,
     ScratchpadToolset,
-    VisualizationToolset,
+    CreativesToolset,
 )
 from app.toolsets.planner import PlannerToolset
 from app.tools.a2a import get_agent_identity, get_my_a2a_key
@@ -79,7 +79,7 @@ root_agent = Agent(
         SystemToolset(),
         ScratchpadToolset(),
         PlannerToolset(),
-        VisualizationToolset(),
+        CreativesToolset(),
         # Individual tools
         *([google_search_agent_tool] if google_search_agent_tool else []),
         web_fetch,
