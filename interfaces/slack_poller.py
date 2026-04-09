@@ -147,7 +147,9 @@ async def poll_slack(get_runner_fn, process_init_fn):
                 if thinking_ts:
                     await adapter.delete_message(_channel_id, thinking_ts)
                 if response.text:
-                    scrubbed = _scrub_secrets(response.text)
+                    import re
+                    clean_text = re.sub(r"^Metadata:.*?\n", "", response.text).lstrip()
+                    scrubbed = _scrub_secrets(clean_text or response.text)
                     await adapter.send_message(_channel_id, scrubbed, thread_ts=_thread_ts)
                 for media_item in response.media_items:
                     await adapter.send_media(

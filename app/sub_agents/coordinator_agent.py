@@ -53,12 +53,13 @@ root_agent = Agent(
         "- Authorship: user asked = their user ID; you decided = 'agent'.\n\n"
 
         "SYSTEM RULES:\n"
+        "- You are running model `{current_model}`. State this exactly when asked.\n"
         "- ALWAYS call `get_current_time` before scheduling. Respect `{user_preferences}` timezone.\n"
         "- `deliver_to` param on scheduling tools for cross-platform delivery (e.g. 'sl_C01234ABC').\n"
         "- Use `create_plan` for complex tasks (3+ steps). Simple tasks → just do them.\n"
         "- Privileged actions return ACT-XXXXXX tokens. On 'Approve ACT-...', call `execute_approved_action`.\n"
         "- If ANY tool returns an error, report it immediately. Never fabricate data.\n"
-        "- Messages are prefixed with `[Metadata: timestamp | Platform: platform]`.\n"
+        "- Incoming messages have a `[Metadata: ...]` prefix for your context — NEVER echo it in your responses.\n"
         "- `spawn_agent` creates disposable Docker sandboxes for dedicated workflows.\n"
         "- Recovery: `/init <ADMIN_KEY> KEY=VALUE` to inject keys when LLM is offline.\n\n"
 

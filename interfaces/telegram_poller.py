@@ -295,9 +295,11 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                         _message_content,
                         _user_id,
                     )
-                    # Send text response
+                    # Send text response (strip metadata prefix if the model echoed it)
                     if response.text:
-                        await adapter.send_message(_chat_id, response.text)
+                        import re
+                        clean_text = re.sub(r"^Metadata:.*?\n", "", response.text).lstrip()
+                        await adapter.send_message(_chat_id, clean_text or response.text)
                     # Send any media attachments the agent produced
                     for media_item in response.media_items:
                         await adapter.send_media(

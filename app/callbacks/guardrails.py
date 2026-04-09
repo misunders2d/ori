@@ -598,8 +598,12 @@ async def state_setter(
     prefs = load_user_preferences(effective_user)
     callback_context.state["user_preferences"] = prefs
 
-    # Load persisted model overrides into session state
+    # Inject the current agent's model so it can answer "what model are you?"
     from app.app_utils.models import MODEL_DEFAULTS, get_model_string
+    agent_name = callback_context.agent_name
+    callback_context.state["current_model"] = get_model_string(agent_name) or "unknown"
+
+    # Load persisted model overrides into session state
     for component in MODEL_DEFAULTS:
         effective_model = get_model_string(component)
         if effective_model != MODEL_DEFAULTS[component]:
