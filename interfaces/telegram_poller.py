@@ -14,7 +14,6 @@ from app.core.agent_executor import (
     _inject_metadata_header,
     extract_agent_response,
     process_message_for_context,
-    update_session_state,
 )
 from app.core.transport import TransportAdapter, register_adapter
 

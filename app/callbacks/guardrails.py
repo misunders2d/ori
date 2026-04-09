@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import math
@@ -212,7 +213,7 @@ def _estimate_tokens(llm_request: LlmRequest) -> int:
     return total_chars // _CHARS_PER_TOKEN
 
 
-def prompt_injection_guardrail(
+async def prompt_injection_guardrail(
     callback_context: CallbackContext, llm_request: LlmRequest
 ) -> LlmResponse | None:
     """
@@ -246,7 +247,7 @@ def prompt_injection_guardrail(
         logger.warning("Rate throttle hit (%d RPM). Waiting for token refill for %s.", _throttle.rpm, callback_context.agent_name)
         # Back off with increasing delays, up to ~60s total
         for delay in (5, 10, 15, 30):
-            time.sleep(delay)
+            await asyncio.sleep(delay)
             if _throttle.acquire():
                 break
         else:
@@ -546,11 +547,15 @@ def plan_enforcer(
     return None
 
 
+_CALLER_ID_RE = re.compile(r"\[__caller_id:([^\]]+)__\]")
+
+
 async def state_setter(
     callback_context: CallbackContext, **kwargs
 ) -> types.Content | None:
     """
     Sets initial fundamental session state keys to prevent KeyErrors during prompt evaluation.
+    Extracts the real caller ID from message tags (for multi-user group chats).
     """
     import os
 
@@ -560,14 +565,29 @@ async def state_setter(
     admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
     admin_users = [u.strip() for u in admin_users_str.split(",") if u.strip()]
 
+    # Extract real caller ID from the message tag (injected by extract_agent_response
+    # for group chats where session user_id != actual sender).
+    # callback_context.user_content is the Content that started this invocation.
+    real_caller = None
+    user_content = callback_context.user_content
+    if user_content and hasattr(user_content, "parts") and user_content.parts:
+        for part in user_content.parts:
+            if hasattr(part, "text") and part.text:
+                m = _CALLER_ID_RE.search(part.text)
+                if m:
+                    real_caller = m.group(1)
+                    # Strip the tag so the model never sees it
+                    part.text = _CALLER_ID_RE.sub("", part.text)
+                break
+
+    effective_user = real_caller or current_state.get("user_id") or current_user
+
     logger.info(
-        f"DEBUG: state_setter() - current_user='{current_user}', state['user_id']='{current_state.get('user_id')}'"
+        f"DEBUG: state_setter() - current_user='{current_user}', real_caller='{real_caller}', effective='{effective_user}'"
     )
 
-    if "master_user_id" not in current_state:
-        callback_context.state["master_user_id"] = admin_users
-    if "user_id" not in current_state:
-        callback_context.state["user_id"] = current_user
+    callback_context.state["master_user_id"] = admin_users
+    callback_context.state["user_id"] = effective_user
 
     # Load bot name from env (defaults to "Ori")
     callback_context.state["bot_name"] = os.environ.get("BOT_NAME", "Ori")
@@ -575,16 +595,15 @@ async def state_setter(
     # Load user preferences from disk into session state
     from app.tools.preferences import load_user_preferences
 
-    effective_user = current_state.get("user_id", current_user)
     prefs = load_user_preferences(effective_user)
     callback_context.state["user_preferences"] = prefs
 
     # Load persisted model overrides into session state
     from app.app_utils.models import MODEL_DEFAULTS, get_model_string
     for component in MODEL_DEFAULTS:
-        effective = get_model_string(component)
-        if effective != MODEL_DEFAULTS[component]:
-            callback_context.state[f"model:{component}"] = effective
+        effective_model = get_model_string(component)
+        if effective_model != MODEL_DEFAULTS[component]:
+            callback_context.state[f"model:{component}"] = effective_model
 
     return None
 

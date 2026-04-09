@@ -84,7 +84,7 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
     """
     import uuid
 
-    from app.core.agent_executor import extract_agent_response, update_session_state
+    from app.core.agent_executor import extract_agent_response
     from run_bot import get_runner
 
     if not task_id:
@@ -129,16 +129,11 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
             app_name=runner.app_name, user_id=user_id, session_id=session_id
         )
 
-        # Inject admin identity so guardrails recognize this as an admin execution
-        await update_session_state(
-            runner=runner,
-            user_id=user_id,
-            session_id=session_id,
-            state_delta={"user_id": admin_user_id},
-        )
-
+        # Pass admin identity via actual_caller_id so state_setter picks it up
         logger.info("System Task: Executing agent for %s", task_id)
-        response = await extract_agent_response(runner, user_id, session_id, query)
+        response = await extract_agent_response(
+            runner, user_id, session_id, query, actual_caller_id=admin_user_id
+        )
         response = response.text if hasattr(response, "text") else str(response)
 
         is_failure = any(

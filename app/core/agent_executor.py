@@ -198,14 +198,6 @@ async def extract_agent_response(
 
     logger.info(f"DEBUG: extract_agent_response(user_id={user_id}, session_id={session_id}, actual_caller_id={actual_caller_id})")
 
-    if actual_caller_id:
-        await update_session_state(
-            runner=runner,
-            session_id=session_id,
-            user_id=user_id,
-            state_delta={"user_id": actual_caller_id},
-        )
-
     try:
         session = await runner.session_service.get_session(
             app_name=runner.app_name, user_id=user_id, session_id=session_id
@@ -233,6 +225,19 @@ async def extract_agent_response(
         )
 
     MAX_RETRIES = 3
+
+    # Embed actual caller ID as a hidden tag in the message so state_setter
+    # can extract it without fabricating synthetic __system__ events.
+    if actual_caller_id:
+        caller_tag = f"[__caller_id:{actual_caller_id}__]"
+        if isinstance(message, str):
+            message = caller_tag + message
+        elif message.parts:
+            # Prepend to the first text part
+            for part in message.parts:
+                if hasattr(part, "text") and part.text:
+                    part.text = caller_tag + part.text
+                    break
 
     # Prepare message_arg
     if isinstance(message, str):
