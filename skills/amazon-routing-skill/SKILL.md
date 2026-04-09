@@ -1,83 +1,39 @@
 ---
 name: amazon-routing-skill
-description: "Routing guide for AmazonHeadAgent — maps user requests to the right specialist agent, with multi-agent coordination patterns."
+description: "How to route Amazon business requests to the right specialist agent. Use this skill when you need to decide which agent handles a request — product research, knowledge/memory, BigQuery analytics, Google Workspace, or data analysis. Also use when coordinating multi-agent workflows where data passes between agents via the scratchpad."
 ---
 
 # Amazon Operations Routing
 
-You coordinate a team of specialist agents. Each is called as a tool. This skill helps you route requests and coordinate multi-agent workflows.
+You coordinate specialist agents, each callable as a tool. Route the request to the right one, or coordinate multiple agents for complex tasks.
 
 ## Routing Decision Tree
 
-| User wants... | Route to | Tool(s) used |
-|--------------|----------|-------------|
-| Product data, pricing, sales, competitors, BSR | **AmazonAgent** | Keepa, SP-API, Helium10 |
-| "What do we know about X?" / search knowledge | **AmazonMemoryAgent** | `search_knowledge` (Pinecone) |
-| "How is X connected to Y?" / relationships | **AmazonMemoryAgent** | `find_connection_path`, `query_connections` (Neo4j) |
-| Remember a person, supplier, product, entity | **AmazonMemoryAgent** | `create_record`, `create_person`, `add_entity` |
-| Entity timeline, graph exploration | **AmazonMemoryAgent** | `entity_timeline`, `search_graph` |
-| Auto-extraction settings | **AmazonMemoryAgent** | `enable/disable_auto_extraction` |
-| Sales data, inventory, business metrics (SQL) | **BigQueryAgent** | BigQuery tools |
-| Google Drive files, download, search | **AmazonWorkspaceAgent** | Drive tools |
-| Read/write Google Sheets | **AmazonWorkspaceAgent** | Sheets tools |
-| Calendar events, scheduling meetings | **AmazonWorkspaceAgent** | Calendar tools |
-| Charts, plots, data visualization | **AmazonDataAnalystAgent** | `generate_chart` |
-| CSV/Excel file exports | **AmazonDataAnalystAgent** | `generate_file` |
-| Statistical analysis of data | **AmazonDataAnalystAgent** | `analyze_data` |
-| Analyze large files (SP-API reports, ads, SQP) | **AmazonDataAnalystAgent** | `analyze_data` |
-| Weighted aggregation, ACoS/ROAS, keyword gaps | **AmazonDataAnalystAgent** | `analyze_data` |
-| AI image generation / editing | **NOT your team** — handled by the coordinator directly | `generate_image` |
+| User wants... | Route to |
+|--------------|----------|
+| Product data, pricing, sales, competitors, BSR, Keepa, SP-API, H10 keywords | **AmazonAgent** |
+| Search knowledge, "what do we know about X?" | **AmazonMemoryAgent** |
+| Relationships, "how is X connected to Y?", entity graph | **AmazonMemoryAgent** |
+| Remember a person, supplier, product | **AmazonMemoryAgent** |
+| Sales/inventory data, business metrics (SQL) | **BigQueryAgent** |
+| Google Drive, Sheets, Calendar | **AmazonWorkspaceAgent** |
+| Charts, plots, CSV exports, statistical analysis, large file analysis | **AmazonDataAnalystAgent** |
+| AI image generation / editing | **NOT your team** — handled by coordinator directly |
 
-## Ambiguous Requests
+When the request is ambiguous (e.g., "what do you know about ASIN X?"), check memory first, then fetch fresh data if nothing found. Read `references/coordination-patterns.md` for detailed resolution rules and worked examples.
 
-| Request | Resolution |
-|---------|-----------|
-| "What do you know about ASIN B0123?" | **AmazonMemoryAgent** first (check existing knowledge). If nothing found, **AmazonAgent** (fetch fresh from Keepa). |
-| "Tell me about supplier X" | **AmazonMemoryAgent** (search_knowledge + query_connections). Only fetch fresh data if memory is empty. |
-| "Compare these products" | **AmazonAgent** (fetch data for each), then **AmazonDataAnalystAgent** (chart the comparison). |
-| "Export sales to Sheets" | **BigQueryAgent** (query) → scratchpad → **AmazonWorkspaceAgent** (write to Sheets). |
+## Multi-Agent Tasks
 
-## Multi-Agent Coordination
+For tasks spanning multiple agents, use the scratchpad as shared state — one agent writes, the next reads. Read `references/coordination-patterns.md` for the handoff pattern and worked examples like "chart the sales trend" or "export inventory to Sheets."
 
-When a task spans multiple agents, use the **scratchpad as shared state**:
+## Rules
 
-### Pattern: Data Producer → Scratchpad → Consumer
-
-```
-1. Call the data-producing agent with the request
-2. The agent writes results to scratchpad (e.g. "keepa-research")
-3. Call the consuming agent, telling it to read from that scratchpad
-```
-
-### Examples
-
-**"Chart the sales trend for ASIN B0123"**
-1. Call **AmazonAgent**: "Fetch Keepa sales data for B0123 and write to scratchpad 'sales-data'"
-2. Call **AmazonDataAnalystAgent**: "Read 'sales-data' from scratchpad and create a sales trend chart"
-
-**"Export last month's FBA inventory to Google Sheets"**
-1. Call **BigQueryAgent**: "Query FBA inventory for last 30 days, write results to scratchpad 'inventory'"
-2. Call **AmazonWorkspaceAgent**: "Read 'inventory' from scratchpad and write to a new Google Sheet"
-
-**"Find competitors and compare pricing"**
-1. Call **AmazonAgent**: "Find competitors for B0123, fetch pricing for top 5, write to scratchpad 'competitors'"
-2. Call **AmazonDataAnalystAgent**: "Read 'competitors' from scratchpad and create a pricing comparison chart"
-
-## Memory Authorship
-
-When storing records via AmazonMemoryAgent:
-- User explicitly asks to remember → author = user's ID (leave empty, defaults to their ID)
-- You decide to store proactively → author = `"agent"`
+- Simple tasks → route directly, don't over-coordinate.
+- Always include relevant details from agent responses in your final answer.
+- If an agent returns an error, report it. Never fabricate data.
+- If unsure: AmazonMemoryAgent for knowledge queries, AmazonAgent for fresh product data.
 
 ## Live References
 
 - [Google ADK Multi-Agent Systems](https://google.github.io/adk-docs/agents/multi-agents/)
 - [ADK AgentTool Pattern](https://google.github.io/adk-docs/tools/)
-- [ADK Callbacks & Design Patterns](https://google.github.io/adk-docs/callbacks/design-patterns-and-best-practices/)
-
-## Rules
-
-- For simple single-agent tasks, call the agent directly — don't over-coordinate.
-- Always include relevant details from agent responses in your final answer.
-- If an agent returns an error, report it to the user. Never fabricate data.
-- If unsure which agent to use, prefer AmazonMemoryAgent for knowledge queries, AmazonAgent for fresh product data.
