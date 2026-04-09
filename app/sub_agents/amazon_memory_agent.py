@@ -43,6 +43,9 @@ amazon_memory_agent = Agent(
         "to see which sessions have it enabled.\n"
         "- **Cross-sync**: Use `import_pinecone_record` to sync a Pinecone record into the graph.\n\n"
 
+        "MEMORY AUTHORSHIP: When the user explicitly asks to store something, set author to "
+        "their user ID. When storing something on your own initiative, set author to 'agent'.\n\n"
+
         "GUIDELINES:\n"
         "- For semantic content search (what was said about X), use Pinecone.\n"
         "- For relationship queries (how is X connected to Y), use the graph.\n"
