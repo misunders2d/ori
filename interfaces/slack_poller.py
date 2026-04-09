@@ -23,6 +23,7 @@ from app.core.whitelist import (
     reload as reload_whitelist,
 )
 from app.core.channel_logger import log_message
+from app.tools.google_oauth.token_store import save_user_mapping, resolve_email
 
 logger = logging.getLogger(__name__)
 
@@ -254,9 +255,10 @@ async def poll_slack(get_runner_fn, process_init_fn):
         session_id = adapter.make_session_id(channel_id)
         session_user_id = session_id
 
-        # Extract display name and email (best-effort from Slack Web API)
+        # Extract display name and email (best-effort from Slack Web API, cached to SQLite)
         display_name = user_raw
         user_email = ""
+        sl_id = adapter.make_user_id(user_raw)
         try:
             resp = await http_client.get(
                 "https://slack.com/api/users.info",
@@ -268,11 +270,18 @@ async def poll_slack(get_runner_fn, process_init_fn):
                 profile = user_data["user"].get("profile", {})
                 display_name = profile.get("display_name") or profile.get("real_name") or user_raw
                 user_email = profile.get("email", "")
+                # Cache the mapping so it survives restarts even if the API fails next time
+                if user_email:
+                    save_user_mapping(sl_id, user_email)
         except Exception:
             pass
 
+        # Fall back to cached mapping if the API call failed or returned no email
+        if not user_email:
+            user_email = resolve_email(sl_id)
+
         # Use email as canonical user_id if available, fall back to sl_ prefix
-        user_id = user_email if user_email else adapter.make_user_id(user_raw)
+        user_id = user_email if user_email else sl_id
 
         # Extract timestamp
         try:
