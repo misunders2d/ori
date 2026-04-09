@@ -37,3 +37,4 @@ For tasks spanning multiple agents, use the scratchpad as shared state — one a
 
 - [Google ADK Multi-Agent Systems](https://google.github.io/adk-docs/agents/multi-agents/)
 - [ADK AgentTool Pattern](https://google.github.io/adk-docs/tools/)
+- [ADK Callbacks & Design Patterns](https://google.github.io/adk-docs/callbacks/design-patterns-and-best-practices/)
