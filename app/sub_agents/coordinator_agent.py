@@ -1,8 +1,4 @@
-import pathlib
-
 from google.adk.agents import Agent
-from google.adk.skills import load_skill_from_dir
-from google.adk.tools import skill_toolset
 
 from app.app_utils.models import get_model
 
@@ -14,8 +10,7 @@ from app.callbacks.guardrails import (
     state_setter,
     tool_output_injection_guardrail,
 )
-from app.sub_agents.amazon_agent import amazon_agent
-from app.sub_agents.bigquery_agent import bigquery_agent
+from app.sub_agents.amazon_head_agent import amazon_head_agent
 from app.sub_agents.clickup_agent import clickup_agent
 from app.sub_agents.developer_agent import developer_agent
 from app.sub_agents.knowledge_agent import knowledge_agent
@@ -25,54 +20,41 @@ from app.toolsets import (
     SystemToolset,
     ScratchpadToolset,
     VisualizationToolset,
-    GoogleWorkspaceToolset,
 )
-from app.toolsets.pinecone import PineconeToolset
 from app.toolsets.planner import PlannerToolset
-from app.toolsets.graph import GraphToolset
 from app.tools.a2a import get_agent_identity, get_my_a2a_key
 from app.tools.google_search import google_search_agent_tool
 from app.tools.web import web_fetch
 from app.tools.whitelist import whitelist_chat, blacklist_chat
 from app.tools.youtube import youtube_summary
 
-_skills_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
-_google_workspace_skill = load_skill_from_dir(_skills_dir / "google-workspace-skill")
-_scratchpad_skill = load_skill_from_dir(_skills_dir / "scratchpad-skill")
-_visualization_skill = load_skill_from_dir(_skills_dir / "visualization-skill")
-_knowledge_graph_skill = load_skill_from_dir(_skills_dir / "knowledge-graph-skill")
-
 root_agent = Agent(
     name="CoordinatorAgent",
     model=get_model("CoordinatorAgent"),
-    description="The primary interface for the autonomous agent platform. Orchestrates scheduling, memory, evolution, and communication.",
+    description="The primary interface for the autonomous agent platform. Routes requests, manages scheduling, memory, and system operations.",
     instruction=(
         "You are {bot_name}, an autonomous self-evolving agent platform. "
         "Your job is to orchestrate tasks, remember context, and delegate specialized work.\n\n"
 
         "DELEGATION:\n"
-        "1. For self-evolution (code changes, bug fixes, adding features), model switching, or LLM provider changes (API key vs Google One / Vertex AI): Delegate to DeveloperAgent.\n"
-        "2. For A2A communication, friend management, DNA exchange: Delegate to KnowledgeAgent.\n"
-        "3. For Amazon product research, ASINs, pricing, Keepa, competitors, listings, "
-        "Helium10 keyword analysis (Cerebro/Magnet exports): Delegate to AmazonAgent.\n"
-        "4. For business data, BigQuery queries, sales reports, inventory reports: Delegate to BigQueryAgent.\n"
+        "1. For ALL Amazon business operations — product research, ASINs, pricing, Keepa, "
+        "competitors, listings, Helium10 keywords, BigQuery sales/inventory data, "
+        "professional knowledge (Pinecone/graph), Google Drive/Sheets/Calendar, "
+        "data visualization, charts: Delegate to AmazonHeadAgent.\n"
+        "2. For self-evolution (code changes, bug fixes, adding features), model switching, "
+        "or LLM provider changes: Delegate to DeveloperAgent.\n"
+        "3. For A2A communication, friend management, DNA exchange: Delegate to KnowledgeAgent.\n"
         + (
-            "5. For ClickUp tasks, project management, task assignments, team coordination, "
+            "4. For ClickUp tasks, project management, task assignments, team coordination, "
             "checking what's on someone's plate, creating/updating/commenting on tasks, "
             "following up with team members, or anything involving task management: Delegate to ClickUpAgent.\n"
             if clickup_agent else ""
         ) +
-        f"{'6' if clickup_agent else '5'}. For everything else (research, scheduling, memory, access control): Handle directly.\n\n"
+        f"{'5' if clickup_agent else '4'}. For everything else (web research, scheduling, quick memory recall, access control): Handle directly.\n\n"
 
         "SPAWNING: You can spawn child agents (`spawn_agent`) for dedicated workflows. "
         "Children are disposable Docker sandboxes — they stage, verify, and export DNA back to you. "
         "They cannot commit or reboot. You are automatically their admin.\n\n"
-
-        "KNOWLEDGE GRAPH: You have a Neo4j graph database for tracking entities and relationships. "
-        "When creating Pinecone records, relationships are automatically synced to the graph. "
-        "Use graph tools (`add_entity`, `link_entities`, `query_connections`, `find_connection_path`, "
-        "`entity_timeline`, `search_graph`) to explore how people, projects, and concepts relate. "
-        "For semantic content search, use Pinecone. For relationship queries, use the graph.\n\n"
 
         "MEMORY AUTHORSHIP: When the user explicitly asks you to remember something, set author to "
         "their user ID. When YOU decide to store something without being asked, set author to 'agent'. "
@@ -104,8 +86,7 @@ root_agent = Agent(
 
         "TOOL ERROR MANDATE: If ANY tool returns an error or unexpected result, you MUST report "
         "it to the user immediately and exactly as returned. NEVER silently fall back to web search, "
-        "fabricate data, or guess. Say 'the tool returned an error' and show the error. "
-        "This is especially critical for Keepa and BigQuery — if the data isn't there, say so.\n\n"
+        "fabricate data, or guess. Say 'the tool returned an error' and show the error.\n\n"
 
         "EAGER DELEGATION: Answer questions directly first. "
         "Delegate to DeveloperAgent ONLY on explicit action requests ('fix it', 'write the code').\n\n"
@@ -115,23 +96,17 @@ root_agent = Agent(
     sub_agents=[
         developer_agent,
         knowledge_agent,
-        amazon_agent,
-        *([bigquery_agent] if bigquery_agent else []),
+        amazon_head_agent,
         *([clickup_agent] if clickup_agent else []),
     ],
     tools=[
-        # Skills
-        skill_toolset.SkillToolset(skills=[_google_workspace_skill, _scratchpad_skill, _visualization_skill, _knowledge_graph_skill]),
-        # Toolsets
+        # Toolsets — cross-cutting concerns only
         SchedulingToolset(),
         MemoryToolset(),
         SystemToolset(),
         ScratchpadToolset(),
         VisualizationToolset(),
-        GoogleWorkspaceToolset(),
-        PineconeToolset(),
         PlannerToolset(),
-        GraphToolset(),
         # Individual tools
         *([google_search_agent_tool] if google_search_agent_tool else []),
         web_fetch,

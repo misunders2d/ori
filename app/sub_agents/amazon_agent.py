@@ -11,7 +11,7 @@ from google.adk.tools import skill_toolset
 
 from app.app_utils.models import get_model
 from app.callbacks.guardrails import prompt_injection_guardrail
-from app.toolsets import KeepaToolset, ScratchpadToolset, VisualizationToolset
+from app.toolsets import KeepaToolset, ScratchpadToolset
 from app.toolsets.sp_api import SPApiToolset
 from app.toolsets.h10 import H10Toolset
 
@@ -19,8 +19,6 @@ base_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 keepa_skill = load_skill_from_dir(base_dir / "keepa-skill")
 sp_api_skill = load_skill_from_dir(base_dir / "sp-api-skill")
 h10_skill = load_skill_from_dir(base_dir / "h10-keyword-skill")
-scratchpad_skill = load_skill_from_dir(base_dir / "scratchpad-skill")
-visualization_skill = load_skill_from_dir(base_dir / "visualization-skill")
 
 amazon_agent = Agent(
     name="AmazonAgent",
@@ -67,12 +65,11 @@ amazon_agent = Agent(
         "Never spam retries — use progressive backoff.\n"
     ),
     tools=[
-        skill_toolset.SkillToolset(skills=[keepa_skill, sp_api_skill, h10_skill, scratchpad_skill, visualization_skill]),
+        skill_toolset.SkillToolset(skills=[keepa_skill, sp_api_skill, h10_skill]),
         KeepaToolset(),
         SPApiToolset(),
         H10Toolset(),
         ScratchpadToolset(),
-        VisualizationToolset(),
     ],
     before_model_callback=prompt_injection_guardrail,
 )

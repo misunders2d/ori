@@ -62,7 +62,7 @@ def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
     # Whitelist-based transfer guard: non-admins can only transfer to explicitly safe agents.
     # New sub-agents are blocked by default until added here.
     if tool.name == "transfer_to_agent":
-        _NONADMIN_ALLOWED_AGENTS = {"ClickUpAgent", "BigQueryAgent"}  # Agents with their own access control
+        _NONADMIN_ALLOWED_AGENTS = {"ClickUpAgent", "BigQueryAgent", "AmazonHeadAgent"}  # Agents with their own access control
         agent_target = args.get("agent_name", "").strip()
 
         if agent_target.lower() not in {a.lower() for a in _NONADMIN_ALLOWED_AGENTS}:
