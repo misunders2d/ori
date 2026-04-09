@@ -255,6 +255,17 @@ async def prompt_injection_guardrail(
             # instead of returning text that gets surfaced to the caller
             raise Exception("429 internal rate throttle exhausted")
 
+    # Global system directive — injected into every LLM call, single source of truth
+    _SYSTEM_DIRECTIVE = (
+        "CLARIFY BEFORE ACTING: If the user's intent is ambiguous or unclear, "
+        "ask a clarifying question. Never assume and waste tokens on the wrong task."
+    )
+    if llm_request.contents:
+        llm_request.contents.insert(0, types.Content(
+            role="user",
+            parts=[types.Part.from_text(text=f"[SYSTEM] {_SYSTEM_DIRECTIVE}")],
+        ))
+
     use_planner = callback_context.state.to_dict().get("use_planner", False)
     if not use_planner and getattr(llm_request, "config", None):
         if hasattr(llm_request.config, "thinking_config"):

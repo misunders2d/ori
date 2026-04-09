@@ -38,6 +38,7 @@ try:
 except FileNotFoundError:
     _instruction = "You are a ClickUp task management agent. Help users manage their tasks."
 
+
 def _get_company_domain() -> str:
     return os.environ.get("COMPANY_DOMAIN", "").strip().lower()
 
