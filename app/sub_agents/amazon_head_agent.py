@@ -1,6 +1,6 @@
 """Amazon Head Agent — domain router for all Amazon business operations.
 
-Delegates to specialized child agents wrapped as AgentTools:
+Delegates to specialized child agents via transfer_to_agent:
 - AmazonAgent: Product research (Keepa, SP-API, Helium10)
 - AmazonMemoryAgent: Knowledge storage (Pinecone, Neo4j graph)
 - AmazonBigQueryAgent: Business data analytics
@@ -14,7 +14,6 @@ import pathlib
 from google.adk.agents import Agent
 from google.adk.skills import load_skill_from_dir
 from google.adk.tools import skill_toolset
-from google.adk.tools.agent_tool import AgentTool
 
 from app.app_utils.models import get_model
 from app.callbacks.guardrails import prompt_injection_guardrail
@@ -32,19 +31,6 @@ _skills_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 _routing_skill = load_skill_from_dir(_skills_dir / "amazon-routing-skill")
 _scratchpad_skill = load_skill_from_dir(_skills_dir / "scratchpad-skill")
 
-# Wrap child agents as tools — reduces hop count vs transfer_to_agent
-_child_tools = [
-    skill_toolset.SkillToolset(skills=[_routing_skill, _scratchpad_skill]),
-    AgentTool(agent=amazon_agent),
-    AgentTool(agent=amazon_memory_agent),
-    AgentTool(agent=amazon_workspace_agent),
-    AgentTool(agent=amazon_data_analyst_agent),
-    ScratchpadToolset(),
-]
-
-if bigquery_agent:
-    _child_tools.append(AgentTool(agent=bigquery_agent))
-
 amazon_head_agent = Agent(
     name="AmazonHeadAgent",
     model=get_model("AmazonAgent"),
@@ -57,16 +43,26 @@ amazon_head_agent = Agent(
     ),
     instruction=(
         "You are the Amazon Head Agent — the central coordinator for all Amazon business operations. "
-        "You manage a team of specialist agents, each callable as a tool.\n\n"
+        "You manage a team of specialist sub-agents. Delegate to the right one via transfer_to_agent.\n\n"
         "Load the `amazon-routing-skill` for detailed routing decisions and multi-agent coordination patterns. "
         "Load the `scratchpad-skill` when coordinating data handoffs between agents.\n\n"
         "Your team: AmazonAgent (product research), AmazonMemoryAgent (knowledge/graph), "
         + ("BigQueryAgent (business analytics), " if bigquery_agent else "")
         + "AmazonWorkspaceAgent (Drive/Sheets/Calendar), "
         "AmazonDataAnalystAgent (data analysis, statistics, charts — handles large files other agents can't read).\n\n"
-        "For simple tasks, route directly to the right agent. "
+        "For simple tasks, delegate directly to the right agent. "
         "For multi-step tasks, use the scratchpad as shared state between agents."
     ),
-    tools=_child_tools,
+    sub_agents=[
+        amazon_agent,
+        amazon_memory_agent,
+        amazon_workspace_agent,
+        amazon_data_analyst_agent,
+        *([bigquery_agent] if bigquery_agent else []),
+    ],
+    tools=[
+        skill_toolset.SkillToolset(skills=[_routing_skill, _scratchpad_skill]),
+        ScratchpadToolset(),
+    ],
     before_model_callback=prompt_injection_guardrail,
 )
