@@ -52,8 +52,8 @@ amazon_head_agent = Agent(
         "Amazon business operations manager. Handles ALL Amazon-related tasks: "
         "product research, pricing, Keepa data, SP-API, Helium10 keywords, "
         "BigQuery sales/inventory analytics, professional memory and knowledge graph, "
-        "Google Workspace (Drive, Sheets, Calendar), data visualization, and chart creation. "
-        "Delegate here for anything related to Amazon business."
+        "Google Workspace (Drive, Sheets, Calendar), data visualization, charts, and file exports. "
+        "Delegate here for anything related to Amazon business. NOT for AI image generation."
     ),
     instruction=(
         "You are the Amazon Head Agent — the central coordinator for all Amazon business operations. "

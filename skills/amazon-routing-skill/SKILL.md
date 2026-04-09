@@ -23,8 +23,8 @@ You coordinate a team of specialist agents. Each is called as a tool. This skill
 | Calendar events, scheduling meetings | **AmazonWorkspaceAgent** | Calendar tools |
 | Charts, plots, data visualization | **AmazonDataAnalystAgent** | `generate_chart` |
 | CSV/Excel file exports | **AmazonDataAnalystAgent** | `generate_file` |
-| AI image generation / editing | **AmazonDataAnalystAgent** | `generate_image` |
 | Statistical analysis of data | **AmazonDataAnalystAgent** | `analyze_data` |
+| AI image generation / editing | **NOT your team** — handled by the coordinator directly | `generate_image` |
 
 ## Ambiguous Requests
 

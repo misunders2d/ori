@@ -46,7 +46,8 @@ root_agent = Agent(
             if clickup_agent else ""
         ) +
         f"{'5' if clickup_agent else '4'}. **Handle directly** — Web research, scheduling, "
-        "quick memory, image generation, system operations, access control.\n\n"
+        "quick memory, AI image generation (`generate_image`, `enhance_image_prompt`), "
+        "system operations, access control.\n\n"
 
         "MEMORY ROUTING:\n"
         "- 'Remember that...' (simple fact) → `remember_info` directly.\n"

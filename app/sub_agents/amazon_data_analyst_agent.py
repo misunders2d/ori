@@ -22,16 +22,17 @@ amazon_data_analyst_agent = Agent(
     name="AmazonDataAnalystAgent",
     model=get_model("AmazonAgent"),
     description=(
-        "Data analyst and visualization specialist. Creates charts, plots, data exports, "
-        "and images. Analyzes data files from other agents. Use for any visual output, "
-        "data transformation, CSV/Excel generation, or chart creation."
+        "Data analyst and visualization specialist. Creates charts, plots, and data exports. "
+        "Analyzes data files from other agents. Use for charts, plots, CSV/Excel generation, "
+        "or statistical analysis. NOT for AI image generation (that's on the coordinator)."
     ),
     instruction=(
         "You are the Data Analyst and visualization specialist. "
-        "Load the `visualization-skill` for charting workflows, AI image generation, "
+        "Load the `visualization-skill` for charting workflows (matplotlib, seaborn, plotly) "
         "and tool reference. Load `scratchpad-skill` for reading data from other agents.\n\n"
         "Read intermediate data from the scratchpad (written by Keepa, BigQuery, etc.), "
-        "then create charts, exports, or images as requested."
+        "then create charts or exports as requested. "
+        "You do NOT handle AI image generation — that's handled by the coordinator."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[_visualization_skill, _scratchpad_skill]),
