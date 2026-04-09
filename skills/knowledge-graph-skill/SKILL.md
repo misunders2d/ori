@@ -104,6 +104,12 @@ This fetches the Pinecone metadata and creates the corresponding entity + relati
 
 After every conversation turn, a background process automatically extracts named entities and relationships from the exchange and writes them to Neo4j with `author="agent:auto"`. This happens silently — you don't need to do anything. The graph builds itself over time from natural conversations.
 
+## Live References
+
+- [Neo4j Cypher Query Language](https://neo4j.com/docs/cypher-manual/current/)
+- [Pinecone Documentation](https://docs.pinecone.io/)
+- [Neo4j Aura (managed cloud)](https://neo4j.com/cloud/platform/aura-graph-database/)
+
 ## Important
 
 - Pinecone is the source of truth for content. Neo4j is best-effort for relationships.

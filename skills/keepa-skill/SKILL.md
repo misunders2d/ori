@@ -50,6 +50,12 @@ Keepa's `monthlySold` is a **tier indicator**, not exact units. The sales analys
 - 50 → 50-100 units/month
 - Always report sales as a range (min-max), never as exact numbers.
 
+## Live References
+
+- [Keepa API Documentation](https://keepa.com/#!discuss/t/keepa-api/150)
+- [Keepa API Endpoint Reference](https://keepa.com/api/)
+- [Amazon Product Advertising API (context)](https://webservices.amazon.com/paapi5/documentation/)
+
 ## Gotchas
 
 - **Always fetch before extracting.** Extract tools read from cache — they fail if the ASIN wasn't fetched first.
@@ -58,4 +64,4 @@ Keepa's `monthlySold` is a **tier indicator**, not exact units. The sales analys
 - **BSR is shared across variations.** All children of the same parent have the same sales rank. Use `monthlySold` (via sales analysis) to differentiate variation performance.
 - **Never pass offers > 20.** Keepa requires offers=0 or offers≥20. The fetch tool handles this.
 - **Token costs add up.** Each product fetch = 1 token + 2 for offers. Check balance with `keepa_check_tokens` before bulk operations.
-- **If any tool returns an error, report it immediately.** Do NOT fall back to web search or fabricate data.
+- **Error handling**: follows system-level error mandate (report immediately, never fabricate).

@@ -56,6 +56,13 @@ One connection grants access to Drive, Sheets, AND Calendar. No need to connect 
 - **Attendees:** Comma-separated email addresses (e.g. `'alice@mellanni.com,bob@mellanni.com'`). Invitations are sent automatically by Google.
 - **All-day events:** For all-day events, use date format `'2026-04-10'` instead of datetime.
 
+## Live References
+
+- [Google Drive API v3](https://developers.google.com/drive/api/reference/rest/v3)
+- [Google Sheets API v4](https://developers.google.com/sheets/api/reference/rest)
+- [Google Calendar API v3](https://developers.google.com/calendar/api/v3/reference)
+- [OAuth 2.0 Device Flow](https://developers.google.com/identity/protocols/oauth2/limited-input-device)
+
 ## Gotchas
 
 - **User must connect first.** All tools return "not connected" if the user hasn't authorized. Don't retry — tell them to run the connect flow.

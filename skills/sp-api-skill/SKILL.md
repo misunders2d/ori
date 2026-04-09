@@ -108,6 +108,13 @@ When reporting prices, always specify whether you're quoting the landed price or
 ### For `sp_search_catalog`:
 `summaries, images, identifiers, attributes, productTypes, salesRanks, relationships, classifications, dimensions`
 
+## Live References
+
+- [SP-API Documentation](https://developer-docs.amazon.com/sp-api/)
+- [SP-API Report Types](https://developer-docs.amazon.com/sp-api/docs/report-type-values)
+- [SP-API Rate Limits](https://developer-docs.amazon.com/sp-api/docs/usage-plans-and-rate-limits)
+- [Catalog Items API](https://developer-docs.amazon.com/sp-api/docs/catalog-items-api-v2022-04-01-reference)
+
 ## Gotchas
 
 - **Reports are NOT instant.** Always poll status before downloading. Most take 1-30 minutes.
@@ -116,5 +123,5 @@ When reporting prices, always specify whether you're quoting the landed price or
 - **Competitive pricing max batch = 20.** Split larger lists into chunks.
 - **Large reports are saved to file.** The tool returns a file path and preview. Use `analyze_data` for the full data.
 - **Marketplace is US-only** (`ATVPDKIKX0DER`). All tools are pre-configured for the US marketplace.
-- **If any tool returns an error, report it immediately.** Never fabricate data or silently fall back.
+- **Error handling**: follows system-level error mandate (report immediately, never fabricate).
 - **4xx errors (except 429) = don't retry.** 400 = bad input, 403 = permissions issue, 404 = ASIN/SKU doesn't exist.

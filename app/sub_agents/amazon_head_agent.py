@@ -9,8 +9,11 @@ Delegates to specialized child agents wrapped as AgentTools:
 """
 
 import logging
+import pathlib
 
 from google.adk.agents import Agent
+from google.adk.skills import load_skill_from_dir
+from google.adk.tools import skill_toolset
 from google.adk.tools.agent_tool import AgentTool
 
 from app.app_utils.models import get_model
@@ -25,8 +28,13 @@ from app.sub_agents.bigquery_agent import bigquery_agent
 
 logger = logging.getLogger(__name__)
 
+_skills_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
+_routing_skill = load_skill_from_dir(_skills_dir / "amazon-routing-skill")
+_scratchpad_skill = load_skill_from_dir(_skills_dir / "scratchpad-skill")
+
 # Wrap child agents as tools — reduces hop count vs transfer_to_agent
 _child_tools = [
+    skill_toolset.SkillToolset(skills=[_routing_skill, _scratchpad_skill]),
     AgentTool(agent=amazon_agent),
     AgentTool(agent=amazon_memory_agent),
     AgentTool(agent=amazon_workspace_agent),
@@ -48,50 +56,15 @@ amazon_head_agent = Agent(
         "Delegate here for anything related to Amazon business."
     ),
     instruction=(
-        "You are the Amazon Head Agent — the central coordinator for all Amazon business operations.\n\n"
-
-        "YOUR TEAM (call them as tools):\n"
-        "- **AmazonAgent**: Product research. Keepa data (pricing, sales, competitors, BSR), "
-        "SP-API (catalog, listings, competitive pricing, reports), Helium10 (Cerebro/Magnet keyword analysis).\n"
-        "- **AmazonMemoryAgent**: Professional knowledge. Pinecone (semantic search, records, people), "
-        "Neo4j graph (entities, relationships, connection paths, timelines), auto-extraction control.\n"
-        + (
-            "- **BigQueryAgent**: Business analytics. SQL on sales, inventory, advertising, operational data. "
-            "Has per-table access control — non-admin users are gated by email domain.\n"
-            if bigquery_agent else ""
-        ) +
-        "- **AmazonWorkspaceAgent**: Google Workspace. Drive files, Sheets read/write, Calendar events.\n"
-        "- **AmazonDataAnalystAgent**: Visualization and analysis. Charts, plots, CSV/Excel exports, "
-        "image generation, statistical analysis.\n\n"
-
-        "ROUTING GUIDE:\n"
-        "- 'What is the price of ASIN X?' → AmazonAgent\n"
-        "- 'What do we know about supplier X?' → AmazonMemoryAgent (search first), "
-        "then AmazonAgent (fetch fresh if not found)\n"
-        "- 'How is X connected to Y?' → AmazonMemoryAgent (graph query)\n"
-        "- 'Remember this supplier/person/product' → AmazonMemoryAgent (create_record/create_person/add_entity)\n"
-        "- 'What were last month's sales?' → BigQueryAgent\n"
-        "- 'Chart the sales trend' → BigQueryAgent (query) → scratchpad → AmazonDataAnalystAgent (chart)\n"
-        "- 'Export this to Sheets' → AmazonWorkspaceAgent\n"
-        "- 'Create a chart/plot/image' → AmazonDataAnalystAgent\n"
-        "- 'What's on the calendar?' → AmazonWorkspaceAgent\n\n"
-
-        "MULTI-AGENT COORDINATION:\n"
-        "When a task spans multiple agents, use the scratchpad as shared state:\n"
-        "1. Have the data-producing agent write results to scratchpad (e.g. `scratchpad_write`).\n"
-        "2. Have the consuming agent read from scratchpad (e.g. `scratchpad_read`).\n"
-        "Example: AmazonAgent fetches Keepa data → writes to scratchpad → "
-        "AmazonDataAnalystAgent reads and charts it.\n\n"
-
-        "MEMORY AUTHORSHIP: When storing records on behalf of the user, set author to their user ID. "
-        "When YOU decide to store something, set author to 'agent'.\n\n"
-
-        "RULES:\n"
-        "- Never fabricate data. If an agent returns an error, report it immediately.\n"
-        "- For simple single-agent tasks, call the appropriate agent directly — don't overthink routing.\n"
-        "- Always include the relevant details from agent responses in your final answer.\n"
-        "- If unsure which agent to use, prefer AmazonMemoryAgent for knowledge queries "
-        "and AmazonAgent for fresh product data.\n"
+        "You are the Amazon Head Agent — the central coordinator for all Amazon business operations. "
+        "You manage a team of specialist agents, each callable as a tool.\n\n"
+        "Load the `amazon-routing-skill` for detailed routing decisions and multi-agent coordination patterns. "
+        "Load the `scratchpad-skill` when coordinating data handoffs between agents.\n\n"
+        "Your team: AmazonAgent (product research), AmazonMemoryAgent (knowledge/graph), "
+        + ("BigQueryAgent (business analytics), " if bigquery_agent else "")
+        + "AmazonWorkspaceAgent (Drive/Sheets/Calendar), AmazonDataAnalystAgent (charts/visualization).\n\n"
+        "For simple tasks, route directly to the right agent. "
+        "For multi-step tasks, use the scratchpad as shared state between agents."
     ),
     tools=_child_tools,
     before_model_callback=prompt_injection_guardrail,

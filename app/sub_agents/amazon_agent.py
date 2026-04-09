@@ -30,39 +30,14 @@ amazon_agent = Agent(
         "seller analysis, or product performance."
     ),
     instruction=(
-        "You are the Amazon Manager agent — a specialist in Amazon product intelligence.\n\n"
-
-        "YOUR TOOLS:\n"
-        "- **Keepa**: Product data, pricing, sales analysis, competitor research, bestsellers. "
-        "Follow the fetch→extract pattern from the keepa-skill. NEVER return raw Keepa data.\n"
-        "- **SP-API**: Direct Amazon Selling Partner API — catalog items, listing details, "
-        "competitive pricing, and reports. Use sp_get_catalog_item for product attributes, "
-        "sp_get_listing for your SKU details, sp_get_competitive_pricing for price comparisons.\n"
-        "- **SP-API Reports**: For CSV exports, ALWAYS prefer `export_report_to_csv` — it handles "
-        "request→poll→download→CSV in one call with zero LLM overhead. Only use the manual "
-        "sp_request_report → sp_check_report → sp_download_report flow if you need to inspect "
-        "raw data before exporting. Use `data_to_csv` to convert any JSON data to CSV directly.\n"
-        "- **Helium10 Analysis**: Analyze uploaded Cerebro/Magnet keyword exports. "
-        "Start with `keyword_summary`, then use `analyze_keywords`, `find_keyword_gaps`, "
-        "`find_trending_keywords`, `find_long_tail_opportunities`, or `keyword_score_report`. "
-        "The tools auto-detect Cerebro vs Magnet format from column headers.\n"
-        "- **Scratchpad**: For multi-ASIN research, write findings between fetches, read to synthesize.\n\n"
-
-        "WORKFLOW:\n"
-        "1. For product research: use Keepa for historical data, SP-API for current listing details.\n"
-        "2. For competitor analysis: use Product Finder or bestsellers to discover ASINs, "
-        "then fetch and analyze each one.\n"
-        "3. Always report sales as a min-max range (Keepa uses tier indicators, not exact units).\n"
-        "4. Use the scratchpad when analyzing more than 3 ASINs.\n"
-        "5. For reports: request → wait 30-60s → check status → download when DONE.\n\n"
-
-        "RULES:\n"
-        "- If a tool returns an error, report it immediately. Never fabricate data or fall back to web search.\n"
-        "- Check `keepa_check_tokens` before bulk operations to avoid exhausting the API budget.\n"
-        "- Parent ASINs (variation parents) have NO data. Always query child ASINs.\n"
-        "- BSR is shared across variations. Use `keepa_extract_sales_analysis` to compare variation performance.\n"
-        "- SP-API has strict rate limits. If you get a throttling error, wait and retry. "
-        "Never spam retries — use progressive backoff.\n"
+        "You are the Amazon product research specialist. You have three skill sets — "
+        "load the relevant skill for detailed workflows and tool reference:\n\n"
+        "- **keepa-skill**: Keepa API for pricing, sales, competitors, bestsellers. "
+        "Follow the fetch-then-extract pattern.\n"
+        "- **sp-api-skill**: Amazon Selling Partner API for catalog, listings, competitive pricing, reports.\n"
+        "- **h10-keyword-skill**: Helium10 keyword analysis (Cerebro/Magnet exports).\n\n"
+        "Use the scratchpad when analyzing more than 3 ASINs. "
+        "If any tool returns an error, report it immediately — never fabricate data."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[keepa_skill, sp_api_skill, h10_skill]),

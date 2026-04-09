@@ -123,6 +123,13 @@ This ensures the AI preserves all details the user didn't ask to change.
 - "Generate a photo of a sunset" → NO (text-to-image, just use `generate_image` directly)
 - "Completely redesign this bedroom" → NO (full edit, use `generate_image` directly)
 
+## Live References
+
+- [Matplotlib Gallery](https://matplotlib.org/stable/gallery/index.html)
+- [Seaborn Gallery](https://seaborn.pydata.org/examples/index.html)
+- [Plotly Python](https://plotly.com/python/)
+- [Google Imagen API](https://cloud.google.com/vertex-ai/generative-ai/docs/image/overview)
+
 ## Important
 
 - The generated image is **automatically delivered** to the user's chat — you don't need to do anything extra.
