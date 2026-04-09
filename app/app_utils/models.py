@@ -72,9 +72,13 @@ def _parse_model_str(model_str: str) -> tuple[str, str]:
     """Split "provider/model_name" into (provider, model_name).
 
     Bare strings (no '/') default to the "google" provider.
+    Handles Google API format "models/gemini-..." (strip prefix, default to google).
     Strips quotes that leak from .env files (Docker --env-file doesn't strip them).
     """
     model_str = model_str.strip().strip("\"'")
+    # Google API returns "models/model-name" — not a provider prefix
+    if model_str.startswith("models/"):
+        return "google", model_str.removeprefix("models/")
     if "/" in model_str:
         provider, model_name = model_str.split("/", 1)
         return provider.lower().strip(), model_name.strip()
