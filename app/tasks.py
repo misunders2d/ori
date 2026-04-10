@@ -175,7 +175,12 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
 
 
 async def _deliver_message(notify: dict, message: str):
-    """Send a message to the user via their original channel using the adapter registry."""
+    """Send a message to the user's chat AND inject it into their session history.
+
+    The injection is what makes scheduled task output visible to the agent on the
+    user's next turn — without it, follow-up questions like "what was the reminder?"
+    have no context to draw on.
+    """
     from app.core.transport import get_adapter
 
     if not notify:
@@ -193,3 +198,53 @@ async def _deliver_message(notify: dict, message: str):
             logger.error("Failed to deliver message via adapter: %s", e)
     else:
         logger.warning("No adapter registered for channel type: %s", channel_type)
+
+    # Mirror the delivered message into the chat's session so the model has it
+    # in conversation history when the user asks a follow-up.
+    await _inject_into_session(notify, message)
+
+
+async def _inject_into_session(notify: dict, message: str):
+    """Append the delivered scheduled-task text as a model-authored event in the
+    target chat's session, so it shows up in conversation history on the next turn.
+
+    Silently no-ops if the session doesn't exist or the runner isn't available.
+    """
+    target_session = (notify or {}).get("origin_session_id")
+    if not target_session:
+        return
+
+    from run_bot import get_runner
+
+    runner = get_runner()
+    if not runner:
+        return
+
+    try:
+        from google.adk.events.event import Event
+        from google.genai import types as _types
+        import uuid as _uuid
+        import time as _time
+
+        # In this codebase, ADK user_id and session_id are the same value for
+        # chat sessions (see telegram_poller / slack_poller: session_user_id = session_id).
+        session = await runner.session_service.get_session(
+            app_name=runner.app_name, user_id=target_session, session_id=target_session
+        )
+        if session is None:
+            return  # Chat hasn't started its session yet — nothing to append to.
+
+        content = _types.Content(
+            role="model",
+            parts=[_types.Part.from_text(text=message)],
+        )
+        event = Event(
+            id=str(_uuid.uuid4()),
+            author="scheduler",
+            timestamp=_time.time(),
+            content=content,
+        )
+        await runner.session_service.append_event(session, event)
+        logger.info("Injected scheduled task message into session %s", target_session)
+    except Exception as e:
+        logger.warning("Failed to inject scheduled message into session %s: %s", target_session, e)
