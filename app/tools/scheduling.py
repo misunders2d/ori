@@ -71,14 +71,21 @@ def _get_user_id(tool_context: ToolContext) -> str:
     return (getter("user_id", "") or "") if callable(getter) else ""
 
 
+def _get_session_id(tool_context: ToolContext) -> str:
+    """Read the current chat session_id from tool_context, '' if unknown."""
+    session = getattr(tool_context, "session", None)
+    if not session:
+        return ""
+    return getattr(session, "session_id", None) or getattr(session, "id", None) or ""
+
+
 def _get_session_notify_info(tool_context: ToolContext) -> dict:
     """Extract notification info (channel type + id) from the current session via the adapter registry."""
     from app.core.transport import parse_notify_from_session_id
 
-    session = getattr(tool_context, "session", None)
-    if not session:
+    sid = _get_session_id(tool_context)
+    if not sid:
         return {}
-    sid = getattr(session, "session_id", None) or getattr(session, "id", None)
     return parse_notify_from_session_id(sid) or {}
 
 
@@ -137,18 +144,23 @@ def _can_access_job(job, user_id: str, is_admin: bool) -> bool:
     return owner == user_id
 
 
-def _stamp_ownership(notify: dict, user_id: str, deliver_to: str) -> dict:
-    """Attach ownership metadata to the notify dict.
+def _stamp_ownership(notify: dict, user_id: str, deliver_to: str, origin_session_id: str = "") -> dict:
+    """Attach ownership + history-injection metadata to the notify dict.
 
-    These keys are used only by scheduling tools for list/edit/delete — they
-    pass through `_deliver_message` untouched (it reads only `type` and
-    `chat_id`/`channel`).
+    These keys are used only by scheduling tools and the post-delivery session
+    injector — they pass through `_deliver_message` untouched (it reads only
+    `type` and `chat_id`/`channel`).
     """
     stamped = dict(notify) if notify else {}
     if user_id:
         stamped["owner_user_id"] = user_id
     if deliver_to:
         stamped["deliver_to_session"] = deliver_to
+    # The chat session whose history should receive the synthetic event when the
+    # task fires. Prefer the explicit deliver_to target; fall back to origin.
+    target_session = deliver_to or origin_session_id
+    if target_session:
+        stamped["origin_session_id"] = target_session
     return stamped
 
 
@@ -202,7 +214,7 @@ def schedule_one_off_task(
         }
 
     user_id = _get_user_id(tool_context)
-    notify = _stamp_ownership(notify, user_id, deliver_to)
+    notify = _stamp_ownership(notify, user_id, deliver_to, _get_session_id(tool_context))
 
     job_id = f"oneoff_{uuid.uuid4().hex[:8]}"
     scheduler.add_job(
@@ -265,7 +277,7 @@ def schedule_recurring_task(
         }
 
     user_id = _get_user_id(tool_context)
-    notify = _stamp_ownership(notify, user_id, deliver_to)
+    notify = _stamp_ownership(notify, user_id, deliver_to, _get_session_id(tool_context))
 
     job_id = f"cron_{uuid.uuid4().hex[:8]}"
     scheduler.add_job(
@@ -514,6 +526,8 @@ def schedule_system_task(
                        "Provide a valid `deliver_to` session ID, or schedule from a chat that has a registered transport.",
         }
 
+    notify = _stamp_ownership(notify, "", deliver_to, _get_session_id(tool_context))
+
     job_id = f"sys_oneoff_{uuid.uuid4().hex[:8]}"
     scheduler.add_job(
         run_system_task,
@@ -569,6 +583,8 @@ def run_system_task_now(
             "message": "Cannot launch: no delivery target could be resolved. "
                        "Provide a valid `deliver_to` session ID, or run from a chat that has a registered transport.",
         }
+
+    notify = _stamp_ownership(notify, "", deliver_to, _get_session_id(tool_context))
 
     task_id = f"immediate_{uuid.uuid4().hex[:8]}"
 
@@ -636,6 +652,8 @@ def schedule_recurring_system_task(
             "message": "Cannot schedule: no delivery target could be resolved. "
                        "Provide a valid `deliver_to` session ID, or schedule from a chat that has a registered transport.",
         }
+
+    notify = _stamp_ownership(notify, "", deliver_to, _get_session_id(tool_context))
 
     job_id = f"sys_cron_{uuid.uuid4().hex[:8]}"
     scheduler.add_job(
