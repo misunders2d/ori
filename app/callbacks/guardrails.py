@@ -95,10 +95,9 @@ def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
     ]:
         current_state = tool_context.state.to_dict()
         user_id = current_state.get("user_id", "")
-        session_id = current_state.get("session_id", "default")
 
         logger.info(
-            f"DEBUG: admin_tool_guardrail(tool={tool.name}) - user_id='{user_id}', session_id='{session_id}'"
+            f"DEBUG: admin_tool_guardrail(tool={tool.name}) - user_id='{user_id}'"
         )
 
         admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
@@ -117,7 +116,7 @@ def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
         try:
             from app.core.pending_actions import stage_action
 
-            token = stage_action(tool.name, args, user_id, session_id)
+            token = stage_action(tool.name, args, user_id, "")
 
             logger.info(f"Admin Guardrail: Staged {tool.name} for {user_id} -> {token}")
 
