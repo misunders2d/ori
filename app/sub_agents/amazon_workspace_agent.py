@@ -19,7 +19,7 @@ _google_workspace_skill = load_skill_from_dir(_base_dir / "google-workspace-skil
 
 amazon_workspace_agent = Agent(
     name="AmazonWorkspaceAgent",
-    model=get_model("AmazonAgent"),
+    model=get_model("AmazonWorkspaceAgent"),
     description=(
         "Google Workspace specialist for Amazon business operations. Manages Google Drive "
         "files, reads/writes Google Sheets, and handles Google Calendar events. Use for "

@@ -56,6 +56,14 @@ One connection grants access to Drive, Sheets, AND Calendar. No need to connect 
 - **Attendees:** Comma-separated email addresses (e.g. `'alice@mellanni.com,bob@mellanni.com'`). Invitations are sent automatically by Google.
 - **All-day events:** For all-day events, use date format `'2026-04-10'` instead of datetime.
 
+## NOT Your Job: Personal Reminders
+
+Google Calendar is for **scheduled events, meetings, and appointments with other people or time-blocked activities visible on the user's calendar**. It is NOT a personal reminder system for the agent.
+
+If the user says "remind me…", "nudge me…", "ping me at…", "every day do X", "in 10 minutes…", or any similar reminder phrasing **without explicitly asking for a calendar event** (no attendees, no meeting, no calendar mentioned), this is a scheduling request, not a calendar event. Do NOT call `calendar_create_event`. Instead, transfer back to the parent (`AmazonHeadAgent` → `CoordinatorAgent`) so the coordinator can use its scheduling tools.
+
+Create a calendar event only when the user explicitly says "add to my calendar", "create a calendar event", mentions attendees/invitations, or is clearly describing a meeting.
+
 ## Live References
 
 - [Google Drive API v3](https://developers.google.com/drive/api/reference/rest/v3)

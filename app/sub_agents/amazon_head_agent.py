@@ -33,7 +33,7 @@ _scratchpad_skill = load_skill_from_dir(_skills_dir / "scratchpad-skill")
 
 amazon_head_agent = Agent(
     name="AmazonHeadAgent",
-    model=get_model("AmazonAgent"),
+    model=get_model("AmazonHeadAgent"),
     description=(
         "Amazon business operations manager. Handles ALL Amazon-related tasks: "
         "product research, pricing, Keepa data, SP-API, Helium10 keywords, "

@@ -20,7 +20,7 @@ _knowledge_graph_skill = load_skill_from_dir(_base_dir / "knowledge-graph-skill"
 
 amazon_memory_agent = Agent(
     name="AmazonMemoryAgent",
-    model=get_model("AmazonAgent"),
+    model=get_model("AmazonMemoryAgent"),
     description=(
         "Professional memory and knowledge graph specialist. Manages Pinecone vector "
         "records (semantic search, people, products, concepts) and Neo4j graph "

@@ -63,7 +63,7 @@ def before_clickup_callback(
 if os.environ.get("CLICKUP_API_TOKEN", "").strip():
     clickup_agent = Agent(
         name="ClickUpAgent",
-        model=get_model("CoordinatorAgent"),
+        model=get_model("ClickUpAgent"),
         description=(
             "Task management agent for ClickUp. Handles creating, updating, assigning, "
             "and querying tasks. Use for any ClickUp-related requests including team "

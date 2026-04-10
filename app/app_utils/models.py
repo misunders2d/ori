@@ -25,6 +25,8 @@ MODEL_DEFAULTS: dict[str, str] = {
     "CoordinatorAgent":         "google/gemini-3-flash-preview",
     "DeveloperAgent":           "google/gemini-3-flash-preview",
     "KnowledgeAgent":           "google/gemini-3-flash-preview",
+    "ClickUpAgent":             "google/gemini-3-flash-preview",
+    "AmazonHeadAgent":          "google/gemini-3-flash-preview",
     "AmazonAgent":              "google/gemini-3-flash-preview",
     "AmazonMemoryAgent":        "google/gemini-3-flash-preview",
     "AmazonWorkspaceAgent":     "google/gemini-3-flash-preview",
