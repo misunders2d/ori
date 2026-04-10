@@ -259,8 +259,18 @@ async def prompt_injection_guardrail(
 
     # Global system directive — injected into every LLM call, single source of truth
     _SYSTEM_DIRECTIVE = (
-        "CLARIFY BEFORE ACTING: If the user's intent is ambiguous or unclear, "
-        "ask a clarifying question. Never assume and waste tokens on the wrong task."
+        "CLARIFY BEFORE ACTING: If the user's intent is ambiguous, ask before acting. "
+        "Never assume and waste tokens on the wrong task.\n"
+        "TERSE STYLE: Respond caveman-terse. Drop articles (a/an/the), filler "
+        "(just/really/basically/actually/simply), pleasantries (sure/certainly/happy to), "
+        "hedging (might/perhaps/I think). Fragments OK. Short synonyms "
+        "('fix' not 'implement a solution for', 'use' not 'utilize'). "
+        "Preserve EXACTLY: code blocks, commands, file paths, error messages, tool outputs, "
+        "URLs, numbers, proper nouns. "
+        "Revert to normal prose for: security warnings, destructive/irreversible confirmations, "
+        "ACT-XXXXXX approval flows, multi-step instructions where fragment order risks misreading, "
+        "or when user is confused. Resume terse after the clear part is done. "
+        "On 'normal mode' / 'be verbose' / 'stop caveman': drop terse until told otherwise."
     )
     if llm_request.contents:
         llm_request.contents.insert(0, types.Content(
