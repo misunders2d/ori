@@ -274,6 +274,16 @@ async def search_graph(
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+def _resolve_session_id(tool_context: ToolContext | None) -> str:
+    """Read the current chat session_id from tool_context, '' if unknown."""
+    if not tool_context:
+        return ""
+    session = getattr(tool_context, "session", None)
+    if not session:
+        return ""
+    return getattr(session, "session_id", None) or getattr(session, "id", None) or ""
+
+
 async def _resolve_entity(identifier: str) -> str | None:
     """Resolve a name or ID to an entity_id. Returns None if not found."""
     if not identifier:
@@ -299,7 +309,7 @@ async def _resolve_entity(identifier: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 async def enable_auto_extraction(
-    session_id: str,
+    session_id: str = "",
     tool_context: ToolContext = None,
 ) -> dict:
     """Enable automatic entity extraction for a chat/channel.
@@ -308,26 +318,47 @@ async def enable_auto_extraction(
     entities/relationships will be added to the knowledge graph automatically.
 
     Args:
-        session_id: The session ID to enable extraction for (e.g. 'sl_C01ABC', 'tg_-100123').
-                    Use the current session's ID to enable for this chat.
+        session_id: Optional. The session ID to enable extraction for (e.g.
+            'sl_C01ABC', 'tg_-100123'). If omitted or empty, defaults to the
+            current chat's session — which is what you want when the user says
+            "turn it on here" / "enable for this chat".
     """
     from app.core.extraction_config import enable_extraction
-    enable_extraction(session_id)
-    return {"status": "success", "message": f"Auto entity extraction enabled for `{session_id}`."}
+
+    sid = session_id.strip() if session_id else ""
+    if not sid:
+        sid = _resolve_session_id(tool_context)
+    if not sid:
+        return {
+            "status": "error",
+            "message": "Could not determine the current session_id. Pass it explicitly.",
+        }
+    enable_extraction(sid)
+    return {"status": "success", "message": f"Auto entity extraction enabled for `{sid}`."}
 
 
 async def disable_auto_extraction(
-    session_id: str,
+    session_id: str = "",
     tool_context: ToolContext = None,
 ) -> dict:
     """Disable automatic entity extraction for a chat/channel.
 
     Args:
-        session_id: The session ID to disable extraction for.
+        session_id: Optional. The session ID to disable extraction for. If
+            omitted or empty, defaults to the current chat's session.
     """
     from app.core.extraction_config import disable_extraction
-    disable_extraction(session_id)
-    return {"status": "success", "message": f"Auto entity extraction disabled for `{session_id}`."}
+
+    sid = session_id.strip() if session_id else ""
+    if not sid:
+        sid = _resolve_session_id(tool_context)
+    if not sid:
+        return {
+            "status": "error",
+            "message": "Could not determine the current session_id. Pass it explicitly.",
+        }
+    disable_extraction(sid)
+    return {"status": "success", "message": f"Auto entity extraction disabled for `{sid}`."}
 
 
 async def list_auto_extraction_sessions(
