@@ -22,6 +22,13 @@ if not os.environ.get("_VAULT_LOADED"):
         except (PermissionError, OSError):
             pass  # Child container without vault access — credentials from -e flags
 
+# Normalize any legacy/quoted MODEL_* assignments left in the vault (one-time, idempotent)
+try:
+    from app.app_utils.models import normalize_assignments
+    normalize_assignments()
+except Exception:
+    pass
+
 from logging.handlers import RotatingFileHandler
 LOG_FILE_PATH = os.path.abspath("./data/agent.log")
 os.makedirs(os.path.dirname(LOG_FILE_PATH), exist_ok=True)

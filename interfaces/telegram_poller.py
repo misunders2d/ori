@@ -584,6 +584,69 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                             await adapter.send_message(chat_id, result_msg)
                         continue
 
+                    # Handle /models command — deterministic, bypasses the LLM entirely
+                    # /models                       → list all assignments
+                    # /models default               → clear all overrides (reset every agent to default)
+                    # /models default <Component>   → clear one component's override
+                    if text.strip().startswith("/models"):
+                        admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
+                        admin_users = {u.strip() for u in admin_users_str.split(",") if u.strip()}
+                        caller_ids = {session_id, f"tg_{user_id}"}
+                        if admin_users and not (caller_ids & admin_users):
+                            await adapter.send_message(
+                                chat_id,
+                                "Access denied: /models is admin-only.",
+                            )
+                            continue
+                        from app.app_utils.models import (
+                            format_model_assignments,
+                            reset_all_models,
+                            reset_model,
+                            VALID_COMPONENTS,
+                        )
+                        parts = text.strip().split()
+                        if len(parts) == 1:
+                            await adapter.send_message(
+                                chat_id,
+                                "```\n" + format_model_assignments(markdown=False) + "\n```",
+                            )
+                        elif len(parts) >= 2 and parts[1].lower() == "default":
+                            if len(parts) == 2:
+                                cleared = reset_all_models()
+                                msg = (
+                                    f"Reset {len(cleared)} model override(s) to defaults."
+                                    if cleared else
+                                    "No overrides to reset — everything is already on defaults."
+                                )
+                                await adapter.send_message(
+                                    chat_id,
+                                    msg + "\n\n```\n" + format_model_assignments(markdown=False) + "\n```",
+                                )
+                            else:
+                                component = parts[2]
+                                if component not in VALID_COMPONENTS:
+                                    await adapter.send_message(
+                                        chat_id,
+                                        f"Unknown component '{component}'. Valid: {', '.join(sorted(VALID_COMPONENTS))}",
+                                    )
+                                else:
+                                    cleared = reset_model(component)
+                                    msg = (
+                                        f"Reset {component} to default."
+                                        if cleared else
+                                        f"{component} was already on its default — nothing to clear."
+                                    )
+                                    await adapter.send_message(chat_id, msg)
+                        else:
+                            await adapter.send_message(
+                                chat_id,
+                                "Usage:\n"
+                                "  `/models` — list all agent model assignments\n"
+                                "  `/models default` — reset ALL agents to their default models\n"
+                                "  `/models default <Component>` — reset one component to its default",
+                            )
+                        continue
+
                     # Handle /init command
                     if text.strip().startswith("/init"):
                         await adapter.delete_message(chat_id, message_id)

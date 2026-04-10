@@ -99,6 +99,45 @@ async def start_cli_chat(get_runner_fn):
                 print(f"\n{bot_name}: Closing onboarding chat. You can reach me via configured messengers!")
                 break
 
+            if user_input.strip().startswith("/models"):
+                from app.app_utils.models import (
+                    format_model_assignments,
+                    reset_all_models,
+                    reset_model,
+                    VALID_COMPONENTS,
+                )
+                parts = user_input.strip().split()
+                if len(parts) == 1:
+                    print(f"\n{format_model_assignments(markdown=False)}\n")
+                elif len(parts) >= 2 and parts[1].lower() == "default":
+                    if len(parts) == 2:
+                        cleared = reset_all_models()
+                        print(
+                            f"\nReset {len(cleared)} model override(s) to defaults.\n"
+                            if cleared else
+                            "\nNo overrides to reset — everything is already on defaults.\n"
+                        )
+                        print(f"{format_model_assignments(markdown=False)}\n")
+                    else:
+                        component = parts[2]
+                        if component not in VALID_COMPONENTS:
+                            print(f"\nUnknown component '{component}'. Valid: {', '.join(sorted(VALID_COMPONENTS))}\n")
+                        else:
+                            cleared = reset_model(component)
+                            print(
+                                f"\nReset {component} to default.\n"
+                                if cleared else
+                                f"\n{component} was already on its default — nothing to clear.\n"
+                            )
+                else:
+                    print(
+                        "\nUsage:\n"
+                        "  /models                     — list all agent model assignments\n"
+                        "  /models default             — reset ALL agents to their default models\n"
+                        "  /models default <Component> — reset one component to its default\n"
+                    )
+                continue
+
             # SECURE KEY CAPTURE
             from app.secure_config import capture_key, check_pending, capture_friend_key, check_pending_friend
             

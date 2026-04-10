@@ -69,9 +69,13 @@ def _parse_model_str(model_str: str) -> tuple[str, str]:
     """Split "provider/model_name" into (provider, model_name).
 
     Bare strings (no '/') default to the "google" provider.
+    Handles Google API format "models/gemini-..." (strip prefix, default to google).
     Strips quotes that leak from .env files (Docker --env-file doesn't strip them).
     """
     model_str = model_str.strip().strip("\"'")
+    # Google API returns "models/model-name" — not a provider prefix
+    if model_str.startswith("models/"):
+        return "google", model_str.removeprefix("models/")
     if "/" in model_str:
         provider, model_name = model_str.split("/", 1)
         return provider.lower().strip(), model_name.strip()
@@ -168,19 +172,154 @@ def get_model(component: str, **kwargs):
 
 
 def set_model(component: str, model_str: str) -> None:
-    """Persist a model assignment to runtime config."""
+    """Persist a model assignment to the vault.
+
+    Always stores the canonical `provider/model` form, even if the caller
+    passed a legacy Google-API `models/X` string or a bare name.
+    """
     if component not in VALID_COMPONENTS:
         raise ValueError(f"Invalid component: '{component}'. Valid: {sorted(VALID_COMPONENTS)}")
 
+    provider, model_name = _parse_model_str(model_str)
+    if provider not in SUPPORTED_PROVIDERS:
+        raise ValueError(
+            f"Unsupported provider '{provider}' in '{model_str}'. Supported: {sorted(SUPPORTED_PROVIDERS)}"
+        )
+    normalized = f"{provider}/{model_name}"
+
     from deploy.vault import set as vault_set
     env_key = f"MODEL_{component.upper()}"
-    vault_set(env_key, model_str)
-    logger.info("Model for %s set to %s", component, model_str)
+    vault_set(env_key, normalized)
+    logger.info("Model for %s set to %s", component, normalized)
+
+
+def reset_model(component: str) -> bool:
+    """Clear a single component's override, reverting it to its default.
+
+    Returns True if something was cleared, False if it was already at default.
+    """
+    if component not in VALID_COMPONENTS:
+        raise ValueError(f"Invalid component: '{component}'. Valid: {sorted(VALID_COMPONENTS)}")
+    from deploy.vault import unset as vault_unset
+    env_key = f"MODEL_{component.upper()}"
+    had_override = bool(os.environ.get(env_key, ""))
+    vault_unset(env_key)
+    if had_override:
+        logger.info("Model for %s reset to default (%s)", component, MODEL_DEFAULTS.get(component, ""))
+    return had_override
+
+
+def reset_all_models() -> dict[str, str]:
+    """Clear every persisted model override at once. Returns the dict of what was cleared."""
+    from deploy.vault import unset as vault_unset
+    cleared = {}
+    for component in MODEL_DEFAULTS:
+        env_key = f"MODEL_{component.upper()}"
+        current = os.environ.get(env_key, "")
+        if current:
+            cleared[component] = current
+            vault_unset(env_key)
+    if cleared:
+        logger.info("Reset %d model override(s) to defaults", len(cleared))
+    return cleared
+
+
+def normalize_assignments() -> int:
+    """Rewrite any persisted model assignments that use the legacy `models/X` form.
+
+    Called once at startup. Strips quotes and converts `models/X` → `google/X`.
+    Returns the number of entries that were rewritten.
+    """
+    from deploy.vault import set as vault_set
+    fixed = 0
+    for component in MODEL_DEFAULTS:
+        env_key = f"MODEL_{component.upper()}"
+        current = os.environ.get(env_key, "")
+        if not current:
+            continue
+        stripped = current.strip().strip("\"'")
+        normalized = stripped
+        if stripped.startswith("models/"):
+            normalized = "google/" + stripped.removeprefix("models/")
+        elif "/" not in stripped:
+            normalized = "google/" + stripped
+        if normalized != current:
+            vault_set(env_key, normalized)
+            fixed += 1
+            logger.info("Normalized %s: %s → %s", env_key, current, normalized)
+    return fixed
 
 
 def get_all_assignments() -> dict[str, str]:
     """Return {component: "provider/model"} for all components."""
     return {c: get_model_string(c) for c in MODEL_DEFAULTS}
+
+
+def list_models() -> dict:
+    """Return a fully-resolved snapshot of every component's current model assignment.
+
+    Deterministic — no LLM involved. Safe to call from slash commands, CLIs, or scripts.
+
+    Returns:
+        dict: {
+            "auth_mode": <auth info dict from get_auth_mode()>,
+            "assignments": {component: "provider/model", ...},
+            "defaults":    {component: "provider/model", ...},
+            "overrides":   {component: "provider/model", ...},  # only components differing from defaults
+        }
+    """
+    resolved = get_all_assignments()
+    overrides = {
+        comp: model for comp, model in resolved.items()
+        if model and model != MODEL_DEFAULTS.get(comp)
+    }
+    return {
+        "auth_mode": get_auth_mode(),
+        "assignments": resolved,
+        "defaults": dict(MODEL_DEFAULTS),
+        "overrides": overrides,
+    }
+
+
+def format_model_assignments(markdown: bool = False) -> str:
+    """Render list_models() as a human-readable string.
+
+    Args:
+        markdown: If True, wrap model names in backticks for markdown renderers.
+    """
+    snapshot = list_models()
+    assignments = snapshot["assignments"]
+    overrides = snapshot["overrides"]
+    auth = snapshot["auth_mode"]
+
+    width = max((len(c) for c in assignments), default=0)
+    lines = ["Model assignments:"]
+    for comp in sorted(assignments):
+        model = assignments[comp] or "(unset)"
+        marker = " *" if comp in overrides else "  "
+        if markdown:
+            lines.append(f"{marker}`{comp.ljust(width)}` → `{model}`")
+        else:
+            lines.append(f"{marker}{comp.ljust(width)}  →  {model}")
+
+    if overrides:
+        lines.append("")
+        lines.append("(* = overrides the default)")
+
+    lines.append("")
+    lines.append(f"Auth mode: {auth.get('auth_method', 'unknown')}")
+    if auth.get("vertex_ai"):
+        proj = auth.get("google_cloud_project") or "(no project)"
+        loc = auth.get("google_cloud_location") or "(no location)"
+        lines.append(f"  GCP project:  {proj}")
+        lines.append(f"  GCP location: {loc}")
+        if auth.get("service_account"):
+            lines.append("  Service account: configured")
+    else:
+        lines.append(f"  GOOGLE_API_KEY:    {'set' if auth.get('google_api_key') else 'missing'}")
+        lines.append(f"  ANTHROPIC_API_KEY: {'set' if auth.get('anthropic_api_key') else 'missing'}")
+
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
