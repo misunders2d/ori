@@ -24,8 +24,9 @@ if not os.environ.get("_VAULT_LOADED"):
 
 # Migrate model assignments from vault to model_config.json (one-time)
 try:
-    from app.app_utils.model_config import migrate_from_vault
+    from app.app_utils.model_config import migrate_from_vault, normalize_assignments
     migrate_from_vault()
+    normalize_assignments()
 except Exception:
     pass
 

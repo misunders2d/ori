@@ -192,13 +192,44 @@ def get_model(component: str, **kwargs):
 
 
 def set_model(component: str, model_str: str) -> None:
-    """Persist a model assignment to model_config.json (not the vault)."""
+    """Persist a model assignment to model_config.json (not the vault).
+
+    Always stores the canonical `provider/model` form, even if the caller
+    passed a legacy Google-API `models/X` string or a bare name.
+    """
     if component not in VALID_COMPONENTS:
         raise ValueError(f"Invalid component: '{component}'. Valid: {sorted(VALID_COMPONENTS)}")
 
+    provider, model_name = _parse_model_str(model_str)
+    if provider not in SUPPORTED_PROVIDERS:
+        raise ValueError(
+            f"Unsupported provider '{provider}' in '{model_str}'. Supported: {sorted(SUPPORTED_PROVIDERS)}"
+        )
+    normalized = f"{provider}/{model_name}"
+
     from app.app_utils.model_config import set_assignment
-    set_assignment(component, model_str)
-    logger.info("Model for %s set to %s", component, model_str)
+    set_assignment(component, normalized)
+    logger.info("Model for %s set to %s", component, normalized)
+
+
+def reset_model(component: str) -> bool:
+    """Clear a single component's override, reverting it to its default.
+
+    Returns True if something was cleared, False if it was already at default.
+    """
+    if component not in VALID_COMPONENTS:
+        raise ValueError(f"Invalid component: '{component}'. Valid: {sorted(VALID_COMPONENTS)}")
+    from app.app_utils.model_config import unset_assignment
+    cleared = unset_assignment(component)
+    if cleared:
+        logger.info("Model for %s reset to default (%s)", component, MODEL_DEFAULTS.get(component, ""))
+    return cleared
+
+
+def reset_all_models() -> dict[str, str]:
+    """Clear every persisted model override at once. Returns the dict of what was cleared."""
+    from app.app_utils.model_config import clear_all_assignments
+    return clear_all_assignments()
 
 
 def get_all_assignments() -> dict[str, str]:

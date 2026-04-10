@@ -87,6 +87,58 @@ def set_assignment(component: str, model_str: str):
     logger.info("Model config: %s = %s", component, model_str)
 
 
+def unset_assignment(component: str) -> bool:
+    """Remove a single component's override. Returns True if something was cleared."""
+    config = _read_config()
+    assignments = config.get("assignments", {})
+    cleared = component in assignments
+    if cleared:
+        del assignments[component]
+        config["assignments"] = assignments
+        _write_config(config)
+    env_key = f"MODEL_{component.upper()}"
+    if env_key in os.environ:
+        del os.environ[env_key]
+        cleared = True
+    if cleared:
+        logger.info("Model config: cleared override for %s", component)
+    return cleared
+
+
+def clear_all_assignments() -> dict:
+    """Remove every persisted model override. Returns the dict of what was cleared."""
+    config = _read_config()
+    cleared = dict(config.get("assignments", {}))
+    config["assignments"] = {}
+    _write_config(config)
+    for comp in cleared:
+        os.environ.pop(f"MODEL_{comp.upper()}", None)
+    if cleared:
+        logger.info("Model config: cleared %d model overrides", len(cleared))
+    return cleared
+
+
+def normalize_assignments() -> int:
+    """Rewrite any legacy 'models/X' assignments as 'google/X'. Returns the number fixed."""
+    config = _read_config()
+    assignments = config.get("assignments", {})
+    fixed = 0
+    for comp, model_str in list(assignments.items()):
+        if not isinstance(model_str, str):
+            continue
+        stripped = model_str.strip().strip("\"'")
+        if stripped.startswith("models/"):
+            normalized = "google/" + stripped.removeprefix("models/")
+            assignments[comp] = normalized
+            os.environ[f"MODEL_{comp.upper()}"] = normalized
+            fixed += 1
+    if fixed:
+        config["assignments"] = assignments
+        _write_config(config)
+        logger.info("Model config: normalized %d legacy 'models/' prefixes", fixed)
+    return fixed
+
+
 def get_all_assignments() -> dict:
     """Return all persisted model assignments."""
     config = _read_config()
