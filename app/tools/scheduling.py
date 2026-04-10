@@ -1,7 +1,4 @@
 import os
-import shutil
-import subprocess
-import sys
 import uuid
 from datetime import datetime
 
@@ -20,11 +17,8 @@ def get_current_time(timezone: str, tool_context: ToolContext) -> dict:
     Returns:
         dict: Current date, time, and timezone info.
     """
-    from zoneinfo import ZoneInfo
-
-    try:
-        tz = ZoneInfo(timezone)
-    except (KeyError, Exception):
+    tz = _parse_tz(timezone)
+    if tz is None:
         return {"status": "error", "message": f"Unknown timezone: '{timezone}'. Use IANA format like 'Europe/Kyiv', 'America/New_York', 'UTC'."}
 
     now = datetime.now(tz)
@@ -38,6 +32,44 @@ def get_current_time(timezone: str, tool_context: ToolContext) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _parse_tz(timezone: str):
+    """Return a ZoneInfo object or None on failure."""
+    from zoneinfo import ZoneInfo
+    try:
+        return ZoneInfo(timezone)
+    except Exception:
+        return None
+
+
+def _parse_iso_to_tz(iso_str: str, tz) -> datetime:
+    """Parse an ISO 8601 datetime.
+
+    - Naive input → interpret in `tz`.
+    - TZ-aware input → convert to `tz` (preserves the absolute moment).
+
+    Raises ValueError on malformed input.
+    """
+    dt = datetime.fromisoformat(iso_str)
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=tz)
+    return dt.astimezone(tz)
+
+
+def _get_user_id(tool_context: ToolContext) -> str:
+    """Read user_id from session state; '' if unknown."""
+    session = getattr(tool_context, "session", None)
+    if not session:
+        return ""
+    state = session.state if hasattr(session, "state") else {}
+    if isinstance(state, dict):
+        return state.get("user_id", "") or ""
+    getter = getattr(state, "get", None)
+    return (getter("user_id", "") or "") if callable(getter) else ""
+
 
 def _get_session_notify_info(tool_context: ToolContext) -> dict:
     """Extract notification info (channel type + id) from the current session via the adapter registry."""
@@ -47,7 +79,7 @@ def _get_session_notify_info(tool_context: ToolContext) -> dict:
     if not session:
         return {}
     sid = getattr(session, "session_id", None) or getattr(session, "id", None)
-    return parse_notify_from_session_id(sid)
+    return parse_notify_from_session_id(sid) or {}
 
 
 def _resolve_notify(tool_context: ToolContext, deliver_to: str = "") -> dict:
@@ -60,7 +92,69 @@ def _resolve_notify(tool_context: ToolContext, deliver_to: str = "") -> dict:
     return _get_session_notify_info(tool_context)
 
 
+def _require_admin(tool_context: ToolContext) -> str | None:
+    """Check if the current user is an admin. Returns the admin user_id if authorized, None otherwise."""
+    user_id = _get_user_id(tool_context)
+    admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
+    admin_users = [u.strip() for u in admin_users_str.split(",") if u.strip()]
+    if admin_users and user_id in admin_users:
+        return user_id
+    return None
 
+
+def _is_admin(tool_context: ToolContext) -> bool:
+    return _require_admin(tool_context) is not None
+
+
+def _job_owner(job) -> str:
+    """Return the user_id who owns a job, or '' for legacy jobs with no recorded owner."""
+    try:
+        kwargs = job.kwargs or {}
+    except Exception:
+        return ""
+    # System tasks carry admin_user_id directly as a kwarg
+    admin_id = kwargs.get("admin_user_id", "")
+    if admin_id:
+        return admin_id
+    # User tasks stamp owner_user_id inside the notify dict
+    notify = kwargs.get("notify") or {}
+    if isinstance(notify, dict):
+        return notify.get("owner_user_id", "") or ""
+    return ""
+
+
+def _can_access_job(job, user_id: str, is_admin: bool) -> bool:
+    """Admins touch everything. Non-admins only touch their own non-system jobs.
+    Legacy jobs with no recorded owner are admin-only.
+    """
+    if is_admin:
+        return True
+    if job.id.startswith("sys_"):
+        return False
+    owner = _job_owner(job)
+    if not owner:
+        return False
+    return owner == user_id
+
+
+def _stamp_ownership(notify: dict, user_id: str, deliver_to: str) -> dict:
+    """Attach ownership metadata to the notify dict.
+
+    These keys are used only by scheduling tools for list/edit/delete — they
+    pass through `_deliver_message` untouched (it reads only `type` and
+    `chat_id`/`channel`).
+    """
+    stamped = dict(notify) if notify else {}
+    if user_id:
+        stamped["owner_user_id"] = user_id
+    if deliver_to:
+        stamped["deliver_to_session"] = deliver_to
+    return stamped
+
+
+# ---------------------------------------------------------------------------
+# User scheduling tools
+# ---------------------------------------------------------------------------
 
 def schedule_one_off_task(
     task_prompt: str, run_at_iso_datetime: str, timezone: str, tool_context: ToolContext,
@@ -77,37 +171,40 @@ def schedule_one_off_task(
 
     Args:
         task_prompt (str): The instruction the agent should execute when the time comes (e.g. 'Tell the user a funny joke to start their morning' or 'Check Keepa for ASIN B08X and report the price').
-        run_at_iso_datetime (str): The date and time to run the task, in ISO 8601 format (e.g., '2026-03-25T10:00:00'). This is in the timezone specified.
+        run_at_iso_datetime (str): The date and time to run the task, in ISO 8601 format (e.g., '2026-03-25T10:00:00'). Interpreted in the provided timezone if naive; honored as-is if it already carries an offset.
         timezone (str): IANA timezone for the scheduled time (e.g., 'Europe/Kyiv', 'UTC').
         deliver_to (str): Optional session ID to deliver results to instead of the current chat. Use this to post to a different platform or channel (e.g. 'sl_C01234ABC' for a Slack channel, 'tg_123456' for a Telegram chat). If empty, delivers to the current chat.
 
     Returns:
         dict: Status of the scheduling operation.
     """
-    from zoneinfo import ZoneInfo
-
     from app.scheduler_instance import scheduler
     from app.tasks import run_scheduled_task
 
-    job_id = f"oneoff_{uuid.uuid4().hex[:8]}"
-
-    try:
-        tz = ZoneInfo(timezone)
-    except (KeyError, Exception):
+    tz = _parse_tz(timezone)
+    if tz is None:
         return {"status": "error", "message": f"Unknown timezone: '{timezone}'."}
 
     try:
-        naive_dt = datetime.fromisoformat(run_at_iso_datetime.replace("Z", ""))
-        run_date = naive_dt.replace(tzinfo=tz)
-    except ValueError:
+        run_date = _parse_iso_to_tz(run_at_iso_datetime, tz)
+    except (ValueError, TypeError):
         return {"status": "error", "message": "Invalid datetime format. Must be ISO 8601."}
 
-    # Check it's in the future
     if run_date <= datetime.now(tz):
         return {"status": "error", "message": "Scheduled time is in the past."}
 
     notify = _resolve_notify(tool_context, deliver_to)
+    if not notify:
+        return {
+            "status": "error",
+            "message": "Cannot schedule: no delivery target could be resolved. "
+                       "Provide a valid `deliver_to` session ID, or schedule from a chat that has a registered transport.",
+        }
 
+    user_id = _get_user_id(tool_context)
+    notify = _stamp_ownership(notify, user_id, deliver_to)
+
+    job_id = f"oneoff_{uuid.uuid4().hex[:8]}"
     scheduler.add_job(
         run_scheduled_task,
         "date",
@@ -121,7 +218,6 @@ def schedule_one_off_task(
         "status": "success",
         "message": f"Scheduled: '{task_prompt}' for {run_date.strftime('%Y-%m-%d %H:%M')} ({timezone}). Delivers to: {dest}. Job ID: {job_id}",
     }
-
 
 
 def schedule_recurring_task(
@@ -146,18 +242,13 @@ def schedule_recurring_task(
     Returns:
         dict: Status of the scheduling operation.
     """
-    from zoneinfo import ZoneInfo
-
     from apscheduler.triggers.cron import CronTrigger
 
     from app.scheduler_instance import scheduler
     from app.tasks import run_scheduled_task
 
-    job_id = f"cron_{uuid.uuid4().hex[:8]}"
-
-    try:
-        tz = ZoneInfo(timezone)
-    except (KeyError, Exception):
+    tz = _parse_tz(timezone)
+    if tz is None:
         return {"status": "error", "message": f"Unknown timezone: '{timezone}'."}
 
     try:
@@ -166,7 +257,17 @@ def schedule_recurring_task(
         return {"status": "error", "message": "Invalid cron expression."}
 
     notify = _resolve_notify(tool_context, deliver_to)
+    if not notify:
+        return {
+            "status": "error",
+            "message": "Cannot schedule: no delivery target could be resolved. "
+                       "Provide a valid `deliver_to` session ID, or schedule from a chat that has a registered transport.",
+        }
 
+    user_id = _get_user_id(tool_context)
+    notify = _stamp_ownership(notify, user_id, deliver_to)
+
+    job_id = f"cron_{uuid.uuid4().hex[:8]}"
     scheduler.add_job(
         run_scheduled_task,
         trigger=trigger,
@@ -181,9 +282,10 @@ def schedule_recurring_task(
     }
 
 
-
 def list_scheduled_tasks(tool_context: ToolContext) -> dict:
-    """Lists all currently scheduled tasks/reminders.
+    """Lists the current user's scheduled tasks/reminders.
+
+    Admins see all tasks (including system tasks). Non-admins see only their own.
 
     Use this when the user asks to see their reminders, scheduled tasks, or wants to know what's coming up.
 
@@ -192,15 +294,18 @@ def list_scheduled_tasks(tool_context: ToolContext) -> dict:
     """
     from app.scheduler_instance import scheduler
 
-    jobs = scheduler.get_jobs()
-    if not jobs:
-        return {"status": "success", "tasks": [], "message": "No scheduled tasks."}
+    user_id = _get_user_id(tool_context)
+    is_admin = _is_admin(tool_context)
 
+    jobs = scheduler.get_jobs()
     tasks = []
     for job in jobs:
+        if not _can_access_job(job, user_id, is_admin):
+            continue
+        kwargs = job.kwargs or {}
         task_info = {
             "job_id": job.id,
-            "task": job.kwargs.get("task_prompt") if job.kwargs else (job.args[0] if job.args else "Unknown"),
+            "task": kwargs.get("task_prompt", "Unknown"),
             "next_run": str(job.next_run_time) if job.next_run_time else "N/A",
             "type": (
                 "system (recurring)" if job.id.startswith("sys_cron_")
@@ -208,15 +313,20 @@ def list_scheduled_tasks(tool_context: ToolContext) -> dict:
                 else "recurring" if job.id.startswith("cron_")
                 else "one-off"
             ),
+            "owner": _job_owner(job) or "legacy",
         }
         tasks.append(task_info)
 
+    if not tasks:
+        return {"status": "success", "tasks": [], "message": "No scheduled tasks."}
     return {"status": "success", "tasks": tasks}
-
 
 
 def delete_scheduled_task(job_id: str, tool_context: ToolContext) -> dict:
     """Deletes a scheduled task/reminder.
+
+    Only the owner of a task (or an admin) may delete it.
+    System tasks (`sys_*`) are admin-only.
 
     Use this when the user wants to cancel a reminder or stop a recurring task.
     Call list_scheduled_tasks first to get the job_id.
@@ -229,89 +339,133 @@ def delete_scheduled_task(job_id: str, tool_context: ToolContext) -> dict:
     """
     from app.scheduler_instance import scheduler
 
-    try:
-        scheduler.remove_job(job_id)
-        return {"status": "success", "message": f"Deleted task {job_id}."}
-    except Exception:
+    job = scheduler.get_job(job_id)
+    if job is None:
         return {"status": "error", "message": f"Task {job_id} not found."}
 
+    if not _can_access_job(job, _get_user_id(tool_context), _is_admin(tool_context)):
+        return {"status": "error", "message": f"Access denied: task {job_id} is not yours."}
+
+    try:
+        scheduler.remove_job(job_id)
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to delete {job_id}: {e}"}
+    return {"status": "success", "message": f"Deleted task {job_id}."}
 
 
 def edit_scheduled_task(
-    job_id: str, new_task_prompt: str, new_run_at_iso_datetime: str,
-    timezone: str, tool_context: ToolContext
+    job_id: str, tool_context: ToolContext,
+    new_task_prompt: str = "",
+    new_run_at_iso_datetime: str = "",
+    new_cron_expression: str = "",
+    timezone: str = "",
 ) -> dict:
-    """Edits an existing one-off scheduled task — changes its prompt and/or time.
+    """Edits an existing scheduled task — all fields are optional, pass only what you want to change.
 
-    Call list_scheduled_tasks first to get the job_id.
+    - `new_task_prompt` changes the instruction (works for both one-off and recurring).
+    - For one-off jobs: `new_run_at_iso_datetime` + `timezone` changes the run time.
+    - For recurring jobs: `new_cron_expression` + `timezone` changes the schedule.
+    - Cannot convert a one-off to recurring (or vice versa) — delete and recreate instead.
+    - Ownership, delivery destination, and admin status are preserved unchanged.
+
+    Only the owner of a task (or an admin) may edit it. Call list_scheduled_tasks first to get the job_id.
 
     Args:
         job_id (str): The job ID to edit.
-        new_task_prompt (str): The updated task instruction.
-        new_run_at_iso_datetime (str): The new date and time in ISO 8601 format.
-        timezone (str): IANA timezone for the new time.
+        new_task_prompt (str): Optional. New task instruction. Empty = keep existing.
+        new_run_at_iso_datetime (str): Optional. New ISO 8601 datetime for one-off jobs. Empty = keep existing.
+        new_cron_expression (str): Optional. New 5-part cron expression for recurring jobs. Empty = keep existing.
+        timezone (str): IANA timezone — required if new_run_at_iso_datetime or new_cron_expression is provided.
 
     Returns:
         dict: Status of the edit.
     """
-    from zoneinfo import ZoneInfo
+    from apscheduler.triggers.cron import CronTrigger
 
     from app.scheduler_instance import scheduler
-    from app.tasks import run_scheduled_task
 
-    try:
-        tz = ZoneInfo(timezone)
-    except (KeyError, Exception):
-        return {"status": "error", "message": f"Unknown timezone: '{timezone}'."}
-
-    try:
-        naive_dt = datetime.fromisoformat(new_run_at_iso_datetime.replace("Z", ""))
-        run_date = naive_dt.replace(tzinfo=tz)
-    except ValueError:
-        return {"status": "error", "message": "Invalid datetime format."}
-
-    if run_date <= datetime.now(tz):
-        return {"status": "error", "message": "Scheduled time is in the past."}
-
-    notify = _get_session_notify_info(tool_context)
-
-    try:
-        scheduler.remove_job(job_id)
-    except Exception:
+    job = scheduler.get_job(job_id)
+    if job is None:
         return {"status": "error", "message": f"Task {job_id} not found."}
 
-    scheduler.add_job(
-        run_scheduled_task,
-        "date",
-        run_date=run_date,
-        kwargs={"task_prompt": new_task_prompt, "notify": notify},
-        id=job_id,
-    )
+    if not _can_access_job(job, _get_user_id(tool_context), _is_admin(tool_context)):
+        return {"status": "error", "message": f"Access denied: task {job_id} is not yours."}
 
+    if not (new_task_prompt or new_run_at_iso_datetime or new_cron_expression):
+        return {
+            "status": "error",
+            "message": "Nothing to update — provide at least one of new_task_prompt, new_run_at_iso_datetime, new_cron_expression.",
+        }
+
+    is_recurring = job.id.startswith("cron_") or job.id.startswith("sys_cron_")
+
+    if new_cron_expression and not is_recurring:
+        return {
+            "status": "error",
+            "message": f"Task {job_id} is a one-off — cannot set a cron expression. Delete and recreate as recurring.",
+        }
+    if new_run_at_iso_datetime and is_recurring:
+        return {
+            "status": "error",
+            "message": f"Task {job_id} is recurring — use new_cron_expression instead. Delete and recreate to convert to one-off.",
+        }
+
+    # Preserve all original kwargs (notify carries ownership + delivery target; system tasks carry admin_user_id/silent)
+    existing_kwargs = dict(job.kwargs or {})
+    if new_task_prompt:
+        existing_kwargs["task_prompt"] = new_task_prompt
+    updated_prompt = existing_kwargs.get("task_prompt", "")
+
+    new_run_date = None
+    new_trigger = None
+
+    if new_run_at_iso_datetime:
+        if not timezone:
+            return {"status": "error", "message": "timezone is required when changing the run time."}
+        tz = _parse_tz(timezone)
+        if tz is None:
+            return {"status": "error", "message": f"Unknown timezone: '{timezone}'."}
+        try:
+            new_run_date = _parse_iso_to_tz(new_run_at_iso_datetime, tz)
+        except (ValueError, TypeError):
+            return {"status": "error", "message": "Invalid datetime format. Must be ISO 8601."}
+        if new_run_date <= datetime.now(tz):
+            return {"status": "error", "message": "Scheduled time is in the past."}
+
+    if new_cron_expression:
+        if not timezone:
+            return {"status": "error", "message": "timezone is required when changing the cron expression."}
+        tz = _parse_tz(timezone)
+        if tz is None:
+            return {"status": "error", "message": f"Unknown timezone: '{timezone}'."}
+        try:
+            new_trigger = CronTrigger.from_crontab(new_cron_expression, timezone=tz)
+        except ValueError:
+            return {"status": "error", "message": "Invalid cron expression."}
+
+    try:
+        scheduler.modify_job(job_id, kwargs=existing_kwargs)
+        if new_run_date is not None:
+            scheduler.reschedule_job(job_id, trigger="date", run_date=new_run_date)
+        elif new_trigger is not None:
+            scheduler.reschedule_job(job_id, trigger=new_trigger)
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to update {job_id}: {e}"}
+
+    parts = [f"prompt='{updated_prompt}'"]
+    if new_run_date is not None:
+        parts.append(f"run_at={new_run_date.strftime('%Y-%m-%d %H:%M')} ({timezone})")
+    if new_trigger is not None:
+        parts.append(f"cron='{new_cron_expression}' ({timezone})")
     return {
         "status": "success",
-        "message": f"Updated task {job_id}: '{new_task_prompt}' at {run_date.strftime('%Y-%m-%d %H:%M')} ({timezone}).",
+        "message": f"Updated task {job_id}: " + ", ".join(parts),
     }
 
 
-def _require_admin(tool_context: ToolContext) -> str | None:
-    """Check if the current user is an admin. Returns the admin user_id if authorized, None otherwise."""
-    session = getattr(tool_context, "session", None)
-    if not session:
-        return None
-    state = session.state if hasattr(session, "state") else {}
-    if isinstance(state, dict):
-        user_id = state.get("user_id", "")
-    else:
-        user_id = getattr(state, "get", lambda k, d: d)("user_id", "")
-
-    admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
-    admin_users = [u.strip() for u in admin_users_str.split(",") if u.strip()]
-
-    if admin_users and user_id in admin_users:
-        return user_id
-    return None
-
+# ---------------------------------------------------------------------------
+# System (admin-only) scheduling tools
+# ---------------------------------------------------------------------------
 
 def schedule_system_task(
     task_prompt: str, run_at_iso_datetime: str, timezone: str, tool_context: ToolContext,
@@ -333,34 +487,34 @@ def schedule_system_task(
     Returns:
         dict: Status of the scheduling operation.
     """
-    from zoneinfo import ZoneInfo
-
     from app.scheduler_instance import scheduler
     from app.tasks import run_system_task
 
-    # Admin-only enforcement
     admin_user_id = _require_admin(tool_context)
     if not admin_user_id:
         return {"status": "error", "message": "Only admin users can schedule system tasks."}
 
-    job_id = f"sys_oneoff_{uuid.uuid4().hex[:8]}"
-
-    try:
-        tz = ZoneInfo(timezone)
-    except (KeyError, Exception):
+    tz = _parse_tz(timezone)
+    if tz is None:
         return {"status": "error", "message": f"Unknown timezone: '{timezone}'."}
 
     try:
-        naive_dt = datetime.fromisoformat(run_at_iso_datetime.replace("Z", ""))
-        run_date = naive_dt.replace(tzinfo=tz)
-    except ValueError:
+        run_date = _parse_iso_to_tz(run_at_iso_datetime, tz)
+    except (ValueError, TypeError):
         return {"status": "error", "message": "Invalid datetime format. Must be ISO 8601."}
 
     if run_date <= datetime.now(tz):
         return {"status": "error", "message": "Scheduled time is in the past."}
 
     notify = _resolve_notify(tool_context, deliver_to)
+    if not notify:
+        return {
+            "status": "error",
+            "message": "Cannot schedule: no delivery target could be resolved. "
+                       "Provide a valid `deliver_to` session ID, or schedule from a chat that has a registered transport.",
+        }
 
+    job_id = f"sys_oneoff_{uuid.uuid4().hex[:8]}"
     scheduler.add_job(
         run_system_task,
         "date",
@@ -401,7 +555,6 @@ def run_system_task_now(
         dict: Confirmation that the task has been launched.
     """
     import asyncio
-    import uuid
 
     from app.tasks import run_system_task
 
@@ -410,6 +563,13 @@ def run_system_task_now(
         return {"status": "error", "message": "Only admin users can run system tasks."}
 
     notify = _resolve_notify(tool_context, deliver_to)
+    if not notify:
+        return {
+            "status": "error",
+            "message": "Cannot launch: no delivery target could be resolved. "
+                       "Provide a valid `deliver_to` session ID, or run from a chat that has a registered transport.",
+        }
+
     task_id = f"immediate_{uuid.uuid4().hex[:8]}"
 
     asyncio.create_task(
@@ -451,23 +611,17 @@ def schedule_recurring_system_task(
     Returns:
         dict: Status of the scheduling operation.
     """
-    from zoneinfo import ZoneInfo
-
     from apscheduler.triggers.cron import CronTrigger
 
     from app.scheduler_instance import scheduler
     from app.tasks import run_system_task
 
-    # Admin-only enforcement
     admin_user_id = _require_admin(tool_context)
     if not admin_user_id:
         return {"status": "error", "message": "Only admin users can schedule system tasks."}
 
-    job_id = f"sys_cron_{uuid.uuid4().hex[:8]}"
-
-    try:
-        tz = ZoneInfo(timezone)
-    except (KeyError, Exception):
+    tz = _parse_tz(timezone)
+    if tz is None:
         return {"status": "error", "message": f"Unknown timezone: '{timezone}'."}
 
     try:
@@ -476,7 +630,14 @@ def schedule_recurring_system_task(
         return {"status": "error", "message": "Invalid cron expression."}
 
     notify = _resolve_notify(tool_context, deliver_to)
+    if not notify:
+        return {
+            "status": "error",
+            "message": "Cannot schedule: no delivery target could be resolved. "
+                       "Provide a valid `deliver_to` session ID, or schedule from a chat that has a registered transport.",
+        }
 
+    job_id = f"sys_cron_{uuid.uuid4().hex[:8]}"
     scheduler.add_job(
         run_system_task,
         trigger=trigger,
@@ -495,4 +656,3 @@ def schedule_recurring_system_task(
         "status": "success",
         "message": f"Recurring system task scheduled: '{task_prompt}' with cron '{cron_expression}' ({timezone}). Delivers to: {dest}. Mode: {mode}. Job ID: {job_id}",
     }
-
