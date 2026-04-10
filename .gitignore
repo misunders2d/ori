@@ -3,6 +3,8 @@ tmp/
 
 # Secrets & Vault
 .env
+.env*
+*.bak
 data/vault/
 
 # Databases & Runtime State
