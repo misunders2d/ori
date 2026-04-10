@@ -400,6 +400,20 @@ async def poll_slack(get_runner_fn, process_init_fn):
                 await say(result_msg)
             return
 
+        # /models command — deterministic, bypasses the LLM entirely
+        if text.strip() == "/models":
+            admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
+            admin_users = {u.strip() for u in admin_users_str.split(",") if u.strip()}
+            caller_ids = {session_id, sl_id}
+            if user_email:
+                caller_ids.add(user_email)
+            if admin_users and not (caller_ids & admin_users):
+                await say("Access denied: /models is admin-only.")
+                return
+            from app.app_utils.models import format_model_assignments
+            await say("```\n" + format_model_assignments(markdown=False) + "\n```")
+            return
+
         # /init command
         if text.strip().startswith("/init"):
             try:

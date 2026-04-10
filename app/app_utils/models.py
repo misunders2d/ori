@@ -206,6 +206,73 @@ def get_all_assignments() -> dict[str, str]:
     return {c: get_model_string(c) for c in MODEL_DEFAULTS}
 
 
+def list_models() -> dict:
+    """Return a fully-resolved snapshot of every component's current model assignment.
+
+    Deterministic — no LLM involved. Safe to call from slash commands, CLIs, or scripts.
+
+    Returns:
+        dict: {
+            "auth_mode": <auth info dict from get_auth_mode()>,
+            "assignments": {component: "provider/model", ...},
+            "defaults":    {component: "provider/model", ...},
+            "overrides":   {component: "provider/model", ...},  # only components differing from defaults
+        }
+    """
+    resolved = get_all_assignments()
+    overrides = {
+        comp: model for comp, model in resolved.items()
+        if model and model != MODEL_DEFAULTS.get(comp)
+    }
+    return {
+        "auth_mode": get_auth_mode(),
+        "assignments": resolved,
+        "defaults": dict(MODEL_DEFAULTS),
+        "overrides": overrides,
+    }
+
+
+def format_model_assignments(markdown: bool = False) -> str:
+    """Render list_models() as a human-readable string.
+
+    Args:
+        markdown: If True, wrap model names in backticks for markdown renderers.
+    """
+    snapshot = list_models()
+    assignments = snapshot["assignments"]
+    overrides = snapshot["overrides"]
+    auth = snapshot["auth_mode"]
+
+    width = max((len(c) for c in assignments), default=0)
+    lines = ["Model assignments:"]
+    for comp in sorted(assignments):
+        model = assignments[comp] or "(unset)"
+        marker = " *" if comp in overrides else "  "
+        if markdown:
+            lines.append(f"{marker}`{comp.ljust(width)}` → `{model}`")
+        else:
+            lines.append(f"{marker}{comp.ljust(width)}  →  {model}")
+
+    if overrides:
+        lines.append("")
+        lines.append("(* = overrides the default)")
+
+    lines.append("")
+    lines.append(f"Auth mode: {auth.get('auth_method', 'unknown')}")
+    if auth.get("vertex_ai"):
+        proj = auth.get("google_cloud_project") or "(no project)"
+        loc = auth.get("google_cloud_location") or "(no location)"
+        lines.append(f"  GCP project:  {proj}")
+        lines.append(f"  GCP location: {loc}")
+        if auth.get("service_account"):
+            lines.append("  Service account: configured")
+    else:
+        lines.append(f"  GOOGLE_API_KEY:    {'set' if auth.get('google_api_key') else 'missing'}")
+        lines.append(f"  ANTHROPIC_API_KEY: {'set' if auth.get('anthropic_api_key') else 'missing'}")
+
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Live provider validation & discovery
 # ---------------------------------------------------------------------------

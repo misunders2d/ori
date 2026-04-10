@@ -99,6 +99,11 @@ async def start_cli_chat(get_runner_fn):
                 print(f"\n{bot_name}: Closing onboarding chat. You can reach me via configured messengers!")
                 break
 
+            if user_input.strip() == "/models":
+                from app.app_utils.models import format_model_assignments
+                print(f"\n{format_model_assignments(markdown=False)}\n")
+                continue
+
             # SECURE KEY CAPTURE
             from app.secure_config import capture_key, check_pending, capture_friend_key, check_pending_friend
             

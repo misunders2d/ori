@@ -602,6 +602,24 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                             await adapter.send_message(chat_id, result_msg)
                         continue
 
+                    # Handle /models command — deterministic, bypasses the LLM entirely
+                    if text.strip() == "/models":
+                        admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
+                        admin_users = {u.strip() for u in admin_users_str.split(",") if u.strip()}
+                        caller_ids = {session_id, f"tg_{user_id}"}
+                        if admin_users and not (caller_ids & admin_users):
+                            await adapter.send_message(
+                                chat_id,
+                                "Access denied: /models is admin-only.",
+                            )
+                            continue
+                        from app.app_utils.models import format_model_assignments
+                        await adapter.send_message(
+                            chat_id,
+                            "```\n" + format_model_assignments(markdown=False) + "\n```",
+                        )
+                        continue
+
                     # Handle /init command
                     if text.strip().startswith("/init"):
                         await adapter.delete_message(chat_id, message_id)
