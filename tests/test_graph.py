@@ -421,20 +421,40 @@ class TestEntityExtraction:
         await extract_entities_background("Hello", "Hi there", "test_session")
 
     @pytest.mark.asyncio
+    @patch("app.core.extraction_config.is_extraction_enabled", return_value=True)
+    @patch("app.callbacks.entity_extraction.neo4j_graph.upsert_entity", new_callable=AsyncMock)
     @patch("app.callbacks.entity_extraction.neo4j_graph.is_configured", return_value=True)
-    async def test_skips_short_messages(self, mock_configured):
+    async def test_skips_short_messages(self, mock_configured, mock_upsert, mock_enabled):
         from app.callbacks.entity_extraction import extract_entities_background
-        # Very short messages should be skipped
+        # Very short messages should be skipped even when extraction is enabled
         await extract_entities_background("hi", "hey", "test_session")
+        mock_upsert.assert_not_called()
 
     @pytest.mark.asyncio
+    @patch("app.core.extraction_config.is_extraction_enabled", return_value=False)
+    @patch("app.callbacks.entity_extraction.neo4j_graph.upsert_entity", new_callable=AsyncMock)
+    @patch("app.callbacks.entity_extraction.neo4j_graph.is_configured", return_value=True)
+    async def test_skips_when_session_not_opted_in(
+        self, mock_configured, mock_upsert, mock_enabled
+    ):
+        from app.callbacks.entity_extraction import extract_entities_background
+        # Opt-in guard: sessions not in the allowlist get no extraction at all
+        await extract_entities_background(
+            "Tell me about Alice Chen's work on Project Atlas.",
+            "Alice Chen is leading Project Atlas, a new supply chain initiative.",
+            "test_session",
+        )
+        mock_upsert.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("app.core.extraction_config.is_extraction_enabled", return_value=True)
     @patch("app.callbacks.entity_extraction.neo4j_graph.upsert_entity", new_callable=AsyncMock)
     @patch("app.callbacks.entity_extraction.neo4j_graph.search_entities", new_callable=AsyncMock)
     @patch("app.callbacks.entity_extraction.neo4j_graph.add_relationship", new_callable=AsyncMock)
     @patch("app.callbacks.entity_extraction.genai.Client")
     @patch("app.callbacks.entity_extraction.neo4j_graph.is_configured", return_value=True)
     async def test_extracts_entities_from_response(
-        self, mock_configured, mock_client_cls, mock_add_rel, mock_search, mock_upsert
+        self, mock_configured, mock_client_cls, mock_add_rel, mock_search, mock_upsert, mock_enabled
     ):
         from app.callbacks.entity_extraction import extract_entities_background
 

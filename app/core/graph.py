@@ -214,6 +214,52 @@ async def add_relationship(
         return {"status": "error", "message": str(e)}
 
 
+async def delete_outbound_edges(
+    entity_id: str, relation_types: list[str] | None = None
+) -> dict:
+    """Delete outbound edges from an entity — used by update flow for nuke-and-repave.
+
+    Args:
+        entity_id: Entity whose outbound edges should be cleared.
+        relation_types: Optional filter. If provided, only edges of these types are
+            removed (e.g. ['INVOLVES', 'RELATED_TO']). If None, all outbound edges
+            are removed. Types are sanitized to UPPER_SNAKE_CASE.
+    """
+    driver = _get_driver()
+    if not driver:
+        return {"status": "error", "message": "Neo4j not configured."}
+
+    if relation_types:
+        safe_types = []
+        for rt in relation_types:
+            safe = "".join(c for c in rt.upper().replace(" ", "_") if c.isalnum() or c == "_")
+            if safe:
+                safe_types.append(safe)
+        if not safe_types:
+            return {"status": "error", "message": "No valid relation types provided."}
+        type_filter = "|".join(safe_types)
+        query = f"""
+        MATCH (e:Entity {{entity_id: $entity_id}})-[r:{type_filter}]->()
+        DELETE r
+        RETURN count(r) AS deleted
+        """
+    else:
+        query = """
+        MATCH (e:Entity {entity_id: $entity_id})-[r]->()
+        DELETE r
+        RETURN count(r) AS deleted
+        """
+
+    try:
+        async with driver.session() as session:
+            result = await session.run(query, entity_id=entity_id)
+            record = await result.single()
+            return {"status": "success", "deleted": record["deleted"]}
+    except Exception as e:
+        logger.error("Neo4j delete_outbound_edges error: %s", e)
+        return {"status": "error", "message": str(e)}
+
+
 async def remove_relationship(
     from_entity_id: str, to_entity_id: str, relation_type: str | None = None
 ) -> dict:

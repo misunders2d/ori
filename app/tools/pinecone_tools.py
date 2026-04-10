@@ -475,6 +475,54 @@ async def update_record(
 
             await index.update(id=record_id, namespace=namespace, set_metadata=payload)
 
+        # Mirror the update into Neo4j (best-effort — Pinecone is source of truth).
+        # Nuke-and-repave outbound edges so stale relationships don't accumulate.
+        if neo4j_graph.is_configured():
+            try:
+                merged = dict(meta)
+                merged.update(updates_dict)  # updates_dict holds the raw (pre-json-encoded) values
+                sync_author = merged.get("author") or meta.get("user_id", "unknown")
+
+                if namespace == "people":
+                    await neo4j_graph.delete_outbound_edges(record_id)
+                    relations_val = merged.get("relations", "[]")
+                    if isinstance(relations_val, list):
+                        relations_val = json.dumps(relations_val)
+                    await _sync_person_to_graph(
+                        person_id=record_id,
+                        first_name=merged.get("first_name", ""),
+                        last_name=merged.get("last_name", ""),
+                        role=merged.get("role", ""),
+                        relations=relations_val,
+                        author=sync_author,
+                    )
+                else:
+                    await neo4j_graph.delete_outbound_edges(
+                        record_id, relation_types=["INVOLVES", "RELATED_TO"]
+                    )
+                    related_memories_raw = merged.get("related_memories", [])
+                    if isinstance(related_memories_raw, str):
+                        try:
+                            related_memories = json.loads(related_memories_raw)
+                        except json.JSONDecodeError:
+                            related_memories = []
+                    else:
+                        related_memories = related_memories_raw or []
+                    related_people = merged.get("related_people") or []
+
+                    await _sync_record_to_graph(
+                        record_id=record_id,
+                        short_description=merged.get("short_description", record_id),
+                        category=merged.get("category", "knowledge"),
+                        related_people=related_people if related_people else None,
+                        related_memories=related_memories if related_memories else None,
+                        author=sync_author,
+                    )
+            except Exception as sync_err:
+                logger.warning(
+                    "Neo4j sync failed on update for %s: %s", record_id, sync_err
+                )
+
         return {
             "status": "success",
             "message": f"Record {record_id} updated in {namespace}.",

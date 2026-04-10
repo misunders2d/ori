@@ -1,78 +1,73 @@
 ---
 name: knowledge-graph-skill
-description: "How to use the dual-layer memory system — Pinecone for semantic search, Neo4j for entity relationships. Use this skill when storing or retrieving professional knowledge, tracking people/companies/products and their relationships, exploring connection paths, or managing auto-extraction settings. Also use when deciding whether to store something in Pinecone vs Neo4j vs scratchpad."
+description: "How to use the professional memory system — Pinecone for semantic search, with an automatically-mirrored Neo4j knowledge graph behind the scenes. Use this skill when storing or retrieving knowledge, people, products, or concepts, when deciding what to put in Pinecone vs scratchpad, and when the user asks to turn background entity auto-extraction on or off for a chat."
 ---
 
-# Knowledge Graph Memory
+# Professional Memory
 
-You have a dual-layer memory system: **Pinecone** for semantic content search, **Neo4j** for entity relationships and graph traversal. They work together — Pinecone stores the full text, Neo4j stores who/what connects to who/what.
+Long-term memory lives in **Pinecone** (semantic content search). A Neo4j knowledge graph is kept in sync automatically as a side-effect of every Pinecone write — you do **not** call Neo4j directly.
 
-## When to Use Which
+## Architecture (what happens when you write)
 
-| Question Type | Use | Tool |
-|--------------|-----|------|
-| "What do I know about X?" | Pinecone | `search_knowledge` |
-| "Find records about topic Z" | Pinecone | `search_knowledge` |
-| "How is X related to Y?" | Neo4j | `find_connection_path` |
-| "Who/what is connected to X?" | Neo4j | `query_connections` |
-| "Show me the network around Alice" | Neo4j | `query_connections` |
-| "When did X's relationships change?" | Neo4j | `entity_timeline` |
-| "Find entities named X" | Neo4j | `search_graph` |
-| "What's the full text of record mem_123?" | Pinecone | `get_records` |
+```
+You → Pinecone tool → Pinecone record (source of truth)
+                    → Neo4j entity + edges (auto-mirrored)
+```
 
-For entity types, relationship types, creation workflow, and auto-extraction details, read `references/entity-relationship-guide.md`.
+- `create_record` → Pinecone record + Neo4j entity + `INVOLVES`/`RELATED_TO` edges to related people/memories.
+- `create_person` → Pinecone person + Neo4j person node + relationship edges parsed from the `relations` field.
+- `update_record` → Pinecone metadata updated **and** the mirrored Neo4j node/edges are refreshed (old outbound edges are removed and re-created from the new state, so updates never produce duplicates).
+- `delete_record` → Pinecone record deleted and the mirrored Neo4j entity removed.
+
+You have no tools for editing Neo4j directly. That's intentional — the graph is a derived view of Pinecone.
+
+## Pinecone Tools
+
+| Tool | Purpose |
+|------|---------|
+| `search_knowledge` | Semantic search across namespaces |
+| `get_records` | Fetch specific records by ID |
+| `list_records` | List records (paginated) |
+| `create_record` | Store a memory, idea, knowledge item, incident, etc. |
+| `create_person` | Store a person profile with relations |
+| `update_record` | Update a record (creator/admin only — graph mirror updates automatically) |
+| `delete_record` | Delete a record (creator/admin only — graph mirror cleans up automatically) |
+
+Namespaces: `personal`, `professional`, `people`, `technical`.
+
+For categories, schema fields, and workflow examples, read `references/entity-relationship-guide.md`.
 
 ## Authorship Rules
 
-Every memory record has an `author` field. This is critical for audit:
+Every memory record has an `author` field, which is critical for audit and update/delete permission checks:
 
 | Scenario | Author Value |
 |----------|-------------|
-| User explicitly says "remember this" | User's ID (e.g. `valerii@mellanni.com`) |
-| You decide to store something on your own | `"agent"` |
-| Background auto-extraction | `"agent:auto"` |
+| User explicitly says "remember this" | Leave `author` empty — defaults to the user's ID |
+| You decide to store something on your own | `author="agent"` |
+| Background auto-extraction | `"agent:auto"` (set automatically by the extraction process) |
 
-Always set `author` correctly when calling `create_record` or `create_person`:
-- If the user asked you to remember it: leave `author` empty (defaults to their ID)
-- If you're storing something proactively: set `author="agent"`
+Only the creator (or an admin) can update or delete a record.
 
-## Architecture
+## Auto-Extraction (Background Entity Extraction)
 
-```
-Pinecone (vector DB, cloud)          Neo4j (graph DB, cloud)
-  - Full text content                  - Entity nodes (lightweight)
-  - Semantic search                    - Relationship edges (temporal)
-  - Source of truth                    - Cross-references via pinecone_id
-  - Namespaces: personal,             - Entity types: person, company,
-    professional, people, technical       project, product, concept, event
-```
+A background process can analyze chat turns and extract entities/relationships into the knowledge graph silently, with `author="agent:auto"`. This is **off by default for every chat** — no session gets auto-extraction until it is explicitly enabled.
 
-When you create a Pinecone record, a corresponding Neo4j entity and relationship edges are automatically created (dual-write). When you delete a Pinecone record, the Neo4j entity is cleaned up too.
+Control tools (only call these when the user explicitly asks):
 
-## Graph Tools Reference
+- `enable_auto_extraction(session_id)` — turn extraction on for a session
+- `disable_auto_extraction(session_id)` — turn it off
+- `list_auto_extraction_sessions()` — show which sessions currently have it enabled
 
-| Tool | Purpose | When to Use |
-|------|---------|-------------|
-| `add_entity` | Create/update an entity node | When you learn about a new person, company, project, etc. |
-| `link_entities` | Create a relationship between entities | When you learn how two entities are connected |
-| `query_connections` | Find all connected entities (1-4 hops) | "Who/what is connected to X?" |
-| `find_connection_path` | Find shortest path between two entities | "How is X connected to Y?" |
-| `entity_timeline` | Get relationship history with timestamps | "When did X start working with Y?" |
-| `search_graph` | Search entities by name | "Find entities named Alice" |
-| `import_pinecone_record` | Import an existing Pinecone record to graph | Backfill older records into the graph |
-
-For entity types, relationship types, workflow examples, and auto-extraction details, read `references/entity-relationship-guide.md`.
+When the user says something like "enable auto-extraction here" or "turn on entity extraction for this chat," use the **current session's ID** (e.g. `sl_C01ABC`, `tg_-100123`). If you don't know the session ID, ask the user or check session state before calling.
 
 ## Important
 
-- Pinecone is the source of truth for content. Neo4j is best-effort for relationships.
-- If a Neo4j write fails, the Pinecone write still succeeds — relationships can be added later.
-- Don't duplicate data — store full text in Pinecone, store only names/types/relationships in Neo4j.
-- Entity resolution: `link_entities` and `query_connections` accept either entity IDs or names. Names are resolved by searching the graph.
-- Cross-reference: Every Neo4j entity created from a Pinecone record stores the `pinecone_id` for lookup.
+- Pinecone is the source of truth. Neo4j is a derived mirror — never assume you can "correct" the graph by writing to it; correct the Pinecone record and the mirror updates itself.
+- If the Neo4j mirror fails on any write, the Pinecone write still succeeds (best-effort mirroring). Report the error to the user if you see one.
+- Don't duplicate data — store full text in Pinecone only. The graph stores only lightweight names/types/relationships.
 
 ## Live References
 
-- [Neo4j Cypher Query Language](https://neo4j.com/docs/cypher-manual/current/)
 - [Pinecone Documentation](https://docs.pinecone.io/)
-- [Neo4j Aura (managed cloud)](https://neo4j.com/cloud/platform/aura-graph-database/)
+- [Neo4j Cypher Query Language](https://neo4j.com/docs/cypher-manual/current/) (for reference — not directly callable)
