@@ -16,7 +16,7 @@ get_current_time(timezone="Europe/Kyiv")
 → {"datetime": "2026-04-13T12:21:14+03:00", "weekday": "Monday", ...}
 ```
 
-**Step 2 — translate schedule:** Mon/Wed/Fri 12:30 = `30 12 * * 1,3,5` (1=Mon in Vixie cron).
+**Step 2 — translate schedule:** Mon/Wed/Fri 12:30 = `30 12 * * MON,WED,FRI`. Use 3-letter names — numeric DOW is rejected because APScheduler's convention differs from Unix cron (0=Mon, not 1=Mon) and silently produces wrong days.
 
 **Step 3 — verify "first run today":** now = 12:21, next slot today = 12:30 → today is fine. Otherwise, today would have been skipped.
 
@@ -35,14 +35,14 @@ schedule_recurring_task(
         "5. Report any tool failures inline before posting.\n"
         "Deliver the digest to the destination channel."
     ),
-    cron_expression="30 12 * * 1,3,5",
+    cron_expression="30 12 * * MON,WED,FRI",
     timezone="Europe/Kyiv",
     deliver_to="sl_C03A8FDLREH",
 )
 ```
 
 **Step 5 — quote the result back literally:**
-> Scheduled `cron_4c2a6cc2`. Cron: `30 12 * * 1,3,5` Europe/Kyiv. Next run: `2026-04-13 12:30:00+03:00`. Delivers to: amazon-team (sl_C03A8FDLREH).
+> Scheduled `cron_4c2a6cc2`. Cron: `30 12 * * MON,WED,FRI` Europe/Kyiv. Next run: `2026-04-13 12:30:00+03:00`. Delivers to: amazon-team (sl_C03A8FDLREH).
 
 **Don't say** "first run in 8 minutes" unless `next_run_time` literally shows today.
 
@@ -111,18 +111,20 @@ edit_scheduled_task(
 
 ---
 
-## Example 6 — Cron format pitfalls (don't repeat past mistakes)
+## Example 6 — Cron DOW: names only
 
-| User says | Correct cron | Wrong (off-by-one) |
-|-----------|--------------|--------------------|
-| "Every Monday 9am" | `0 9 * * 1` | `0 9 * * 0` ❌ (Sunday) |
-| "Weekdays 18:00" | `0 18 * * 1-5` | `0 18 * * 0-4` ❌ |
-| "Mon/Wed/Fri 12:30" | `30 12 * * 1,3,5` | `30 12 * * 0,2,4` ❌ |
-| "Every Sunday midnight" | `0 0 * * 0` (or `7`) | `0 0 * * 1` ❌ |
-| "Every 30 min" | `*/30 * * * *` | — |
-| "First of month, 6am" | `0 6 1 * *` | — |
+Numeric DOW is rejected by the tool. Use names.
 
-**Sanity check:** after building the cron string, mentally re-read `day_of_week` with `1=Mon` and confirm against the user's words.
+| User says | Correct cron |
+|-----------|--------------|
+| "Every Monday 9am" | `0 9 * * MON` |
+| "Weekdays 18:00" | `0 18 * * MON-FRI` |
+| "Mon/Wed/Fri 12:30" | `30 12 * * MON,WED,FRI` |
+| "Every Sunday midnight" | `0 0 * * SUN` |
+| "Every 30 min" | `*/30 * * * *` |
+| "First of month, 6am" | `0 6 1 * *` |
+
+If you pass numeric DOW, the tool will return an error telling you to switch to names — heed it, don't retry with different numbers.
 
 ---
 
@@ -140,7 +142,26 @@ If the user says "but I wanted it today!", check `now` vs. the next slot — if 
 
 ---
 
-## Example 8 — Plan enforcement that survives every fire
+## Example 8 — "Did the job run?" → check the log
+
+**User at 17:02:** "Did the 5 PM digest fire?"
+
+Don't guess from `list_scheduled_tasks` (which shows only `next_run`, not history). Call the log:
+
+```python
+get_scheduled_task_logs(task_id="", limit=10)
+# returns events (newest last). Look for the most recent fire_start/fire_end pair.
+```
+
+Interpret:
+- `fire_start` + `fire_end` with `status=Completed` → it ran, quote `duration_ms` and `response_preview`.
+- `fire_start` but no `fire_end` → still running (or crashed) — tell the user and re-check in a minute.
+- `error` event → surface the error string verbatim. Don't sanitize.
+- No events at all for this job → it hasn't fired yet. Cross-check `next_run_time` via `list_scheduled_tasks`.
+
+Pass `task_id` to narrow to a single job — useful when multiple jobs fire close together.
+
+## Example 9 — Plan enforcement that survives every fire
 
 The CoordinatorAgent's `plan_enforcer` callback fires per-session. Because each scheduled fire runs in its own session, any plan you `create_plan` lives only for that fire — there's no carryover. To make every fire follow the same checklist, embed it in the `task_prompt`:
 

@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from datetime import datetime
@@ -6,6 +7,39 @@ logger = logging.getLogger(__name__)
 
 # In-memory registry for tracking real-time status of background tasks
 ACTIVE_TASKS = {}
+
+# Persistent event log for scheduled/system task fires — appended JSONL so the
+# agent can read it back via get_scheduled_task_logs without parsing free-form
+# Python logs. Rotation is handled by simple size-based truncation.
+_JOB_LOG_PATH = os.path.abspath("./data/scheduler_jobs.log")
+_JOB_LOG_MAX_BYTES = 500_000
+
+
+def _log_job_event(event: str, **fields) -> None:
+    """Append one JSON line to the scheduler job log.
+
+    Events: fire_start, fire_end, delivery, error. Fields should include
+    job_id, task_id, and event-specific context (prompt_preview, next_run,
+    duration_ms, error, channel).
+    """
+    try:
+        os.makedirs(os.path.dirname(_JOB_LOG_PATH), exist_ok=True)
+        try:
+            if os.path.getsize(_JOB_LOG_PATH) > _JOB_LOG_MAX_BYTES:
+                # Keep the last half — cheap truncation, no rotation files.
+                with open(_JOB_LOG_PATH, "rb") as f:
+                    data = f.read()
+                keep = data[len(data) // 2 :].split(b"\n", 1)
+                tail = keep[1] if len(keep) == 2 else b""
+                with open(_JOB_LOG_PATH, "wb") as f:
+                    f.write(tail)
+        except FileNotFoundError:
+            pass
+        record = {"ts": datetime.now().isoformat(timespec="seconds"), "event": event, **fields}
+        with open(_JOB_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, default=str) + "\n")
+    except Exception as e:
+        logger.warning("Failed to write scheduler job log: %s", e)
 
 
 async def run_scheduled_task(task_prompt: str, notify: dict, task_id: str = None):
@@ -21,14 +55,22 @@ async def run_scheduled_task(task_prompt: str, notify: dict, task_id: str = None
     if not task_id:
         task_id = f"sched_{uuid.uuid4().hex[:8]}"
 
+    start_ts = datetime.now()
     ACTIVE_TASKS[task_id] = {
         "prompt": task_prompt,
         "type": "scheduled",
         "status": "Running",
-        "start_time": datetime.now().isoformat(),
+        "start_time": start_ts.isoformat(),
         "end_time": None,
         "error": None
     }
+    _log_job_event(
+        "fire_start",
+        task_id=task_id,
+        kind="scheduled",
+        prompt_preview=task_prompt[:140],
+        channel=(notify or {}).get("chat_id") or (notify or {}).get("channel"),
+    )
 
     runner = get_runner()
 
@@ -60,6 +102,7 @@ async def run_scheduled_task(task_prompt: str, notify: dict, task_id: str = None
             ACTIVE_TASKS[task_id]["status"] = "Failed"
             ACTIVE_TASKS[task_id]["error"] = str(e)
             ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
+            _log_job_event("error", task_id=task_id, kind="scheduled", error=str(e))
         finally:
             try:
                 await runner.session_service.delete_session(
@@ -74,6 +117,15 @@ async def run_scheduled_task(task_prompt: str, notify: dict, task_id: str = None
 
     # Deliver to the user's channel
     await _deliver_message(notify, response)
+    duration_ms = int((datetime.now() - start_ts).total_seconds() * 1000)
+    _log_job_event(
+        "fire_end",
+        task_id=task_id,
+        kind="scheduled",
+        status=ACTIVE_TASKS[task_id]["status"],
+        duration_ms=duration_ms,
+        response_preview=(response or "")[:200],
+    )
 
 
 async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, silent: bool = False, task_id: str = None):
@@ -91,14 +143,23 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
 
     logger.info("System Task: Starting %s (%s)", task_id, task_prompt)
 
+    start_ts = datetime.now()
     ACTIVE_TASKS[task_id] = {
         "prompt": task_prompt,
         "type": "system",
         "status": "Running",
-        "start_time": datetime.now().isoformat(),
+        "start_time": start_ts.isoformat(),
         "end_time": None,
         "error": None
     }
+    _log_job_event(
+        "fire_start",
+        task_id=task_id,
+        kind="system",
+        prompt_preview=task_prompt[:140],
+        admin_user_id=admin_user_id,
+        silent=silent,
+    )
 
     runner = get_runner()
     if not runner:
@@ -157,6 +218,7 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
         ACTIVE_TASKS[task_id]["status"] = "Failed"
         ACTIVE_TASKS[task_id]["error"] = str(e)
         ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
+        _log_job_event("error", task_id=task_id, kind="system", error=str(e))
         await _deliver_message(notify, f"System Task Failed:\nTask: {task_prompt}\nCheck logs for details.")
     finally:
         # Clean up the ephemeral session
@@ -166,6 +228,14 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
             )
         except Exception:
             pass
+        duration_ms = int((datetime.now() - start_ts).total_seconds() * 1000)
+        _log_job_event(
+            "fire_end",
+            task_id=task_id,
+            kind="system",
+            status=ACTIVE_TASKS[task_id]["status"],
+            duration_ms=duration_ms,
+        )
 
 
 async def _deliver_message(notify: dict, message: str):

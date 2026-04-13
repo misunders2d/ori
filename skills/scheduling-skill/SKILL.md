@@ -17,18 +17,25 @@ Scheduled tasks run the agent (you) at a future time in an **isolated session pe
 | `list_scheduled_tasks()` | Show jobs the current user owns (admins see all). |
 | `edit_scheduled_task(job_id, ...)` | Change prompt / time / cron without recreating. |
 | `delete_scheduled_task(job_id)` | Cancel a job. |
+| `get_scheduled_task_logs(task_id="", limit=50)` | Read the JSONL fire log. Use when the user asks "did it run?" / "what did it produce?" — **don't guess, check the log**. |
 
 System (admin-only) variants: `schedule_system_task`, `schedule_recurring_system_task`, `run_system_task_now` — for maintenance chores, run with admin privileges.
 
 ## Cron format — read this carefully
 
-`schedule_recurring_task` uses **standard Vixie cron** (5 fields): `minute hour day month day_of_week`.
+`schedule_recurring_task` uses a 5-field cron: `minute hour day month day_of_week`.
 
-- **Day of week: `0` or `7` = Sunday, `1` = Monday, … `6` = Saturday.**
-- Example: `30 12 * * 1,3,5` = Mon/Wed/Fri at 12:30 (in the timezone you pass).
+**Day-of-week: ALWAYS use 3-letter names (`MON,TUE,WED,THU,FRI,SAT,SUN`). Never numeric.**
+
+This codebase rejects numeric DOW at the tool level with an explicit error. The reason: APScheduler's `CronTrigger.from_crontab` uses `0=Mon, 6=Sun` (non-standard, contradicts Unix cron). Passing `1,3,5` silently produces Tue/Thu/Sat — a class of bug that's bitten this project before. Names are unambiguous.
+
+- **Good:** `0 17 * * MON,WED,FRI` → Mon/Wed/Fri at 17:00
+- **Good:** `0 8 * * MON-FRI` → weekdays at 08:00
+- **Rejected:** `0 17 * * 1,3,5` → tool returns an error telling you to use names
+- Minute/hour/day/month stay numeric as usual. Only DOW must be names.
 - The trigger is timezone-aware — pass an IANA tz like `Europe/Kyiv`.
-- **First fire ≠ "today" automatically.** APScheduler computes the *next* matching slot strictly after `now`. If you schedule at 12:21 PM with `30 12 * * 1,3,5` and today is Monday, next fire = today 12:30. If you schedule at 12:35, next fire = Wednesday 12:30 — **today is skipped**. Don't promise "first run today" unless you've verified `now < next_slot_today`.
-- After scheduling, read `next_run_time` from the response — that is authoritative. Never narrate a different date.
+- **First fire ≠ "today" automatically.** APScheduler computes the *next* matching slot strictly after `now`. If you schedule at 12:21 PM with `30 12 * * MON,WED,FRI` and today is Monday, next fire = today 12:30. If you schedule at 12:35, next fire = Wednesday 12:30 — **today is skipped**. Don't promise "first run today" unless you've verified `now < next_slot_today`.
+- After scheduling, read `next_run_time` from the tool response — that is authoritative. Never narrate a different date.
 
 ## Channel routing — `deliver_to`
 
@@ -69,9 +76,10 @@ Read `references/examples.md` **before** writing your first scheduling tool call
 3. One-off reminder in the current chat.
 4. Post-now (`slack_post_message`) vs. scheduling — which to pick.
 5. Editing a job without recreate.
-6. Cron DOW pitfalls table (right vs. wrong).
+6. Cron DOW — names-only table.
 7. `next_run` discipline (don't fabricate dates).
-8. Plan enforcement that survives every fire.
+8. "Did it run?" → `get_scheduled_task_logs` workflow.
+9. Plan enforcement that survives every fire.
 
 If the user's request matches any of these patterns, copy the example shape — don't reinvent.
 
@@ -91,3 +99,15 @@ If the user's request matches any of these patterns, copy the example shape — 
 - **Don't convert one-offs ↔ recurring via edit** — delete and recreate.
 - **System tasks (`sys_*`)** are admin-only and write a `background_tasks` memory entry; ordinary scheduled tasks do not.
 - **Owner scoping**: non-admin users only see/edit/delete their own jobs.
+
+## Verifying a fire actually happened
+
+When the user asks "did it run?" or "what did it produce?", **do not infer from memory or `next_run_time`** — call `get_scheduled_task_logs()`. The log contains one JSON line per event (`fire_start`, `fire_end`, `error`) with timestamps, duration, status, and response preview. This is the only reliable source of truth for execution history.
+
+Typical shape of events:
+```json
+{"ts": "2026-04-13T17:00:02", "event": "fire_start", "task_id": "sched_xx", "kind": "scheduled", "prompt_preview": "...", "channel": "C03A..."}
+{"ts": "2026-04-13T17:00:47", "event": "fire_end", "task_id": "sched_xx", "status": "Completed", "duration_ms": 45123, "response_preview": "..."}
+```
+
+If `fire_start` is present but no `fire_end`, the fire is still running or crashed mid-flight.
