@@ -1,4 +1,8 @@
+import pathlib
+
 from google.adk.agents import Agent
+from google.adk.skills import load_skill_from_dir
+from google.adk.tools import skill_toolset
 
 from app.app_utils.models import get_model
 
@@ -28,6 +32,9 @@ from app.tools.web import web_fetch
 from app.tools.whitelist import whitelist_chat, blacklist_chat
 from app.tools.youtube import youtube_summary
 
+_skills_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
+_scheduling_skill = load_skill_from_dir(_skills_dir / "scheduling-skill")
+
 root_agent = Agent(
     name="CoordinatorAgent",
     model=get_model("CoordinatorAgent"),
@@ -55,23 +62,17 @@ root_agent = Agent(
         "- Authorship: user asked = their user ID; you decided = 'agent'.\n\n"
 
         "SCHEDULING / REMINDER ROUTING (STRICT):\n"
-        "- ANY request phrased as 'remind me', 'nudge me', 'ping me', 'at <time> do X', "
-        "'every day/week do X', 'in N minutes/hours', 'tomorrow/next week do X', or any other "
-        "request for a one-off or recurring task the agent should execute on a schedule → "
-        "ALWAYS handle DIRECTLY via `schedule_one_off_task` or `schedule_recurring_task`. "
-        "NEVER delegate this to ClickUpAgent or AmazonWorkspaceAgent.\n"
-        "- Only use ClickUp when the user EXPLICITLY says 'create a ClickUp task', "
-        "'add to ClickUp', 'assign to <person> in ClickUp', or similar explicit ClickUp wording.\n"
-        "- Only use Google Calendar (via AmazonHeadAgent → AmazonWorkspaceAgent) when the user "
-        "EXPLICITLY says 'add to my calendar', 'create a calendar event', 'invite <attendees>', "
-        "or when the request involves meetings with other people.\n"
-        "- If ambiguous (e.g. 'set a reminder for the meeting'), default to the scheduling system "
-        "and briefly ask the user if they also want a calendar event or ClickUp task.\n\n"
+        "- ANY 'remind me / every X / at <time> / in N minutes' request → handle DIRECTLY with the "
+        "scheduling tools. Load `scheduling-skill` for cron format, `deliver_to` channel routing "
+        "(`sl_<id>` Slack, `tg_<id>` Telegram), and plan-enforcement-in-task patterns.\n"
+        "- NEVER delegate scheduling to ClickUpAgent or AmazonWorkspaceAgent.\n"
+        "- ClickUp only on explicit 'create a ClickUp task / assign in ClickUp' wording.\n"
+        "- Google Calendar (via AmazonHeadAgent → AmazonWorkspaceAgent) only on explicit "
+        "'add to calendar / create event / invite <attendees>'.\n"
+        "- If ambiguous, default to scheduling and ask if a calendar event / ClickUp task is also wanted.\n\n"
 
         "SYSTEM RULES:\n"
         "- You are running model `{current_model}`. State this exactly when asked.\n"
-        "- ALWAYS call `get_current_time` before scheduling. Respect `{user_preferences}` timezone.\n"
-        "- `deliver_to` param on scheduling tools for cross-platform delivery (e.g. 'sl_C01234ABC').\n"
         "- Use `create_plan` for complex tasks (3+ steps). Simple tasks → just do them.\n"
         "- Privileged actions return ACT-XXXXXX tokens. On 'Approve ACT-...', call `execute_approved_action`.\n"
         "- If ANY tool returns an error, report it immediately. Never fabricate data.\n"
@@ -88,6 +89,7 @@ root_agent = Agent(
         *([clickup_agent] if clickup_agent else []),
     ],
     tools=[
+        skill_toolset.SkillToolset(skills=[_scheduling_skill]),
         # Toolsets — cross-cutting concerns only
         SchedulingToolset(),
         MemoryToolset(),

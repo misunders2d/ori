@@ -33,8 +33,10 @@ async def run_scheduled_task(task_prompt: str, notify: dict, task_id: str = None
     runner = get_runner()
 
     if runner:
+        # Ephemeral session per fire — isolates plan state, conversation history,
+        # and scratchpad between concurrent/sequential scheduled tasks.
         user_id = "system_scheduler"
-        session_id = "scheduled_task"
+        session_id = f"sched_{task_id}"
         query = (
             f"Scheduled Task: {task_prompt}\n"
             "(This is an automated reminder. Execute the task or deliver the reminder to the user. "
@@ -42,19 +44,9 @@ async def run_scheduled_task(task_prompt: str, notify: dict, task_id: str = None
         )
 
         try:
-            # Ensure session exists
-            try:
-                session = await runner.session_service.get_session(
-                    app_name=runner.app_name, user_id=user_id, session_id=session_id
-                )
-                if session is None:
-                    await runner.session_service.create_session(
-                        app_name=runner.app_name, user_id=user_id, session_id=session_id
-                    )
-            except Exception:
-                await runner.session_service.create_session(
-                    app_name=runner.app_name, user_id=user_id, session_id=session_id
-                )
+            await runner.session_service.create_session(
+                app_name=runner.app_name, user_id=user_id, session_id=session_id
+            )
 
             response = await extract_agent_response(runner, user_id, session_id, query)
             response = response.text if hasattr(response, "text") else str(response)
@@ -68,6 +60,13 @@ async def run_scheduled_task(task_prompt: str, notify: dict, task_id: str = None
             ACTIVE_TASKS[task_id]["status"] = "Failed"
             ACTIVE_TASKS[task_id]["error"] = str(e)
             ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
+        finally:
+            try:
+                await runner.session_service.delete_session(
+                    app_name=runner.app_name, user_id=user_id, session_id=session_id
+                )
+            except Exception:
+                pass
     else:
         response = f"Reminder: {task_prompt}"
         ACTIVE_TASKS[task_id]["status"] = "Completed"
