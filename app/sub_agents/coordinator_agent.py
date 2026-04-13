@@ -1,3 +1,4 @@
+import os
 import pathlib
 
 from google.adk.agents import Agent
@@ -31,6 +32,16 @@ from app.tools.google_search import google_search_agent_tool
 from app.tools.web import web_fetch
 from app.tools.whitelist import whitelist_chat, blacklist_chat
 from app.tools.youtube import youtube_summary
+from app.tools.slack import (
+    slack_post_message,
+    slack_list_channels,
+    slack_read_history,
+)
+
+_slack_enabled = bool(os.environ.get("SLACK_BOT_TOKEN", "").strip())
+_slack_tools = (
+    [slack_post_message, slack_list_channels, slack_read_history] if _slack_enabled else []
+)
 
 _skills_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 _scheduling_skill = load_skill_from_dir(_skills_dir / "scheduling-skill")
@@ -105,6 +116,7 @@ root_agent = Agent(
         get_my_a2a_key,
         whitelist_chat,
         blacklist_chat,
+        *_slack_tools,
     ],
     before_agent_callback=[state_setter],
     before_model_callback=[prompt_injection_guardrail, plan_enforcer],

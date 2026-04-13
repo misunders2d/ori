@@ -62,16 +62,6 @@
                 "a2a",
                 "exchange"
             ]
-        },
-        {
-            "id": "knowledge-graph",
-            "name": "knowledge-graph",
-            "description": "Tracks entities and relationships in a Neo4j knowledge graph.",
-            "tags": [
-                "memory",
-                "graph",
-                "knowledge"
-            ]
         }
     ]
 }
