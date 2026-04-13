@@ -78,7 +78,7 @@ async def run_scheduled_task(task_prompt: str, notify: dict, task_id: str = None
         # Ephemeral session per fire — isolates plan state, conversation history,
         # and scratchpad between concurrent/sequential scheduled tasks.
         user_id = "system_scheduler"
-        session_id = f"sched_{task_id}"
+        session_id = task_id  # task_id already carries a 'sched_' or 'immediate_' prefix
         query = (
             f"Scheduled Task: {task_prompt}\n"
             "(This is an automated reminder. Execute the task or deliver the reminder to the user. "
