@@ -36,6 +36,36 @@ def get_current_time(timezone: str, tool_context: ToolContext) -> dict:
 # Helpers
 # ---------------------------------------------------------------------------
 
+_DOW_NAMES = {"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"}
+
+
+def _validate_cron_dow(cron_expression: str) -> str | None:
+    """Reject numeric day-of-week fields. APScheduler's from_crontab uses
+    0=Mon / 6=Sun (non-standard), so numeric DOW reliably produces off-by-one
+    bugs when the agent assumes Vixie cron (1=Mon). Force explicit 3-letter
+    names (MON,WED,FRI).
+
+    Returns an error string on invalid input, None when valid.
+    """
+    parts = cron_expression.strip().split()
+    if len(parts) != 5:
+        return None  # let from_crontab surface the real error
+    dow = parts[4]
+    if dow in {"*", "?"}:
+        return None
+    tokens = dow.replace(",", " ").replace("-", " ").replace("/", " ").split()
+    for tok in tokens:
+        if tok.isdigit():
+            return (
+                f"Ambiguous day-of-week '{dow}'. Use 3-letter names (MON,TUE,WED,THU,FRI,SAT,SUN) — "
+                f"numeric DOW is rejected because APScheduler's from_crontab uses 0=Mon (non-standard) "
+                f"and produces off-by-one bugs. Example: '0 17 * * MON,WED,FRI'."
+            )
+        if tok.upper() not in _DOW_NAMES:
+            return f"Unknown day-of-week token '{tok}'. Use MON,TUE,WED,THU,FRI,SAT,SUN."
+    return None
+
+
 def _parse_tz(timezone: str):
     """Return a ZoneInfo object or None on failure."""
     from zoneinfo import ZoneInfo
@@ -185,7 +215,7 @@ def schedule_one_off_task(
         task_prompt (str): The instruction the agent should execute when the time comes (e.g. 'Tell the user a funny joke to start their morning' or 'Check Keepa for ASIN B08X and report the price').
         run_at_iso_datetime (str): The date and time to run the task, in ISO 8601 format (e.g., '2026-03-25T10:00:00'). Interpreted in the provided timezone if naive; honored as-is if it already carries an offset.
         timezone (str): IANA timezone for the scheduled time (e.g., 'Europe/Kyiv', 'UTC').
-        deliver_to (str): Optional session ID to deliver results to instead of the current chat. Use this to post to a different platform or channel (e.g. 'tg_123456' for a Telegram chat). If empty, delivers to the current chat.
+        deliver_to (str): Optional session ID to deliver results to instead of the current chat. Use this to post to a different platform or channel (e.g. 'sl_C01234ABC' for a Slack channel, 'tg_123456' for a Telegram chat). If empty, delivers to the current chat.
 
     Returns:
         dict: Status of the scheduling operation.
@@ -217,7 +247,7 @@ def schedule_one_off_task(
     notify = _stamp_ownership(notify, user_id, deliver_to, _get_session_id(tool_context))
 
     job_id = f"oneoff_{uuid.uuid4().hex[:8]}"
-    scheduler.add_job(
+    job = scheduler.add_job(
         run_scheduled_task,
         "date",
         run_date=run_date,
@@ -226,9 +256,18 @@ def schedule_one_off_task(
     )
 
     dest = deliver_to or "current chat"
+    now_local = datetime.now(tz)
+    next_run = str(getattr(job, "next_run_time", run_date))
     return {
         "status": "success",
-        "message": f"Scheduled: '{task_prompt}' for {run_date.strftime('%Y-%m-%d %H:%M')} ({timezone}). Delivers to: {dest}. Job ID: {job_id}",
+        "job_id": job_id,
+        "now": now_local.isoformat(timespec="seconds"),
+        "next_run": next_run,
+        "delivers_to": dest,
+        "message": (
+            f"Scheduled {job_id}. now={now_local.isoformat(timespec='seconds')}. "
+            f"next_run={next_run}. delivers_to={dest}. Quote 'next_run' verbatim — do not translate."
+        ),
     }
 
 
@@ -249,7 +288,7 @@ def schedule_recurring_task(
         task_prompt (str): The instruction the agent should execute (e.g. 'Perform a management check for ASIN B08X').
         cron_expression (str): A standard 5-part cron expression defining the schedule (e.g., '0 10 * * *' for every day at 10 AM).
         timezone (str): IANA timezone for the cron schedule (e.g., 'Europe/Kyiv', 'UTC').
-        deliver_to (str): Optional session ID to deliver results to instead of the current chat. Use this to post to a different platform or channel (e.g. 'tg_123456' for a Telegram chat). If empty, delivers to the current chat.
+        deliver_to (str): Optional session ID to deliver results to instead of the current chat. Use this to post to a different platform or channel (e.g. 'sl_C01234ABC' for a Slack channel, 'tg_123456' for a Telegram chat). If empty, delivers to the current chat.
 
     Returns:
         dict: Status of the scheduling operation.
@@ -262,6 +301,10 @@ def schedule_recurring_task(
     tz = _parse_tz(timezone)
     if tz is None:
         return {"status": "error", "message": f"Unknown timezone: '{timezone}'."}
+
+    dow_err = _validate_cron_dow(cron_expression)
+    if dow_err:
+        return {"status": "error", "message": dow_err}
 
     try:
         trigger = CronTrigger.from_crontab(cron_expression, timezone=tz)
@@ -280,7 +323,7 @@ def schedule_recurring_task(
     notify = _stamp_ownership(notify, user_id, deliver_to, _get_session_id(tool_context))
 
     job_id = f"cron_{uuid.uuid4().hex[:8]}"
-    scheduler.add_job(
+    job = scheduler.add_job(
         run_scheduled_task,
         trigger=trigger,
         kwargs={"task_prompt": task_prompt, "notify": notify},
@@ -288,9 +331,21 @@ def schedule_recurring_task(
     )
 
     dest = deliver_to or "current chat"
+    now_local = datetime.now(tz)
+    next_run = str(getattr(job, "next_run_time", "unknown"))
     return {
         "status": "success",
-        "message": f"Scheduled recurring: '{task_prompt}' with cron '{cron_expression}' ({timezone}). Delivers to: {dest}. Job ID: {job_id}",
+        "job_id": job_id,
+        "cron": cron_expression,
+        "timezone": timezone,
+        "now": now_local.isoformat(timespec="seconds"),
+        "next_run": next_run,
+        "delivers_to": dest,
+        "message": (
+            f"Scheduled {job_id} with cron '{cron_expression}' ({timezone}). "
+            f"now={now_local.isoformat(timespec='seconds')}. next_run={next_run}. "
+            f"delivers_to={dest}. Quote 'next_run' verbatim — do not translate or guess."
+        ),
     }
 
 
@@ -332,6 +387,53 @@ def list_scheduled_tasks(tool_context: ToolContext) -> dict:
     if not tasks:
         return {"status": "success", "tasks": [], "message": "No scheduled tasks."}
     return {"status": "success", "tasks": tasks}
+
+
+def get_scheduled_task_logs(
+    tool_context: ToolContext, task_id: str = "", limit: int = 50,
+) -> dict:
+    """Returns recent fire events from the scheduler job log (JSONL).
+
+    Each event records one of: fire_start, fire_end, error. Events include
+    timestamps, task_id, kind (scheduled/system), duration_ms, status, and
+    response_preview. Use this to check whether a scheduled job actually ran,
+    how long it took, and what it produced — without re-running it.
+
+    Args:
+        task_id (str): Optional task_id to filter by (e.g. 'sched_a1b2c3d4'). Empty = all events.
+        limit (int): Maximum number of events to return (most recent first). Default 50.
+
+    Returns:
+        dict: {'status', 'events': [...]} — events are chronological (newest last).
+    """
+    import json as _json
+    import os as _os
+
+    path = _os.path.abspath("./data/scheduler_jobs.log")
+    if not _os.path.exists(path):
+        return {"status": "success", "events": [], "message": "No scheduler log yet — no jobs have fired."}
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to read log: {e}"}
+
+    events = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = _json.loads(line)
+        except Exception:
+            continue
+        if task_id and rec.get("task_id") != task_id:
+            continue
+        events.append(rec)
+
+    events = events[-max(1, int(limit)):]
+    return {"status": "success", "events": events, "count": len(events)}
 
 
 def delete_scheduled_task(job_id: str, tool_context: ToolContext) -> dict:
@@ -494,7 +596,7 @@ def schedule_system_task(
         run_at_iso_datetime (str): When to run, in ISO 8601 format (e.g., '2026-03-28T03:00:00').
         timezone (str): IANA timezone for the scheduled time (e.g., 'Europe/Kyiv', 'UTC').
         silent (bool): If True, only notify the admin on failure/warnings. Successes are logged silently. Default: False.
-        deliver_to (str): Optional session ID to deliver results to instead of the current chat (e.g. 'tg_123456' for a Telegram chat). If empty, delivers to the current chat.
+        deliver_to (str): Optional session ID to deliver results to instead of the current chat (e.g. 'sl_C01234ABC' for a Slack channel). If empty, delivers to the current chat.
 
     Returns:
         dict: Status of the scheduling operation.
@@ -563,7 +665,7 @@ def run_system_task_now(
     Args:
         task_prompt (str): The exact system task instruction (e.g. 'Analyze and fix the failing test in tests/test_structure.py').
         silent (bool): If True, only notify the admin on failure/warnings. Successes are logged silently. Default: False.
-        deliver_to (str): Optional session ID to deliver results to instead of the current chat (e.g. 'tg_123456' for a Telegram chat). If empty, delivers to the current chat.
+        deliver_to (str): Optional session ID to deliver results to instead of the current chat (e.g. 'sl_C01234ABC' for a Slack channel). If empty, delivers to the current chat.
 
     Returns:
         dict: Confirmation that the task has been launched.
@@ -622,7 +724,7 @@ def schedule_recurring_system_task(
         cron_expression (str): A standard 5-part cron expression (e.g., '0 3 * * *' for every day at 3 AM).
         timezone (str): IANA timezone for the cron schedule (e.g., 'Europe/Kyiv', 'UTC').
         silent (bool): If True, only notify the admin on failure/warnings. Successes are logged silently. Default: False.
-        deliver_to (str): Optional session ID to deliver results to instead of the current chat (e.g. 'tg_123456' for a Telegram chat). If empty, delivers to the current chat.
+        deliver_to (str): Optional session ID to deliver results to instead of the current chat (e.g. 'sl_C01234ABC' for a Slack channel). If empty, delivers to the current chat.
 
     Returns:
         dict: Status of the scheduling operation.
@@ -639,6 +741,10 @@ def schedule_recurring_system_task(
     tz = _parse_tz(timezone)
     if tz is None:
         return {"status": "error", "message": f"Unknown timezone: '{timezone}'."}
+
+    dow_err = _validate_cron_dow(cron_expression)
+    if dow_err:
+        return {"status": "error", "message": dow_err}
 
     try:
         trigger = CronTrigger.from_crontab(cron_expression, timezone=tz)

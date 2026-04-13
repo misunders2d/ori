@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from datetime import datetime
@@ -6,6 +7,39 @@ logger = logging.getLogger(__name__)
 
 # In-memory registry for tracking real-time status of background tasks
 ACTIVE_TASKS = {}
+
+# Persistent event log for scheduled/system task fires — appended JSONL so the
+# agent can read it back via get_scheduled_task_logs without parsing free-form
+# Python logs. Rotation is handled by simple size-based truncation.
+_JOB_LOG_PATH = os.path.abspath("./data/scheduler_jobs.log")
+_JOB_LOG_MAX_BYTES = 500_000
+
+
+def _log_job_event(event: str, **fields) -> None:
+    """Append one JSON line to the scheduler job log.
+
+    Events: fire_start, fire_end, delivery, error. Fields should include
+    job_id, task_id, and event-specific context (prompt_preview, next_run,
+    duration_ms, error, channel).
+    """
+    try:
+        os.makedirs(os.path.dirname(_JOB_LOG_PATH), exist_ok=True)
+        try:
+            if os.path.getsize(_JOB_LOG_PATH) > _JOB_LOG_MAX_BYTES:
+                # Keep the last half — cheap truncation, no rotation files.
+                with open(_JOB_LOG_PATH, "rb") as f:
+                    data = f.read()
+                keep = data[len(data) // 2 :].split(b"\n", 1)
+                tail = keep[1] if len(keep) == 2 else b""
+                with open(_JOB_LOG_PATH, "wb") as f:
+                    f.write(tail)
+        except FileNotFoundError:
+            pass
+        record = {"ts": datetime.now().isoformat(timespec="seconds"), "event": event, **fields}
+        with open(_JOB_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, default=str) + "\n")
+    except Exception as e:
+        logger.warning("Failed to write scheduler job log: %s", e)
 
 
 async def run_scheduled_task(task_prompt: str, notify: dict, task_id: str = None):
@@ -21,20 +55,30 @@ async def run_scheduled_task(task_prompt: str, notify: dict, task_id: str = None
     if not task_id:
         task_id = f"sched_{uuid.uuid4().hex[:8]}"
 
+    start_ts = datetime.now()
     ACTIVE_TASKS[task_id] = {
         "prompt": task_prompt,
         "type": "scheduled",
         "status": "Running",
-        "start_time": datetime.now().isoformat(),
+        "start_time": start_ts.isoformat(),
         "end_time": None,
         "error": None
     }
+    _log_job_event(
+        "fire_start",
+        task_id=task_id,
+        kind="scheduled",
+        prompt_preview=task_prompt[:140],
+        channel=(notify or {}).get("chat_id") or (notify or {}).get("channel"),
+    )
 
     runner = get_runner()
 
     if runner:
+        # Ephemeral session per fire — isolates plan state, conversation history,
+        # and scratchpad between concurrent/sequential scheduled tasks.
         user_id = "system_scheduler"
-        session_id = "scheduled_task"
+        session_id = task_id  # task_id already carries a 'sched_' or 'immediate_' prefix
         query = (
             f"Scheduled Task: {task_prompt}\n"
             "(This is an automated reminder. Execute the task or deliver the reminder to the user. "
@@ -42,39 +86,66 @@ async def run_scheduled_task(task_prompt: str, notify: dict, task_id: str = None
         )
 
         try:
-            # Ensure session exists
-            try:
-                session = await runner.session_service.get_session(
-                    app_name=runner.app_name, user_id=user_id, session_id=session_id
-                )
-                if session is None:
-                    await runner.session_service.create_session(
-                        app_name=runner.app_name, user_id=user_id, session_id=session_id
-                    )
-            except Exception:
-                await runner.session_service.create_session(
-                    app_name=runner.app_name, user_id=user_id, session_id=session_id
-                )
+            await runner.session_service.create_session(
+                app_name=runner.app_name, user_id=user_id, session_id=session_id
+            )
 
             response = await extract_agent_response(runner, user_id, session_id, query)
             response = response.text if hasattr(response, "text") else str(response)
-            if "Guardrail Intervention:" in response:
-                response = f"Reminder: {task_prompt}\n\n[Warning]: {response}"
-            ACTIVE_TASKS[task_id]["status"] = "Completed"
+            if not response or not response.strip():
+                # Agent returned empty — treat as failure so user sees something.
+                response = (
+                    f":warning: Scheduled task `{task_id}` produced an empty response.\n"
+                    f"Prompt: {task_prompt[:200]}"
+                )
+                ACTIVE_TASKS[task_id]["status"] = "Failed (empty response)"
+                _log_job_event("error", task_id=task_id, kind="scheduled", error="empty response")
+            elif "Guardrail Intervention:" in response:
+                response = f":warning: Scheduled task `{task_id}` hit a guardrail.\n{response}"
+                ACTIVE_TASKS[task_id]["status"] = "Failed (guardrail)"
+                _log_job_event("error", task_id=task_id, kind="scheduled", error="guardrail intervention")
+            else:
+                ACTIVE_TASKS[task_id]["status"] = "Completed"
             ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
         except Exception as e:
             logger.exception("Scheduled task agent execution failed")
-            response = f"Reminder: {task_prompt}"
+            response = (
+                f":x: Scheduled task `{task_id}` failed.\n"
+                f"Prompt: {task_prompt[:200]}\n"
+                f"Error: {type(e).__name__}: {e}"
+            )
             ACTIVE_TASKS[task_id]["status"] = "Failed"
             ACTIVE_TASKS[task_id]["error"] = str(e)
             ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
+            _log_job_event("error", task_id=task_id, kind="scheduled", error=f"{type(e).__name__}: {e}")
+        finally:
+            try:
+                await runner.session_service.delete_session(
+                    app_name=runner.app_name, user_id=user_id, session_id=session_id
+                )
+            except Exception:
+                pass
     else:
-        response = f"Reminder: {task_prompt}"
-        ACTIVE_TASKS[task_id]["status"] = "Completed"
+        # Runner unavailable — bot is starting up or shutting down. Report honestly.
+        response = (
+            f":x: Scheduled task `{task_id}` could not run: agent runner unavailable.\n"
+            f"Prompt: {task_prompt[:200]}"
+        )
+        ACTIVE_TASKS[task_id]["status"] = "Failed (no runner)"
         ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
+        _log_job_event("error", task_id=task_id, kind="scheduled", error="runner unavailable")
 
-    # Deliver to the user's channel
-    await _deliver_message(notify, response)
+    # Deliver to the user's channel, with fallback to origin on failure.
+    await _deliver_with_fallback(notify, response, task_id=task_id)
+    duration_ms = int((datetime.now() - start_ts).total_seconds() * 1000)
+    _log_job_event(
+        "fire_end",
+        task_id=task_id,
+        kind="scheduled",
+        status=ACTIVE_TASKS[task_id]["status"],
+        duration_ms=duration_ms,
+        response_preview=(response or "")[:200],
+    )
 
 
 async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, silent: bool = False, task_id: str = None):
@@ -92,14 +163,23 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
 
     logger.info("System Task: Starting %s (%s)", task_id, task_prompt)
 
+    start_ts = datetime.now()
     ACTIVE_TASKS[task_id] = {
         "prompt": task_prompt,
         "type": "system",
         "status": "Running",
-        "start_time": datetime.now().isoformat(),
+        "start_time": start_ts.isoformat(),
         "end_time": None,
         "error": None
     }
+    _log_job_event(
+        "fire_start",
+        task_id=task_id,
+        kind="system",
+        prompt_preview=task_prompt[:140],
+        admin_user_id=admin_user_id,
+        silent=silent,
+    )
 
     runner = get_runner()
     if not runner:
@@ -129,11 +209,8 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
             app_name=runner.app_name, user_id=user_id, session_id=session_id
         )
 
-        # Inject admin identity so guardrails recognize this as an admin execution
         await update_session_state(
-            runner=runner,
-            user_id=user_id,
-            session_id=session_id,
+            runner=runner, user_id=user_id, session_id=session_id,
             state_delta={"user_id": admin_user_id},
         )
 
@@ -152,7 +229,7 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
             prefix = "System Task Report" if not is_failure else "System Task Warning"
             msg = f"{prefix}:\n{response}"
             logger.info("System Task: Delivering report for %s", task_id)
-            await _deliver_message(notify, msg)
+            await _deliver_with_fallback(notify, msg, task_id=task_id)
 
         ACTIVE_TASKS[task_id]["status"] = "Completed" if not is_failure else "Completed (With Warnings)"
         ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
@@ -163,7 +240,8 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
         ACTIVE_TASKS[task_id]["status"] = "Failed"
         ACTIVE_TASKS[task_id]["error"] = str(e)
         ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
-        await _deliver_message(notify, f"System Task Failed:\nTask: {task_prompt}\nCheck logs for details.")
+        _log_job_event("error", task_id=task_id, kind="system", error=str(e))
+        await _deliver_with_fallback(notify, f"System Task Failed:\nTask: {task_prompt}\nCheck logs for details.", task_id=task_id)
     finally:
         # Clean up the ephemeral session
         try:
@@ -172,36 +250,83 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
             )
         except Exception:
             pass
+        duration_ms = int((datetime.now() - start_ts).total_seconds() * 1000)
+        _log_job_event(
+            "fire_end",
+            task_id=task_id,
+            kind="system",
+            status=ACTIVE_TASKS[task_id].get("status", "unknown"),
+            duration_ms=duration_ms,
+        )
 
 
-async def _deliver_message(notify: dict, message: str):
+async def _deliver_message(notify: dict, message: str, task_id: str = "") -> bool:
     """Send a message to the user's chat AND inject it into their session history.
 
+    Returns True on successful send, False on any failure (no adapter, adapter raised,
+    channel not delivered). Failures are logged to the scheduler job log so the user
+    can diagnose them via get_scheduled_task_logs.
+
     The injection is what makes scheduled task output visible to the agent on the
-    user's next turn — without it, follow-up questions like "what was the reminder?"
-    have no context to draw on.
+    user's next turn.
     """
     from app.core.transport import get_adapter
 
     if not notify:
-        logger.warning("Notification delivery skipped: no notification info (notify={})", notify)
-        return
+        logger.warning("Notification delivery skipped: no notification info")
+        _log_job_event("delivery_failure", task_id=task_id, reason="no notify dict")
+        return False
 
     channel_type = notify.get("type")
     adapter = get_adapter(channel_type)
-    if adapter:
-        target = notify.get("chat_id") or notify.get("channel")
-        logger.info("Delivering message to %s channel, target: %s", channel_type, target)
-        try:
-            await adapter.send_message(target, message)
-        except Exception as e:
-            logger.error("Failed to deliver message via adapter: %s", e)
-    else:
+    target = notify.get("chat_id") or notify.get("channel")
+    if not adapter:
         logger.warning("No adapter registered for channel type: %s", channel_type)
+        _log_job_event("delivery_failure", task_id=task_id, reason=f"no adapter for {channel_type}", target=target)
+        return False
+
+    logger.info("Delivering message to %s channel, target: %s", channel_type, target)
+    try:
+        await adapter.send_message(target, message)
+        delivered = True
+    except Exception as e:
+        logger.error("Failed to deliver message via adapter: %s", e)
+        _log_job_event("delivery_failure", task_id=task_id, reason=str(e), target=target)
+        delivered = False
 
     # Mirror the delivered message into the chat's session so the model has it
     # in conversation history when the user asks a follow-up.
     await _inject_into_session(notify, message)
+    return delivered
+
+
+async def _deliver_with_fallback(notify: dict, message: str, task_id: str) -> None:
+    """Deliver to notify's channel; if that fails and origin_session_id differs,
+    try delivering the failure notice to origin so the user is never left in the
+    dark. Never raises.
+    """
+    delivered = await _deliver_message(notify, message, task_id=task_id)
+    if delivered:
+        return
+
+    # Fallback — try origin_session_id if it's a different channel.
+    origin = (notify or {}).get("origin_session_id", "")
+    primary = (notify or {}).get("chat_id") or (notify or {}).get("channel", "")
+    if not origin or not primary:
+        return
+    if origin == f"sl_{primary}" or origin == f"tg_{primary}" or origin.endswith(f"_{primary}"):
+        return  # same channel as primary, nothing to retry
+
+    from app.core.transport import parse_notify_from_session_id
+    fallback_notify = parse_notify_from_session_id(origin)
+    if not fallback_notify:
+        return
+
+    fallback_msg = (
+        f":warning: Could not deliver scheduled task `{task_id}` to its target channel. "
+        f"Routing to the session that scheduled it.\n\n{message}"
+    )
+    await _deliver_message(fallback_notify, fallback_msg, task_id=task_id)
 
 
 async def _inject_into_session(notify: dict, message: str):

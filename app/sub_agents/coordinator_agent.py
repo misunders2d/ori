@@ -1,4 +1,8 @@
+import pathlib
+
 from google.adk.agents import Agent
+from google.adk.skills import load_skill_from_dir
+from google.adk.tools import skill_toolset
 
 from app.app_utils.models import get_model
 
@@ -19,6 +23,9 @@ from app.toolsets import (
 from app.tools.google_search import google_search_agent_tool
 from app.tools.web import web_fetch
 from app.tools.whitelist import whitelist_chat, blacklist_chat
+
+_skills_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
+_scheduling_skill = load_skill_from_dir(_skills_dir / "scheduling-skill")
 
 root_agent = Agent(
     name="CoordinatorAgent",
@@ -59,6 +66,7 @@ root_agent = Agent(
         knowledge_agent,
     ],
     tools=[
+        skill_toolset.SkillToolset(skills=[_scheduling_skill]),
         # Toolsets
         SchedulingToolset(),
         MemoryToolset(),
