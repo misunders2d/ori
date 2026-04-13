@@ -247,7 +247,7 @@ def schedule_one_off_task(
     notify = _stamp_ownership(notify, user_id, deliver_to, _get_session_id(tool_context))
 
     job_id = f"oneoff_{uuid.uuid4().hex[:8]}"
-    scheduler.add_job(
+    job = scheduler.add_job(
         run_scheduled_task,
         "date",
         run_date=run_date,
@@ -256,9 +256,18 @@ def schedule_one_off_task(
     )
 
     dest = deliver_to or "current chat"
+    now_local = datetime.now(tz)
+    next_run = str(getattr(job, "next_run_time", run_date))
     return {
         "status": "success",
-        "message": f"Scheduled: '{task_prompt}' for {run_date.strftime('%Y-%m-%d %H:%M')} ({timezone}). Delivers to: {dest}. Job ID: {job_id}",
+        "job_id": job_id,
+        "now": now_local.isoformat(timespec="seconds"),
+        "next_run": next_run,
+        "delivers_to": dest,
+        "message": (
+            f"Scheduled {job_id}. now={now_local.isoformat(timespec='seconds')}. "
+            f"next_run={next_run}. delivers_to={dest}. Quote 'next_run' verbatim — do not translate."
+        ),
     }
 
 
@@ -314,7 +323,7 @@ def schedule_recurring_task(
     notify = _stamp_ownership(notify, user_id, deliver_to, _get_session_id(tool_context))
 
     job_id = f"cron_{uuid.uuid4().hex[:8]}"
-    scheduler.add_job(
+    job = scheduler.add_job(
         run_scheduled_task,
         trigger=trigger,
         kwargs={"task_prompt": task_prompt, "notify": notify},
@@ -322,9 +331,21 @@ def schedule_recurring_task(
     )
 
     dest = deliver_to or "current chat"
+    now_local = datetime.now(tz)
+    next_run = str(getattr(job, "next_run_time", "unknown"))
     return {
         "status": "success",
-        "message": f"Scheduled recurring: '{task_prompt}' with cron '{cron_expression}' ({timezone}). Delivers to: {dest}. Job ID: {job_id}",
+        "job_id": job_id,
+        "cron": cron_expression,
+        "timezone": timezone,
+        "now": now_local.isoformat(timespec="seconds"),
+        "next_run": next_run,
+        "delivers_to": dest,
+        "message": (
+            f"Scheduled {job_id} with cron '{cron_expression}' ({timezone}). "
+            f"now={now_local.isoformat(timespec='seconds')}. next_run={next_run}. "
+            f"delivers_to={dest}. Quote 'next_run' verbatim — do not translate or guess."
+        ),
     }
 
 

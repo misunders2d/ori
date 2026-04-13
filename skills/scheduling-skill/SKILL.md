@@ -35,7 +35,35 @@ This codebase rejects numeric DOW at the tool level with an explicit error. The 
 - Minute/hour/day/month stay numeric as usual. Only DOW must be names.
 - The trigger is timezone-aware — pass an IANA tz like `Europe/Kyiv`.
 - **First fire ≠ "today" automatically.** APScheduler computes the *next* matching slot strictly after `now`. If you schedule at 12:21 PM with `30 12 * * MON,WED,FRI` and today is Monday, next fire = today 12:30. If you schedule at 12:35, next fire = Wednesday 12:30 — **today is skipped**. Don't promise "first run today" unless you've verified `now < next_slot_today`.
-- After scheduling, read `next_run_time` from the tool response — that is authoritative. Never narrate a different date.
+- After scheduling, read `next_run` from the tool response — that is authoritative. Never narrate a different date. The response also returns `now` (current time in the task's timezone) so you never have to guess "is today's slot still reachable?" — just compare `now` with the expected slot.
+
+## Tool response shape
+
+`schedule_recurring_task` returns:
+```json
+{
+  "status": "success",
+  "job_id": "cron_…",
+  "cron": "30 12 * * MON,WED,FRI",
+  "timezone": "Europe/Kyiv",
+  "now": "2026-04-13T12:21:14+03:00",
+  "next_run": "2026-04-13 12:30:00+03:00",
+  "delivers_to": "sl_C03A8FDLREH",
+  "message": "Scheduled cron_… now=… next_run=… delivers_to=…"
+}
+```
+`schedule_one_off_task` returns the same shape (minus `cron`/`timezone`). **Report `next_run` exactly as given.** Do not translate, round, or describe in relative terms without the absolute timestamp.
+
+## Reliability guarantees
+
+Every fire goes through this flow — you can trust it:
+1. `fire_start` logged.
+2. Agent runs in ephemeral session `sched_<task_id>`.
+3. Result (success **or failure**) is always delivered to the channel. Failures look like `:x: Scheduled task <id> failed.` — never fake-succeed silently.
+4. If delivery to the target channel fails, a fallback delivery goes to the session that scheduled the job (`origin_session_id`), prefixed with a `:warning:` notice.
+5. `fire_end` logged with `status` and `duration_ms`.
+
+If a user reports "the job didn't run," the first move is always `get_scheduled_task_logs(task_id=…)`. Silence means the fire didn't happen — not that it failed quietly.
 
 ## Channel routing — `deliver_to`
 
