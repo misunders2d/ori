@@ -1,127 +1,76 @@
 ---
 name: sp-api-skill
-description: "Amazon Selling Partner API workflow — catalog, listings, competitive pricing, and reports. Covers rate limits, report lifecycle, and data interpretation."
+description: "Amazon Selling Partner API workflow — product catalog, listings, competitive pricing, fee estimates, orders, FBA inventory, reports, and account health monitoring. Use this skill whenever the user asks anything about their Amazon seller account, ASINs, SKUs, inventory levels, order details, policy violations, account health, margin calculations, or any SP-API data — even if they don't name the API explicitly."
 ---
 
-# Amazon SP-API Skill
+# Amazon SP-API
 
-You have access to Amazon Selling Partner API tools for product data, listing details, competitive pricing, and reports. SP-API has strict rate limits — always be efficient with API calls.
+You have read-only access to the Amazon Selling Partner API for product research, listing management, competitive pricing, order retrieval, FBA inventory, bulk reports, and account health monitoring. SP-API has strict rate limits — reach for the right tool for the job and avoid making individual calls in loops when a report could give you the same data in one shot.
 
-## Tools Overview
+## How to navigate this skill
 
-| Tool | Purpose | Rate Impact |
-|------|---------|-------------|
-| `sp_get_catalog_item(asin)` | Product details by ASIN (title, bullets, images, attributes) | 1 call |
-| `sp_search_catalog(keywords/identifiers)` | Search catalog by keywords or identifiers (ASIN, UPC, EAN) | 1 call |
-| `sp_get_listing(sku)` | Your seller-specific listing details (price, inventory, status) | 1 call |
-| `sp_get_competitive_pricing(asins/skus)` | Your price vs competitors, buy box info | 1 call for up to 20 items |
-| `sp_request_report(report_type, days)` | Request any Amazon report | 1 call |
-| `sp_check_report(report_id)` | Check report processing status | 1 call |
-| `sp_download_report(report_document_id)` | Download completed report data | 1 call |
-| `sp_list_reports(report_type, status, days)` | List existing reports | 1 call |
-| `export_report_to_csv(report_type, days)` | **One-shot report→CSV pipeline** (preferred for exports) | 3 calls (auto) |
-| `data_to_csv(data, filename)` | Convert any JSON data to CSV directly | 0 calls |
+SKILL.md is the routing doc. Each API domain has its own reference file — read the one matching the question rather than trying to hold everything in your head.
 
-## Key Concepts
+| User is asking about... | Read |
+|---|---|
+| ASIN/product details, search, SKU listing state | [`references/catalog-and-listings.md`](references/catalog-and-listings.md) |
+| Price vs. competitors, Buy Box, offer landscape | [`references/pricing.md`](references/pricing.md) |
+| Fee math, profitability, "what's my take-home at $X?" | [`references/product-fees.md`](references/product-fees.md) |
+| Recent orders, line items on a specific order | [`references/orders.md`](references/orders.md) |
+| Live FBA stock, "do we have it in stock?" | [`references/inventory.md`](references/inventory.md) |
+| AHR, policy violations, suspension risk, is my account healthy? | [`references/account-health.md`](references/account-health.md) |
+| Bulk data exports, any report-based flow | [`references/reports.md`](references/reports.md) + [`references/report-examples.md`](references/report-examples.md) |
 
-### ASIN vs SKU
-- **ASIN**: Amazon's product identifier, shared across all sellers. Use with `sp_get_catalog_item` and `sp_get_competitive_pricing`.
-- **SKU**: Your seller-specific identifier. Use with `sp_get_listing`.
-- If the user gives you an ASIN and you need listing data, you may need to look up the SKU first via a listings report.
+## Tool inventory (quick reference)
 
-### Catalog vs Listing
-- **Catalog** = shared product data (title, images, description) — same for all sellers of that ASIN.
-- **Listing** = your seller-specific data (your price, quantity, fulfillment channel, listing issues).
-- Use catalog for product research, listing for inventory/pricing management.
+| Tool | Purpose |
+|------|---------|
+| `sp_get_catalog_item(asin)` | Product details by ASIN |
+| `sp_search_catalog(keywords/identifiers)` | Catalog search |
+| `sp_get_listing(sku)` | Your listing for a SKU |
+| `sp_get_competitive_pricing(asins/skus)` | Price vs. competitors, up to 20 items |
+| `sp_get_fees_estimate(asin, price, is_fba)` | Fee breakdown for profitability math |
+| `sp_list_orders(days, order_statuses)` | Recent orders (compact summaries) |
+| `sp_get_order_items(order_id)` | Line items for one order |
+| `sp_get_inventory_summaries(skus)` | Live FBA stock (fulfillable / inbound / reserved) |
+| `sp_get_account_health(days)` | **One-shot account health digest** |
+| `export_report_to_csv(report_type, days)` | **One-shot report → CSV pipeline** |
+| `sp_request_report` / `sp_check_report` / `sp_download_report` / `sp_list_reports` | Manual report lifecycle |
+| `data_to_csv(data, filename)` | Convert any JSON you already have into CSV |
 
-## Report Workflow
+## Cross-cutting rules
 
-### Preferred: Direct CSV Export (one tool call, zero LLM overhead)
+### Author identifier for records
 
-For CSV exports, **ALWAYS use `export_report_to_csv`**. It handles the entire pipeline in one call:
-request → poll → download → parse → CSV. No data passes through the conversation.
+Every SP-API call runs as the configured seller. Marketplace is US-only (`ATVPDKIKX0DER`). If the user needs a non-US marketplace, tell them the tools aren't wired for that yet — don't try to pass a different marketplace ID.
 
-```
-export_report_to_csv(report_type="GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA", days=30)
-→ returns: {"file_path": "./tmp/exports/fba_myi_unsuppressed_inventory_20260408_1430.csv", "rows": 1234}
-```
+### Rate limits
 
-Use `data_to_csv` to convert any JSON data you already have into a CSV file directly.
+SP-API uses a token-bucket limiter per endpoint. Tools here retry throttling (429) with exponential backoff up to 3 attempts. Beyond that:
 
-### Manual flow (only when you need to inspect raw data first)
+- **Prefer reports over loops.** 100 individual `sp_get_listing` calls = 100 API calls. One `GET_MERCHANT_LISTINGS_ALL_DATA` report = 3 calls for everything.
+- **Batch competitive pricing** — up to 20 ASINs/SKUs per call.
+- **Minimize `included_data`** — only request sections you need.
+- **Never retry 4xx (except 429).** 400 = bad input, 403 = permissions, 404 = ASIN/SKU doesn't exist. Report to the user, don't hammer.
 
-- [ ] Step 1: `sp_request_report(report_type, days)` — returns a `report_id`
-- [ ] Step 2: Wait 30-60 seconds, then `sp_check_report(report_id)`
-- [ ] Step 3: If status is `IN_PROGRESS` or `IN_QUEUE`, wait and check again
-- [ ] Step 4: When status is `DONE`, use `sp_download_report(report_document_id)`
-- [ ] Step 5: If the report is large, it's saved to a file — use `analyze_data` to inspect
+### Error reporting
 
-**Before requesting a new report**, check `sp_list_reports()` — a recent one may already exist.
+If any tool returns a non-success status, report the error immediately. Never fabricate data to paper over a failure.
 
-### Common Report Types
+### Reports take time
 
-| Report Type | Use Case |
-|-------------|----------|
-| `GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL` | All orders |
-| `GET_BRAND_ANALYTICS_SEARCH_CATALOG_PERFORMANCE_REPORT` | SQP / brand analytics (needs `report_options: {"reportPeriod": "WEEK"}`) |
-| `GET_FLAT_FILE_OPEN_LISTINGS_DATA` | Active listings (SKU, price, quantity) |
-| `GET_MERCHANT_LISTINGS_ALL_DATA` | All listings with full details |
-| `GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA` | FBA inventory levels |
-| `GET_FBA_INVENTORY_AGED_DATA` | Inventory aging |
-| `GET_FBA_ESTIMATED_FBA_FEES_TXT_DATA` | FBA fee estimates |
-| `GET_EXCESS_INVENTORY_DATA` | Excess/stranded inventory |
-| `GET_V2_SETTLEMENT_REPORT_DATA_FLAT_FILE` | Financial settlements |
-| `GET_SALES_AND_TRAFFIC_REPORT` | Business reports (sessions, conversions) |
-| `GET_FBA_FULFILLMENT_CUSTOMER_RETURNS_DATA` | Customer returns |
-| `GET_FBA_FULFILLMENT_REMOVAL_ORDER_DETAIL_DATA` | Removal orders |
-| `GET_SELLER_FEEDBACK_DATA` | Customer feedback |
+Reports are asynchronous — most take 1–30 minutes. Use `export_report_to_csv` or `sp_get_account_health` for fire-and-forget one-shot flows; only use the manual request/check/download trio when you specifically need to inspect raw data before processing.
 
-## Rate Limit Strategy
+### What's NOT available
 
-SP-API uses a **token bucket algorithm**. Tokens regenerate per second, and each call consumes one.
+- **Write operations.** Updating listings, prices, inventory, images — none of that is exposed (intentional, this integration is read-only).
+- **Seller-support cases.** Case creation, listing, or reading via API is not supported by Amazon — it's Seller Central UI-only. If the user asks about opening or reading a support case, explain this; don't pretend there's a tool.
+- **Buyer PII (names, addresses, email).** Requires the Restricted Data Token (RDT) flow via the Tokens API — not wired up here. Order summaries include buyer-flagged booleans (IsPrime, IsBusinessOrder) but not personal data.
+- **Non-US marketplaces.** Tools are hardcoded to the US marketplace. EU/JP/MX would require work.
 
-### Rules
-1. **Prefer reports over repeated individual calls.** 1 report = bulk data for 2-3 API calls. 100 `sp_get_listing` calls = 100 API calls for the same data.
-2. **Batch competitive pricing.** `sp_get_competitive_pricing` accepts up to 20 ASINs/SKUs per call.
-3. **Minimize `included_data`.** Only request the data sections you need.
-4. **If throttled, the tool auto-retries** with exponential backoff (up to 3 attempts). If all retries fail, report the error to the user — do NOT keep hammering.
-5. **Never retry 400/403 errors** — those indicate bad input or missing permissions, not rate limits.
-
-## Competitive Pricing Interpretation
-
-`sp_get_competitive_pricing` returns pricing structures including:
-- **Your price** vs **lowest competitor price**
-- **Buy Box price** (the price shown on the product page)
-- **Number of offers** from other sellers
-- **Landed price** (item price + shipping)
-
-When reporting prices, always specify whether you're quoting the landed price or just the item price.
-
-## Included Data Options
-
-### For `sp_get_catalog_item`:
-`summaries, attributes, identifiers, images, productTypes, salesRanks, relationships, classifications, dimensions, vendorDetails`
-
-### For `sp_get_listing`:
-`summaries, attributes, issues, offers, fulfillmentAvailability, procurement, relationships, productTypes`
-
-### For `sp_search_catalog`:
-`summaries, images, identifiers, attributes, productTypes, salesRanks, relationships, classifications, dimensions`
-
-## Live References
+## Live references
 
 - [SP-API Documentation](https://developer-docs.amazon.com/sp-api/)
 - [SP-API Report Types](https://developer-docs.amazon.com/sp-api/docs/report-type-values)
 - [SP-API Rate Limits](https://developer-docs.amazon.com/sp-api/docs/usage-plans-and-rate-limits)
-- [Catalog Items API](https://developer-docs.amazon.com/sp-api/docs/catalog-items-api-v2022-04-01-reference)
-
-## Gotchas
-
-- **Reports are NOT instant.** Always poll status before downloading. Most take 1-30 minutes.
-- **Brand Analytics reports require `reportPeriod` in options.** Use `{"reportPeriod": "WEEK"}` and set `days` to cover the target week.
-- **SKU and ASIN are NOT interchangeable.** Catalog tools use ASIN, listing tools use SKU.
-- **Competitive pricing max batch = 20.** Split larger lists into chunks.
-- **Large reports are saved to file.** The tool returns a file path and preview. Use `analyze_data` for the full data.
-- **Marketplace is US-only** (`ATVPDKIKX0DER`). All tools are pre-configured for the US marketplace.
-- **Error handling**: follows system-level error mandate (report immediately, never fabricate).
-- **4xx errors (except 429) = don't retry.** 400 = bad input, 403 = permissions issue, 404 = ASIN/SKU doesn't exist.
+- [Official SP-API models (Amazon)](https://github.com/amzn/selling-partner-api-models/tree/main/models)
