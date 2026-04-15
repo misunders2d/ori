@@ -170,6 +170,36 @@ def _can_access_job(job, user_id: str, is_admin: bool) -> bool:
     return owner == user_id
 
 
+def _validate_steps(steps):
+    """Validate the optional `steps` kwarg accepted by scheduling tools.
+
+    Returns:
+        - None if steps is None / empty (non-enforced task).
+        - A cleaned list of stripped non-empty step strings if valid.
+        - A dict `{"status": "error", "message": ...}` if the shape is invalid,
+          so the caller can short-circuit by returning it to the user.
+    """
+    if steps is None:
+        return None
+    if not isinstance(steps, list):
+        return {
+            "status": "error",
+            "message": "`steps` must be a list of strings (one entry per checklist step). "
+                       "Omit it entirely for non-enforced tasks.",
+        }
+    cleaned = [s.strip() for s in steps if isinstance(s, str) and s.strip()]
+    if len(cleaned) != len([s for s in steps if s is not None]):
+        return {
+            "status": "error",
+            "message": "`steps` contains entries that are not non-empty strings. "
+                       "Each step must be a single descriptive string.",
+        }
+    if not cleaned:
+        # Explicit empty list = same as None
+        return None
+    return cleaned
+
+
 def _stamp_ownership(notify: dict, user_id: str, deliver_to: str, origin_session_id: str = "") -> dict:
     """Attach delivery + history-injection metadata to the notify dict.
 
@@ -198,6 +228,7 @@ def _stamp_ownership(notify: dict, user_id: str, deliver_to: str, origin_session
 def schedule_one_off_task(
     task_prompt: str, run_at_iso_datetime: str, timezone: str, tool_context: ToolContext,
     deliver_to: str = "",
+    steps: list[str] = None,
 ) -> dict:
     """Schedules the agent to execute a specific task once at a specific date and time.
 
@@ -213,6 +244,10 @@ def schedule_one_off_task(
         run_at_iso_datetime (str): The date and time to run the task, in ISO 8601 format (e.g., '2026-03-25T10:00:00'). Interpreted in the provided timezone if naive; honored as-is if it already carries an offset.
         timezone (str): IANA timezone for the scheduled time (e.g., 'Europe/Kyiv', 'UTC').
         deliver_to (str): Optional session ID to deliver results to instead of the current chat. Use this to post to a different platform or channel (e.g. 'sl_C01234ABC' for a Slack channel, 'tg_123456' for a Telegram chat). If empty, delivers to the current chat.
+        steps (list[str]): Optional ordered checklist. If provided, the plan is seeded into
+            storage before the agent's first turn and `plan_enforcer` injects it every turn —
+            the LLM cannot skip or paraphrase. Use for tasks that must follow an exact
+            sequence on every fire. See scheduling-skill → Enforced step-by-step scheduling.
 
     Returns:
         dict: Status of the scheduling operation.
@@ -247,18 +282,26 @@ def schedule_one_off_task(
             "message": "Cannot schedule: current user identity could not be determined from session state. "
                        "This task has no one to run as. Please retry from an authenticated chat.",
         }
+
+    validated_steps = _validate_steps(steps)
+    if isinstance(validated_steps, dict):  # error shape
+        return validated_steps
+
     notify = _stamp_ownership(notify, owner_user_id, deliver_to, _get_session_id(tool_context))
 
     job_id = f"oneoff_{uuid.uuid4().hex[:8]}"
+    job_kwargs = {
+        "task_prompt": task_prompt,
+        "notify": notify,
+        "owner_user_id": owner_user_id,
+    }
+    if validated_steps:
+        job_kwargs["steps"] = validated_steps
     job = scheduler.add_job(
         run_scheduled_task,
         "date",
         run_date=run_date,
-        kwargs={
-            "task_prompt": task_prompt,
-            "notify": notify,
-            "owner_user_id": owner_user_id,
-        },
+        kwargs=job_kwargs,
         id=job_id,
     )
 
@@ -281,6 +324,7 @@ def schedule_one_off_task(
 def schedule_recurring_task(
     task_prompt: str, cron_expression: str, timezone: str, tool_context: ToolContext,
     deliver_to: str = "",
+    steps: list[str] = None,
 ) -> dict:
     """Schedules the agent to execute a task automatically on a recurring schedule.
 
@@ -296,6 +340,10 @@ def schedule_recurring_task(
         cron_expression (str): A standard 5-part cron expression defining the schedule (e.g., '0 10 * * *' for every day at 10 AM).
         timezone (str): IANA timezone for the cron schedule (e.g., 'Europe/Kyiv', 'UTC').
         deliver_to (str): Optional session ID to deliver results to instead of the current chat. Use this to post to a different platform or channel (e.g. 'sl_C01234ABC' for a Slack channel, 'tg_123456' for a Telegram chat). If empty, delivers to the current chat.
+        steps (list[str]): Optional ordered checklist. If provided, the plan is seeded into
+            storage before the agent's first turn and `plan_enforcer` injects it every turn —
+            the LLM cannot skip or paraphrase. Use for tasks that must follow an exact
+            sequence on every fire. See scheduling-skill → Enforced step-by-step scheduling.
 
     Returns:
         dict: Status of the scheduling operation.
@@ -333,17 +381,25 @@ def schedule_recurring_task(
             "message": "Cannot schedule: current user identity could not be determined from session state. "
                        "This task has no one to run as. Please retry from an authenticated chat.",
         }
+
+    validated_steps = _validate_steps(steps)
+    if isinstance(validated_steps, dict):
+        return validated_steps
+
     notify = _stamp_ownership(notify, owner_user_id, deliver_to, _get_session_id(tool_context))
 
     job_id = f"cron_{uuid.uuid4().hex[:8]}"
+    job_kwargs = {
+        "task_prompt": task_prompt,
+        "notify": notify,
+        "owner_user_id": owner_user_id,
+    }
+    if validated_steps:
+        job_kwargs["steps"] = validated_steps
     job = scheduler.add_job(
         run_scheduled_task,
         trigger=trigger,
-        kwargs={
-            "task_prompt": task_prompt,
-            "notify": notify,
-            "owner_user_id": owner_user_id,
-        },
+        kwargs=job_kwargs,
         id=job_id,
     )
 
@@ -490,12 +546,17 @@ def edit_scheduled_task(
     new_run_at_iso_datetime: str = "",
     new_cron_expression: str = "",
     timezone: str = "",
+    new_steps: list[str] = None,
+    clear_steps: bool = False,
 ) -> dict:
     """Edits an existing scheduled task — all fields are optional, pass only what you want to change.
 
     - `new_task_prompt` changes the instruction (works for both one-off and recurring).
     - For one-off jobs: `new_run_at_iso_datetime` + `timezone` changes the run time.
     - For recurring jobs: `new_cron_expression` + `timezone` changes the schedule.
+    - `new_steps` replaces the enforced step list (adds enforcement to a non-enforced task,
+      or updates the checklist of an already-enforced one).
+    - `clear_steps=True` removes enforcement (task reverts to normal LLM-decided flow).
     - Cannot convert a one-off to recurring (or vice versa) — delete and recreate instead.
     - Ownership, delivery destination, and admin status are preserved unchanged.
 
@@ -507,6 +568,10 @@ def edit_scheduled_task(
         new_run_at_iso_datetime (str): Optional. New ISO 8601 datetime for one-off jobs. Empty = keep existing.
         new_cron_expression (str): Optional. New 5-part cron expression for recurring jobs. Empty = keep existing.
         timezone (str): IANA timezone — required if new_run_at_iso_datetime or new_cron_expression is provided.
+        new_steps (list[str]): Optional. Replace the enforced step list with this. Provide ordered
+            step descriptions. Ignored if clear_steps=True.
+        clear_steps (bool): If True, removes the enforced step list from the task (future fires
+            run under normal LLM-decided flow). Mutually exclusive with new_steps.
 
     Returns:
         dict: Status of the edit.
@@ -522,10 +587,16 @@ def edit_scheduled_task(
     if not _can_access_job(job, _get_user_id(tool_context), _is_admin(tool_context)):
         return {"status": "error", "message": f"Access denied: task {job_id} is not yours."}
 
-    if not (new_task_prompt or new_run_at_iso_datetime or new_cron_expression):
+    if not (new_task_prompt or new_run_at_iso_datetime or new_cron_expression or new_steps or clear_steps):
         return {
             "status": "error",
-            "message": "Nothing to update — provide at least one of new_task_prompt, new_run_at_iso_datetime, new_cron_expression.",
+            "message": "Nothing to update — provide at least one of new_task_prompt, "
+                       "new_run_at_iso_datetime, new_cron_expression, new_steps, or clear_steps.",
+        }
+    if new_steps and clear_steps:
+        return {
+            "status": "error",
+            "message": "new_steps and clear_steps are mutually exclusive — pick one.",
         }
 
     is_recurring = job.id.startswith("cron_") or job.id.startswith("sys_cron_")
@@ -546,6 +617,18 @@ def edit_scheduled_task(
     if new_task_prompt:
         existing_kwargs["task_prompt"] = new_task_prompt
     updated_prompt = existing_kwargs.get("task_prompt", "")
+
+    # Enforced-plan updates
+    if clear_steps:
+        existing_kwargs.pop("steps", None)
+    elif new_steps is not None:
+        validated_steps = _validate_steps(new_steps)
+        if isinstance(validated_steps, dict):
+            return validated_steps
+        if validated_steps:
+            existing_kwargs["steps"] = validated_steps
+        else:
+            existing_kwargs.pop("steps", None)
 
     new_run_date = None
     new_trigger = None
@@ -588,6 +671,10 @@ def edit_scheduled_task(
         parts.append(f"run_at={new_run_date.strftime('%Y-%m-%d %H:%M')} ({timezone})")
     if new_trigger is not None:
         parts.append(f"cron='{new_cron_expression}' ({timezone})")
+    if clear_steps:
+        parts.append("steps=<cleared, enforcement removed>")
+    elif new_steps is not None:
+        parts.append(f"steps={len(existing_kwargs.get('steps') or [])} enforced")
     return {
         "status": "success",
         "message": f"Updated task {job_id}: " + ", ".join(parts),
@@ -601,6 +688,7 @@ def edit_scheduled_task(
 def schedule_system_task(
     task_prompt: str, run_at_iso_datetime: str, timezone: str, tool_context: ToolContext,
     silent: bool = False, deliver_to: str = "",
+    steps: list[str] = None,
 ) -> dict:
     """Schedules a one-off system maintenance task that runs with admin privileges.
 
@@ -614,6 +702,9 @@ def schedule_system_task(
         timezone (str): IANA timezone for the scheduled time (e.g., 'Europe/Kyiv', 'UTC').
         silent (bool): If True, only notify the admin on failure/warnings. Successes are logged silently. Default: False.
         deliver_to (str): Optional session ID to deliver results to instead of the current chat (e.g. 'sl_C01234ABC' for a Slack channel). If empty, delivers to the current chat.
+        steps (list[str]): Optional ordered checklist. If provided, plan is seeded before the
+            agent's first turn and `plan_enforcer` injects it every turn. See
+            scheduling-skill → Enforced step-by-step scheduling.
 
     Returns:
         dict: Status of the scheduling operation.
@@ -645,19 +736,26 @@ def schedule_system_task(
                        "Provide a valid `deliver_to` session ID, or schedule from a chat that has a registered transport.",
         }
 
+    validated_steps = _validate_steps(steps)
+    if isinstance(validated_steps, dict):
+        return validated_steps
+
     notify = _stamp_ownership(notify, "", deliver_to, _get_session_id(tool_context))
 
     job_id = f"sys_oneoff_{uuid.uuid4().hex[:8]}"
+    job_kwargs = {
+        "task_prompt": task_prompt,
+        "notify": notify,
+        "admin_user_id": admin_user_id,
+        "silent": silent,
+    }
+    if validated_steps:
+        job_kwargs["steps"] = validated_steps
     scheduler.add_job(
         run_system_task,
         "date",
         run_date=run_date,
-        kwargs={
-            "task_prompt": task_prompt,
-            "notify": notify,
-            "admin_user_id": admin_user_id,
-            "silent": silent,
-        },
+        kwargs=job_kwargs,
         id=job_id,
     )
 
@@ -671,6 +769,7 @@ def schedule_system_task(
 
 def run_system_task_now(
     task_prompt: str, tool_context: ToolContext, silent: bool = False, deliver_to: str = "",
+    steps: list[str] = None,
 ) -> dict:
     """Immediately launches a system maintenance task in the background with admin privileges.
 
@@ -683,6 +782,8 @@ def run_system_task_now(
         task_prompt (str): The exact system task instruction (e.g. 'Analyze and fix the failing test in tests/test_structure.py').
         silent (bool): If True, only notify the admin on failure/warnings. Successes are logged silently. Default: False.
         deliver_to (str): Optional session ID to deliver results to instead of the current chat (e.g. 'sl_C01234ABC' for a Slack channel). If empty, delivers to the current chat.
+        steps (list[str]): Optional ordered checklist. If provided, plan is seeded before the
+            agent's first turn and `plan_enforcer` injects it every turn.
 
     Returns:
         dict: Confirmation that the task has been launched.
@@ -703,6 +804,10 @@ def run_system_task_now(
                        "Provide a valid `deliver_to` session ID, or run from a chat that has a registered transport.",
         }
 
+    validated_steps = _validate_steps(steps)
+    if isinstance(validated_steps, dict):
+        return validated_steps
+
     notify = _stamp_ownership(notify, "", deliver_to, _get_session_id(tool_context))
 
     task_id = f"immediate_{uuid.uuid4().hex[:8]}"
@@ -714,6 +819,7 @@ def run_system_task_now(
             admin_user_id=admin_user_id,
             silent=silent,
             task_id=task_id,
+            steps=validated_steps,
         ),
         name=task_id,
     )
@@ -729,6 +835,7 @@ def run_system_task_now(
 def schedule_recurring_system_task(
     task_prompt: str, cron_expression: str, timezone: str, tool_context: ToolContext,
     silent: bool = False, deliver_to: str = "",
+    steps: list[str] = None,
 ) -> dict:
     """Schedules a recurring system maintenance task that runs with admin privileges on a cron schedule.
 
@@ -742,6 +849,9 @@ def schedule_recurring_system_task(
         timezone (str): IANA timezone for the cron schedule (e.g., 'Europe/Kyiv', 'UTC').
         silent (bool): If True, only notify the admin on failure/warnings. Successes are logged silently. Default: False.
         deliver_to (str): Optional session ID to deliver results to instead of the current chat (e.g. 'sl_C01234ABC' for a Slack channel). If empty, delivers to the current chat.
+        steps (list[str]): Optional ordered checklist. If provided, plan is seeded before the
+            agent's first turn and `plan_enforcer` injects it every turn. See
+            scheduling-skill → Enforced step-by-step scheduling.
 
     Returns:
         dict: Status of the scheduling operation.
@@ -776,18 +886,25 @@ def schedule_recurring_system_task(
                        "Provide a valid `deliver_to` session ID, or schedule from a chat that has a registered transport.",
         }
 
+    validated_steps = _validate_steps(steps)
+    if isinstance(validated_steps, dict):
+        return validated_steps
+
     notify = _stamp_ownership(notify, "", deliver_to, _get_session_id(tool_context))
 
     job_id = f"sys_cron_{uuid.uuid4().hex[:8]}"
+    job_kwargs = {
+        "task_prompt": task_prompt,
+        "notify": notify,
+        "admin_user_id": admin_user_id,
+        "silent": silent,
+    }
+    if validated_steps:
+        job_kwargs["steps"] = validated_steps
     scheduler.add_job(
         run_system_task,
         trigger=trigger,
-        kwargs={
-            "task_prompt": task_prompt,
-            "notify": notify,
-            "admin_user_id": admin_user_id,
-            "silent": silent,
-        },
+        kwargs=job_kwargs,
         id=job_id,
     )
 

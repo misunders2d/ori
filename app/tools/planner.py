@@ -44,6 +44,32 @@ def _get_session_id(tool_context: ToolContext) -> str:
     return getattr(session, "session_id", None) or getattr(session, "id", None) or "default"
 
 
+def seed_plan(session_id: str, task: str, steps: list[str]) -> None:
+    """Programmatically populate a plan in storage — no LLM, no tool_context.
+
+    Used by the scheduler at fire time when a task carries an enforced step list.
+    The plan is written before the agent's first turn, so `plan_enforcer` has
+    something to inject from turn one — the LLM has no opportunity to skip the
+    plan-creation step.
+
+    Overwrites any existing plan for the session (scheduler sessions are ephemeral,
+    so collisions are unexpected; if one occurs, the caller's intent wins).
+    """
+    if not steps:
+        return
+    plan = {
+        "task": task[:500],
+        "status": "active",
+        "created_at": time.time(),
+        "current_step": 0,
+        "steps": [
+            {"id": i, "description": desc, "status": "pending", "result": None}
+            for i, desc in enumerate(steps)
+        ],
+    }
+    _save_plan(session_id, plan)
+
+
 def create_plan(
     task_description: str,
     steps: list[str],
