@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 # Configurable via AGENT_RPM env var (requests per minute). Default: 2000.
 # ---------------------------------------------------------------------------
 
+
 class _RequestThrottle:
     """Simple token-bucket rate limiter."""
 
@@ -63,8 +64,13 @@ def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
     # New sub-agents are blocked by default until added here.
     if tool.name == "transfer_to_agent":
         _NONADMIN_ALLOWED_AGENTS = {  # Agents with their own access control
-            "ClickUpAgent", "BigQueryAgent", "AmazonHeadAgent",
-            "AmazonAgent", "AmazonMemoryAgent", "AmazonWorkspaceAgent", "AmazonDataAnalystAgent",
+            "ClickUpAgent",
+            "BigQueryAgent",
+            "AmazonHeadAgent",
+            "AmazonAgent",
+            "AmazonMemoryAgent",
+            "AmazonWorkspaceAgent",
+            "AmazonDataAnalystAgent",
         }
         agent_target = args.get("agent_name", "").strip()
 
@@ -79,7 +85,7 @@ def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
             if not is_a2a and (not admin_users or user_id not in admin_users):
                 return {
                     "status": "error",
-                    "message": f"Guardrail Intervention: Only Admin/Master users can transfer to `{agent_target}`. Your user_id ({user_id}) is unauthorized."
+                    "message": f"Guardrail Intervention: Only Admin/Master users can transfer to `{agent_target}`. Your user_id ({user_id}) is unauthorized.",
                 }
         return None
 
@@ -188,14 +194,16 @@ def _cosine_similarity(v1, v2):
 
 
 _TOKEN_LIMIT = 900_000  # ~10% safety margin under 1M model limit
-_CHARS_PER_TOKEN = 4    # Conservative estimate
+_CHARS_PER_TOKEN = 4  # Conservative estimate
 
 
 def _estimate_tokens(llm_request: LlmRequest) -> int:
     """Estimate total token count from all contents in the LLM request."""
     total_chars = 0
     # System instruction
-    if getattr(llm_request, "config", None) and getattr(llm_request.config, "system_instruction", None):
+    if getattr(llm_request, "config", None) and getattr(
+        llm_request.config, "system_instruction", None
+    ):
         si = llm_request.config.system_instruction
         if hasattr(si, "parts"):
             for part in si.parts:
@@ -227,26 +235,36 @@ async def prompt_injection_guardrail(
     # Token gatekeeper — reject and instruct agent to reduce context
     est_tokens = _estimate_tokens(llm_request)
     if est_tokens > _TOKEN_LIMIT:
-        logger.warning("Token estimate %d exceeds %d for %s. Rejecting.",
-                       est_tokens, _TOKEN_LIMIT, callback_context.agent_name)
+        logger.warning(
+            "Token estimate %d exceeds %d for %s. Rejecting.",
+            est_tokens,
+            _TOKEN_LIMIT,
+            callback_context.agent_name,
+        )
         return LlmResponse(
             content=types.Content(
-                parts=[types.Part(
-                    text=(
-                        f"CONTEXT OVERFLOW: Your request is ~{est_tokens:,} tokens, which exceeds the "
-                        f"{_TOKEN_LIMIT:,} token safety limit. You MUST reduce your context before retrying:\n"
-                        "1. Use `scratchpad_write` to save your intermediate findings to disk.\n"
-                        "2. Summarize large tool outputs instead of keeping them in conversation.\n"
-                        "3. If the session is too bloated, ask the user to /reset.\n"
-                        "Do NOT retry the same request — it will fail again."
+                parts=[
+                    types.Part(
+                        text=(
+                            f"CONTEXT OVERFLOW: Your request is ~{est_tokens:,} tokens, which exceeds the "
+                            f"{_TOKEN_LIMIT:,} token safety limit. You MUST reduce your context before retrying:\n"
+                            "1. Use `scratchpad_write` to save your intermediate findings to disk.\n"
+                            "2. Summarize large tool outputs instead of keeping them in conversation.\n"
+                            "3. If the session is too bloated, ask the user to /reset.\n"
+                            "Do NOT retry the same request — it will fail again."
+                        )
                     )
-                )]
+                ]
             )
         )
 
     # Per-container rate throttle — prevents one agent from exhausting shared API quota
     if not _throttle.acquire():
-        logger.warning("Rate throttle hit (%d RPM). Waiting for token refill for %s.", _throttle.rpm, callback_context.agent_name)
+        logger.warning(
+            "Rate throttle hit (%d RPM). Waiting for token refill for %s.",
+            _throttle.rpm,
+            callback_context.agent_name,
+        )
         # Back off with increasing delays, up to ~60s total
         for delay in (5, 10, 15, 30):
             await asyncio.sleep(delay)
@@ -261,6 +279,7 @@ async def prompt_injection_guardrail(
     _SYSTEM_DIRECTIVE = (
         "CLARIFY BEFORE ACTING: If the user's intent is ambiguous, ask before acting. "
         "Never assume and waste tokens on the wrong task.\n"
+        "Prioritize quick responses, do not overthink unless explicitly asked to.\n"
         "TERSE STYLE: Respond caveman-terse. Drop articles (a/an/the), filler "
         "(just/really/basically/actually/simply), pleasantries (sure/certainly/happy to), "
         "hedging (might/perhaps/I think). Fragments OK. Short synonyms "
@@ -273,10 +292,13 @@ async def prompt_injection_guardrail(
         "On 'normal mode' / 'be verbose' / 'stop caveman': drop terse until told otherwise."
     )
     if llm_request.contents:
-        llm_request.contents.insert(0, types.Content(
-            role="user",
-            parts=[types.Part.from_text(text=f"[SYSTEM] {_SYSTEM_DIRECTIVE}")],
-        ))
+        llm_request.contents.insert(
+            0,
+            types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=f"[SYSTEM] {_SYSTEM_DIRECTIVE}")],
+            ),
+        )
 
     use_planner = callback_context.state.to_dict().get("use_planner", False)
     if not use_planner and getattr(llm_request, "config", None):
@@ -288,6 +310,7 @@ async def prompt_injection_guardrail(
     model_override = callback_context.state.to_dict().get(model_key)
     if model_override:
         from app.app_utils.models import _parse_model_str, get_model_string
+
         override_provider, override_model_name = _parse_model_str(model_override)
         # Determine the provider the agent was actually initialized with
         running_str = get_model_string(callback_context.agent_name)
@@ -301,7 +324,9 @@ async def prompt_injection_guardrail(
             logger.warning(
                 "Cross-provider hot-swap requested for %s (%s -> %s). "
                 "Takes effect after restart.",
-                callback_context.agent_name, running_provider, override_provider,
+                callback_context.agent_name,
+                running_provider,
+                override_provider,
             )
 
     if llm_request.contents:
@@ -318,6 +343,7 @@ async def prompt_injection_guardrail(
                 google_key = os.environ.get("GOOGLE_API_KEY", "").strip()
                 if vectors and google_key:
                     from google.genai import Client
+
                     client = Client(api_key=google_key)
                     try:
                         emb_response = client.models.embed_content(
@@ -552,7 +578,11 @@ def plan_enforcer(
     """Injects active plan context into the model prompt to enforce step-by-step execution."""
     from app.tools.planner import get_active_plan_context
 
-    session = getattr(callback_context, "session", None) if hasattr(callback_context, "session") else None
+    session = (
+        getattr(callback_context, "session", None)
+        if hasattr(callback_context, "session")
+        else None
+    )
     if not session:
         return None
     session_id = getattr(session, "session_id", None) or getattr(session, "id", None)
@@ -562,10 +592,13 @@ def plan_enforcer(
     context = get_active_plan_context(session_id)
     if context and llm_request.contents:
         # Prepend plan context as a system-level instruction
-        llm_request.contents.insert(0, types.Content(
-            role="user",
-            parts=[types.Part.from_text(text=context)],
-        ))
+        llm_request.contents.insert(
+            0,
+            types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=context)],
+            ),
+        )
 
     return None
 
@@ -623,6 +656,7 @@ async def state_setter(
 
     # Inject the current agent's model so it can answer "what model are you?"
     from app.app_utils.models import MODEL_DEFAULTS, get_model_string
+
     agent_name = callback_context.agent_name
     callback_context.state["current_model"] = get_model_string(agent_name) or "unknown"
 
