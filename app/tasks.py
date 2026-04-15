@@ -85,12 +85,29 @@ async def run_scheduled_task(task_prompt: str, notify: dict, task_id: str = None
             "Do not ask for missing credentials; stop gracefully if something is missing.)"
         )
 
+        # The scheduler runs under a synthetic user_id ("system_scheduler") so that
+        # it doesn't collide with anyone's chat session. But tools scoped to the
+        # task owner — Google Drive/Sheets/Calendar in particular — need the real
+        # owner's platform ID in state["user_id"] to resolve their OAuth token.
+        # owner_user_id is stamped into notify at task creation; inject it as
+        # actual_caller_id so state_setter promotes it into session state.
+        owner_user_id = (notify or {}).get("owner_user_id", "") or ""
+        if not owner_user_id:
+            logger.warning(
+                "Scheduled task %s has no owner_user_id — running unattributed; "
+                "user-scoped tools (Google, etc.) will fail.",
+                task_id,
+            )
+
         try:
             await runner.session_service.create_session(
                 app_name=runner.app_name, user_id=user_id, session_id=session_id
             )
 
-            response = await extract_agent_response(runner, user_id, session_id, query)
+            response = await extract_agent_response(
+                runner, user_id, session_id, query,
+                actual_caller_id=owner_user_id or None,
+            )
             response = response.text if hasattr(response, "text") else str(response)
             if not response or not response.strip():
                 # Agent returned empty — treat as failure so user sees something.
