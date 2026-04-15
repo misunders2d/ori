@@ -91,12 +91,32 @@ async def run_scheduled_task(task_prompt: str, notify: dict, task_id: str = None
         # owner's platform ID in state["user_id"] to resolve their OAuth token.
         # owner_user_id is stamped into notify at task creation; inject it as
         # actual_caller_id so state_setter promotes it into session state.
-        owner_user_id = (notify or {}).get("owner_user_id", "") or ""
+        _notify = notify or {}
+        owner_user_id = _notify.get("owner_user_id", "") or ""
+
+        # Backward-compat fallback: jobs persisted in APScheduler's jobstore
+        # before `owner_user_id` was stamped (or reschedule_job paths that
+        # preserve the stale kwargs) don't carry an explicit owner. For 1:1
+        # chat sessions the origin session id equals the creator's platform
+        # ID, so recover from there. Group-chat session IDs (e.g. Slack
+        # channels) won't resolve to a single user — that's still better
+        # than running as "system_scheduler", and the downstream
+        # resolve_email lookup will simply return empty if no mapping exists.
+        if not owner_user_id:
+            fallback = _notify.get("origin_session_id", "") or _notify.get("deliver_to_session", "") or ""
+            if fallback:
+                owner_user_id = fallback
+                logger.info(
+                    "Scheduled task %s: owner_user_id missing, falling back to session id %s",
+                    task_id, fallback,
+                )
+
         if not owner_user_id:
             logger.warning(
-                "Scheduled task %s has no owner_user_id — running unattributed; "
-                "user-scoped tools (Google, etc.) will fail.",
-                task_id,
+                "Scheduled task %s has no owner_user_id, origin_session_id, or "
+                "deliver_to_session — running unattributed; user-scoped tools will fail. "
+                "notify keys: %s",
+                task_id, sorted((_notify or {}).keys()),
             )
 
         try:
