@@ -111,6 +111,25 @@ async def run_scheduled_task(task_prompt: str, notify: dict, task_id: str = None
                     task_id, fallback,
                 )
 
+        # Last-resort reconstruction for legacy jobs whose notify dict only has
+        # {type, chat_id}. For 1:1 Telegram chats, chat_id == user's numeric
+        # Telegram ID, so `tg_<chat_id>` is the platform ID; similarly for
+        # Slack DMs. Group chats won't resolve to a single user — that's
+        # accepted, we just try our best and let resolve_email fail if it can't
+        # find a mapping.
+        if not owner_user_id:
+            notify_type = _notify.get("type", "")
+            chat_id = str(_notify.get("chat_id", "") or "")
+            type_prefix = {"telegram": "tg", "slack": "sl"}.get(notify_type, "")
+            if chat_id and type_prefix:
+                reconstructed = f"{type_prefix}_{chat_id}"
+                owner_user_id = reconstructed
+                logger.info(
+                    "Scheduled task %s: reconstructed owner from notify as %s "
+                    "(legacy job without ownership metadata)",
+                    task_id, reconstructed,
+                )
+
         if not owner_user_id:
             logger.warning(
                 "Scheduled task %s has no owner_user_id, origin_session_id, or "
