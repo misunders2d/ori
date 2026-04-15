@@ -149,15 +149,11 @@ def _job_owner(job) -> str:
         kwargs = job.kwargs or {}
     except Exception:
         return ""
-    # System tasks carry admin_user_id directly as a kwarg
-    admin_id = kwargs.get("admin_user_id", "")
-    if admin_id:
-        return admin_id
-    # User tasks stamp owner_user_id inside the notify dict
-    notify = kwargs.get("notify") or {}
-    if isinstance(notify, dict):
-        return notify.get("owner_user_id", "") or ""
-    return ""
+    # New contract: owner_user_id is an explicit top-level kwarg for user tasks,
+    # admin_user_id for system tasks. Both are set at schedule creation time and
+    # persisted in APScheduler's jobstore.
+    owner = kwargs.get("owner_user_id", "") or kwargs.get("admin_user_id", "") or ""
+    return owner
 
 
 def _can_access_job(job, user_id: str, is_admin: bool) -> bool:
@@ -175,19 +171,20 @@ def _can_access_job(job, user_id: str, is_admin: bool) -> bool:
 
 
 def _stamp_ownership(notify: dict, user_id: str, deliver_to: str, origin_session_id: str = "") -> dict:
-    """Attach ownership + history-injection metadata to the notify dict.
+    """Attach delivery + history-injection metadata to the notify dict.
 
-    These keys are used only by scheduling tools and the post-delivery session
-    injector — they pass through `_deliver_message` untouched (it reads only
-    `type` and `chat_id`/`channel`).
+    Ownership is NOT stored here any more — owner_user_id is an explicit top-level
+    kwarg on the job itself (see schedule_one_off_task / schedule_recurring_task).
+    This function only records where to deliver results and which chat session's
+    history should receive the synthetic event on fire. The `user_id` arg is
+    retained for signature compatibility but unused; it will be removed once
+    all callers are updated.
     """
+    del user_id  # intentionally ignored — see docstring
     stamped = dict(notify) if notify else {}
-    if user_id:
-        stamped["owner_user_id"] = user_id
     if deliver_to:
         stamped["deliver_to_session"] = deliver_to
-    # The chat session whose history should receive the synthetic event when the
-    # task fires. Prefer the explicit deliver_to target; fall back to origin.
+    # Prefer an explicit deliver_to target; fall back to the origin session.
     target_session = deliver_to or origin_session_id
     if target_session:
         stamped["origin_session_id"] = target_session
@@ -243,15 +240,25 @@ def schedule_one_off_task(
                        "Provide a valid `deliver_to` session ID, or schedule from a chat that has a registered transport.",
         }
 
-    user_id = _get_user_id(tool_context)
-    notify = _stamp_ownership(notify, user_id, deliver_to, _get_session_id(tool_context))
+    owner_user_id = _get_user_id(tool_context)
+    if not owner_user_id:
+        return {
+            "status": "error",
+            "message": "Cannot schedule: current user identity could not be determined from session state. "
+                       "This task has no one to run as. Please retry from an authenticated chat.",
+        }
+    notify = _stamp_ownership(notify, owner_user_id, deliver_to, _get_session_id(tool_context))
 
     job_id = f"oneoff_{uuid.uuid4().hex[:8]}"
     job = scheduler.add_job(
         run_scheduled_task,
         "date",
         run_date=run_date,
-        kwargs={"task_prompt": task_prompt, "notify": notify},
+        kwargs={
+            "task_prompt": task_prompt,
+            "notify": notify,
+            "owner_user_id": owner_user_id,
+        },
         id=job_id,
     )
 
@@ -319,14 +326,24 @@ def schedule_recurring_task(
                        "Provide a valid `deliver_to` session ID, or schedule from a chat that has a registered transport.",
         }
 
-    user_id = _get_user_id(tool_context)
-    notify = _stamp_ownership(notify, user_id, deliver_to, _get_session_id(tool_context))
+    owner_user_id = _get_user_id(tool_context)
+    if not owner_user_id:
+        return {
+            "status": "error",
+            "message": "Cannot schedule: current user identity could not be determined from session state. "
+                       "This task has no one to run as. Please retry from an authenticated chat.",
+        }
+    notify = _stamp_ownership(notify, owner_user_id, deliver_to, _get_session_id(tool_context))
 
     job_id = f"cron_{uuid.uuid4().hex[:8]}"
     job = scheduler.add_job(
         run_scheduled_task,
         trigger=trigger,
-        kwargs={"task_prompt": task_prompt, "notify": notify},
+        kwargs={
+            "task_prompt": task_prompt,
+            "notify": notify,
+            "owner_user_id": owner_user_id,
+        },
         id=job_id,
     )
 

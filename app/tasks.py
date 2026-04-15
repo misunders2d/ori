@@ -42,11 +42,21 @@ def _log_job_event(event: str, **fields) -> None:
         logger.warning("Failed to write scheduler job log: %s", e)
 
 
-async def run_scheduled_task(task_prompt: str, notify: dict, task_id: str = None):
+async def run_scheduled_task(
+    task_prompt: str,
+    notify: dict,
+    owner_user_id: str,
+    task_id: str = None,
+):
     """
     Executed by APScheduler when a scheduled task fires.
-    Runs the agent with the task prompt and delivers the response
-    to the user via their original messaging channel.
+
+    owner_user_id is the creator's platform identifier (e.g. 'tg_330959414' or
+    'sergey@mellanni.com') and is required — scheduling tools refuse to create
+    tasks without one, so a missing value here indicates a corrupted job from
+    before this contract was introduced. Such jobs are wiped by the
+    scripts/reset_scheduled_tasks.py migration; if you see the warning below
+    in production, run that script and have the creator reschedule.
     """
     from app.core.agent_executor import extract_agent_response
     from run_bot import get_runner
@@ -85,58 +95,30 @@ async def run_scheduled_task(task_prompt: str, notify: dict, task_id: str = None
             "Do not ask for missing credentials; stop gracefully if something is missing.)"
         )
 
-        # The scheduler runs under a synthetic user_id ("system_scheduler") so that
-        # it doesn't collide with anyone's chat session. But tools scoped to the
-        # task owner — Google Drive/Sheets/Calendar in particular — need the real
-        # owner's platform ID in state["user_id"] to resolve their OAuth token.
-        # owner_user_id is stamped into notify at task creation; inject it as
-        # actual_caller_id so state_setter promotes it into session state.
-        _notify = notify or {}
-        owner_user_id = _notify.get("owner_user_id", "") or ""
-
-        # Backward-compat fallback: jobs persisted in APScheduler's jobstore
-        # before `owner_user_id` was stamped (or reschedule_job paths that
-        # preserve the stale kwargs) don't carry an explicit owner. For 1:1
-        # chat sessions the origin session id equals the creator's platform
-        # ID, so recover from there. Group-chat session IDs (e.g. Slack
-        # channels) won't resolve to a single user — that's still better
-        # than running as "system_scheduler", and the downstream
-        # resolve_email lookup will simply return empty if no mapping exists.
+        # The scheduler runs tasks under a synthetic user_id ("system_scheduler")
+        # so the session is isolated from the owner's chat. But per-user tools
+        # (Google, preferences, admin checks) need state["user_id"] to be the
+        # real owner — we inject it via actual_caller_id, which state_setter
+        # then promotes into session state. owner_user_id is a required kwarg
+        # on this function; if it's missing, the job is stale (created before
+        # this contract) and no per-user tool can succeed.
         if not owner_user_id:
-            fallback = _notify.get("origin_session_id", "") or _notify.get("deliver_to_session", "") or ""
-            if fallback:
-                owner_user_id = fallback
-                logger.info(
-                    "Scheduled task %s: owner_user_id missing, falling back to session id %s",
-                    task_id, fallback,
-                )
-
-        # Last-resort reconstruction for legacy jobs whose notify dict only has
-        # {type, chat_id}. For 1:1 Telegram chats, chat_id == user's numeric
-        # Telegram ID, so `tg_<chat_id>` is the platform ID; similarly for
-        # Slack DMs. Group chats won't resolve to a single user — that's
-        # accepted, we just try our best and let resolve_email fail if it can't
-        # find a mapping.
-        if not owner_user_id:
-            notify_type = _notify.get("type", "")
-            chat_id = str(_notify.get("chat_id", "") or "")
-            type_prefix = {"telegram": "tg", "slack": "sl"}.get(notify_type, "")
-            if chat_id and type_prefix:
-                reconstructed = f"{type_prefix}_{chat_id}"
-                owner_user_id = reconstructed
-                logger.info(
-                    "Scheduled task %s: reconstructed owner from notify as %s "
-                    "(legacy job without ownership metadata)",
-                    task_id, reconstructed,
-                )
-
-        if not owner_user_id:
-            logger.warning(
-                "Scheduled task %s has no owner_user_id, origin_session_id, or "
-                "deliver_to_session — running unattributed; user-scoped tools will fail. "
-                "notify keys: %s",
-                task_id, sorted((_notify or {}).keys()),
+            logger.error(
+                "Scheduled task %s has no owner_user_id. The job was persisted "
+                "before the explicit-owner contract was introduced. Wipe legacy "
+                "jobs with scripts/reset_scheduled_tasks.py and have the creator "
+                "reschedule. Failing the task.",
+                task_id,
             )
+            response = (
+                f":x: Scheduled task `{task_id}` failed: no owner recorded on this job. "
+                f"Please reschedule this task (the legacy entry pre-dates the identity fix)."
+            )
+            ACTIVE_TASKS[task_id]["status"] = "Failed (no owner)"
+            ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
+            _log_job_event("error", task_id=task_id, kind="scheduled", error="missing owner_user_id")
+            await _deliver_with_fallback(notify, response, task_id=task_id)
+            return
 
         try:
             await runner.session_service.create_session(
