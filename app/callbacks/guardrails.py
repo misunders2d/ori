@@ -473,6 +473,38 @@ def verify_retry_guardrail(tool, args, tool_context, tool_response):
     return None
 
 
+def plan_enforcer(
+    callback_context: CallbackContext, llm_request: LlmRequest
+) -> LlmResponse | None:
+    """Injects active plan context into the model prompt to enforce step-by-step execution.
+
+    Runs as a before_model_callback on the coordinator. If the current session has
+    an active plan (written by create_plan or scheduler-seeded via seed_plan), its
+    context is prepended to the LLM's contents so the agent cannot forget the
+    active step. Works hand-in-hand with the `steps` kwarg on scheduling tools:
+    the scheduler seeds a plan programmatically before the agent's first turn,
+    and this callback injects it every turn until the plan completes.
+    """
+    from app.tools.planner import get_active_plan_context
+
+    session = getattr(callback_context, "session", None) if hasattr(callback_context, "session") else None
+    if not session:
+        return None
+    session_id = getattr(session, "session_id", None) or getattr(session, "id", None)
+    if not session_id:
+        return None
+
+    context = get_active_plan_context(session_id)
+    if context and llm_request.contents:
+        # Prepend plan context as a system-level instruction
+        llm_request.contents.insert(0, types.Content(
+            role="user",
+            parts=[types.Part.from_text(text=context)],
+        ))
+
+    return None
+
+
 async def state_setter(
     callback_context: CallbackContext, **kwargs
 ) -> types.Content | None:

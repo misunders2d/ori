@@ -143,7 +143,17 @@ async def _perform_session_refresh(
         await runner.session_service.create_session(
             app_name=runner.app_name, user_id=user_id, session_id=session_id
         )
-        return "Fresh session started."
+
+    # Clean up any active plan file for this session — it belongs to the
+    # prior conversation, not whatever starts next.
+    try:
+        import os as _os
+        plan_path = _os.path.join(_os.path.abspath("./tmp/plans"), f"{session_id}.json")
+        if _os.path.exists(plan_path):
+            _os.remove(plan_path)
+    except Exception:
+        pass
+    return "Fresh session started."
 
 
 async def update_session_state(runner, user_id: str, session_id: str, state_delta: dict):

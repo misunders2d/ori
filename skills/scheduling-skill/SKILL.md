@@ -78,19 +78,47 @@ The Slack channel ID is the `<#CXXX\|name>` value (the `C…` part). For groups 
 
 You can run **multiple recurring tasks delivering to different channels** in parallel. Each fire gets its own ephemeral session, so plans, scratchpads, and conversation history don't leak between jobs.
 
-## Plan enforcement for scheduled tasks
+## Enforced step-by-step scheduling
 
-If the scheduled task is non-trivial (3+ steps, must follow the same checklist every fire), bake the plan instruction into `task_prompt` itself:
+Use this pattern when the user says things like "must follow exactly", "precisely", "strict", "every step", "never skip", "daily checklist", or any framing that implies the task is a **playbook** — an ordered process that must execute the same way every fire, with no room for the agent to paraphrase, reorder, or skip.
 
-```
-CRITICAL: You MUST use create_plan with the following steps before doing anything else:
-1. ...
-2. ...
-3. ...
-Report tool failures immediately to the delivery channel.
-```
+**The mechanism (hard-wired, not LLM-decided):** pass a `steps: list[str]` kwarg to any scheduling tool. At fire time, the scheduler seeds the plan into storage **before the agent's first turn**, and `plan_enforcer` (wired on the coordinator as `before_model_callback`) injects the plan into every subsequent LLM turn. The agent cannot "forget" to plan — the plan already exists when it wakes up. This is enforced in code, not by instruction.
 
-This works because each fire runs the full CoordinatorAgent (with `plan_enforcer` callback wired in). The agent will create a fresh plan per fire — no leakage from previous runs.
+All scheduling tools accept the optional `steps` argument: `schedule_one_off_task`, `schedule_recurring_task`, `schedule_system_task`, `schedule_recurring_system_task`, and `run_system_task_now`.
+
+### The review-and-approve workflow
+
+When a user asks for this kind of task, follow this flow:
+
+1. **Collect the steps.** Sources:
+   - User dictates them in chat → copy verbatim, no summarizing.
+   - User points at a Google Sheet → call `sheets_read`, extract the step column. Keep the exact text.
+   - User points at a file → read it, extract the steps. Keep the exact text.
+2. **Show the exact tool call for review.** Print the full `schedule_*_task(...)` invocation in a code block, with `task_prompt` and the full `steps` list visible. No paraphrasing, no summarization.
+3. **Require explicit approval.** Wait for the user to respond with `APPROVE` (or similarly clear affirmation). Any edit request → apply, re-print the full call, wait for approval again.
+4. **Call the tool unchanged.** Do not mutate the approved text between approval and the tool call.
+
+The approval step exists precisely because LLMs tend to "tidy up" when translating between formats. This is the checkpoint that catches it.
+
+### Editing an enforced task
+
+- To change the step list: `edit_scheduled_task(job_id, new_steps=[...])`. Follow the same review-and-approve flow before calling.
+- To remove enforcement entirely: `edit_scheduled_task(job_id, clear_steps=True)` — the task reverts to normal LLM-decided flow.
+- To add enforcement to an existing non-enforced task: `edit_scheduled_task(job_id, new_steps=[...])`.
+
+### What NOT to do
+
+- **Do NOT embed `CRITICAL: You MUST use create_plan…` style instructions in `task_prompt`.** That was the old pattern. It relied on the LLM obeying. The new pattern bypasses the LLM entirely for plan seeding — just use `steps`.
+- **Do NOT call `create_plan` as the first action of an enforced task.** The plan already exists in storage. Go straight to `get_next_step` and execute.
+- **Do NOT paraphrase step text.** If you think a step is unclear, ask the user to revise it before scheduling. Don't rewrite on their behalf.
+
+### Where enforcement lives
+
+- Schedule creation: `steps` is persisted as a top-level kwarg on the APScheduler job (alongside `task_prompt`, `notify`, `owner_user_id`).
+- Fire time: `run_scheduled_task` / `run_system_task` calls `planner.seed_plan(session_id, task, steps)` **before** invoking the agent. No LLM round-trip; no opportunity to skip.
+- Runtime: `plan_enforcer` reads from the planner store on every turn and injects into the prompt.
+
+If `steps` is not provided, none of this triggers and the task runs as a normal scheduled agent invocation.
 
 ## Posting to a channel without scheduling
 

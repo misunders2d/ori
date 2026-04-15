@@ -9,6 +9,7 @@ from app.app_utils.models import get_model
 from app.callbacks.guardrails import (
     a2a_privacy_guardrail,
     admin_tool_guardrail,
+    plan_enforcer,
     prompt_injection_guardrail,
     state_setter,
     tool_output_injection_guardrail,
@@ -17,6 +18,7 @@ from app.sub_agents.developer_agent import developer_agent
 from app.sub_agents.knowledge_agent import knowledge_agent
 from app.toolsets import (
     MemoryToolset,
+    PlannerToolset,
     SchedulingToolset,
     SystemToolset,
 )
@@ -71,6 +73,7 @@ root_agent = Agent(
         SchedulingToolset(),
         MemoryToolset(),
         SystemToolset(),
+        PlannerToolset(),
         # Individual tools
         *([google_search_agent_tool] if google_search_agent_tool else []),
         web_fetch,
@@ -78,7 +81,7 @@ root_agent = Agent(
         blacklist_chat,
     ],
     before_agent_callback=[state_setter],
-    before_model_callback=prompt_injection_guardrail,
+    before_model_callback=[prompt_injection_guardrail, plan_enforcer],
     before_tool_callback=[admin_tool_guardrail, a2a_privacy_guardrail],
     after_tool_callback=[tool_output_injection_guardrail, a2a_privacy_guardrail],
 )

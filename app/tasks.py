@@ -47,6 +47,7 @@ async def run_scheduled_task(
     notify: dict,
     owner_user_id: str,
     task_id: str = None,
+    steps: list[str] = None,
 ):
     """
     Executed by APScheduler when a scheduled task fires.
@@ -57,6 +58,11 @@ async def run_scheduled_task(
     before this contract was introduced. Such jobs are wiped by the
     scripts/reset_scheduled_tasks.py migration; if you see the warning below
     in production, run that script and have the creator reschedule.
+
+    If `steps` is provided (enforced task), the plan is seeded into storage
+    before the agent runs — `plan_enforcer` injects it from turn one, so the
+    LLM cannot skip or paraphrase steps. If `steps` is None, the task runs
+    under normal (LLM-decided) flow.
     """
     from app.core.agent_executor import extract_agent_response
     from run_bot import get_runner
@@ -125,6 +131,17 @@ async def run_scheduled_task(
                 app_name=runner.app_name, user_id=user_id, session_id=session_id
             )
 
+            # Enforced task: seed the plan BEFORE the agent's first turn so
+            # plan_enforcer has something to inject immediately. The LLM has
+            # no opportunity to skip create_plan — the plan already exists.
+            if steps:
+                from app.tools.planner import seed_plan
+                seed_plan(session_id, task_prompt[:500], steps)
+                logger.info(
+                    "Scheduled task %s: seeded enforced plan with %d step(s)",
+                    task_id, len(steps),
+                )
+
             response = await extract_agent_response(
                 runner, user_id, session_id, query,
                 actual_caller_id=owner_user_id or None,
@@ -186,10 +203,21 @@ async def run_scheduled_task(
     )
 
 
-async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, silent: bool = False, task_id: str = None):
+async def run_system_task(
+    task_prompt: str,
+    notify: dict,
+    admin_user_id: str,
+    silent: bool = False,
+    task_id: str = None,
+    steps: list[str] = None,
+):
     """
     Executed by APScheduler for admin-only system maintenance tasks.
     Runs the agent with full privileges in an isolated session, then cleans up.
+
+    If `steps` is provided (enforced task), the plan is seeded into storage
+    before the agent runs — plan_enforcer injects it from turn one. LLM cannot
+    skip or paraphrase steps. If `steps` is None, normal LLM-decided flow.
     """
     import uuid
 
@@ -246,6 +274,16 @@ async def run_system_task(task_prompt: str, notify: dict, admin_user_id: str, si
         await runner.session_service.create_session(
             app_name=runner.app_name, user_id=user_id, session_id=session_id
         )
+
+        # Enforced task: seed the plan before first turn. See run_scheduled_task
+        # for the same pattern.
+        if steps:
+            from app.tools.planner import seed_plan
+            seed_plan(session_id, task_prompt[:500], steps)
+            logger.info(
+                "System task %s: seeded enforced plan with %d step(s)",
+                task_id, len(steps),
+            )
 
         await update_session_state(
             runner=runner, user_id=user_id, session_id=session_id,
