@@ -1,9 +1,12 @@
 """Diagnostic: probe each stored Google refresh token and print Google's verdict.
 
-Run from the repo root after loading env vars:
+Run from the repo root:
 
-    set -a; source .env; set +a
     uv run python scripts/check_google_refresh.py
+
+Hydrates GOOGLE_OAUTH_CLIENT_ID / _SECRET from the project's vault
+(data/vault/credentials.json) via deploy.vault.load_vault — the same path
+the bot itself uses at startup, so no .env is required.
 
 For each row in data/oauth_tokens.db, this attempts an offline refresh against
 Google's token endpoint (same code path the agent uses) and prints the raw
@@ -17,7 +20,12 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from app.tools.google_oauth.device_flow import refresh_access_token
+# Hydrate vault-backed secrets into os.environ before anything else imports settings.
+from deploy.vault import load_vault
+
+load_vault()
+
+from app.tools.google_oauth.device_flow import refresh_access_token  # noqa: E402
 
 
 DB_PATH = Path("data/oauth_tokens.db")
