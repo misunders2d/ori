@@ -42,11 +42,21 @@ def _log_job_event(event: str, **fields) -> None:
         logger.warning("Failed to write scheduler job log: %s", e)
 
 
-async def run_scheduled_task(task_prompt: str, notify: dict, task_id: str = None):
+async def run_scheduled_task(
+    task_prompt: str,
+    notify: dict,
+    owner_user_id: str,
+    task_id: str = None,
+):
     """
     Executed by APScheduler when a scheduled task fires.
-    Runs the agent with the task prompt and delivers the response
-    to the user via their original messaging channel.
+
+    owner_user_id is the creator's platform identifier (e.g. 'tg_330959414' or
+    'sergey@mellanni.com') and is required — scheduling tools refuse to create
+    tasks without one, so a missing value here indicates a corrupted job from
+    before this contract was introduced. Such jobs are wiped by the
+    scripts/reset_scheduled_tasks.py migration; if you see the warning below
+    in production, run that script and have the creator reschedule.
     """
     from app.core.agent_executor import extract_agent_response
     from run_bot import get_runner
@@ -85,19 +95,30 @@ async def run_scheduled_task(task_prompt: str, notify: dict, task_id: str = None
             "Do not ask for missing credentials; stop gracefully if something is missing.)"
         )
 
-        # The scheduler runs under a synthetic user_id ("system_scheduler") so that
-        # it doesn't collide with anyone's chat session. But tools scoped to the
-        # task owner — any per-user OAuth token, preferences, or admin check —
-        # need the real owner's platform ID in state["user_id"]. owner_user_id is
-        # stamped into notify at task creation; inject it as actual_caller_id so
-        # state_setter promotes it into session state.
-        owner_user_id = (notify or {}).get("owner_user_id", "") or ""
+        # The scheduler runs tasks under a synthetic user_id ("system_scheduler")
+        # so the session is isolated from the owner's chat. But per-user tools
+        # need state["user_id"] to be the real owner — we inject it via
+        # actual_caller_id, which state_setter then promotes into session state.
+        # owner_user_id is a required kwarg on this function; if it's missing,
+        # the job is stale (created before this contract) and no per-user tool
+        # can succeed.
         if not owner_user_id:
-            logger.warning(
-                "Scheduled task %s has no owner_user_id — running unattributed; "
-                "user-scoped tools will fail.",
+            logger.error(
+                "Scheduled task %s has no owner_user_id. The job was persisted "
+                "before the explicit-owner contract was introduced. Wipe legacy "
+                "jobs with scripts/reset_scheduled_tasks.py and have the creator "
+                "reschedule. Failing the task.",
                 task_id,
             )
+            response = (
+                f":x: Scheduled task `{task_id}` failed: no owner recorded on this job. "
+                f"Please reschedule this task (the legacy entry pre-dates the identity fix)."
+            )
+            ACTIVE_TASKS[task_id]["status"] = "Failed (no owner)"
+            ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
+            _log_job_event("error", task_id=task_id, kind="scheduled", error="missing owner_user_id")
+            await _deliver_with_fallback(notify, response, task_id=task_id)
+            return
 
         try:
             await runner.session_service.create_session(
