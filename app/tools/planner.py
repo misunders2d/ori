@@ -44,6 +44,19 @@ def _get_session_id(tool_context: ToolContext) -> str:
     return getattr(session, "session_id", None) or getattr(session, "id", None) or "default"
 
 
+def plan_has_pending_steps(session_id: str) -> bool:
+    """True if there's an active plan for this session with steps not yet done.
+
+    Used by the scheduler's plan-driven loop to decide whether to re-invoke the
+    agent after its turn ends — a pending step means the agent stopped mid-plan
+    (typically by emitting a user-facing text summary) and needs another push.
+    """
+    plan = _load_plan(session_id)
+    if not plan or plan.get("status") != "active":
+        return False
+    return any(s.get("status") != "done" for s in plan.get("steps", []))
+
+
 def seed_plan(session_id: str, task: str, steps: list[str]) -> None:
     """Programmatically populate a plan in storage — no LLM, no tool_context.
 
