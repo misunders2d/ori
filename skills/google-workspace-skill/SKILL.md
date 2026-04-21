@@ -1,11 +1,11 @@
 ---
 name: google-workspace-skill
-description: "Google Drive, Sheets, and Calendar integration — per-user OAuth2 connection, file management, spreadsheet operations, calendar management."
+description: "Google Drive, Sheets, Calendar, and Gmail integration — per-user OAuth2 connection, file management, spreadsheet operations, calendar management, read-only Gmail access."
 ---
 
 # Google Workspace Skill
 
-Per-user Google Drive, Sheets, and Calendar access via OAuth2 device code flow. Each user connects their own Google account — they see their own files and calendars.
+Per-user Google Drive, Sheets, Calendar, and Gmail access via OAuth2 device code flow. Each user connects their own Google account — they see their own files, calendars, and mailbox. Gmail is read-only for now.
 
 ## Connection Flow
 
@@ -15,7 +15,7 @@ Per-user Google Drive, Sheets, and Calendar access via OAuth2 device code flow. 
 - [ ] Step 4: User confirms they authorized → call `google_connect_complete`
 - [ ] Step 5: Done — all Drive/Sheets/Calendar tools now work for that user
 
-One connection grants access to Drive, Sheets, AND Calendar. No need to connect separately.
+One connection grants access to Drive, Sheets, Calendar, AND Gmail. No need to connect separately.
 
 ## Tools
 
@@ -48,6 +48,16 @@ One connection grants access to Drive, Sheets, AND Calendar. No need to connect 
 | `calendar_update_event(event_id, ...)` | Update an existing event (only provided fields change) |
 | `calendar_delete_event(event_id)` | Delete an event |
 
+### Gmail (read-only)
+| Tool | Purpose |
+|------|---------|
+| `gmail_list_labels()` | Enumerate labels. Returns system (INBOX, SENT, etc.) and user-defined labels. |
+| `gmail_list_messages(query, max_results, label_ids)` | Search messages. Uses Gmail search syntax. |
+| `gmail_get_message(message_id, full)` | Full headers + body + attachment metadata. Body truncated to 8000 chars unless `full=True`. |
+| `gmail_list_threads(query, max_results)` | Thread-centric list — useful for back-and-forth conversations. |
+| `gmail_get_thread(thread_id, full)` | All messages in a thread. Each body truncated per `full`. |
+| `gmail_download_attachment(message_id, attachment_id, filename)` | Save an attachment to `./tmp/gmail_attachments/`. Cached 24h by default. |
+
 ## Calendar Usage
 
 - **Calendar ID:** Use `'primary'` for the user's main calendar (default). Call `calendar_list` to discover shared/team calendars.
@@ -55,6 +65,14 @@ One connection grants access to Drive, Sheets, AND Calendar. No need to connect 
 - **Timezone:** Pass `timezone_str` (e.g. `'America/New_York'`) when creating/updating events. If omitted, uses the calendar's default timezone. Always call `get_current_time` to know the user's timezone before scheduling.
 - **Attendees:** Comma-separated email addresses (e.g. `'alice@mellanni.com,bob@mellanni.com'`). Invitations are sent automatically by Google.
 - **All-day events:** For all-day events, use date format `'2026-04-10'` instead of datetime.
+
+## Gmail Usage
+
+- **Search syntax:** Use Gmail's native search operators — `from:`, `to:`, `subject:`, `is:unread`, `has:attachment`, `newer_than:7d`, `label:INBOX`. Combine freely: `from:amazon.com is:unread newer_than:3d`.
+- **Body truncation:** By default, bodies are clipped to 8000 chars and end with a `[truncated, N more chars — call with full=True]` marker. Call the tool again with `full=True` when you genuinely need the whole body.
+- **Attachments:** `gmail_download_attachment` writes to `./tmp/gmail_attachments/{message_id}_{filename}`. Files older than 24h are purged automatically on the next download (override with `GMAIL_ATTACHMENT_TTL_HOURS`). The cache is not a Drive upload — it's a local scratch area.
+- **Threads vs messages:** Prefer `gmail_list_threads` + `gmail_get_thread` for buyer↔seller or supplier conversations; use messages tools for one-shot notifications (Amazon alerts, receipts).
+- **Read-only:** Sending, drafting, labeling, and archiving aren't available yet. If the user asks to send a reply, tell them this is a read-only integration for now.
 
 ## NOT Your Job: Personal Reminders
 
@@ -75,9 +93,10 @@ Create a calendar event only when the user explicitly says "add to my calendar",
 
 - **User must connect first.** All tools return "not connected" if the user hasn't authorized. Don't retry — tell them to run the connect flow.
 - **Per-user access.** Each user sees only their own files and calendars. Tokens are stored per-email.
-- **Existing users must reconnect** after Calendar was added (new scope). If Calendar tools fail with permission errors, tell the user to run `google_connect` again.
+- **Existing users must reconnect** after Calendar or Gmail were added (new scopes). If Calendar or Gmail tools fail with permission errors, tell the user to run `google_connect` again.
 - **Spreadsheet ID is in the URL.** `https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit` — extract the ID between `/d/` and `/edit`.
 - **Range format.** Use A1 notation: `Sheet1!A1:D10`, `Sheet1`, `A1:B5`. Sheet name is optional if there's only one sheet.
 - **Tokens auto-refresh.** Access tokens expire after 1 hour but refresh automatically. If refresh fails, the user needs to reconnect.
 - **OAuth client must be configured.** Needs `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` in vault. Set via `/init`.
 - **Calendar API must be enabled** in the Google Cloud project (console.cloud.google.com → APIs & Services → Calendar API).
+- **Gmail API must be enabled** in the Google Cloud project (console.cloud.google.com → APIs & Services → Gmail API).
