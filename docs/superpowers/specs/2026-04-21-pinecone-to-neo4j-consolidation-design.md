@@ -23,7 +23,7 @@ Eliminate Pinecone from amazon_manager and consolidate all persistent memory + k
 3. **Vector indexes per label.** One vector index per namespace label — index-level isolation complements the code-enforced ACL as defense in depth. A query targeting the `personal_memory_embedding` index cannot physically return `:Memory:Professional` nodes.
 4. **Embedder: OpenAI `text-embedding-3-small`, 1536 dims, cosine.** Called inline via Cypher through Neo4j's GenAI plugin (`ai.text.embed(text, 'OpenAI', config)`). No Python embedding helper. Multilingual (Russian, Spanish, 100+ languages).
 5. **Authorship as a graph edge.** `(:Person)-[:AUTHORED]->(record)` replaces the current `author_user_id` string property. Update/delete checks become Cypher MATCH queries on the edge.
-6. **Auto-provisioned caller Person nodes.** First contact from a new caller lazily MERGEs a `:Person` node keyed on their platform `user_id`, with namespace label decided by `COMPANY_EMAIL_DOMAIN` email-domain match.
+6. **Auto-provisioned caller Person nodes.** First contact from a new caller lazily MERGEs a `:Person` node keyed on their platform `user_id`, with namespace label decided by `COMPANY_DOMAIN` email-domain match (existing env var — same one `clickup_agent.py` and `bigquery_agent.py` already use).
 7. **Hard-cutover migration.** Stop bot → purge Neo4j → run one-shot migration script → deploy Pinecone-free code → restart bot.
 
 ## Node model
@@ -33,7 +33,7 @@ Eliminate Pinecone from amazon_manager and consolidate all persistent memory + k
 | Label | Vector index | Read ACL | Create | Update/Delete |
 |---|---|---|---|---|
 | `:Memory:Personal` | `personal_memory_embedding` | admins only | any authenticated caller | creator (via `:AUTHORED`) or admin |
-| `:Memory:Professional` | `professional_memory_embedding` | `is_admin` OR email-domain ∈ `COMPANY_EMAIL_DOMAIN` | any authenticated caller | creator or admin |
+| `:Memory:Professional` | `professional_memory_embedding` | `is_admin` OR `user_id.endswith("@" + COMPANY_DOMAIN)` | any authenticated caller | creator or admin |
 | `:Memory:Technical` | `technical_memory_embedding` | open | any authenticated caller | creator or admin |
 
 All three vector indexes: `DIMENSIONS 1536`, `SIMILARITY_FUNCTION 'cosine'`.
@@ -45,7 +45,7 @@ All three vector indexes: `DIMENSIONS 1536`, `SIMILARITY_FUNCTION 'cosine'`.
 | Label | Vector index | Read ACL | Create | Update/Delete |
 |---|---|---|---|---|
 | `:Person:Personal` | `personal_person_embedding` | admins only | any authenticated caller | creator or admin |
-| `:Person:Professional` | `professional_person_embedding` | `is_admin` OR email-domain ∈ `COMPANY_EMAIL_DOMAIN` | any authenticated caller | creator or admin |
+| `:Person:Professional` | `professional_person_embedding` | `is_admin` OR `user_id.endswith("@" + COMPANY_DOMAIN)` | any authenticated caller | creator or admin |
 
 Dual-scope: a single `:Person` node may carry both `:Personal` and `:Professional` labels. It appears in both indexes; its read-visibility is the union of the two read ACLs.
 
@@ -106,7 +106,7 @@ All ACL checks live in `app/tools/memory_tools.py`. No enforcement in Cypher, no
 
 1. `caller = tool_context.state['user_id']`.
 2. `is_admin = caller in ADMIN_USER_IDS.split(',')`.
-3. `is_company = any(caller.endswith('@' + d) for d in COMPANY_EMAIL_DOMAIN.split(','))`.
+3. `is_company = bool(COMPANY_DOMAIN) and caller.lower().endswith('@' + COMPANY_DOMAIN.lower())`. Pattern identical to `clickup_agent.py:42-55` (single domain; empty env disables the gate). Extension to multiple domains is trivial if ever needed.
 4. **Auto-provision caller's `:Person` node** if `primary_user_id = caller` does not already exist. Scope label = `:Person:Professional` if `is_company` else `:Person:Personal`. `is_auto_provisioned: true`.
 5. **Read check (search / get / list):**
    - `personal` → require `is_admin`.
@@ -217,7 +217,7 @@ One-shot script: `scripts/migrate_pinecone_to_neo4j.py`.
 
 ### Pre-flight
 
-1. Assert all env vars present: `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`, `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`, `OPENAI_API_KEY`, `COMPANY_EMAIL_DOMAIN`, `ADMIN_USER_IDS`, `BOT_NAME`.
+1. Assert all env vars present: `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`, `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`, `OPENAI_API_KEY`, `COMPANY_DOMAIN`, `ADMIN_USER_IDS`, `BOT_NAME`.
 2. Require `--purge` flag for destructive-op confirmation.
 3. Test `ai.text.embed('ping', 'OpenAI', {...})` round-trips one embedding. Fail fast on broken OpenAI key or plugin access.
 
@@ -287,7 +287,7 @@ Migration is idempotent (MERGE-based Cypher, re-runnable). Re-running after a pa
 
 ### New
 - `OPENAI_API_KEY` — for inline `ai.text.embed`.
-- `COMPANY_EMAIL_DOMAIN` — comma-separated list of domains counted as "company user" (e.g. `mellanni.com,alliedcorp.com`).
+- `COMPANY_DOMAIN` — **reused** (already present in `ALLOWED_CONFIG_KEYS`; used by `clickup_agent.py` and `bigquery_agent.py`). Single domain (e.g. `mellanni.com`). A caller is a "company user" when their `user_id` ends with `@<COMPANY_DOMAIN>` (case-insensitive).
 
 ### Removed
 - `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`.
