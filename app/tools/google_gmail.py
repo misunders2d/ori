@@ -71,3 +71,18 @@ def _decode_body(payload: dict) -> str:
         return _strip_html(raw)
 
     return ""
+
+
+_TRUNCATE_DEFAULT = 8000
+
+
+def _truncate(body: str, full: bool) -> str:
+    """Clip body to _TRUNCATE_DEFAULT chars unless full=True.
+
+    When clipped, appends a suffix noting how many chars were dropped and how to
+    retrieve the full body, so the agent can choose whether to re-fetch.
+    """
+    if full or len(body) <= _TRUNCATE_DEFAULT:
+        return body
+    dropped = len(body) - _TRUNCATE_DEFAULT
+    return body[:_TRUNCATE_DEFAULT] + f"...[truncated, {dropped} more chars — call with full=True]"

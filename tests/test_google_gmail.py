@@ -2,7 +2,7 @@
 
 import base64
 
-from app.tools.google_gmail import _decode_body
+from app.tools.google_gmail import _decode_body, _truncate
 from app.tools.google_oauth.device_flow import SCOPES
 
 
@@ -63,3 +63,27 @@ def test_decode_body_nested_multipart():
 
 def test_decode_body_empty_returns_empty_string():
     assert _decode_body({"mimeType": "image/png", "body": {"attachmentId": "x"}}) == ""
+
+
+def test_truncate_under_threshold_returns_unchanged():
+    body = "short body"
+    assert _truncate(body, full=False) == body
+
+
+def test_truncate_over_threshold_clips_with_suffix():
+    body = "x" * 9000
+    result = _truncate(body, full=False)
+    assert result.startswith("x" * 8000)
+    assert "[truncated" in result
+    assert "1000 more chars" in result
+    assert "full=True" in result
+
+
+def test_truncate_full_true_returns_unchanged_over_threshold():
+    body = "x" * 9000
+    assert _truncate(body, full=True) == body
+
+
+def test_truncate_exactly_at_threshold_unchanged():
+    body = "x" * 8000
+    assert _truncate(body, full=False) == body
