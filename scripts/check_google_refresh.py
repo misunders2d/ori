@@ -25,7 +25,7 @@ from deploy.vault import load_vault
 
 load_vault()
 
-from app.tools.google_oauth.device_flow import refresh_access_token  # noqa: E402
+from app.tools.google_oauth.web_flow import refresh_access_token  # noqa: E402
 
 
 DB_PATH = Path("data/oauth_tokens.db")
