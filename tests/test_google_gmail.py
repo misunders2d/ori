@@ -272,3 +272,74 @@ async def test_gmail_get_message_full_true_returns_untruncated():
          patch("app.tools.google_gmail.httpx.AsyncClient", client_cls):
         result = await gmail_get_message("msg_1", full=True, tool_context=_mock_ctx())
     assert result["body"] == long_body
+
+
+def _metadata_message(id_: str, subject: str, from_: str, has_attachment: bool = False) -> dict:
+    headers = [
+        {"name": "From", "value": from_},
+        {"name": "Subject", "value": subject},
+        {"name": "Date", "value": "Tue, 21 Apr 2026 10:00:00 -0400"},
+    ]
+    parts = []
+    if has_attachment:
+        parts.append({
+            "mimeType": "application/pdf",
+            "filename": "file.pdf",
+            "body": {"attachmentId": "att_x", "size": 1},
+        })
+    return {
+        "id": id_,
+        "threadId": f"thr_{id_}",
+        "snippet": f"snippet for {id_}",
+        "payload": {
+            "headers": headers,
+            "mimeType": "multipart/mixed" if parts else "text/plain",
+            "parts": parts,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_gmail_list_messages_not_connected():
+    from app.tools.google_gmail import gmail_list_messages
+    with patch("app.tools.google_gmail.get_token", return_value=None):
+        result = await gmail_list_messages(tool_context=_mock_ctx())
+    assert result["status"] == "error"
+    assert "not connected" in result["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_gmail_list_messages_happy_path_with_enrichment():
+    from app.tools.google_gmail import gmail_list_messages
+    list_resp = _mock_response({
+        "messages": [{"id": "m1", "threadId": "thr_m1"}, {"id": "m2", "threadId": "thr_m2"}],
+    })
+    m1 = _mock_response(_metadata_message("m1", "Order update", "amazon@amazon.com", has_attachment=True))
+    m2 = _mock_response(_metadata_message("m2", "Supplier invoice", "supplier@example.com"))
+    client_cls, _ = _mock_async_client(get_responses=[list_resp, m1, m2])
+    with patch("app.tools.google_gmail._get_valid_token", AsyncMock(return_value="tok")), \
+         patch("app.tools.google_gmail._get_user_email", return_value="user@test.com"), \
+         patch("app.tools.google_gmail.httpx.AsyncClient", client_cls):
+        result = await gmail_list_messages(query="is:unread", max_results=2, tool_context=_mock_ctx())
+    assert result["status"] == "success"
+    assert result["count"] == 2
+    assert [m["id"] for m in result["messages"]] == ["m1", "m2"]
+    assert result["messages"][0]["from"] == "amazon@amazon.com"
+    assert result["messages"][0]["subject"] == "Order update"
+    assert result["messages"][0]["has_attachments"] is True
+    assert result["messages"][0]["thread_id"] == "thr_m1"
+    assert result["messages"][1]["has_attachments"] is False
+
+
+@pytest.mark.asyncio
+async def test_gmail_list_messages_empty_result():
+    from app.tools.google_gmail import gmail_list_messages
+    list_resp = _mock_response({})
+    client_cls, _ = _mock_async_client(get_responses=[list_resp])
+    with patch("app.tools.google_gmail._get_valid_token", AsyncMock(return_value="tok")), \
+         patch("app.tools.google_gmail._get_user_email", return_value="user@test.com"), \
+         patch("app.tools.google_gmail.httpx.AsyncClient", client_cls):
+        result = await gmail_list_messages(tool_context=_mock_ctx())
+    assert result["status"] == "success"
+    assert result["count"] == 0
+    assert result["messages"] == []

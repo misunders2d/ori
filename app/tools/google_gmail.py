@@ -178,6 +178,40 @@ async def gmail_list_labels(tool_context: ToolContext = None) -> dict:
         return {"status": "error", "message": f"Gmail API error: {e}"}
 
 
+def _has_attachments(payload: dict) -> bool:
+    def walk(node: dict) -> bool:
+        body = node.get("body", {}) or {}
+        if body.get("attachmentId"):
+            return True
+        for p in node.get("parts", []) or []:
+            if walk(p):
+                return True
+        return False
+    return walk(payload)
+
+
+async def _fetch_message_metadata(client: httpx.AsyncClient, token: str, message_id: str) -> dict:
+    """Fetch a single message with format=metadata and shape it for list output."""
+    resp = await client.get(
+        f"{_GMAIL_API}/messages/{message_id}",
+        params={"format": "metadata"},
+        headers=_auth_headers(token),
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    payload = data.get("payload", {})
+    headers = _headers_to_dict(payload.get("headers", []))
+    return {
+        "id": data.get("id", message_id),
+        "thread_id": data.get("threadId", ""),
+        "snippet": data.get("snippet", ""),
+        "from": headers.get("from", ""),
+        "subject": headers.get("subject", ""),
+        "date": headers.get("date", ""),
+        "has_attachments": _has_attachments(payload),
+    }
+
+
 async def gmail_get_message(
     message_id: str,
     full: bool = False,
@@ -216,5 +250,51 @@ async def gmail_get_message(
             "body": body,
             "attachments": _extract_attachments(payload),
         }
+    except Exception as e:
+        return {"status": "error", "message": f"Gmail API error: {e}"}
+
+
+async def gmail_list_messages(
+    query: str = "",
+    max_results: int = 25,
+    label_ids: str = "",
+    tool_context: ToolContext = None,
+) -> dict:
+    """List Gmail messages matching a query, enriched with headers and snippet.
+
+    Args:
+        query: Gmail search syntax — e.g. 'from:amazon.com is:unread newer_than:7d'.
+        max_results: Max messages to return (default 25, capped at 100).
+        label_ids: Comma-separated label IDs to filter by (from gmail_list_labels).
+
+    Returns:
+        dict with `messages`: list of {id, thread_id, snippet, from, subject, date, has_attachments}.
+    """
+    email = _get_user_email(tool_context)
+    token = await _get_valid_token(email)
+    if not token:
+        return {"status": "error", "message": f"Gmail not connected for {email}. Use google_connect first."}
+
+    params: dict = {"maxResults": min(max(max_results, 1), 100)}
+    if query:
+        params["q"] = query
+    if label_ids:
+        params["labelIds"] = [lid.strip() for lid in label_ids.split(",") if lid.strip()]
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{_GMAIL_API}/messages",
+                params=params,
+                headers=_auth_headers(token),
+            )
+            resp.raise_for_status()
+            ids = [m["id"] for m in resp.json().get("messages", []) or []]
+            if not ids:
+                return {"status": "success", "count": 0, "messages": []}
+            enriched = await asyncio.gather(
+                *(_fetch_message_metadata(client, token, mid) for mid in ids)
+            )
+        return {"status": "success", "count": len(enriched), "messages": list(enriched)}
     except Exception as e:
         return {"status": "error", "message": f"Gmail API error: {e}"}
