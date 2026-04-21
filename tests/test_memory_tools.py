@@ -1147,3 +1147,166 @@ class TestDedupGate:
             tool_context=_make_ctx("admin@example.com"),
         )
         assert result["status"] == "success"
+
+
+# ---------------------------------------------------------------------------
+# Semantic dedup gate on create_record
+# ---------------------------------------------------------------------------
+
+
+def _is_memory_dedup_query(query: str) -> bool:
+    """Identify the memory-dedup vector-search query by its unique fragments."""
+    return "db.index.vector.queryNodes" in query and "WHERE score >= $threshold" in query
+
+
+class TestMemoryDedupGate:
+    @pytest.mark.asyncio
+    async def test_returns_possible_duplicate_on_match(self, patched_driver):
+        async def _run(*args, **kwargs):
+            query = args[0] if args else ""
+            r = AsyncMock()
+            if _is_resolve_caller_lookup(query):
+                r.single = AsyncMock(return_value={"canonical": "sergey@mellanni.com"})
+            elif "p.is_auto_provisioned AS is_auto_provisioned" in query:
+                r.single = AsyncMock(return_value={
+                    "person_id": "per_sergey",
+                    "first_name": "Sergey",
+                    "last_name": "Demchenko",
+                    "full_name": "Sergey Demchenko",
+                    "is_auto_provisioned": False,
+                })
+            elif _is_memory_dedup_query(query):
+                async def aiter(self):
+                    yield {
+                        "record_id": "mem_2026_04_21_existing",
+                        "short_description": "Image Naming Convention (Apr 2025)",
+                        "text_preview": "Structure: [Product Name] - [Color] - [Size] - [View]...",
+                        "created_at": "2026-04-21T15:37:00Z",
+                        "score": 0.94,
+                    }
+                r.__aiter__ = aiter
+                r.single = AsyncMock(return_value=None)
+            else:
+                r.single = AsyncMock(return_value={"record_id": "mem_new"})
+            return r
+
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.create_record(
+            "professional",
+            "Convention for image naming: Product then Color then Size then View then Position.",
+            "Image naming convention restatement",
+            "knowledge",
+            ["naming", "images"],
+            tool_context=_make_ctx("sergey@mellanni.com"),
+        )
+        assert result["status"] == "possible_duplicate"
+        assert result["threshold"] == 0.92
+        assert len(result["matches"]) == 1
+        assert result["matches"][0]["record_id"] == "mem_2026_04_21_existing"
+        assert "force_create=true" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_force_create_bypasses_dedup(self, patched_driver):
+        dedup_was_called = []
+
+        async def _run(*args, **kwargs):
+            query = args[0] if args else ""
+            r = AsyncMock()
+            if _is_resolve_caller_lookup(query):
+                r.single = AsyncMock(return_value={"canonical": "sergey@mellanni.com"})
+            elif "p.is_auto_provisioned AS is_auto_provisioned" in query:
+                r.single = AsyncMock(return_value={
+                    "person_id": "per_sergey",
+                    "first_name": "Sergey",
+                    "last_name": "Demchenko",
+                    "full_name": "Sergey Demchenko",
+                    "is_auto_provisioned": False,
+                })
+            elif _is_memory_dedup_query(query):
+                dedup_was_called.append(True)
+                async def aiter(self):
+                    yield {"record_id": "mem_existing", "score": 0.99}
+                r.__aiter__ = aiter
+                r.single = AsyncMock(return_value=None)
+            else:
+                r.single = AsyncMock(return_value={"record_id": "mem_forced"})
+            return r
+
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.create_record(
+            "professional", "Some text", "desc", "knowledge", [],
+            force_create=True,
+            tool_context=_make_ctx("sergey@mellanni.com"),
+        )
+        assert result["status"] == "success"
+        assert result["record_id"] == "mem_forced"
+        # Dedup query must never have been executed when force_create=True.
+        assert dedup_was_called == []
+
+    @pytest.mark.asyncio
+    async def test_no_near_matches_proceeds(self, patched_driver):
+        async def _run(*args, **kwargs):
+            query = args[0] if args else ""
+            r = AsyncMock()
+            if _is_resolve_caller_lookup(query):
+                r.single = AsyncMock(return_value={"canonical": "sergey@mellanni.com"})
+            elif "p.is_auto_provisioned AS is_auto_provisioned" in query:
+                r.single = AsyncMock(return_value={
+                    "person_id": "per_sergey",
+                    "first_name": "Sergey",
+                    "last_name": "Demchenko",
+                    "full_name": "Sergey Demchenko",
+                    "is_auto_provisioned": False,
+                })
+            elif _is_memory_dedup_query(query):
+                async def aiter(self):
+                    return
+                    yield  # empty iterator
+                r.__aiter__ = aiter
+                r.single = AsyncMock(return_value=None)
+            else:
+                r.single = AsyncMock(return_value={"record_id": "mem_fresh"})
+            return r
+
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.create_record(
+            "professional", "Brand new topic", "desc", "knowledge", [],
+            tool_context=_make_ctx("sergey@mellanni.com"),
+        )
+        assert result["status"] == "success"
+        assert result["record_id"] == "mem_fresh"
+
+    @pytest.mark.asyncio
+    async def test_dedup_failure_fails_open(self, patched_driver):
+        # If the dedup query itself raises (empty index edge case, plugin
+        # hiccup), the helper returns [] and the write proceeds.
+        async def _run(*args, **kwargs):
+            query = args[0] if args else ""
+            if _is_memory_dedup_query(query):
+                raise RuntimeError("simulated plugin failure")
+            r = AsyncMock()
+            if _is_resolve_caller_lookup(query):
+                r.single = AsyncMock(return_value={"canonical": "sergey@mellanni.com"})
+            elif "p.is_auto_provisioned AS is_auto_provisioned" in query:
+                r.single = AsyncMock(return_value={
+                    "person_id": "per_sergey",
+                    "first_name": "Sergey",
+                    "last_name": "Demchenko",
+                    "full_name": "Sergey Demchenko",
+                    "is_auto_provisioned": False,
+                })
+            else:
+                r.single = AsyncMock(return_value={"record_id": "mem_despite_dedup_fail"})
+            return r
+
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.create_record(
+            "professional", "Some text", "desc", "knowledge", [],
+            tool_context=_make_ctx("sergey@mellanni.com"),
+        )
+        assert result["status"] == "success"
+        assert result["record_id"] == "mem_despite_dedup_fail"

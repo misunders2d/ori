@@ -331,6 +331,53 @@ async def _find_possible_duplicates(
         return [dict(r) async for r in result]
 
 
+# Memory semantic-duplicate threshold. Cosine similarity on the
+# text-embedding-3-small embedding space. 0.92 was picked to catch near-
+# paraphrases of the same fact without blocking legitimate follow-up records
+# that share vocabulary but carry different content. Tune per observation.
+_MEMORY_DUPLICATE_THRESHOLD = 0.92
+
+
+async def _find_semantic_duplicate_memory(
+    driver, text: str, namespace: str, openai_key: str,
+    threshold: float = _MEMORY_DUPLICATE_THRESHOLD,
+) -> list[dict]:
+    """Return memories in `namespace` whose embedding is >= threshold similar to `text`.
+
+    Uses the same inline `genai.vector.encode` + `db.index.vector.queryNodes`
+    path as `search_knowledge`. Top 3 matches above threshold are returned,
+    highest first. Returns an empty list on any error (empty index, plugin
+    unavailable, network hiccup) — the check is a convenience, not a hard
+    invariant, and a failed dedup should not block a legitimate write.
+    """
+    index_name = _MEMORY_INDEX_BY_NAMESPACE[namespace]
+    query = (
+        "WITH genai.vector.encode($text, 'OpenAI', "
+        "{token: $openai_key, model: 'text-embedding-3-small'}) AS vec "
+        f"CALL db.index.vector.queryNodes('{index_name}', 3, vec) "
+        "YIELD node, score "
+        "WHERE score >= $threshold "
+        "RETURN node.record_id AS record_id, "
+        "       node.short_description AS short_description, "
+        "       substring(coalesce(node.text, ''), 0, 200) AS text_preview, "
+        "       toString(node.created_at) AS created_at, "
+        "       score "
+        "ORDER BY score DESC"
+    )
+    try:
+        async with driver.session() as session:
+            result = await session.run(
+                query, text=text, openai_key=openai_key, threshold=threshold,
+            )
+            return [dict(r) async for r in result]
+    except Exception:
+        logger.warning(
+            "Semantic duplicate check failed in namespace %r; proceeding without dedup.",
+            namespace, exc_info=True,
+        )
+        return []
+
+
 # ---------------------------------------------------------------------------
 # Memory tools
 # ---------------------------------------------------------------------------
@@ -493,6 +540,7 @@ async def create_record(
     related_people: list[str] = None,
     related_memories: list[str] = None,
     author: str = "",
+    force_create: bool = False,
     tool_context: ToolContext = None,
 ) -> dict:
     """Create a new knowledge record.
@@ -508,6 +556,11 @@ async def create_record(
         related_memories: Optional list of memory IDs this links to.
         author: Advisory only — retained for signature compat. Actual authorship
                 is captured via an `:AUTHORED` edge from the caller's Person node.
+        force_create: Set to True ONLY after the user has explicitly confirmed
+                that a semantically-similar existing memory flagged by the
+                pre-create dedup check is a different record. Default False.
+                Do not set True pre-emptively to bypass the check — the whole
+                point is user confirmation on near-matches.
     """
     # Intentionally unused — authorship is the edge, not a property.
     del author
@@ -541,6 +594,32 @@ async def create_record(
     caller_info = await _get_person_info(driver, canonical_caller)
     if not _has_identity(caller_info):
         return _needs_identity_response(caller_info, canonical_caller)
+
+    # Semantic dedup gate — vector search the proposed text against the
+    # target namespace. If a near-paraphrase already exists, surface it and
+    # require the caller to either update the existing record or confirm
+    # intent with force_create=True.
+    if not force_create:
+        dup_matches = await _find_semantic_duplicate_memory(
+            driver, text, namespace, openai_key,
+        )
+        if dup_matches:
+            return {
+                "status": "possible_duplicate",
+                "matches": dup_matches,
+                "threshold": _MEMORY_DUPLICATE_THRESHOLD,
+                "message": (
+                    f"Found {len(dup_matches)} existing record(s) in {namespace} "
+                    f"semantically similar (cosine ≥ {_MEMORY_DUPLICATE_THRESHOLD}) "
+                    f"to the proposed text. Before creating a new one:\n"
+                    f"- If any match is the same knowledge, call `update_record` on "
+                    f"that existing `record_id` to merge or refine — don't create a "
+                    f"duplicate.\n"
+                    f"- If the user (with explicit confirmation) says this is a "
+                    f"different record despite the similarity, retry `create_record` "
+                    f"with `force_create=true`."
+                ),
+            }
 
     memory_label = _NAMESPACE_TO_MEMORY_LABEL[namespace]
     record_id = _new_record_id()

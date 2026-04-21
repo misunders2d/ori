@@ -42,7 +42,7 @@ Handling a `needs_identity` response:
 | `search_knowledge(search_query, namespace, top_k)` | Semantic vector search in one namespace |
 | `get_records(record_ids, namespace)` | Fetch specific records by ID |
 | `list_records(namespace)` | Enumerate records in a namespace |
-| `create_record(namespace, text, short_description, category, tags, related_people?, related_memories?)` | Store a memory, idea, incident, etc. |
+| `create_record(namespace, text, short_description, category, tags, related_people?, related_memories?, force_create?)` | Store a memory, idea, incident, etc. Returns `{"status": "possible_duplicate"}` if a semantically similar record already exists (cosine ≥ 0.92). Pass `force_create=true` only after the user confirms it's a different record. |
 | `update_record(record_id, namespace, updates)` | Creator-only update |
 | `delete_record(record_id, namespace)` | Creator-only delete |
 | `update_any_record(record_id, namespace, updates)` | **Admin-only** override — bypasses the creator gate |
@@ -75,6 +75,22 @@ Every write records who made it via a `:AUTHORED` graph edge from the caller's `
 - `relations=[{"related_person_id": "per_...", "relation_type": "colleague"}]` on `create_person` creates `(:Person)-[:COLLEAGUE]->(:Person)` (relation type sanitized to UPPER_SNAKE_CASE).
 
 These are managed by the memory tools — you do not call Neo4j directly for relationships.
+
+## Preventing duplicate `:Memory` records
+
+Before writing a new memory, the code runs a **semantic dedup check**: embed the proposed `text`, vector-search the target namespace for top 3 matches with cosine ≥ 0.92, and if any hit, return `{"status": "possible_duplicate", "matches": [...], "threshold": 0.92}`. The create is **not** performed.
+
+Handling a `possible_duplicate` response on `create_record`:
+
+1. Show the match(es) to the user — each item includes `record_id`, `short_description`, `text_preview` (first 200 chars), `created_at`, and `score`.
+2. Ask: "I already have `<short_description>` from `<created_at>` (similarity `<score>`). Is this the same knowledge, or a different record?"
+3. Based on the answer:
+   - **Same knowledge** → call `update_record(record_id, namespace, updates='{"text": "...merged...", "short_description": "...", "tags": [...]}')` on the existing record. Don't create a duplicate.
+   - **Different record** (user explicitly confirms) → retry `create_record` with `force_create=true`. Only after explicit user confirmation — don't pre-emptively set it.
+
+**Fail-open on infrastructure hiccups.** If the dedup query itself errors (plugin outage, empty index edge case), the helper returns no matches and the create proceeds. The gate is best-effort; it never blocks a legitimate write because the check machinery is down.
+
+**Tuning note.** 0.92 is a starting threshold. If you find it too aggressive (frequent false positives on legitimate follow-up records), or too permissive (actual duplicates slipping through), adjust `_MEMORY_DUPLICATE_THRESHOLD` in `app/tools/memory_tools.py`.
 
 ## Preventing duplicate `:Person` records
 
