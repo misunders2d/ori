@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.tools.google_gmail import _decode_body, _sweep_attachments, _truncate
-from app.tools.google_oauth.device_flow import SCOPES
+from app.tools.google_oauth.web_flow import SCOPES
 
 
 def _mock_response(json_data: dict, status: int = 200):

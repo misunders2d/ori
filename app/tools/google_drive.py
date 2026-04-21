@@ -10,7 +10,7 @@ from typing import Optional
 import httpx
 from google.adk.tools.tool_context import ToolContext
 
-from app.tools.google_oauth.device_flow import refresh_access_token, start_device_flow, poll_for_token
+from app.tools.google_oauth.web_flow import refresh_access_token, start_auth_flow
 from app.tools.google_oauth.token_store import (
     get_token, save_token, delete_token,
     save_user_mapping, resolve_email, delete_user_mapping,
@@ -68,72 +68,29 @@ def _auth_headers(token: str) -> dict:
 # ---------------------------------------------------------------------------
 
 async def google_connect(tool_context: ToolContext = None) -> dict:
-    """Start Google Drive/Sheets authorization for the current user.
+    """Start Google authorization for the current user (Drive/Sheets/Calendar/Gmail).
 
-    Generates a URL and code. The user opens the URL in a browser and enters
-    the code to grant access. Then call google_connect_complete to finish.
-
-    Returns:
-        dict: URL and code for the user, plus a device_code for the completion step.
+    Returns an authorization URL. The user opens it in a browser and grants
+    access — Google then redirects to /oauth/google/callback which persists
+    the tokens automatically. No follow-up tool call is needed.
     """
-    result = await start_device_flow()
+    state = tool_context.state.to_dict() if (tool_context and hasattr(tool_context.state, "to_dict")) else {}
+    user_id = state.get("user_id", "")
+    if not user_id:
+        return {"status": "error", "message": "No user_id in session state — cannot start OAuth flow."}
+
+    result = start_auth_flow(user_id)
     if result["status"] != "success":
         return result
-
-    # Store device_code in session state so the completion tool can find it
-    if tool_context:
-        tool_context.state["_google_device_code"] = result["device_code"]
-        tool_context.state["_google_poll_interval"] = result["interval"]
 
     return {
         "status": "success",
         "message": (
-            f"Open this URL and enter the code:\n\n"
-            f"**URL:** {result['verification_url']}\n"
-            f"**Code:** `{result['user_code']}`\n\n"
-            f"After you've authorized, tell me and I'll complete the connection."
+            "Open this link in your browser to connect your Google account "
+            "(Drive, Sheets, Calendar, Gmail read-only):\n\n"
+            f"{result['auth_url']}\n\n"
+            "After you authorize, you'll see a success page — then come back here."
         ),
-    }
-
-
-async def google_connect_complete(tool_context: ToolContext = None) -> dict:
-    """Complete the Google authorization after the user has entered the code.
-
-    Call this after the user confirms they've authorized in the browser.
-
-    Returns:
-        dict: Success with user email, or error.
-    """
-    if not tool_context:
-        return {"status": "error", "message": "No session context available."}
-
-    state = tool_context.state.to_dict() if hasattr(tool_context.state, "to_dict") else {}
-    device_code = state.get("_google_device_code")
-    interval = state.get("_google_poll_interval", 5)
-
-    if not device_code:
-        return {"status": "error", "message": "No pending authorization. Call google_connect first."}
-
-    result = await poll_for_token(device_code, interval=interval, timeout=60)
-    if result["status"] != "success":
-        return result
-
-    email = result["email"]
-    from app.tools.google_oauth.device_flow import SCOPES
-    save_token(email, result["access_token"], result["refresh_token"], result["expires_in"], SCOPES)
-
-    # Map the platform user ID to this Google email
-    user_id = state.get("user_id", "")
-    if user_id and user_id != email:
-        save_user_mapping(user_id, email)
-
-    # Clean up session state
-    tool_context.state["_google_device_code"] = None
-    tool_context.state["_google_poll_interval"] = None
-
-    return {
-        "status": "success",
-        "message": f"Google Drive/Sheets connected for **{email}**. You can now use Drive and Sheets tools.",
     }
 
 

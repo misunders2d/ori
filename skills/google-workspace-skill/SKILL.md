@@ -10,10 +10,10 @@ Per-user Google Drive, Sheets, Calendar, and Gmail access via OAuth2 device code
 ## Connection Flow
 
 - [ ] Step 1: User says "connect my Google" (or similar)
-- [ ] Step 2: Call `google_connect` — returns a URL and code
-- [ ] Step 3: Tell the user to open the URL and enter the code
-- [ ] Step 4: User confirms they authorized → call `google_connect_complete`
-- [ ] Step 5: Done — all Drive/Sheets/Calendar tools now work for that user
+- [ ] Step 2: Call `google_connect` — returns an authorization URL
+- [ ] Step 3: Tell the user to open the URL and sign in
+- [ ] Step 4: Google redirects to our callback, tokens are persisted automatically — no follow-up tool call needed
+- [ ] Step 5: Done — all Drive/Sheets/Calendar/Gmail tools now work for that user
 
 One connection grants access to Drive, Sheets, Calendar, AND Gmail. No need to connect separately.
 
@@ -22,8 +22,7 @@ One connection grants access to Drive, Sheets, Calendar, AND Gmail. No need to c
 ### Connection
 | Tool | Purpose |
 |------|---------|
-| `google_connect` | Start authorization — returns URL + code |
-| `google_connect_complete` | Finish authorization after user confirms |
+| `google_connect` | Start authorization — returns a browser URL to sign in. Tokens are persisted automatically by the callback route. |
 | `google_disconnect` | Remove stored tokens for current user |
 
 ### Drive
@@ -87,16 +86,16 @@ Create a calendar event only when the user explicitly says "add to my calendar",
 - [Google Drive API v3](https://developers.google.com/drive/api/reference/rest/v3)
 - [Google Sheets API v4](https://developers.google.com/sheets/api/reference/rest)
 - [Google Calendar API v3](https://developers.google.com/calendar/api/v3/reference)
-- [OAuth 2.0 Device Flow](https://developers.google.com/identity/protocols/oauth2/limited-input-device)
+- [OAuth 2.0 Web Server Flow](https://developers.google.com/identity/protocols/oauth2/web-server) (Authorization Code + PKCE)
 
 ## Gotchas
 
 - **User must connect first.** All tools return "not connected" if the user hasn't authorized. Don't retry — tell them to run the connect flow.
 - **Per-user access.** Each user sees only their own files and calendars. Tokens are stored per-email.
-- **Existing users must reconnect** after Calendar or Gmail were added (new scopes). If Calendar or Gmail tools fail with permission errors, tell the user to run `google_connect` again.
+- **Existing users must reconnect** after the OAuth flow migrated from device-flow to web-flow (so Gmail scopes are supported). If any Google tool fails with permission or invalid-grant errors, tell the user to run `google_connect` again.
 - **Spreadsheet ID is in the URL.** `https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit` — extract the ID between `/d/` and `/edit`.
 - **Range format.** Use A1 notation: `Sheet1!A1:D10`, `Sheet1`, `A1:B5`. Sheet name is optional if there's only one sheet.
 - **Tokens auto-refresh.** Access tokens expire after 1 hour but refresh automatically. If refresh fails, the user needs to reconnect.
-- **OAuth client must be configured.** Needs `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` in vault. Set via `/init`.
+- **OAuth client must be configured.** Needs `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, and `OAUTH_BASE_URL` (the public URL of the bot's A2A Starlette server, e.g. `https://bezosapp.uk`) in vault. Set via `/init`. The OAuth client in Google Cloud Console must be type "Web application" with `{OAUTH_BASE_URL}/oauth/google/callback` as an authorized redirect URI.
 - **Calendar API must be enabled** in the Google Cloud project (console.cloud.google.com → APIs & Services → Calendar API).
 - **Gmail API must be enabled** in the Google Cloud project (console.cloud.google.com → APIs & Services → Gmail API).
