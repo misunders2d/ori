@@ -523,3 +523,19 @@ async def test_gmail_download_attachment_default_filename(tmp_path):
         result = await gmail_download_attachment("msg_1", "att_1", tool_context=_mock_ctx())
     assert result["filename"] == "att_1"
     assert result["file_path"] == os.path.join(attach_dir, "msg_1_att_1")
+
+
+@pytest.mark.asyncio
+async def test_google_workspace_toolset_registers_gmail_tools():
+    from app.toolsets.google_workspace import GoogleWorkspaceToolset
+    toolset = GoogleWorkspaceToolset()
+    tools = await toolset.get_tools()
+    names = {t.func.__name__ for t in tools}
+    assert "gmail_list_messages" in names
+    assert "gmail_get_message" in names
+    assert "gmail_list_threads" in names
+    assert "gmail_get_thread" in names
+    assert "gmail_list_labels" in names
+    assert "gmail_download_attachment" in names
+    assert "drive_list_files" in names
+    assert "calendar_list_events" in names
