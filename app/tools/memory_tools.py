@@ -258,7 +258,7 @@ async def search_knowledge(
         "       node.text AS text, "
         "       node.category AS category, "
         "       node.tags AS tags, "
-        "       node.created_at AS created_at, "
+        "       toString(node.created_at) AS created_at, "
         "       score"
     )
     try:
@@ -307,8 +307,8 @@ async def get_records(
         "       m.text AS text, "
         "       m.category AS category, "
         "       m.tags AS tags, "
-        "       m.created_at AS created_at, "
-        "       m.updated_at AS updated_at"
+        "       toString(m.created_at) AS created_at, "
+        "       toString(m.updated_at) AS updated_at"
     )
     try:
         async with driver.session() as session:
