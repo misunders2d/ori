@@ -1,8 +1,11 @@
 """Tests for Gmail read-only tools — helpers and tool surface."""
 
 import base64
+import os
+import time as time_mod
+from unittest.mock import patch
 
-from app.tools.google_gmail import _decode_body, _truncate
+from app.tools.google_gmail import _decode_body, _sweep_attachments, _truncate
 from app.tools.google_oauth.device_flow import SCOPES
 
 
@@ -87,3 +90,38 @@ def test_truncate_full_true_returns_unchanged_over_threshold():
 def test_truncate_exactly_at_threshold_unchanged():
     body = "x" * 8000
     assert _truncate(body, full=False) == body
+
+
+def test_sweep_missing_dir_is_noop(tmp_path):
+    missing = str(tmp_path / "does_not_exist")
+    with patch("app.tools.google_gmail._ATTACHMENT_DIR", missing):
+        _sweep_attachments()  # must not raise
+    assert not os.path.exists(missing)
+
+
+def test_sweep_removes_expired_files(tmp_path):
+    d = tmp_path / "attach"
+    d.mkdir()
+    old = d / "old.bin"
+    fresh = d / "fresh.bin"
+    old.write_bytes(b"old")
+    fresh.write_bytes(b"fresh")
+    old_mtime = time_mod.time() - 48 * 3600
+    os.utime(old, (old_mtime, old_mtime))
+    with patch("app.tools.google_gmail._ATTACHMENT_DIR", str(d)):
+        _sweep_attachments()
+    assert not old.exists()
+    assert fresh.exists()
+
+
+def test_sweep_respects_env_ttl_override(tmp_path):
+    d = tmp_path / "attach"
+    d.mkdir()
+    f = d / "file.bin"
+    f.write_bytes(b"data")
+    two_h_ago = time_mod.time() - 2 * 3600
+    os.utime(f, (two_h_ago, two_h_ago))
+    with patch("app.tools.google_gmail._ATTACHMENT_DIR", str(d)), \
+         patch.dict(os.environ, {"GMAIL_ATTACHMENT_TTL_HOURS": "1"}):
+        _sweep_attachments()
+    assert not f.exists()

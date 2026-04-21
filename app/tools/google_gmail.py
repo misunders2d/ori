@@ -86,3 +86,25 @@ def _truncate(body: str, full: bool) -> str:
         return body
     dropped = len(body) - _TRUNCATE_DEFAULT
     return body[:_TRUNCATE_DEFAULT] + f"...[truncated, {dropped} more chars — call with full=True]"
+
+
+def _sweep_attachments() -> None:
+    """Remove expired files from the attachment cache. Missing dir is a no-op.
+
+    TTL hours read from GMAIL_ATTACHMENT_TTL_HOURS env var, default 24.
+    """
+    if not os.path.isdir(_ATTACHMENT_DIR):
+        return
+    try:
+        ttl_hours = float(os.environ.get("GMAIL_ATTACHMENT_TTL_HOURS", "24"))
+    except ValueError:
+        ttl_hours = 24.0
+    cutoff = time.time() - (ttl_hours * 3600)
+    for entry in os.scandir(_ATTACHMENT_DIR):
+        if not entry.is_file():
+            continue
+        try:
+            if entry.stat().st_mtime < cutoff:
+                os.remove(entry.path)
+        except OSError as e:
+            logger.warning("Failed to sweep %s: %s", entry.path, e)
