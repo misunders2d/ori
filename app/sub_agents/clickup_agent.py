@@ -43,19 +43,44 @@ def _get_company_domain() -> str:
     return os.environ.get("COMPANY_DOMAIN", "").strip().lower()
 
 
+def _get_admin_ids() -> list[str]:
+    return [x.strip() for x in os.environ.get("ADMIN_USER_IDS", "").split(",") if x.strip()]
+
+
 def before_clickup_callback(
     tool: BaseTool, args: dict[str, Any], tool_context: ToolContext
 ) -> dict | None:
-    """Domain-level access control — only @COMPANY_DOMAIN users can use ClickUp tools."""
+    """Domain-level access control — only @COMPANY_DOMAIN users can use ClickUp tools.
+
+    Scoped to actual ClickUp tools (names starting with ``clickup_``). This
+    callback is registered as the agent-level ``before_tool_callback``, so it
+    also fires for cross-cutting tools (planner, scratchpad, skill lookup)
+    that a scheduled task or coordinator-delegated flow might invoke in this
+    agent's context — those should pass through unconditionally.
+
+    Admins bypass the company-domain check entirely: scheduled tasks and
+    admin-driven operations shouldn't get blocked because the admin happens
+    to be signed in via a Telegram ID instead of a work email.
+    """
+    tool_name = getattr(tool, "name", "") or ""
+    if not tool_name.startswith("clickup_"):
+        return None  # Not a ClickUp tool → not gated by this callback.
+
+    state = tool_context.state.to_dict() if hasattr(tool_context.state, "to_dict") else {}
+    user_id = state.get("user_id", "") or ""
+
+    # Admin bypass — admins are trusted regardless of domain match.
+    if user_id in _get_admin_ids():
+        return None
+
     company_domain = _get_company_domain()
     if not company_domain:
         return None
-    state = tool_context.state.to_dict() if hasattr(tool_context.state, "to_dict") else {}
-    user_email = state.get("user_id", "")
-    if not user_email or not user_email.lower().endswith(f"@{company_domain}"):
+
+    if not user_id.lower().endswith(f"@{company_domain}"):
         return {
             "error": f"Access denied: ClickUp is only available to @{company_domain} users. "
-                     f"Your identity ({user_email or 'unknown'}) is not authorized."
+                     f"Your identity ({user_id or 'unknown'}) is not authorized."
         }
     return None
 

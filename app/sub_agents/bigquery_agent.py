@@ -57,6 +57,28 @@ def _get_company_domain() -> str:
     return os.environ.get("COMPANY_DOMAIN", "").strip().lower()
 
 
+def _get_admin_ids() -> list[str]:
+    return [x.strip() for x in os.environ.get("ADMIN_USER_IDS", "").split(",") if x.strip()]
+
+
+# The BigQuery-specific tools registered by Google ADK's BigQueryToolset.
+# Anything outside this set (planner, scratchpad, skill lookup, etc.) that
+# happens to flow through this agent's before_tool_callback during a
+# scheduled or coordinator-delegated run passes through unconditionally.
+_BQ_TOOL_NAMES = frozenset({
+    "execute_sql",
+    "list_datasets",
+    "list_tables",
+    "list_table_ids",
+    "get_table_info",
+    "get_dataset_info",
+    "forecast",
+    "analyze_contribution",
+    "detect_anomalies",
+    "ask_data_insights",
+})
+
+
 def before_bq_callback(
     tool: BaseTool, args: dict[str, Any], tool_context: ToolContext
 ) -> dict | None:
@@ -67,20 +89,31 @@ def before_bq_callback(
     table references from SQL queries, explicit args, and table_references
     lists, and checks the user's email against authorized_users in the
     table catalog.
+
+    Scoped to actual BigQuery tools (``_BQ_TOOL_NAMES``). Cross-cutting tools
+    invoked in this agent's context (planner, scratchpad, etc.) pass through
+    so scheduled tasks don't fail on unrelated tool calls.
+
+    Admins bypass the company-domain gate. Per-table allowlists still apply
+    (admins should get the tables they're listed on; that logic runs below).
     """
-    tool_name = getattr(tool, "name", "")
+    tool_name = getattr(tool, "name", "") or ""
+    if tool_name not in _BQ_TOOL_NAMES:
+        return None  # Not a BigQuery tool → not gated by this callback.
 
     state = tool_context.state.to_dict() if hasattr(tool_context.state, "to_dict") else {}
-    user_email = state.get("user_id", "")
+    user_email = state.get("user_id", "") or ""
+    is_admin = user_email in _get_admin_ids()
 
-    # Domain-level gate: user must belong to the company
-    company_domain = _get_company_domain()
-    if company_domain:
-        if not user_email or not user_email.lower().endswith(f"@{company_domain}"):
-            return {
-                "error": f"Access denied: BigQuery is only available to @{company_domain} users. "
-                         f"Your identity ({user_email or 'unknown'}) is not authorized."
-            }
+    # Domain-level gate: user must belong to the company (admins bypass)
+    if not is_admin:
+        company_domain = _get_company_domain()
+        if company_domain:
+            if not user_email or not user_email.lower().endswith(f"@{company_domain}"):
+                return {
+                    "error": f"Access denied: BigQuery is only available to @{company_domain} users. "
+                             f"Your identity ({user_email or 'unknown'}) is not authorized."
+                }
     project_id = args.get("project_id", "")
     tables_to_check = []
 
