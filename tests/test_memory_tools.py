@@ -57,6 +57,30 @@ def _mock_driver(session):
     return driver
 
 
+def _is_resolve_caller_lookup(query: str) -> bool:
+    """True if a query is the alias-aware resolve-caller lookup."""
+    return "$caller IN coalesce(p.aliases" in query
+
+
+def _dispatched_run(record_row=None, resolve_hit=None):
+    """A session.run mock that disambiguates between:
+    - the resolve-caller lookup → returns `resolve_hit` (None = miss, MERGE then runs)
+    - every other query → returns `record_row`
+
+    Use this for tests that only care about the main query outcome.
+    Scripted test sequences should continue to use a local `_run` with an iterator.
+    """
+    async def _run(*args, **kwargs):
+        query = args[0] if args else ""
+        r = AsyncMock()
+        if _is_resolve_caller_lookup(query):
+            r.single = AsyncMock(return_value=resolve_hit)
+        else:
+            r.single = AsyncMock(return_value=record_row)
+        return r
+    return AsyncMock(side_effect=_run)
+
+
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     """Reset env + schema flag between tests for deterministic state."""
@@ -294,11 +318,61 @@ class TestCypherConstruction:
         )
 
     @pytest.mark.asyncio
-    async def test_create_record_auto_provisions_before_creating(self, patched_driver):
+    async def test_create_record_alias_hit_skips_merge(self, patched_driver):
+        """If the caller's id matches an existing :Person by primary or alias,
+        MERGE is skipped — the create uses the canonical primary_user_id."""
+        patched_driver.run = _dispatched_run(
+            record_row={"record_id": "mem_x"},
+            resolve_hit={"canonical": "sergey@mellanni.com"},
+        )
+        await memory_tools.create_record(
+            "technical", "some engineering note", "gotcha", "technical", [],
+            tool_context=_make_ctx("tg_330959414"),  # alias for sergey@mellanni.com
+        )
+        calls = patched_driver.run.await_args_list
+        lookup_call = next(
+            (c for c in calls if _is_resolve_caller_lookup(c.args[0])), None
+        )
+        merge_call = next(
+            (c for c in calls if "MERGE (p:Person {primary_user_id: $caller})" in c.args[0]),
+            None,
+        )
+        assert lookup_call is not None
+        assert merge_call is None, "MERGE should be skipped when alias lookup hits"
+
+    @pytest.mark.asyncio
+    async def test_create_record_alias_miss_runs_merge(self, patched_driver):
+        """New caller (no existing :Person) → MERGE runs with correct scope label."""
+        patched_driver.run = _dispatched_run(
+            record_row={"record_id": "mem_x"},
+            resolve_hit=None,  # miss
+        )
+        await memory_tools.create_record(
+            "technical", "engineering note", "gotcha", "technical", [],
+            tool_context=_make_ctx("bob@example.com"),
+        )
+        calls = patched_driver.run.await_args_list
+        merge_call = next(
+            (c for c in calls if "MERGE (p:Person {primary_user_id: $caller})" in c.args[0]),
+            None,
+        )
+        assert merge_call is not None
+        assert ":ProfessionalPerson" in merge_call.args[0]  # bob@ → company
+
+    @pytest.mark.asyncio
+    async def test_create_record_new_caller_runs_merge_with_scope(self, patched_driver):
+        # Simulate: first call (resolve-caller lookup) returns None → new caller,
+        # MERGE runs; subsequent calls return a record_id for the create.
+        call_seq = iter([None, None, {"record_id": "mem_new"}])
+
         async def _run(*args, **kwargs):
             r = AsyncMock()
-            r.single = AsyncMock(return_value={"record_id": "mem_x"})
+            try:
+                r.single = AsyncMock(return_value=next(call_seq))
+            except StopIteration:
+                r.single = AsyncMock(return_value={"record_id": "mem_extra"})
             return r
+
         patched_driver.run = AsyncMock(side_effect=_run)
 
         await memory_tools.create_record(
@@ -306,35 +380,44 @@ class TestCypherConstruction:
             tool_context=_make_ctx("bob@example.com"),
         )
         calls = patched_driver.run.await_args_list
-        assert len(calls) >= 2
-        # First call auto-provisions the caller's :Person node.
-        first_query = calls[0].args[0]
-        assert "MERGE (p:Person {primary_user_id: $caller})" in first_query
-        assert ":ProfessionalPerson" in first_query  # bob@example.com → company user
+        merge_call = next(
+            (c for c in calls if "MERGE (p:Person {primary_user_id: $caller})" in c.args[0]),
+            None,
+        )
+        assert merge_call is not None
+        # Company user → professional scope label.
+        assert ":ProfessionalPerson" in merge_call.args[0]
 
     @pytest.mark.asyncio
     async def test_create_record_outsider_auto_provisions_as_personal(self, patched_driver):
+        call_seq = iter([None, None, {"record_id": "mem_x"}])
+
         async def _run(*args, **kwargs):
             r = AsyncMock()
-            r.single = AsyncMock(return_value={"record_id": "mem_x"})
+            try:
+                r.single = AsyncMock(return_value=next(call_seq))
+            except StopIteration:
+                r.single = AsyncMock(return_value={"record_id": "mem_extra"})
             return r
+
         patched_driver.run = AsyncMock(side_effect=_run)
 
         await memory_tools.create_record(
             "technical", "technical note", "tip", "technical", [],
             tool_context=_make_ctx("tg_999"),
         )
-        first_query = patched_driver.run.await_args_list[0].args[0]
-        assert ":PersonalPerson" in first_query  # tg_999 → non-company
+        calls = patched_driver.run.await_args_list
+        merge_call = next(
+            (c for c in calls if "MERGE (p:Person {primary_user_id: $caller})" in c.args[0]),
+            None,
+        )
+        assert merge_call is not None
+        assert ":PersonalPerson" in merge_call.args[0]  # tg_999 → non-company
 
     @pytest.mark.asyncio
     async def test_update_record_uses_authored_match(self, patched_driver):
-        # Simulate: caller is NOT the author → match returns no row.
-        async def _run(*args, **kwargs):
-            r = AsyncMock()
-            r.single = AsyncMock(return_value=None)
-            return r
-        patched_driver.run = AsyncMock(side_effect=_run)
+        # Simulate: caller is NOT the author → main-query match returns no row.
+        patched_driver.run = _dispatched_run(record_row=None, resolve_hit=None)
 
         result = await memory_tools.update_record(
             "mem_1", "professional",
@@ -343,10 +426,13 @@ class TestCypherConstruction:
         )
         assert result["status"] == "forbidden"
         assert "not authored by you" in result["message"]
-        # Verify query had the :AUTHORED MATCH predicate.
-        query = patched_driver.run.await_args_list[0].args[0]
-        assert "[:AUTHORED]" in query
-        assert ":ProfessionalMemory" in query
+        # Find the MATCH-with-AUTHORED query among all calls.
+        authored_query = next(
+            (c.args[0] for c in patched_driver.run.await_args_list
+             if "[:AUTHORED]->(m:ProfessionalMemory" in c.args[0]),
+            None,
+        )
+        assert authored_query is not None, "expected an AUTHORED predicate on :ProfessionalMemory"
 
     @pytest.mark.asyncio
     async def test_update_any_record_skips_authored_match(self, patched_driver):
@@ -396,19 +482,20 @@ class TestCypherConstruction:
 
     @pytest.mark.asyncio
     async def test_delete_record_as_author_uses_authored_predicate(self, patched_driver):
-        async def _run(*args, **kwargs):
-            r = AsyncMock()
-            r.single = AsyncMock(return_value={"deleted": 1})
-            return r
-        patched_driver.run = AsyncMock(side_effect=_run)
+        patched_driver.run = _dispatched_run(
+            record_row={"deleted": 1}, resolve_hit={"canonical": "bob@example.com"}
+        )
 
         result = await memory_tools.delete_record(
             "mem_1", "professional", tool_context=_make_ctx("bob@example.com"),
         )
         assert result["status"] == "success"
-        query = patched_driver.run.await_args_list[0].args[0]
-        assert "[:AUTHORED]" in query
-        assert ":ProfessionalMemory" in query
+        authored_query = next(
+            (c.args[0] for c in patched_driver.run.await_args_list
+             if "[:AUTHORED]->(m:ProfessionalMemory" in c.args[0]),
+            None,
+        )
+        assert authored_query is not None
 
     @pytest.mark.asyncio
     async def test_delete_non_author_gets_forbidden(self, patched_driver):
@@ -580,3 +667,228 @@ class TestMisconfiguration:
         )
         assert result["status"] == "error"
         assert "Neo4j not configured" in result["message"]
+
+
+# ---------------------------------------------------------------------------
+# Alias-aware resolution
+# ---------------------------------------------------------------------------
+
+
+class TestResolveCallerPerson:
+    @pytest.mark.asyncio
+    async def test_lookup_hit_returns_canonical(self, patched_driver):
+        """When an existing :Person's aliases or primary matches, return canonical."""
+        async def _run(*args, **kwargs):
+            r = AsyncMock()
+            r.single = AsyncMock(return_value={"canonical": "sergey@mellanni.com"})
+            return r
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        from app.core import graph
+        graph._driver = MagicMock()  # truthy placeholder
+        canonical = await memory_tools._resolve_caller_person(
+            MagicMock(session=MagicMock(return_value=_mock_session(single_row={"canonical": "sergey@mellanni.com"}))),
+            "tg_330959414",
+            is_company=False,
+        )
+        assert canonical == "sergey@mellanni.com"
+
+    @pytest.mark.asyncio
+    async def test_lookup_miss_creates_new_and_returns_caller(self, patched_driver):
+        """When no :Person matches, MERGE new and return raw caller as primary."""
+        call_seq = iter([None])  # lookup returns no row
+
+        async def _run(*args, **kwargs):
+            r = AsyncMock()
+            try:
+                r.single = AsyncMock(return_value=next(call_seq))
+            except StopIteration:
+                r.single = AsyncMock(return_value=None)
+            return r
+
+        fake_driver = MagicMock()
+        fake_session = _mock_session()
+
+        async def _session_run(*args, **kwargs):
+            try:
+                row = next(call_seq)
+            except StopIteration:
+                row = None
+            result = AsyncMock()
+            result.single = AsyncMock(return_value=row)
+            return result
+
+        fake_session.run = AsyncMock(side_effect=_session_run)
+        fake_driver.session = MagicMock(return_value=fake_session)
+
+        canonical = await memory_tools._resolve_caller_person(
+            fake_driver, "new_user@example.com", is_company=True,
+        )
+        assert canonical == "new_user@example.com"
+        # Verify two calls: lookup + MERGE
+        assert fake_session.run.await_count == 2
+        merge_query = fake_session.run.await_args_list[1].args[0]
+        assert "MERGE (p:Person {primary_user_id: $caller})" in merge_query
+        assert ":ProfessionalPerson" in merge_query
+
+    @pytest.mark.asyncio
+    async def test_unknown_caller_returns_unchanged(self, patched_driver):
+        canonical = await memory_tools._resolve_caller_person(MagicMock(), "unknown", True)
+        assert canonical == "unknown"
+        canonical = await memory_tools._resolve_caller_person(MagicMock(), "", True)
+        assert canonical == ""
+
+
+# ---------------------------------------------------------------------------
+# delete_person + delete_any_person
+# ---------------------------------------------------------------------------
+
+
+class TestDeletePerson:
+    @pytest.mark.asyncio
+    async def test_delete_as_author(self, patched_driver):
+        async def _run(*args, **kwargs):
+            r = AsyncMock()
+            r.single = AsyncMock(return_value={"deleted": 1})
+            return r
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.delete_person(
+            "per_alice", tool_context=_make_ctx("bob@example.com"),
+        )
+        assert result["status"] == "success"
+        assert "per_alice" in result["message"]
+        # Author path uses AUTHORED predicate.
+        delete_query = next(
+            c.args[0] for c in patched_driver.run.await_args_list
+            if "DETACH DELETE p" in c.args[0]
+        )
+        assert "[:AUTHORED]" in delete_query
+
+    @pytest.mark.asyncio
+    async def test_delete_non_author_forbidden(self, patched_driver):
+        async def _run(*args, **kwargs):
+            r = AsyncMock()
+            r.single = AsyncMock(return_value={"deleted": 0})
+            return r
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.delete_person(
+            "per_alice", tool_context=_make_ctx("bob@example.com"),
+        )
+        assert result["status"] == "forbidden"
+        assert "not authored by you" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_delete_as_admin_uses_plain_match(self, patched_driver):
+        async def _run(*args, **kwargs):
+            r = AsyncMock()
+            r.single = AsyncMock(return_value={"deleted": 1})
+            return r
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.delete_person(
+            "per_alice", tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "success"
+        delete_query = next(
+            c.args[0] for c in patched_driver.run.await_args_list
+            if "DETACH DELETE p" in c.args[0]
+        )
+        assert "[:AUTHORED]" not in delete_query
+
+    @pytest.mark.asyncio
+    async def test_delete_any_person_admin_only(self, patched_driver):
+        result = await memory_tools.delete_any_person(
+            "per_alice", tool_context=_make_ctx("bob@example.com"),
+        )
+        assert result["status"] == "forbidden"
+
+    @pytest.mark.asyncio
+    async def test_delete_any_person_not_found(self, patched_driver):
+        async def _run(*args, **kwargs):
+            r = AsyncMock()
+            r.single = AsyncMock(return_value={"deleted": 0})
+            return r
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.delete_any_person(
+            "per_ghost", tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "error"
+        assert "not found" in result["message"]
+
+
+# ---------------------------------------------------------------------------
+# merge_persons
+# ---------------------------------------------------------------------------
+
+
+class TestMergePersons:
+    @pytest.mark.asyncio
+    async def test_admin_only(self, patched_driver):
+        result = await memory_tools.merge_persons(
+            "per_canonical", "per_alias", tool_context=_make_ctx("bob@example.com"),
+        )
+        assert result["status"] == "forbidden"
+
+    @pytest.mark.asyncio
+    async def test_same_id_rejected(self, patched_driver):
+        result = await memory_tools.merge_persons(
+            "per_same", "per_same", tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "error"
+        assert "different" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_happy_path(self, patched_driver):
+        # Phase 1 reassign-authored returns moved count.
+        # Phase 1b reassign-involves returns moved count.
+        # Phase 2 finalize returns canonical details.
+        call_seq = iter([
+            {"moved": 3},  # authored
+            {"moved": 1},  # involves
+            {
+                "person_id": "per_canon",
+                "primary_user_id": "tg_330959414",
+                "aliases": ["Telegram: 330959414"],
+            },
+        ])
+
+        async def _run(*args, **kwargs):
+            r = AsyncMock()
+            try:
+                r.single = AsyncMock(return_value=next(call_seq))
+            except StopIteration:
+                r.single = AsyncMock(return_value=None)
+            return r
+
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.merge_persons(
+            "per_canon", "per_alias", tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "success"
+        assert result["authored_edges_moved"] == 3
+        assert result["involves_edges_moved"] == 1
+        assert "Telegram: 330959414" in result["aliases"]
+        # All three phases ran.
+        queries = [c.args[0] for c in patched_driver.run.await_args_list]
+        assert any("MERGE (canon)-[:AUTHORED]->(t)" in q for q in queries)
+        assert any("MERGE (x)-[:INVOLVES]->(canon)" in q for q in queries)
+        assert any("DETACH DELETE alias" in q for q in queries)
+
+    @pytest.mark.asyncio
+    async def test_canonical_not_found(self, patched_driver):
+        # Phase 1 finds no canonical/alias pair → single() returns None.
+        async def _run(*args, **kwargs):
+            r = AsyncMock()
+            r.single = AsyncMock(return_value=None)
+            return r
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.merge_persons(
+            "per_missing", "per_alias", tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "error"
+        assert "not found" in result["message"]

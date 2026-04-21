@@ -182,18 +182,42 @@ def _auto_person_id(caller: str) -> str:
     return f"per_auto_{hashlib.md5(caller.encode('utf-8')).hexdigest()[:8]}"
 
 
-async def _auto_provision_person(driver, caller: str, is_company: bool) -> None:
-    """MERGE the caller's :Person node, tag with the scope label.
+async def _resolve_caller_person(driver, caller: str, is_company: bool) -> str:
+    """Find-or-create the caller's :Person node. Return its canonical primary_user_id.
 
-    Idempotent. Sets the scope label on every call so if a caller's company
-    status changes, the label tracks it. `is_auto_provisioned` distinguishes
-    these stubs from curated Person records (`create_person`).
+    First tries to match an existing :Person whose `primary_user_id` or
+    `aliases` list contains the raw caller id. If found, returns that node's
+    canonical primary_user_id — subsequent MATCH queries then resolve to the
+    same node even when the caller's transport uses an alias identifier.
+
+    If no match, auto-provisions a new stub :Person with the raw caller id as
+    its primary_user_id and the appropriate scope label.
+
+    This is the prevention layer for duplicate :Person nodes. Duplicates that
+    already exist (e.g. 'Telegram: 330959414' vs 'tg_330959414' from the
+    pre-alias era) are merged via the admin-only `merge_persons` tool.
     """
-    if caller == "unknown" or not caller:
-        return
+    if not caller or caller == "unknown":
+        return caller
+
+    lookup_query = (
+        "MATCH (p:Person) "
+        "WHERE p.primary_user_id = $caller "
+        "   OR $caller IN coalesce(p.aliases, []) "
+        "RETURN p.primary_user_id AS canonical LIMIT 1"
+    )
+    async with driver.session() as session:
+        result = await session.run(lookup_query, caller=caller)
+        row = await result.single()
+        # Use .get to survive mock results that don't include the aliased key;
+        # production Neo4j always does, but this is cheap defensive code.
+        canonical = row.get("canonical") if row else None
+        if canonical:
+            return canonical
+
     scope_label = _SCOPE_TO_PERSON_LABEL["professional" if is_company else "personal"]
     person_id = _auto_person_id(caller)
-    query = (
+    create_query = (
         "MERGE (p:Person {primary_user_id: $caller}) "
         "ON CREATE SET "
         "    p.person_id = $person_id, "
@@ -205,7 +229,8 @@ async def _auto_provision_person(driver, caller: str, is_company: bool) -> None:
         f"SET p:{scope_label}"
     )
     async with driver.session() as session:
-        await session.run(query, caller=caller, person_id=person_id)
+        await session.run(create_query, caller=caller, person_id=person_id)
+    return caller
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +436,7 @@ async def create_record(
     if not openai_key:
         return _error("OPENAI_API_KEY not configured.")
 
-    await _auto_provision_person(driver, caller, is_company)
+    canonical_caller = await _resolve_caller_person(driver, caller, is_company)
 
     memory_label = _NAMESPACE_TO_MEMORY_LABEL[namespace]
     record_id = _new_record_id()
@@ -438,7 +463,7 @@ async def create_record(
         async with driver.session() as session:
             result = await session.run(
                 query,
-                caller_id=caller,
+                caller_id=canonical_caller,
                 openai_key=openai_key,
                 record_id=record_id,
                 text=text,
@@ -456,14 +481,14 @@ async def create_record(
         # main create-Cypher small, and a failure here doesn't orphan the
         # already-committed memory node.
         if related_people:
-            await _link_memory_to_people(driver, created_id, related_people, caller)
+            await _link_memory_to_people(driver, created_id, related_people, canonical_caller)
         if related_memories:
-            await _link_memory_to_memories(driver, created_id, related_memories, caller)
+            await _link_memory_to_memories(driver, created_id, related_memories, canonical_caller)
 
         return {
             "status": "success",
             "record_id": created_id,
-            "message": f"Record '{short_description}' created in {namespace}.",
+            "message": f"Record `{created_id}` created in {namespace}: '{short_description}'.",
         }
     except Exception as e:
         logger.exception("create_record failed")
@@ -509,10 +534,12 @@ async def update_record(
     if caller == "unknown":
         return _error("Could not resolve caller identity from tool context.")
 
-    is_admin, _ = _get_acl_flags(caller)
+    is_admin, is_company = _get_acl_flags(caller)
     driver = await _ready_driver()
     if driver is None:
         return _error("Neo4j not configured.")
+
+    canonical_caller = await _resolve_caller_person(driver, caller, is_company)
 
     label = _NAMESPACE_TO_MEMORY_LABEL[namespace]
     openai_key = _get_openai_key()
@@ -521,7 +548,7 @@ async def update_record(
     set_parts = []
     params = {
         "record_id": record_id,
-        "caller_id": caller,
+        "caller_id": canonical_caller,
         "openai_key": openai_key,
     }
     for key, value in updates_dict.items():
@@ -551,15 +578,18 @@ async def update_record(
             if not row:
                 if is_admin:
                     return _forbidden(
-                        "This tool enforces creator-only updates. Use update_any_record for admin override."
+                        f"Record `{record_id}`: this tool enforces creator-only updates. "
+                        "Use update_any_record for admin override."
                     )
                 return _forbidden(
-                    f"Record {record_id} was not authored by you. Only the creator or admins can modify it."
+                    f"Record `{record_id}` was not authored by you. "
+                    "Only the creator or admins can modify it."
                 )
         return {
             "status": "success",
             "record_id": record_id,
             "updated_fields": sorted(updates_dict),
+            "message": f"Record `{record_id}` updated: {', '.join(sorted(updates_dict))}.",
         }
     except Exception as e:
         logger.exception("update_record failed")
@@ -628,11 +658,12 @@ async def update_any_record(
             result = await session.run(query, **params)
             row = await result.single()
             if not row:
-                return _error(f"Record {record_id} not found in {namespace}.")
+                return _error(f"Record `{record_id}` not found in {namespace}.")
         return {
             "status": "success",
             "record_id": record_id,
             "updated_fields": sorted(updates_dict),
+            "message": f"Record `{record_id}` updated (admin override): {', '.join(sorted(updates_dict))}.",
         }
     except Exception as e:
         logger.exception("update_any_record failed")
@@ -657,7 +688,7 @@ async def delete_record(
     if caller == "unknown":
         return _error("Could not resolve caller identity from tool context.")
 
-    is_admin, _ = _get_acl_flags(caller)
+    is_admin, is_company = _get_acl_flags(caller)
     driver = await _ready_driver()
     if driver is None:
         return _error("Neo4j not configured.")
@@ -674,12 +705,13 @@ async def delete_record(
         )
         params = {"record_id": record_id}
     else:
+        canonical_caller = await _resolve_caller_person(driver, caller, is_company)
         query = (
             f"MATCH (caller:Person {{primary_user_id: $caller_id}})-[:AUTHORED]->(m:{label} {{record_id: $record_id}}) "
             "DETACH DELETE m "
             "RETURN count(m) AS deleted"
         )
-        params = {"record_id": record_id, "caller_id": caller}
+        params = {"record_id": record_id, "caller_id": canonical_caller}
 
     try:
         async with driver.session() as session:
@@ -688,13 +720,14 @@ async def delete_record(
             deleted = row["deleted"] if row else 0
             if not deleted:
                 if is_admin:
-                    return _error(f"Record {record_id} not found in {namespace}.")
+                    return _error(f"Record `{record_id}` not found in {namespace}.")
                 return _forbidden(
-                    f"Record {record_id} was not authored by you. Only the creator or admins can delete."
+                    f"Record `{record_id}` was not authored by you. "
+                    "Only the creator or admins can delete."
                 )
         return {
             "status": "success",
-            "message": f"Record {record_id} deleted from {namespace}.",
+            "message": f"Record `{record_id}` deleted from {namespace}.",
         }
     except Exception as e:
         logger.exception("delete_record failed")
@@ -752,7 +785,7 @@ async def create_person(
     if not openai_key:
         return _error("OPENAI_API_KEY not configured.")
 
-    await _auto_provision_person(driver, caller, is_company)
+    canonical_caller = await _resolve_caller_person(driver, caller, is_company)
 
     person_id = _new_person_id()
     full_name = f"{first_name} {last_name or ''}".strip()
@@ -801,7 +834,7 @@ async def create_person(
         async with driver.session() as session:
             result = await session.run(
                 query,
-                caller_id=caller,
+                caller_id=canonical_caller,
                 openai_key=openai_key,
                 person_id=person_id,
                 first_name=first_name,
@@ -819,13 +852,16 @@ async def create_person(
 
         # Wire explicit person→person relationships (e.g. colleague, spouse).
         if relations_list:
-            await _link_person_relations(driver, created_id, relations_list, caller)
+            await _link_person_relations(driver, created_id, relations_list, canonical_caller)
 
         return {
             "status": "success",
             "person_id": created_id,
             "scopes": sorted(set(scopes)),
-            "message": f"Person '{full_name}' created with scope(s): {', '.join(sorted(set(scopes)))}.",
+            "message": (
+                f"Person `{created_id}` created: {full_name}, "
+                f"scope(s): {', '.join(sorted(set(scopes)))}."
+            ),
         }
     except Exception as e:
         logger.exception("create_person failed")
@@ -917,10 +953,12 @@ async def update_person(
     if caller == "unknown":
         return _error("Could not resolve caller identity from tool context.")
 
-    is_admin, _ = _get_acl_flags(caller)
+    is_admin, is_company = _get_acl_flags(caller)
     driver = await _ready_driver()
     if driver is None:
         return _error("Neo4j not configured.")
+
+    canonical_caller = await _resolve_caller_person(driver, caller, is_company)
 
     # Build SET clauses. Name/role changes trigger embedding refresh.
     openai_key = _get_openai_key()
@@ -929,7 +967,7 @@ async def update_person(
         return _error("OPENAI_API_KEY required for updates that refresh embeddings.")
 
     set_parts = []
-    params = {"person_id": person_id, "caller_id": caller, "openai_key": openai_key}
+    params = {"person_id": person_id, "caller_id": canonical_caller, "openai_key": openai_key}
     for key, value in updates_dict.items():
         if key == "user_ids":
             params[key] = json.dumps(value) if not isinstance(value, str) else value
@@ -964,15 +1002,18 @@ async def update_person(
             if not row:
                 if is_admin:
                     return _forbidden(
-                        "This tool enforces creator-only updates. Use update_any_person for admin override."
+                        f"Person `{person_id}`: this tool enforces creator-only updates. "
+                        "Use update_any_person for admin override."
                     )
                 return _forbidden(
-                    f"Person {person_id} was not authored by you. Only the creator or admins can modify."
+                    f"Person `{person_id}` was not authored by you. "
+                    "Only the creator or admins can modify."
                 )
         return {
             "status": "success",
             "person_id": person_id,
             "updated_fields": sorted(updates_dict),
+            "message": f"Person `{person_id}` updated: {', '.join(sorted(updates_dict))}.",
         }
     except Exception as e:
         logger.exception("update_person failed")
@@ -1044,11 +1085,12 @@ async def update_any_person(
             result = await session.run(query, **params)
             row = await result.single()
             if not row:
-                return _error(f"Person {person_id} not found.")
+                return _error(f"Person `{person_id}` not found.")
         return {
             "status": "success",
             "person_id": person_id,
             "updated_fields": sorted(updates_dict),
+            "message": f"Person `{person_id}` updated (admin override): {', '.join(sorted(updates_dict))}.",
         }
     except Exception as e:
         logger.exception("update_any_person failed")
@@ -1087,15 +1129,226 @@ async def promote_person(
             result = await session.run(query, person_id=person_id)
             row = await result.single()
             if not row:
-                return _error(f"Person {person_id} not found.")
+                return _error(f"Person `{person_id}` not found.")
         return {
             "status": "success",
             "person_id": person_id,
             "labels": row["labels"],
-            "message": f"Added scope '{add_scope}' to person {person_id}.",
+            "message": f"Added scope '{add_scope}' to person `{person_id}`.",
         }
     except Exception as e:
         logger.exception("promote_person failed")
+        return _error(str(e))
+
+
+async def delete_person(
+    person_id: str,
+    tool_context: ToolContext = None,
+) -> dict:
+    """Delete a person. Only the creator (via :AUTHORED) or admins can delete.
+
+    Use `delete_any_person` for admin override on a person you did not create.
+
+    Args:
+        person_id: ID of the person to delete.
+    """
+    caller = _get_caller(tool_context)
+    if caller == "unknown":
+        return _error("Could not resolve caller identity from tool context.")
+
+    is_admin, is_company = _get_acl_flags(caller)
+    driver = await _ready_driver()
+    if driver is None:
+        return _error("Neo4j not configured.")
+
+    if is_admin:
+        query = (
+            "MATCH (p:Person {person_id: $person_id}) "
+            "DETACH DELETE p "
+            "RETURN count(p) AS deleted"
+        )
+        params = {"person_id": person_id}
+    else:
+        canonical_caller = await _resolve_caller_person(driver, caller, is_company)
+        query = (
+            "MATCH (caller:Person {primary_user_id: $caller_id})-[:AUTHORED]->(p:Person {person_id: $person_id}) "
+            "DETACH DELETE p "
+            "RETURN count(p) AS deleted"
+        )
+        params = {"person_id": person_id, "caller_id": canonical_caller}
+
+    try:
+        async with driver.session() as session:
+            result = await session.run(query, **params)
+            row = await result.single()
+            deleted = row["deleted"] if row else 0
+            if not deleted:
+                if is_admin:
+                    return _error(f"Person `{person_id}` not found.")
+                return _forbidden(
+                    f"Person `{person_id}` was not authored by you. "
+                    "Only the creator or admins can delete."
+                )
+        return {
+            "status": "success",
+            "message": f"Person `{person_id}` deleted.",
+        }
+    except Exception as e:
+        logger.exception("delete_person failed")
+        return _error(str(e))
+
+
+async def delete_any_person(
+    person_id: str,
+    tool_context: ToolContext = None,
+) -> dict:
+    """Admin-only: delete a person bypassing the :AUTHORED creator gate."""
+    caller = _get_caller(tool_context)
+    is_admin, _ = _get_acl_flags(caller)
+    if not is_admin:
+        return _forbidden("delete_any_person is admin-only.")
+
+    driver = await _ready_driver()
+    if driver is None:
+        return _error("Neo4j not configured.")
+
+    query = (
+        "MATCH (p:Person {person_id: $person_id}) "
+        "DETACH DELETE p "
+        "RETURN count(p) AS deleted"
+    )
+    try:
+        async with driver.session() as session:
+            result = await session.run(query, person_id=person_id)
+            row = await result.single()
+            deleted = row["deleted"] if row else 0
+            if not deleted:
+                return _error(f"Person `{person_id}` not found.")
+        return {
+            "status": "success",
+            "message": f"Person `{person_id}` deleted (admin override).",
+        }
+    except Exception as e:
+        logger.exception("delete_any_person failed")
+        return _error(str(e))
+
+
+async def merge_persons(
+    canonical_id: str,
+    alias_id: str,
+    tool_context: ToolContext = None,
+) -> dict:
+    """Admin-only: merge a duplicate :Person node into a canonical one.
+
+    Use this to consolidate records that represent the same real identity —
+    e.g. a contact registered twice under slightly different names, or a user
+    whose Telegram ID was stored in two different formats ("Telegram: 123"
+    and "tg_123") before alias-aware resolution was in place.
+
+    What it does:
+    1. Reassigns every `:AUTHORED` edge from the alias :Person to the canonical.
+    2. Reassigns every incoming `:INVOLVES` edge (memories that referenced the
+       alias person) to point at the canonical.
+    3. Appends alias's `primary_user_id` (and any of its own aliases) to the
+       canonical's `aliases` list — future calls from that identifier will
+       resolve to the canonical without creating a duplicate.
+    4. DETACH DELETEs the alias node. Any other edges on the alias (e.g.
+       person-to-person `:RELATED_TO`) are dropped in this step; reassign
+       those manually in Neo4j Browser before merging if you need them.
+
+    Args:
+        canonical_id: person_id of the record to KEEP.
+        alias_id: person_id of the record to MERGE IN (deleted afterwards).
+    """
+    caller = _get_caller(tool_context)
+    is_admin, _ = _get_acl_flags(caller)
+    if not is_admin:
+        return _forbidden("merge_persons is admin-only.")
+
+    if not canonical_id or not alias_id:
+        return _error("Both canonical_id and alias_id are required.")
+    if canonical_id == alias_id:
+        return _error("canonical_id and alias_id must be different.")
+
+    driver = await _ready_driver()
+    if driver is None:
+        return _error("Neo4j not configured.")
+
+    # Phase 1: reassign outbound :AUTHORED + inbound :INVOLVES edges.
+    # Done as two small queries so each is easy to read and debug.
+    reassign_authored = (
+        "MATCH (canon:Person {person_id: $canonical_id}), "
+        "      (alias:Person {person_id: $alias_id}) "
+        "WHERE canon.person_id <> alias.person_id "
+        "OPTIONAL MATCH (alias)-[:AUTHORED]->(target) "
+        "WITH canon, alias, collect(DISTINCT target) AS targets "
+        "FOREACH (t IN targets | MERGE (canon)-[:AUTHORED]->(t)) "
+        "RETURN size(targets) AS moved"
+    )
+    reassign_involves = (
+        "MATCH (canon:Person {person_id: $canonical_id}), "
+        "      (alias:Person {person_id: $alias_id}) "
+        "OPTIONAL MATCH (m:Memory)-[:INVOLVES]->(alias) "
+        "WITH canon, alias, collect(DISTINCT m) AS memories "
+        "FOREACH (x IN memories | MERGE (x)-[:INVOLVES]->(canon)) "
+        "RETURN size(memories) AS moved"
+    )
+
+    # Phase 2: append aliases + delete alias node. Filters the new list to
+    # exclude the canonical's own primary_user_id (defensive) and null values.
+    finalize = (
+        "MATCH (canon:Person {person_id: $canonical_id}), "
+        "      (alias:Person {person_id: $alias_id}) "
+        "WHERE canon.person_id <> alias.person_id "
+        "WITH canon, alias, "
+        "     [x IN (coalesce(canon.aliases, []) + [alias.primary_user_id] + coalesce(alias.aliases, [])) "
+        "      WHERE x IS NOT NULL AND x <> canon.primary_user_id] AS new_aliases "
+        "SET canon.aliases = new_aliases, canon.updated_at = datetime() "
+        "WITH canon, alias "
+        "DETACH DELETE alias "
+        "RETURN canon.person_id AS person_id, "
+        "       canon.primary_user_id AS primary_user_id, "
+        "       canon.aliases AS aliases"
+    )
+
+    try:
+        async with driver.session() as session:
+            r1 = await (await session.run(
+                reassign_authored, canonical_id=canonical_id, alias_id=alias_id
+            )).single()
+            if r1 is None:
+                return _error(
+                    f"Canonical `{canonical_id}` or alias `{alias_id}` not found, "
+                    "or they're the same node."
+                )
+            authored_moved = r1["moved"]
+
+            r2 = await (await session.run(
+                reassign_involves, canonical_id=canonical_id, alias_id=alias_id
+            )).single()
+            involves_moved = r2["moved"] if r2 else 0
+
+            r3 = await (await session.run(
+                finalize, canonical_id=canonical_id, alias_id=alias_id
+            )).single()
+            if r3 is None:
+                return _error("Merge finalization failed after edges were reassigned.")
+
+        return {
+            "status": "success",
+            "person_id": r3["person_id"],
+            "primary_user_id": r3["primary_user_id"],
+            "aliases": r3["aliases"],
+            "authored_edges_moved": authored_moved,
+            "involves_edges_moved": involves_moved,
+            "message": (
+                f"Merged `{alias_id}` → `{canonical_id}`. "
+                f"Moved {authored_moved} :AUTHORED + {involves_moved} :INVOLVES edge(s). "
+                f"Canonical now has {len(r3['aliases'])} alias(es)."
+            ),
+        }
+    except Exception as e:
+        logger.exception("merge_persons failed")
         return _error(str(e))
 
 

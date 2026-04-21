@@ -20,9 +20,12 @@ class KnowledgeToolset(BaseToolset):
         from app.tools.memory_tools import (
             create_person,
             create_record,
+            delete_any_person,
+            delete_person,
             delete_record,
             get_records,
             list_records,
+            merge_persons,
             promote_person,
             search_knowledge,
             search_people,
@@ -44,5 +47,8 @@ class KnowledgeToolset(BaseToolset):
             FunctionTool(func=search_people),
             FunctionTool(func=update_person),
             FunctionTool(func=update_any_person),
+            FunctionTool(func=delete_person),
+            FunctionTool(func=delete_any_person),
             FunctionTool(func=promote_person),
+            FunctionTool(func=merge_persons),
         ]

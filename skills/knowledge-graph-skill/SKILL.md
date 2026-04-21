@@ -48,7 +48,10 @@ People live in two scopes (each person can be tagged with one or both):
 | `search_people(search_query, scope, top_k)` | Semantic search within one scope |
 | `update_person(person_id, updates)` | Creator-only |
 | `update_any_person(person_id, updates)` | **Admin-only** override |
+| `delete_person(person_id)` | Creator-only delete |
+| `delete_any_person(person_id)` | **Admin-only** override |
 | `promote_person(person_id, add_scope)` | **Admin-only** — add a scope label to an existing person (e.g. a friend becomes a colleague) |
+| `merge_persons(canonical_id, alias_id)` | **Admin-only** — merge a duplicate `:Person` record into a canonical one. Reassigns `:AUTHORED` + `:INVOLVES` edges and adds the alias's identifier to the canonical's aliases list. Use when you discover two records represent the same real human. |
 
 Categories: `idea`, `memory`, `knowledge`, `procedure`, `experiment`, `incident`, `project`, `technical`, `strategy`, `communication_style`, `policy`, `operational`.
 
@@ -65,6 +68,26 @@ Every write records who made it via a `:AUTHORED` graph edge from the caller's `
 - `relations=[{"related_person_id": "per_...", "relation_type": "colleague"}]` on `create_person` creates `(:Person)-[:COLLEAGUE]->(:Person)` (relation type sanitized to UPPER_SNAKE_CASE).
 
 These are managed by the memory tools — you do not call Neo4j directly for relationships.
+
+## Preventing duplicate `:Person` records
+
+Duplicates happen when the same real human is stored twice under slightly different names or IDs (e.g. "Igor" and "Igor Poluyko", or "Telegram: 123" and "tg_123"). They cost you silently — search results become fragmented, and relationship queries miss connections.
+
+**Before calling `create_person`, always search first.** Disambiguation flow:
+
+1. Call `search_people(search_query="<proposed name + role/context>", scope=<intended scope>, top_k=5)`.
+2. Eyeball the top result(s). If any look like plausibly the same person — same first name with different last name, same role, same company, same domain in `user_ids` — do **not** create. Instead:
+   - **Ask the user to confirm**: "I already have a person named `<full_name>` (`<person_id>`) with role `<role>`. Is this the same person you're describing, or a different one?"
+   - If same → use `update_person` to enrich the existing record (add missing fields, extra `user_ids`, or new relations), or `promote_person` if a scope needs adding. Do not create a duplicate.
+   - If different → proceed with `create_person`.
+3. If no near-matches → `create_person` safely.
+
+Edge cases:
+- **Partial name only**: "Igor" alone is ambiguous — if `search_people` returns "Igor Poluyko", ask the user before doing anything. Never guess.
+- **Same name, clearly different people** (e.g. two colleagues both named Alex): proceed with `create_person`, ideally with distinguishing role/context in the text.
+- **Duplicate discovered after the fact**: admins merge with `merge_persons(canonical_id, alias_id)`. Pick whichever node has richer content or the clearer primary identifier as canonical.
+
+The caller's own `:Person` is auto-provisioned on first tool call and uses alias-aware lookup, so Telegram/Email/Slack identifiers for the same caller don't re-duplicate silently as long as admins have merged the legacy duplicates.
 
 ## Namespace selection heuristics
 

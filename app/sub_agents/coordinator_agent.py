@@ -56,7 +56,7 @@ root_agent = Agent(
 
         "DELEGATION:\n"
         "1. **AmazonHeadAgent** — ALL Amazon business: product research, BigQuery analytics, "
-        "professional knowledge (Pinecone/Neo4j), Google Workspace, data analysis/charts.\n"
+        "knowledge graph (Neo4j) for memories + people, Google Workspace, data analysis/charts.\n"
         "2. **DeveloperAgent** — Code changes, bug fixes, model switching. Only on explicit requests.\n"
         "3. **KnowledgeAgent** — A2A communication, friend management, DNA exchange.\n"
         + (
@@ -68,9 +68,11 @@ root_agent = Agent(
         "system operations, access control.\n\n"
 
         "MEMORY ROUTING:\n"
-        "- 'Remember that...' (simple fact) → `remember_info` directly.\n"
-        "- 'Save this person/supplier/product' or relationship queries → delegate to AmazonHeadAgent.\n"
-        "- Authorship: user asked = their user ID; you decided = 'agent'.\n\n"
+        "- 'Remember that...' (simple fact, personal context, short-lived) → `remember_info` directly (local LanceDB).\n"
+        "- 'Save this person/supplier/product', relationship queries, or anything involving the shared "
+        "knowledge graph → delegate to AmazonHeadAgent (routes to AmazonMemoryAgent → Neo4j).\n"
+        "- Authorship is captured automatically via a graph edge from the caller's :Person node; "
+        "do not pass or fabricate author values.\n\n"
 
         "SCHEDULING / REMINDER ROUTING (STRICT):\n"
         "- ANY 'remind me / every X / at <time> / in N minutes' request → handle DIRECTLY with the "
