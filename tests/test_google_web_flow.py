@@ -138,6 +138,65 @@ async def test_exchange_code_happy_path():
 
 
 @pytest.mark.asyncio
+async def test_oauth_callback_handler_happy_path():
+    """The a2a_server callback handler persists tokens and renders a success page."""
+    from app.a2a_server import _handle_oauth_callback
+
+    # Mock request with state/code query params
+    req = MagicMock()
+    req.query_params = {"state": "s1", "code": "c1", "error": ""}
+
+    with patch("app.tools.google_oauth.web_flow.exchange_code", AsyncMock(return_value={
+        "status": "success",
+        "user_id": "tg_330959414",
+        "access_token": "a",
+        "refresh_token": "r",
+        "expires_in": 3600,
+        "email": "user@gmail.com",
+    })), patch("app.tools.google_oauth.token_store.save_token") as save_token, \
+         patch("app.tools.google_oauth.token_store.save_user_mapping") as save_mapping:
+        resp = await _handle_oauth_callback(req)
+
+    assert resp.status_code == 200
+    save_token.assert_called_once()
+    args, _kwargs = save_token.call_args
+    assert args[0] == "user@gmail.com"  # email keys the token store
+    save_mapping.assert_called_once_with("tg_330959414", "user@gmail.com")
+    body = resp.body.decode()
+    assert "Connected" in body
+    assert "user@gmail.com" in body
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_handler_denied():
+    from app.a2a_server import _handle_oauth_callback
+
+    req = MagicMock()
+    req.query_params = {"error": "access_denied", "state": "s", "code": ""}
+
+    resp = await _handle_oauth_callback(req)
+    assert resp.status_code == 400
+    assert "denied" in resp.body.decode().lower()
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_handler_exchange_fails():
+    from app.a2a_server import _handle_oauth_callback
+
+    req = MagicMock()
+    req.query_params = {"state": "bad", "code": "c", "error": ""}
+
+    with patch("app.tools.google_oauth.web_flow.exchange_code", AsyncMock(return_value={
+        "status": "error",
+        "message": "Invalid or unknown state parameter.",
+    })):
+        resp = await _handle_oauth_callback(req)
+
+    assert resp.status_code == 400
+    assert "Invalid or unknown state" in resp.body.decode()
+
+
+@pytest.mark.asyncio
 async def test_exchange_code_google_error():
     state = "error-state"
     web_flow._PENDING[state] = {
