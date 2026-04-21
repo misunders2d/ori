@@ -37,6 +37,11 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+# Hydrate os.environ from the vault file, same pattern the bot uses at startup.
+# Without this, standalone script invocations see an empty env.
+from deploy.vault import load_vault  # noqa: E402
+load_vault()
+
 from app.core.graph_schema import ensure_schema  # noqa: E402
 
 logging.basicConfig(
