@@ -213,7 +213,21 @@ class SlackAdapter(TransportAdapter):
         except Exception:
             logger.exception("Failed to upload media to Slack channel %s", target_id)
 
-    async def download_file(self, file_url: str) -> Optional[Tuple[bytes, str, str]]:
+    async def download_file(
+        self,
+        file_url: str,
+        mime_hint: str = "",
+        filename_hint: str = "",
+    ) -> Optional[Tuple[bytes, str, str]]:
+        """Download a Slack-hosted file with auth.
+
+        Slack event payloads carry authoritative `mimetype` and `name` on each
+        file object, so the poller should pass them in as hints — Slack's
+        ``url_private`` is not guaranteed to contain the original filename or
+        extension (some files surface as ID-only paths), which would make
+        ``mimetypes.guess_type`` fall back to ``application/octet-stream`` and
+        block downstream models (Gemini) from parsing PDFs, DOCX, etc.
+        """
         # Validate URL is from Slack servers to prevent SSRF
         parsed = urlparse(file_url)
         if parsed.hostname and not parsed.hostname.endswith(".slack.com"):
@@ -240,11 +254,17 @@ class SlackAdapter(TransportAdapter):
                 )
                 return None
 
-            import mimetypes
-            import os as _os
-
-            filename = _os.path.basename(parsed.path)
-            mime_type, _ = mimetypes.guess_type(filename)
+            # Prefer hints from the Slack event (authoritative) over URL guesses.
+            filename = filename_hint or ""
+            mime_type = mime_hint or ""
+            if not filename or not mime_type:
+                import mimetypes
+                import os as _os
+                if not filename:
+                    filename = _os.path.basename(parsed.path) or "attachment"
+                if not mime_type:
+                    guessed, _ = mimetypes.guess_type(filename)
+                    mime_type = guessed or ""
             return resp.content, mime_type or "application/octet-stream", filename
         except Exception:
             logger.exception("Error downloading Slack file from %s", file_url)

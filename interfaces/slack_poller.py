@@ -507,7 +507,14 @@ async def poll_slack(get_runner_fn, process_init_fn):
                 logger.warning("Skipping oversized file (%d bytes): %s", file_size, file_obj.get("name"))
                 continue
 
-            file_data = await adapter.download_file(url_private)
+            # Pass Slack's authoritative mimetype/name so PDFs etc. don't
+            # degrade to application/octet-stream when url_private lacks an
+            # extension in its path.
+            file_data = await adapter.download_file(
+                url_private,
+                mime_hint=file_obj.get("mimetype", "") or "",
+                filename_hint=file_obj.get("name", "") or "",
+            )
             if file_data:
                 blob_bytes, mime_type, filename = file_data
                 from app.app_utils.file_convert import is_convertible, to_text, save_upload
