@@ -1,8 +1,8 @@
 """Graph memory tools — entity and relationship management via Neo4j.
 
 These tools let the agent track entities (people, projects, concepts) and their
-relationships. Works alongside Pinecone: Pinecone stores rich text content,
-Neo4j stores the relationship graph with cross-references via pinecone_id.
+relationships. Operates on the generic :Entity label alongside the
+namespace-scoped :Memory / :Person labels that memory_tools.py manages.
 """
 
 import logging
@@ -184,72 +184,6 @@ async def entity_timeline(
     return await graph.get_entity_history(entity_id)
 
 
-async def import_pinecone_record(
-    record_id: str,
-    namespace: str,
-    tool_context: ToolContext = None,
-) -> dict:
-    """Import an existing Pinecone record into the Neo4j knowledge graph.
-
-    Use this to add graph relationships for records that were created before
-    the graph was enabled. Fetches the record from Pinecone and creates the
-    corresponding entity and relationship edges in Neo4j.
-
-    Args:
-        record_id: Pinecone record ID (e.g. 'mem_2026_04_08_abc123' or 'per_2026_04_08_xyz789').
-        namespace: Pinecone namespace the record lives in (personal, professional, people, technical).
-    """
-    from app.tools.pinecone_tools import (
-        get_records,
-        _sync_record_to_graph,
-        _sync_person_to_graph,
-    )
-
-    # Fetch from Pinecone
-    result = await get_records([record_id], namespace, tool_context=tool_context)
-    if result.get("status") != "success" or not result.get("records"):
-        return {"status": "error", "message": f"Record {record_id} not found in Pinecone namespace '{namespace}'."}
-
-    meta = result["records"].get(record_id, {})
-    if not meta:
-        return {"status": "error", "message": f"Record {record_id} has no metadata."}
-
-    author = meta.get("author", meta.get("user_id", "unknown"))
-
-    if namespace == "people" or record_id.startswith("per_"):
-        await _sync_person_to_graph(
-            person_id=record_id,
-            first_name=meta.get("first_name", ""),
-            last_name=meta.get("last_name", ""),
-            role=meta.get("role", ""),
-            relations=meta.get("relations", "[]"),
-            author=author,
-        )
-    else:
-        related_people = meta.get("related_people", [])
-        related_memories_raw = meta.get("related_memories", "[]")
-        try:
-            import json
-            related_memories = json.loads(related_memories_raw) if isinstance(related_memories_raw, str) else related_memories_raw
-        except Exception:
-            related_memories = []
-
-        await _sync_record_to_graph(
-            record_id=record_id,
-            short_description=meta.get("short_description", record_id),
-            category=meta.get("category", "knowledge"),
-            related_people=related_people if related_people else None,
-            related_memories=related_memories if related_memories else None,
-            author=author,
-        )
-
-    return {
-        "status": "success",
-        "message": f"Record {record_id} imported to knowledge graph.",
-        "entity_id": record_id,
-    }
-
-
 async def search_graph(
     query: str,
     entity_type: str = "",
@@ -274,16 +208,6 @@ async def search_graph(
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _resolve_session_id(tool_context: ToolContext | None) -> str:
-    """Read the current chat session_id from tool_context, '' if unknown."""
-    if not tool_context:
-        return ""
-    session = getattr(tool_context, "session", None)
-    if not session:
-        return ""
-    return getattr(session, "session_id", None) or getattr(session, "id", None) or ""
-
-
 async def _resolve_entity(identifier: str) -> str | None:
     """Resolve a name or ID to an entity_id. Returns None if not found."""
     if not identifier:
@@ -304,67 +228,3 @@ async def _resolve_entity(identifier: str) -> str | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Auto-extraction management
-# ---------------------------------------------------------------------------
-
-async def enable_auto_extraction(
-    session_id: str = "",
-    tool_context: ToolContext = None,
-) -> dict:
-    """Enable automatic entity extraction for a chat/channel.
-
-    When enabled, every conversation turn in this session will be analyzed and
-    entities/relationships will be added to the knowledge graph automatically.
-
-    Args:
-        session_id: Optional. The session ID to enable extraction for (e.g.
-            'sl_C01ABC', 'tg_-100123'). If omitted or empty, defaults to the
-            current chat's session — which is what you want when the user says
-            "turn it on here" / "enable for this chat".
-    """
-    from app.core.extraction_config import enable_extraction
-
-    sid = session_id.strip() if session_id else ""
-    if not sid:
-        sid = _resolve_session_id(tool_context)
-    if not sid:
-        return {
-            "status": "error",
-            "message": "Could not determine the current session_id. Pass it explicitly.",
-        }
-    enable_extraction(sid)
-    return {"status": "success", "message": f"Auto entity extraction enabled for `{sid}`."}
-
-
-async def disable_auto_extraction(
-    session_id: str = "",
-    tool_context: ToolContext = None,
-) -> dict:
-    """Disable automatic entity extraction for a chat/channel.
-
-    Args:
-        session_id: Optional. The session ID to disable extraction for. If
-            omitted or empty, defaults to the current chat's session.
-    """
-    from app.core.extraction_config import disable_extraction
-
-    sid = session_id.strip() if session_id else ""
-    if not sid:
-        sid = _resolve_session_id(tool_context)
-    if not sid:
-        return {
-            "status": "error",
-            "message": "Could not determine the current session_id. Pass it explicitly.",
-        }
-    disable_extraction(sid)
-    return {"status": "success", "message": f"Auto entity extraction disabled for `{sid}`."}
-
-
-async def list_auto_extraction_sessions(
-    tool_context: ToolContext = None,
-) -> dict:
-    """List all sessions that have automatic entity extraction enabled."""
-    from app.core.extraction_config import list_extraction_sessions
-    sessions = list_extraction_sessions()
-    return {"status": "success", "sessions": sessions, "count": len(sessions)}

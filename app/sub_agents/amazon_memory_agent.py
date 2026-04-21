@@ -1,9 +1,10 @@
-"""Amazon Memory sub-agent — Pinecone vector search with automatic Neo4j mirroring.
+"""Amazon Memory sub-agent — Neo4j knowledge base with native vector search.
 
-Handles professional memory storage and retrieval for the Amazon domain. The
-knowledge graph is kept in sync automatically behind the Pinecone tools; the
-agent only interacts with Pinecone directly. Auto-extraction of entities from
-conversations can be toggled per session.
+Stores and retrieves memories + people in Neo4j alone. Access control is
+namespace-scoped (personal / professional / technical for memories, personal /
+professional for people) and enforced in code. Authorship lives on an
+`:AUTHORED` edge — the caller's `:Person` node is auto-provisioned on first
+tool call, and update/delete run a Cypher MATCH on that edge.
 """
 
 import pathlib
@@ -11,16 +12,10 @@ import pathlib
 from google.adk.agents import Agent
 from google.adk.skills import load_skill_from_dir
 from google.adk.tools import skill_toolset
-from google.adk.tools.function_tool import FunctionTool
 
 from app.app_utils.models import get_model
 from app.callbacks.guardrails import prompt_injection_guardrail
-from app.tools.graph_tools import (
-    disable_auto_extraction,
-    enable_auto_extraction,
-    list_auto_extraction_sessions,
-)
-from app.toolsets import PineconeToolset, ScratchpadToolset
+from app.toolsets import KnowledgeToolset, ScratchpadToolset
 
 _base_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 _knowledge_graph_skill = load_skill_from_dir(_base_dir / "knowledge-graph-skill")
@@ -29,30 +24,28 @@ amazon_memory_agent = Agent(
     name="AmazonMemoryAgent",
     model=get_model("AmazonMemoryAgent"),
     description=(
-        "Professional memory specialist. Stores and retrieves knowledge, people, "
-        "products, and concepts via Pinecone semantic search. A knowledge graph is "
-        "mirrored automatically behind the scenes — the agent does not manipulate "
-        "it directly. Can also toggle background auto-extraction of entities from "
-        "chat sessions on request."
+        "Knowledge specialist. Stores and retrieves memories, people, and their "
+        "relationships in Neo4j. Three memory namespaces (personal / professional / "
+        "technical) and two people scopes (personal / professional); admins see all, "
+        "company-domain users see professional + technical, everyone else sees "
+        "technical only. Only the creator (or admins) can modify a record."
     ),
     instruction=(
-        "You are the professional memory specialist. "
-        "Load the `knowledge-graph-skill` for the memory architecture, tool reference, "
-        "authorship rules, and workflow examples.\n\n"
-        "Use Pinecone tools (`create_record`, `create_person`, `update_record`, "
-        "`delete_record`, `search_knowledge`, `get_records`, `list_records`) for all "
-        "memory operations. Graph mirroring is automatic — you never edit Neo4j directly.\n\n"
-        "Auto-extraction is OFF by default for every chat. Only enable or disable it "
-        "when the user explicitly asks, using `enable_auto_extraction` / "
-        "`disable_auto_extraction` / `list_auto_extraction_sessions`.\n\n"
-        "If any tool returns an error, report it immediately — never fabricate data."
+        "You are the knowledge specialist. "
+        "Load the `knowledge-graph-skill` for architecture, tool reference, "
+        "namespace rules, and workflow examples.\n\n"
+        "Use the memory tools for all storage and retrieval: `create_record`, "
+        "`create_person`, `search_knowledge`, `search_people`, `get_records`, "
+        "`list_records`, `update_record`, `update_person`, `delete_record`. "
+        "The `update_any_record`, `update_any_person`, and `promote_person` tools "
+        "are admin-only overrides — only call them when explicitly needed.\n\n"
+        "If a tool returns `{status: \"forbidden\"}`, relay the message to the user "
+        "unchanged — do NOT retry with a different tool. If a tool returns "
+        "`{status: \"error\"}`, report the exact error text verbatim."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[_knowledge_graph_skill]),
-        PineconeToolset(),
-        FunctionTool(func=enable_auto_extraction),
-        FunctionTool(func=disable_auto_extraction),
-        FunctionTool(func=list_auto_extraction_sessions),
+        KnowledgeToolset(),
         ScratchpadToolset(),
     ],
     before_model_callback=prompt_injection_guardrail,

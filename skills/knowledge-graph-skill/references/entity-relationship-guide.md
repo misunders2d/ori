@@ -1,15 +1,20 @@
 # Memory Schema & Workflow Reference
 
-## Pinecone Namespaces
+## Namespaces
 
-- `personal` — private notes, preferences, personal context for a specific user
-- `professional` — business knowledge, incidents, ideas, projects, strategies
-- `people` — person profiles (colleagues, contacts, suppliers)
-- `technical` — engineering notes, debug logs, platform/system specifics
+Memories:
+
+- `personal` — private notes, preferences, personal context. Read-gated to admins.
+- `professional` — business knowledge, incidents, ideas, projects, strategies. Read-gated to admins + company-domain users.
+- `technical` — engineering notes, debug logs, platform specifics, bot-to-bot knowledge sharing. Open to everyone.
+
+People:
+
+- `:Person:Personal` — family, friends, private contacts. Admin-only read.
+- `:Person:Professional` — colleagues, clients, vendors. Admin + company-domain read.
+- A person can carry both labels (`create_person(scopes=["personal", "professional"])`) — dual-scope is supported.
 
 ## Memory Categories (for `create_record` and `update_record`)
-
-Use `category` on non-person records to classify the entry:
 
 - `idea` — opportunities, proposals, brainstorms
 - `memory` — time-stamped events and decisions
@@ -24,46 +29,50 @@ Use `category` on non-person records to classify the entry:
 - `policy` — compliance and legal risks and guidance
 - `operational` — short operational updates, inventory, event-day notes
 
-## Graph Mirror — What Gets Created Automatically
+## Node Model and Edges
 
-When you create or update a Pinecone record, a matching Neo4j entity is created/updated behind the scenes, along with outbound edges to related entities.
+Every memory node carries:
+- `:Memory` (generic kind-label, used for full-text and cross-scope queries)
+- One scope label: `:PersonalMemory`, `:ProfessionalMemory`, or `:TechnicalMemory` (drives the per-namespace vector index)
 
-- **Record nodes:** Category maps to a graph entity type — `project` → project, `incident` / `memory` / `experiment` / `operational` → event, everything else → concept.
-- **Record edges:**
-  - `INVOLVES` → every ID in `related_people`
-  - `RELATED_TO` → every ID in `related_memories`
-- **Person nodes:** Created from `create_person` with type `person`.
-- **Person edges:** Created from the `relations` field (a list of `{related_person_id, relation_type}` objects); each entry becomes a typed edge.
+Every person node carries:
+- `:Person` (generic kind-label)
+- One or both scope labels: `:PersonalPerson`, `:ProfessionalPerson`
 
-You don't need to think about any of this day-to-day — just use the Pinecone tools correctly and the graph will reflect the current state.
+Relationships created by the memory tools:
+
+- `(:Memory)-[:INVOLVES]->(:Person)` — from `related_people=[...]` on `create_record`.
+- `(:Memory)-[:RELATED_TO]->(:Memory)` — from `related_memories=[...]`.
+- `(:Person)-[:<RELATION_TYPE>]->(:Person)` — from the `relations=[...]` field on `create_person` (relation type sanitized to UPPER_SNAKE_CASE).
+- `(:Person)-[:AUTHORED]->(:Memory | :Person)` — created on every write; drives update/delete gating.
+
+You do not call Neo4j directly. The memory tools manage all of this; you just supply the right arguments.
 
 ## Workflow: Storing Connected Memories
 
 When a user shares something that involves people or prior memories:
 
-1. Call `create_record` (or `create_person`) with `related_people` and/or `related_memories` populated with the appropriate IDs.
-2. The graph mirror is created in the same call — no extra step.
-3. If later details change, call `update_record` with the new fields. The mirror is refreshed automatically and old outbound relationships are cleaned up first, so you never get duplicated or stale edges.
+1. Call `create_record` (or `create_person`) with `related_people=[person_ids]` and/or `related_memories=[memory_ids]` populated. Graph edges are created in the same call.
+2. If later details change, call `update_record` — it enforces creator-only via the `:AUTHORED` edge. Non-authors get `{"status": "forbidden"}`.
 
 ### Example
 
 User says: *"Remember that Alice from SupplierCo switched us to DHL for returns."*
 
-1. Make sure Alice has a person record — search with `search_knowledge` in the `people` namespace, or `create_person` if she's new.
-2. Call `create_record` in the `professional` namespace with:
-   - `text="Alice from SupplierCo switched returns shipping to DHL"`
-   - `category="operational"` (or `memory` — a time-stamped decision)
-   - `related_people=["per_<alice_id>"]`
-3. That's it. The graph now has an event node linked to Alice via `INVOLVES`, created automatically.
+1. Find Alice's person record — try `search_people("Alice SupplierCo", scope="professional")`.
+2. If no match, call `create_person("Alice", "", "supplier contact at SupplierCo", user_ids='[{"id_type":"email","id_value":"alice@supplierco.com"}]', scopes=["professional"])`.
+3. Call `create_record("professional", text="Alice from SupplierCo switched returns shipping to DHL.", short_description="SupplierCo returns now via DHL", category="operational", tags=["shipping","supplierco","returns"], related_people=["per_<alice_id>"])`.
 
-## Auto-Extraction Controls
+The `:INVOLVES` edge between the memory and Alice is created in the same call. The `:AUTHORED` edge back to the caller's `:Person` is also wired automatically.
 
-A background process can extract entities and relationships from conversation turns and write them to the graph with `author="agent:auto"`. This is **disabled by default** for every chat — no session receives auto-extraction until it is explicitly enabled.
+## ACL Notes
 
-Tools (call only when the user explicitly asks):
+- A user who is an admin always passes every read check — admins see all three memory namespaces and both person scopes.
+- A company-domain user (email matches `COMPANY_DOMAIN`) sees `professional` and `technical` memories and `:Person:Professional` people.
+- Everyone else (e.g. a Telegram-only identifier like `tg_330959414` with no email) can still write in any namespace but can only read `:Memory:Technical`.
+- The creator of a record can always update or delete it. A non-creator trying to update gets a `forbidden` response. Admins can override via `update_any_record` / `update_any_person`.
 
-- `enable_auto_extraction(session_id)` — turn on for a session
-- `disable_auto_extraction(session_id)` — turn off
-- `list_auto_extraction_sessions()` — see which sessions currently have it enabled
+## Admin-Only Tools
 
-The `session_id` looks like `sl_C01ABC` (Slack) or `tg_-100123` (Telegram). When the user says "turn it on here" or "enable for this chat," use the current session's ID. If it isn't clear from context, check session state or ask the user to confirm.
+- `update_any_record` / `update_any_person` — force-update a record regardless of authorship. Use sparingly, only when the creator cannot update themselves.
+- `promote_person` — add a scope label to an existing person (e.g., promoting a `:PersonalPerson` to also be `:ProfessionalPerson` when a friend joins the company).

@@ -27,7 +27,6 @@ dependencies = [
     "seaborn>=0.13.0",
     "pandas>=2.1.0",
     "openpyxl>=3.1.0",
-    "pinecone[asyncio]>=7.0.0",
     "python-amazon-sp-api>=0.26.0",
     "neo4j>=5.0.0",
 ]
@@ -50,6 +49,14 @@ lint = [
     "ruff>=0.4.6,<1.0.0",
     "ty>=0.0.1a0",
     "codespell>=2.2.0,<3.0.0",
+]
+# pinecone is only needed to run the one-shot migration script
+# (scripts/migrate_pinecone_to_neo4j.py). Install with:
+#     uv sync --extra migration
+# It's deliberately NOT in the core dependencies so production deployments
+# don't carry the Pinecone SDK after cutover.
+migration = [
+    "pinecone[asyncio]>=7.0.0",
 ]
 
 [tool.ruff]
