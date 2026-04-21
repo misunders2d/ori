@@ -343,3 +343,50 @@ async def test_gmail_list_messages_empty_result():
     assert result["status"] == "success"
     assert result["count"] == 0
     assert result["messages"] == []
+
+
+@pytest.mark.asyncio
+async def test_gmail_get_thread_not_connected():
+    from app.tools.google_gmail import gmail_get_thread
+    with patch("app.tools.google_gmail.get_token", return_value=None):
+        result = await gmail_get_thread("thr_1", tool_context=_mock_ctx())
+    assert result["status"] == "error"
+    assert "not connected" in result["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_gmail_get_thread_happy_path():
+    from app.tools.google_gmail import gmail_get_thread
+    thread_resp = _mock_response({
+        "id": "thr_1",
+        "messages": [
+            _sample_message("First message"),
+            _sample_message("Second message"),
+        ],
+    })
+    client_cls, _ = _mock_async_client(get_responses=[thread_resp])
+    with patch("app.tools.google_gmail._get_valid_token", AsyncMock(return_value="tok")), \
+         patch("app.tools.google_gmail._get_user_email", return_value="user@test.com"), \
+         patch("app.tools.google_gmail.httpx.AsyncClient", client_cls):
+        result = await gmail_get_thread("thr_1", tool_context=_mock_ctx())
+    assert result["status"] == "success"
+    assert result["id"] == "thr_1"
+    assert len(result["messages"]) == 2
+    assert result["messages"][0]["body"] == "First message"
+    assert result["messages"][1]["body"] == "Second message"
+
+
+@pytest.mark.asyncio
+async def test_gmail_get_thread_truncates_each_message():
+    from app.tools.google_gmail import gmail_get_thread
+    long_body = "y" * 9000
+    thread_resp = _mock_response({
+        "id": "thr_1",
+        "messages": [_sample_message(long_body), _sample_message(long_body)],
+    })
+    client_cls, _ = _mock_async_client(get_responses=[thread_resp])
+    with patch("app.tools.google_gmail._get_valid_token", AsyncMock(return_value="tok")), \
+         patch("app.tools.google_gmail._get_user_email", return_value="user@test.com"), \
+         patch("app.tools.google_gmail.httpx.AsyncClient", client_cls):
+        result = await gmail_get_thread("thr_1", tool_context=_mock_ctx())
+    assert all("[truncated" in m["body"] for m in result["messages"])

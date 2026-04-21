@@ -254,6 +254,54 @@ async def gmail_get_message(
         return {"status": "error", "message": f"Gmail API error: {e}"}
 
 
+def _shape_message_full(data: dict, full: bool) -> dict:
+    """Shape a messages.get?format=full response into the public tool dict."""
+    payload = data.get("payload", {})
+    return {
+        "id": data.get("id", ""),
+        "thread_id": data.get("threadId", ""),
+        "headers": _headers_to_dict(payload.get("headers", [])),
+        "body": _truncate(_decode_body(payload), full=full),
+        "attachments": _extract_attachments(payload),
+    }
+
+
+async def gmail_get_thread(
+    thread_id: str,
+    full: bool = False,
+    tool_context: ToolContext = None,
+) -> dict:
+    """Fetch a full Gmail thread — all messages in order.
+
+    Args:
+        thread_id: Gmail thread ID (from gmail_list_threads or gmail_list_messages).
+        full: If True, return full bodies. If False (default), truncate each to 8000 chars.
+    """
+    email = _get_user_email(tool_context)
+    token = await _get_valid_token(email)
+    if not token:
+        return {"status": "error", "message": f"Gmail not connected for {email}. Use google_connect first."}
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{_GMAIL_API}/threads/{thread_id}",
+                params={"format": "full"},
+                headers=_auth_headers(token),
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        messages = [_shape_message_full(m, full=full) for m in data.get("messages", [])]
+        return {
+            "status": "success",
+            "id": data.get("id", thread_id),
+            "count": len(messages),
+            "messages": messages,
+        }
+    except Exception as e:
+        return {"status": "error", "message": f"Gmail API error: {e}"}
+
+
 async def gmail_list_messages(
     query: str = "",
     max_results: int = 25,
