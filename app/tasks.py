@@ -42,6 +42,57 @@ def _log_job_event(event: str, **fields) -> None:
         logger.warning("Failed to write scheduler job log: %s", e)
 
 
+# Max re-invocations for plan-driven continuation. A plan with N steps typically
+# needs N+1 turns (N executions + final summary), but tool failures and retries
+# can extend this. 25 leaves comfortable slack for a 6-step plan while capping
+# runaway costs if the agent gets stuck in a loop.
+_MAX_PLAN_ITERATIONS = 25
+
+_PLAN_CONTINUATION_PROMPT = (
+    "Your enforced plan still has pending steps. Do NOT emit a user-facing "
+    "summary yet. Call get_next_step immediately and continue executing. "
+    "Only produce a final summary after complete_step reports "
+    "'All steps completed!'."
+)
+
+
+async def _drive_plan_to_completion(
+    runner,
+    user_id: str,
+    session_id: str,
+    first_response,
+    actual_caller_id: str | None,
+    task_id: str,
+):
+    """Re-invoke the runner while the plan still has pending steps.
+
+    The ADK runner ends an invocation when the agent emits text without a
+    trailing tool call. For enforced multi-step plans the LLM often summarizes
+    after each step, ending the turn before the plan completes. This helper
+    pumps the agent back in with a continuation prompt until the plan is done
+    (or the iteration cap is hit).
+
+    Returns the final AgentResponse.
+    """
+    from app.core.agent_executor import extract_agent_response
+    from app.tools.planner import plan_has_pending_steps
+
+    response = first_response
+    iterations = 0
+    while plan_has_pending_steps(session_id) and iterations < _MAX_PLAN_ITERATIONS:
+        iterations += 1
+        response = await extract_agent_response(
+            runner, user_id, session_id, _PLAN_CONTINUATION_PROMPT,
+            actual_caller_id=actual_caller_id,
+        )
+    if iterations >= _MAX_PLAN_ITERATIONS and plan_has_pending_steps(session_id):
+        logger.warning(
+            "Task %s hit plan-iteration cap (%d); plan still has pending steps.",
+            task_id, _MAX_PLAN_ITERATIONS,
+        )
+    return response
+
+
 async def run_scheduled_task(
     task_prompt: str,
     notify: dict,
@@ -103,11 +154,11 @@ async def run_scheduled_task(
 
         # The scheduler runs tasks under a synthetic user_id ("system_scheduler")
         # so the session is isolated from the owner's chat. But per-user tools
-        # need state["user_id"] to be the real owner — we inject it via
-        # actual_caller_id, which state_setter then promotes into session state.
-        # owner_user_id is a required kwarg on this function; if it's missing,
-        # the job is stale (created before this contract) and no per-user tool
-        # can succeed.
+        # (Google, preferences, admin checks) need state["user_id"] to be the
+        # real owner — we inject it via actual_caller_id, which state_setter
+        # then promotes into session state. owner_user_id is a required kwarg
+        # on this function; if it's missing, the job is stale (created before
+        # this contract) and no per-user tool can succeed.
         if not owner_user_id:
             logger.error(
                 "Scheduled task %s has no owner_user_id. The job was persisted "
@@ -146,6 +197,12 @@ async def run_scheduled_task(
                 runner, user_id, session_id, query,
                 actual_caller_id=owner_user_id or None,
             )
+            if steps:
+                response = await _drive_plan_to_completion(
+                    runner, user_id, session_id, response,
+                    actual_caller_id=owner_user_id or None,
+                    task_id=task_id,
+                )
             response = response.text if hasattr(response, "text") else str(response)
             if not response or not response.strip():
                 # Agent returned empty — treat as failure so user sees something.
@@ -221,7 +278,7 @@ async def run_system_task(
     """
     import uuid
 
-    from app.core.agent_executor import extract_agent_response, update_session_state
+    from app.core.agent_executor import extract_agent_response
     from run_bot import get_runner
 
     if not task_id:
@@ -285,13 +342,17 @@ async def run_system_task(
                 task_id, len(steps),
             )
 
-        await update_session_state(
-            runner=runner, user_id=user_id, session_id=session_id,
-            state_delta={"user_id": admin_user_id},
-        )
-
+        # Pass admin identity via actual_caller_id so state_setter picks it up
         logger.info("System Task: Executing agent for %s", task_id)
-        response = await extract_agent_response(runner, user_id, session_id, query)
+        response = await extract_agent_response(
+            runner, user_id, session_id, query, actual_caller_id=admin_user_id
+        )
+        if steps:
+            response = await _drive_plan_to_completion(
+                runner, user_id, session_id, response,
+                actual_caller_id=admin_user_id,
+                task_id=task_id,
+            )
         response = response.text if hasattr(response, "text") else str(response)
 
         is_failure = any(

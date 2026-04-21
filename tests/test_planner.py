@@ -13,6 +13,7 @@ from app.tools.planner import (
     abandon_plan,
     get_active_plan_context,
     seed_plan,
+    plan_has_pending_steps,
     _PLANS_DIR,
 )
 from app.tools.scheduling import _validate_steps
@@ -213,6 +214,43 @@ def test_seed_plan_strips_not_needed():
     ctx = _make_ctx()
     result = get_next_step(ctx)
     assert result["current_step"]["description"] == exact_step
+
+
+# ---------------------------------------------------------------------------
+# plan_has_pending_steps — signal used by the scheduler's plan-driver loop
+# ---------------------------------------------------------------------------
+
+def test_pending_false_when_no_plan():
+    assert plan_has_pending_steps("test_session") is False
+
+
+def test_pending_true_after_seed():
+    seed_plan("test_session", "Task", ["A", "B"])
+    assert plan_has_pending_steps("test_session") is True
+
+
+def test_pending_true_mid_plan():
+    seed_plan("test_session", "Task", ["A", "B"])
+    ctx = _make_ctx()
+    get_next_step(ctx)
+    complete_step("Done with A", ctx)
+    # Step B still pending
+    assert plan_has_pending_steps("test_session") is True
+
+
+def test_pending_false_after_all_done():
+    seed_plan("test_session", "Task", ["A"])
+    ctx = _make_ctx()
+    get_next_step(ctx)
+    complete_step("Done", ctx)
+    assert plan_has_pending_steps("test_session") is False
+
+
+def test_pending_true_while_step_in_progress():
+    seed_plan("test_session", "Task", ["A", "B"])
+    ctx = _make_ctx()
+    get_next_step(ctx)  # A is now in_progress
+    assert plan_has_pending_steps("test_session") is True
 
 
 # ---------------------------------------------------------------------------
