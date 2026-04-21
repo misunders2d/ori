@@ -165,6 +165,31 @@ async def test_gmail_list_labels_not_connected():
     assert "not connected" in result["message"].lower()
 
 
+def _sample_message(body_text: str, attachments: list[dict] | None = None) -> dict:
+    parts = [
+        {"mimeType": "text/plain", "body": {"data": _b64url(body_text)}},
+    ]
+    for a in attachments or []:
+        parts.append({
+            "mimeType": a.get("mime", "application/octet-stream"),
+            "filename": a.get("filename", "file.bin"),
+            "body": {"attachmentId": a.get("id", "att_x"), "size": a.get("size", 0)},
+        })
+    return {
+        "id": "msg_1",
+        "threadId": "thr_1",
+        "payload": {
+            "headers": [
+                {"name": "From", "value": "alice@example.com"},
+                {"name": "Subject", "value": "Hello"},
+                {"name": "Date", "value": "Tue, 21 Apr 2026 10:00:00 -0400"},
+            ],
+            "mimeType": "multipart/mixed",
+            "parts": parts,
+        },
+    }
+
+
 @pytest.mark.asyncio
 async def test_gmail_list_labels_happy_path():
     from app.tools.google_gmail import gmail_list_labels
@@ -185,3 +210,65 @@ async def test_gmail_list_labels_happy_path():
         {"id": "INBOX", "name": "INBOX", "type": "system"},
         {"id": "Label_1", "name": "Suppliers", "type": "user"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_gmail_get_message_not_connected():
+    from app.tools.google_gmail import gmail_get_message
+    with patch("app.tools.google_gmail.get_token", return_value=None):
+        result = await gmail_get_message("msg_1", tool_context=_mock_ctx())
+    assert result["status"] == "error"
+    assert "not connected" in result["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_gmail_get_message_happy_path_with_attachment():
+    from app.tools.google_gmail import gmail_get_message
+    sample = _sample_message(
+        "Hello world",
+        attachments=[{"filename": "invoice.pdf", "mime": "application/pdf", "id": "att_1", "size": 12345}],
+    )
+    client_cls, _ = _mock_async_client(get_responses=[_mock_response(sample)])
+    with patch("app.tools.google_gmail._get_valid_token", AsyncMock(return_value="tok")), \
+         patch("app.tools.google_gmail._get_user_email", return_value="user@test.com"), \
+         patch("app.tools.google_gmail.httpx.AsyncClient", client_cls):
+        result = await gmail_get_message("msg_1", tool_context=_mock_ctx())
+    assert result["status"] == "success"
+    assert result["id"] == "msg_1"
+    assert result["thread_id"] == "thr_1"
+    assert result["body"] == "Hello world"
+    assert result["headers"]["from"] == "alice@example.com"
+    assert result["headers"]["subject"] == "Hello"
+    assert len(result["attachments"]) == 1
+    att = result["attachments"][0]
+    assert att["filename"] == "invoice.pdf"
+    assert att["mime"] == "application/pdf"
+    assert att["id"] == "att_1"
+    assert att["size"] == 12345
+
+
+@pytest.mark.asyncio
+async def test_gmail_get_message_truncates_long_body():
+    from app.tools.google_gmail import gmail_get_message
+    long_body = "x" * 9000
+    sample = _sample_message(long_body)
+    client_cls, _ = _mock_async_client(get_responses=[_mock_response(sample)])
+    with patch("app.tools.google_gmail._get_valid_token", AsyncMock(return_value="tok")), \
+         patch("app.tools.google_gmail._get_user_email", return_value="user@test.com"), \
+         patch("app.tools.google_gmail.httpx.AsyncClient", client_cls):
+        result = await gmail_get_message("msg_1", tool_context=_mock_ctx())
+    assert "[truncated" in result["body"]
+    assert len(result["body"]) < len(long_body)
+
+
+@pytest.mark.asyncio
+async def test_gmail_get_message_full_true_returns_untruncated():
+    from app.tools.google_gmail import gmail_get_message
+    long_body = "x" * 9000
+    sample = _sample_message(long_body)
+    client_cls, _ = _mock_async_client(get_responses=[_mock_response(sample)])
+    with patch("app.tools.google_gmail._get_valid_token", AsyncMock(return_value="tok")), \
+         patch("app.tools.google_gmail._get_user_email", return_value="user@test.com"), \
+         patch("app.tools.google_gmail.httpx.AsyncClient", client_cls):
+        result = await gmail_get_message("msg_1", full=True, tool_context=_mock_ctx())
+    assert result["body"] == long_body

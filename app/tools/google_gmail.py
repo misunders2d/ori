@@ -122,6 +122,37 @@ def _sweep_attachments() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _headers_to_dict(headers: list[dict]) -> dict:
+    """Flatten Gmail's list-of-{name,value} headers into a lowercased dict."""
+    out: dict[str, str] = {}
+    for h in headers or []:
+        name = h.get("name", "").lower()
+        if name:
+            out[name] = h.get("value", "")
+    return out
+
+
+def _extract_attachments(payload: dict) -> list[dict]:
+    """Walk the payload tree and return metadata for every part with an attachmentId."""
+    out: list[dict] = []
+
+    def walk(node: dict) -> None:
+        body = node.get("body", {}) or {}
+        aid = body.get("attachmentId")
+        if aid:
+            out.append({
+                "id": aid,
+                "filename": node.get("filename", ""),
+                "mime": node.get("mimeType", "application/octet-stream"),
+                "size": body.get("size", 0),
+            })
+        for part in node.get("parts", []) or []:
+            walk(part)
+
+    walk(payload)
+    return out
+
+
 async def gmail_list_labels(tool_context: ToolContext = None) -> dict:
     """List all Gmail labels for the current user.
 
@@ -143,5 +174,47 @@ async def gmail_list_labels(tool_context: ToolContext = None) -> dict:
             for l in data.get("labels", [])
         ]
         return {"status": "success", "count": len(labels), "labels": labels}
+    except Exception as e:
+        return {"status": "error", "message": f"Gmail API error: {e}"}
+
+
+async def gmail_get_message(
+    message_id: str,
+    full: bool = False,
+    tool_context: ToolContext = None,
+) -> dict:
+    """Fetch a single Gmail message with headers, body, and attachment metadata.
+
+    Args:
+        message_id: Gmail message ID (from gmail_list_messages).
+        full: If True, return the full decoded body. If False (default), truncate to 8000 chars.
+
+    Returns:
+        dict with id, thread_id, headers (lowercased), body, attachments.
+    """
+    email = _get_user_email(tool_context)
+    token = await _get_valid_token(email)
+    if not token:
+        return {"status": "error", "message": f"Gmail not connected for {email}. Use google_connect first."}
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{_GMAIL_API}/messages/{message_id}",
+                params={"format": "full"},
+                headers=_auth_headers(token),
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        payload = data.get("payload", {})
+        body = _truncate(_decode_body(payload), full=full)
+        return {
+            "status": "success",
+            "id": data.get("id", message_id),
+            "thread_id": data.get("threadId", ""),
+            "headers": _headers_to_dict(payload.get("headers", [])),
+            "body": body,
+            "attachments": _extract_attachments(payload),
+        }
     except Exception as e:
         return {"status": "error", "message": f"Gmail API error: {e}"}
