@@ -508,26 +508,16 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                         file_data = await adapter.download_file(file_id)
                         if file_data:
                             blob_bytes, mime_type, filename = file_data
-                            from app.app_utils.file_convert import is_convertible, to_text, save_upload
+                            from app.app_utils.file_convert import prepare_for_llm, save_upload
                             saved_path = save_upload(blob_bytes, filename)
-                            if is_convertible(mime_type):
-                                text_content = to_text(blob_bytes, mime_type, filename)
-                                if text_content:
-                                    message_content.parts.append(types.Part.from_text(
-                                        text=f"[File: {filename} | saved to: {saved_path}]\n{text_content}"
-                                    ))
-                                else:
-                                    message_content.parts.append(types.Part.from_text(
-                                        text=f"[File: {filename} | saved to: {saved_path}] (could not parse preview)"
-                                    ))
-                            else:
-                                message_content.parts.append(types.Part.from_text(
-                                    text=f"[Media: {filename} | saved to: {saved_path}]"
-                                ))
+                            prepared = prepare_for_llm(blob_bytes, mime_type, filename, saved_path)
+                            message_content.parts.append(types.Part.from_text(text=prepared.text))
+                            if prepared.inline_blob:
+                                _blob_bytes, _blob_mime = prepared.inline_blob
                                 message_content.parts.append(
                                     types.Part(
                                         inline_data=types.Blob(
-                                            data=blob_bytes, mime_type=mime_type
+                                            data=_blob_bytes, mime_type=_blob_mime
                                         )
                                     )
                                 )
