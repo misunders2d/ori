@@ -892,3 +892,258 @@ class TestMergePersons:
         )
         assert result["status"] == "error"
         assert "not found" in result["message"]
+
+
+# ---------------------------------------------------------------------------
+# Identity gate: create_record / create_person refuse unidentified callers
+# ---------------------------------------------------------------------------
+
+
+class TestIdentityGate:
+    """An auto-provisioned :Person stub with no first_name cannot write."""
+
+    @pytest.mark.asyncio
+    async def test_has_identity_curated(self):
+        # Curated persons (is_auto_provisioned=false) are always identified.
+        assert memory_tools._has_identity({"is_auto_provisioned": False}) is True
+        assert memory_tools._has_identity(
+            {"is_auto_provisioned": False, "first_name": None}
+        ) is True
+
+    @pytest.mark.asyncio
+    async def test_has_identity_auto_provisioned_with_first_name(self):
+        assert memory_tools._has_identity(
+            {"is_auto_provisioned": True, "first_name": "Sergey"}
+        ) is True
+
+    @pytest.mark.asyncio
+    async def test_has_identity_bare_stub(self):
+        assert memory_tools._has_identity(
+            {"is_auto_provisioned": True, "first_name": None}
+        ) is False
+        assert memory_tools._has_identity(
+            {"is_auto_provisioned": True, "first_name": ""}
+        ) is False
+        assert memory_tools._has_identity(
+            {"is_auto_provisioned": True, "first_name": "   "}
+        ) is False
+
+    @pytest.mark.asyncio
+    async def test_has_identity_missing_info(self):
+        # None and empty dict both mean "no info" → block (safer default).
+        assert memory_tools._has_identity(None) is False
+        assert memory_tools._has_identity({}) is False
+
+    @pytest.mark.asyncio
+    async def test_create_record_rejects_bare_stub(self, patched_driver):
+        # Custom dispatcher: resolve-lookup misses, _get_person_info returns a
+        # bare auto-provisioned stub → identity gate should block the write.
+        async def _run(*args, **kwargs):
+            query = args[0] if args else ""
+            r = AsyncMock()
+            if _is_resolve_caller_lookup(query):
+                r.single = AsyncMock(return_value=None)  # miss → provision
+            elif "p.is_auto_provisioned AS is_auto_provisioned" in query:
+                r.single = AsyncMock(return_value={
+                    "person_id": "per_auto_stub",
+                    "first_name": None,
+                    "last_name": None,
+                    "full_name": "tg_999",
+                    "is_auto_provisioned": True,
+                })
+            else:
+                r.single = AsyncMock(return_value={"record_id": "mem_x"})
+            return r
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.create_record(
+            "technical", "text", "desc", "memory", [],
+            tool_context=_make_ctx("tg_999"),
+        )
+        assert result["status"] == "needs_identity"
+        assert "per_auto_stub" in result["person_id"]
+        assert "update_person" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_create_record_allows_identified_caller(self, patched_driver):
+        async def _run(*args, **kwargs):
+            query = args[0] if args else ""
+            r = AsyncMock()
+            if _is_resolve_caller_lookup(query):
+                r.single = AsyncMock(return_value={"canonical": "sergey@mellanni.com"})
+            elif "p.is_auto_provisioned AS is_auto_provisioned" in query:
+                r.single = AsyncMock(return_value={
+                    "person_id": "per_sergey",
+                    "first_name": "Sergey",
+                    "last_name": "Demchenko",
+                    "full_name": "Sergey Demchenko",
+                    "is_auto_provisioned": False,
+                })
+            else:
+                r.single = AsyncMock(return_value={"record_id": "mem_ok"})
+            return r
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.create_record(
+            "technical", "text", "desc", "memory", [],
+            tool_context=_make_ctx("sergey@mellanni.com"),
+        )
+        assert result["status"] == "success"
+        assert result["record_id"] == "mem_ok"
+
+    @pytest.mark.asyncio
+    async def test_create_person_rejects_bare_stub(self, patched_driver):
+        async def _run(*args, **kwargs):
+            query = args[0] if args else ""
+            r = AsyncMock()
+            if _is_resolve_caller_lookup(query):
+                r.single = AsyncMock(return_value=None)
+            elif "p.is_auto_provisioned AS is_auto_provisioned" in query:
+                r.single = AsyncMock(return_value={
+                    "person_id": "per_auto_stub",
+                    "first_name": None,
+                    "last_name": None,
+                    "full_name": "tg_999",
+                    "is_auto_provisioned": True,
+                })
+            else:
+                r.single = AsyncMock(return_value={"person_id": "per_new"})
+            return r
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.create_person(
+            "Alice", "Smith", "colleague", "[]",
+            tool_context=_make_ctx("tg_999"),
+        )
+        assert result["status"] == "needs_identity"
+
+
+# ---------------------------------------------------------------------------
+# Pre-create dedup gate on create_person
+# ---------------------------------------------------------------------------
+
+
+class TestDedupGate:
+    @pytest.mark.asyncio
+    async def test_returns_possible_duplicate(self, patched_driver):
+        async def _run(*args, **kwargs):
+            query = args[0] if args else ""
+            r = AsyncMock()
+
+            # resolve-caller lookup → caller is a curated, identified person.
+            if _is_resolve_caller_lookup(query):
+                r.single = AsyncMock(return_value={"canonical": "admin@example.com"})
+            # _get_person_info (caller identity check) → identified.
+            elif "p.is_auto_provisioned AS is_auto_provisioned" in query:
+                r.single = AsyncMock(return_value={
+                    "person_id": "per_admin",
+                    "first_name": "Admin",
+                    "last_name": "User",
+                    "full_name": "Admin User",
+                    "is_auto_provisioned": False,
+                })
+            # duplicate-check query returns one match.
+            elif "WHERE p.is_auto_provisioned = false" in query and "LIMIT 5" in query:
+                async def aiter(self):
+                    yield {
+                        "person_id": "per_igor",
+                        "full_name": "Igor Poluyko",
+                        "first_name": "Igor",
+                        "last_name": "Poluyko",
+                        "role": "colleague",
+                        "user_ids": '[{"id_type":"email","id_value":"igor@example.com"}]',
+                        "labels": ["Person", "ProfessionalPerson"],
+                    }
+                r.__aiter__ = aiter
+                r.single = AsyncMock(return_value=None)
+            else:
+                r.single = AsyncMock(return_value={"person_id": "per_created"})
+            return r
+
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.create_person(
+            "Igor", "", "some role", "[]",
+            tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "possible_duplicate"
+        assert len(result["matches"]) == 1
+        assert result["matches"][0]["full_name"] == "Igor Poluyko"
+        assert "force_create=true" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_force_create_bypasses_dedup(self, patched_driver):
+        # Dedup would have matched, but force_create=True skips the check entirely.
+        async def _run(*args, **kwargs):
+            query = args[0] if args else ""
+            r = AsyncMock()
+            if _is_resolve_caller_lookup(query):
+                r.single = AsyncMock(return_value={"canonical": "admin@example.com"})
+            elif "p.is_auto_provisioned AS is_auto_provisioned" in query:
+                r.single = AsyncMock(return_value={
+                    "person_id": "per_admin",
+                    "first_name": "Admin",
+                    "last_name": "",
+                    "full_name": "Admin",
+                    "is_auto_provisioned": False,
+                })
+            elif "LIMIT 5" in query:
+                # Shouldn't be called when force_create=True — but be safe.
+                async def aiter(self):
+                    yield {
+                        "person_id": "per_igor",
+                        "full_name": "Igor Poluyko",
+                        "first_name": "Igor",
+                        "last_name": "Poluyko",
+                        "role": "",
+                        "user_ids": "[]",
+                        "labels": ["Person", "ProfessionalPerson"],
+                    }
+                r.__aiter__ = aiter
+                r.single = AsyncMock(return_value=None)
+            else:
+                r.single = AsyncMock(return_value={"person_id": "per_igor2"})
+            return r
+
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.create_person(
+            "Igor", "Different", "colleague", "[]",
+            force_create=True,
+            tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "success"
+        assert result["person_id"] == "per_igor2"
+
+    @pytest.mark.asyncio
+    async def test_no_match_proceeds_without_force(self, patched_driver):
+        async def _run(*args, **kwargs):
+            query = args[0] if args else ""
+            r = AsyncMock()
+            if _is_resolve_caller_lookup(query):
+                r.single = AsyncMock(return_value={"canonical": "admin@example.com"})
+            elif "p.is_auto_provisioned AS is_auto_provisioned" in query:
+                r.single = AsyncMock(return_value={
+                    "person_id": "per_admin",
+                    "first_name": "Admin",
+                    "last_name": "",
+                    "full_name": "Admin",
+                    "is_auto_provisioned": False,
+                })
+            elif "LIMIT 5" in query:
+                async def aiter(self):
+                    return
+                    yield  # unreachable — produces empty async iterator
+                r.__aiter__ = aiter
+                r.single = AsyncMock(return_value=None)
+            else:
+                r.single = AsyncMock(return_value={"person_id": "per_fresh"})
+            return r
+
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.create_person(
+            "Uniquename", "Lastname", "colleague", "[]",
+            tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "success"

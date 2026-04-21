@@ -24,7 +24,14 @@ People live in two scopes (each person can be tagged with one or both):
 | `personal` | Admins only (family, friends, private contacts) |
 | `professional` | Admins and `@<COMPANY_DOMAIN>` users (colleagues, clients, vendors) |
 
-**Creation is allowed for any authenticated caller** in any namespace. **Updates and deletes are restricted to the record's creator** (or an admin). The gate is enforced in code — if a non-author tries to update, the tool returns `{"status": "forbidden"}`. Relay the message to the user unchanged; do NOT retry.
+**Creation is allowed for any authenticated and identified caller** in any namespace. **Updates and deletes are restricted to the record's creator** (or an admin). The gate is enforced in code — if a non-author tries to update, the tool returns `{"status": "forbidden"}`. Relay the message to the user unchanged; do NOT retry.
+
+**Identity requirement before writing (code-enforced):** before `create_record` or `create_person` runs, the code checks whether the caller's `:Person` has a real name on file. If the caller is still a bare auto-provisioned stub (just a platform ID like `tg_330959414` with no `first_name`), the write is refused with `{"status": "needs_identity"}`. This prevents anonymous memories from accumulating. There is **no bypass flag** — the caller must be named before any write succeeds.
+
+Handling a `needs_identity` response:
+1. Ask the user: "Before I save that, what's your first and last name?"
+2. Parse the answer and call `update_person(person_id="<from the response>", updates='{"first_name": "...", "last_name": "..."}')`.
+3. Retry the original write. It will now succeed.
 
 ## Tools
 
@@ -44,7 +51,7 @@ People live in two scopes (each person can be tagged with one or both):
 
 | Tool | Purpose |
 |------|---------|
-| `create_person(first_name, last_name, role, user_ids, relations?, scopes?)` | Store a person. `scopes` defaults to `["professional"]`; pass `["personal", "professional"]` for dual-scope people. |
+| `create_person(first_name, last_name, role, user_ids, relations?, scopes?, force_create?)` | Store a person. `scopes` defaults to `["professional"]`; pass `["personal", "professional"]` for dual-scope people. Returns `{"status": "possible_duplicate"}` if a matching record exists — pass `force_create=true` only after user confirms it's a different person. |
 | `search_people(search_query, scope, top_k)` | Semantic search within one scope |
 | `update_person(person_id, updates)` | Creator-only |
 | `update_any_person(person_id, updates)` | **Admin-only** override |
@@ -73,21 +80,23 @@ These are managed by the memory tools — you do not call Neo4j directly for rel
 
 Duplicates happen when the same real human is stored twice under slightly different names or IDs (e.g. "Igor" and "Igor Poluyko", or "Telegram: 123" and "tg_123"). They cost you silently — search results become fragmented, and relationship queries miss connections.
 
-**Before calling `create_person`, always search first.** Disambiguation flow:
+**Code-level dedup gate (enforced on every `create_person` call):** before writing, the code searches existing `:Person` records for matches on `first_name` (case-insensitive) OR any overlapping `user_ids` value. If any match is found, the tool returns `{"status": "possible_duplicate", "matches": [...]}` with up to 5 candidates. The create is **not** performed.
 
-1. Call `search_people(search_query="<proposed name + role/context>", scope=<intended scope>, top_k=5)`.
-2. Eyeball the top result(s). If any look like plausibly the same person — same first name with different last name, same role, same company, same domain in `user_ids` — do **not** create. Instead:
-   - **Ask the user to confirm**: "I already have a person named `<full_name>` (`<person_id>`) with role `<role>`. Is this the same person you're describing, or a different one?"
-   - If same → use `update_person` to enrich the existing record (add missing fields, extra `user_ids`, or new relations), or `promote_person` if a scope needs adding. Do not create a duplicate.
-   - If different → proceed with `create_person`.
-3. If no near-matches → `create_person` safely.
+Handling a `possible_duplicate` response:
+1. Show the match(es) to the user with their `person_id`, `full_name`, `role`, and any relevant identifiers.
+2. Ask: "I already have `<existing full_name>` (`<person_id>`). Is this the same person you're describing, or a different one?"
+3. Based on the answer:
+   - **Same person** → call `update_person` on the existing `person_id` to enrich missing fields, or `promote_person` if a scope needs adding. Do **not** create a duplicate.
+   - **Different person** (user explicitly confirms) → retry `create_person` with `force_create=true`. Only use this flag after the user's explicit confirmation; do not pre-emptively set it to skip the check.
+
+Good practice before calling `create_person` in the first place (proactive, before the code gate fires): use `search_people(search_query="<proposed name + role/context>", scope=..., top_k=5)` yourself. If you can already see a likely match, raise it with the user before attempting the create — saves a round-trip and gives the user more context.
 
 Edge cases:
-- **Partial name only**: "Igor" alone is ambiguous — if `search_people` returns "Igor Poluyko", ask the user before doing anything. Never guess.
-- **Same name, clearly different people** (e.g. two colleagues both named Alex): proceed with `create_person`, ideally with distinguishing role/context in the text.
-- **Duplicate discovered after the fact**: admins merge with `merge_persons(canonical_id, alias_id)`. Pick whichever node has richer content or the clearer primary identifier as canonical.
+- **Partial name only** ("Igor"): the dedup gate will surface "Igor Poluyko" and whoever else has `first_name: "Igor"`. Ask the user before doing anything. Never guess.
+- **Same name, clearly different people** (e.g. two colleagues both named Alex): after the user confirms, retry with `force_create=true`.
+- **Duplicate discovered after the fact**: admins merge with `merge_persons(canonical_id, alias_id)`. Pick whichever node has richer content as canonical.
 
-The caller's own `:Person` is auto-provisioned on first tool call and uses alias-aware lookup, so Telegram/Email/Slack identifiers for the same caller don't re-duplicate silently as long as admins have merged the legacy duplicates.
+The caller's own `:Person` uses alias-aware lookup — Telegram/Email/Slack identifiers for the same human resolve to the same node once an admin has merged the legacy duplicates.
 
 ## Namespace selection heuristics
 

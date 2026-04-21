@@ -234,6 +234,104 @@ async def _resolve_caller_person(driver, caller: str, is_company: bool) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Identity + duplicate enforcement (code-level, not LLM-decided)
+# ---------------------------------------------------------------------------
+
+# Callers are considered "identified" when their :Person has a first_name set,
+# OR when the node was curated (not auto-provisioned). A bare auto-provisioned
+# stub with only a platform user_id is blocked from creating memories / people
+# until it's enriched via update_person(first_name=..., last_name=...).
+#
+# This is a hard gate (no bypass flag) because anonymous memories are exactly
+# what the :AUTHORED edge model is trying to prevent.
+
+
+async def _get_person_info(driver, primary_user_id: str) -> dict | None:
+    if not primary_user_id:
+        return None
+    query = (
+        "MATCH (p:Person {primary_user_id: $id}) "
+        "RETURN p.person_id AS person_id, "
+        "       p.first_name AS first_name, "
+        "       p.last_name AS last_name, "
+        "       p.full_name AS full_name, "
+        "       p.is_auto_provisioned AS is_auto_provisioned "
+        "LIMIT 1"
+    )
+    async with driver.session() as session:
+        result = await session.run(query, id=primary_user_id)
+        row = await result.single()
+        return dict(row) if row else None
+
+
+def _has_identity(info: dict | None) -> bool:
+    """True when the caller's :Person has enough identity to attribute writes."""
+    if not info:
+        return False
+    if not info.get("is_auto_provisioned"):
+        return True  # Curated via create_person → always identified.
+    first = (info.get("first_name") or "").strip()
+    return bool(first)
+
+
+def _needs_identity_response(info: dict, caller_user_id: str) -> dict:
+    pid = (info or {}).get("person_id", "unknown")
+    return {
+        "status": "needs_identity",
+        "message": (
+            f"Cannot write: caller `{caller_user_id}` is not identified yet. "
+            f"Ask the user for their first and last name, then call "
+            f"`update_person(person_id=\"{pid}\", updates='{{\"first_name\": \"...\", \"last_name\": \"...\"}}')`. "
+            "Do NOT retry the write until that succeeds. This is a hard gate — there is no bypass."
+        ),
+        "person_id": pid,
+        "caller_user_id": caller_user_id,
+    }
+
+
+async def _find_possible_duplicates(
+    driver, first_name: str, last_name: str, role: str, user_ids_list: list,
+) -> list[dict]:
+    """Return existing :Person nodes that may represent the same human.
+
+    Matches on any of:
+    - same first_name (case-insensitive, curated records only)
+    - any shared id_value from the proposed `user_ids_list` appearing
+      anywhere in a stored `user_ids` JSON blob (substring match)
+
+    Intentionally broad — the caller decides via the returned list whether
+    a match is a genuine duplicate. Only excludes auto-provisioned stubs
+    (those don't have first_name + role; they're not duplicates-worth-asking).
+    """
+    id_values = [
+        item.get("id_value") for item in (user_ids_list or [])
+        if isinstance(item, dict) and item.get("id_value")
+    ]
+    query = (
+        "MATCH (p:Person) "
+        "WHERE p.is_auto_provisioned = false "
+        "  AND ("
+        "    toLower(coalesce(p.first_name, '')) = toLower($first_name) "
+        "    OR (size($id_values) > 0 AND "
+        "        any(v IN $id_values WHERE coalesce(p.user_ids, '') CONTAINS v))"
+        "  ) "
+        "RETURN p.person_id AS person_id, "
+        "       p.full_name AS full_name, "
+        "       p.first_name AS first_name, "
+        "       p.last_name AS last_name, "
+        "       p.role AS role, "
+        "       p.user_ids AS user_ids, "
+        "       labels(p) AS labels "
+        "LIMIT 5"
+    )
+    async with driver.session() as session:
+        result = await session.run(
+            query, first_name=first_name, id_values=id_values,
+        )
+        return [dict(r) async for r in result]
+
+
+# ---------------------------------------------------------------------------
 # Memory tools
 # ---------------------------------------------------------------------------
 
@@ -437,6 +535,12 @@ async def create_record(
         return _error("OPENAI_API_KEY not configured.")
 
     canonical_caller = await _resolve_caller_person(driver, caller, is_company)
+
+    # Hard gate: anonymous stubs must be enriched with a real name before any
+    # memory is written. Prevents accumulation of unattributable records.
+    caller_info = await _get_person_info(driver, canonical_caller)
+    if not _has_identity(caller_info):
+        return _needs_identity_response(caller_info, canonical_caller)
 
     memory_label = _NAMESPACE_TO_MEMORY_LABEL[namespace]
     record_id = _new_record_id()
@@ -747,6 +851,7 @@ async def create_person(
     relations: str = "[]",
     scopes: list[str] = None,
     author: str = "",
+    force_create: bool = False,
     tool_context: ToolContext = None,
 ) -> dict:
     """Create a new person record.
@@ -759,6 +864,11 @@ async def create_person(
         scopes: List of scope labels. Valid entries: "personal", "professional".
                 Default: ["professional"]. Dual-scope people pass both.
         author: Advisory — authorship is captured via :AUTHORED edge.
+        force_create: Set to True ONLY after the user has explicitly confirmed
+                that a near-match found by the pre-create duplicate check is
+                actually a different person. Defaults to False. Do not set
+                True to bypass the check — the whole point of the check is to
+                force a human-in-the-loop confirmation.
     """
     del author
 
@@ -787,9 +897,10 @@ async def create_person(
 
     canonical_caller = await _resolve_caller_person(driver, caller, is_company)
 
-    person_id = _new_person_id()
-    full_name = f"{first_name} {last_name or ''}".strip()
-    bot_name = _get_bot_name()
+    # Hard gate: caller must be identified before creating anything.
+    caller_info = await _get_person_info(driver, canonical_caller)
+    if not _has_identity(caller_info):
+        return _needs_identity_response(caller_info, canonical_caller)
 
     # Normalize user_ids/relations inputs to JSON strings for storage.
     try:
@@ -800,6 +911,32 @@ async def create_person(
         relations_list = json.loads(relations) if isinstance(relations, str) else relations
     except (json.JSONDecodeError, TypeError):
         relations_list = []
+
+    # Duplicate-prevention gate: unless the caller passes force_create, check
+    # for existing :Person records that plausibly represent the same human.
+    # See _find_possible_duplicates for the match criteria.
+    if not force_create:
+        duplicates = await _find_possible_duplicates(
+            driver, first_name, last_name or "", role or "", user_ids_list,
+        )
+        if duplicates:
+            return {
+                "status": "possible_duplicate",
+                "matches": duplicates,
+                "message": (
+                    f"Found {len(duplicates)} existing person(s) matching first_name="
+                    f"'{first_name}' or sharing a user_id. Before creating a new record:\n"
+                    f"- If any match is the same human, use `update_person` to enrich the "
+                    f"existing record (add missing fields, extra user_ids, or new relations), "
+                    f"or `promote_person` to add a scope. DO NOT create a duplicate.\n"
+                    f"- If you (with the user's confirmation) are sure this is a different "
+                    f"person, retry `create_person` with `force_create=true`."
+                ),
+            }
+
+    person_id = _new_person_id()
+    full_name = f"{first_name} {last_name or ''}".strip()
+    bot_name = _get_bot_name()
 
     # Embedding text includes name + role + identifiers for richer semantic search.
     ids_summary = ", ".join(
