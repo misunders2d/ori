@@ -4,6 +4,7 @@ import os
 import re
 import weakref
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import httpx
 from google.genai import types
@@ -235,9 +236,26 @@ async def poll_slack(get_runner_fn, process_init_fn):
     async def handle_message(event, say):
         _update_heartbeat()
 
+        # DEBUG: log the shape of every incoming message event so we can
+        # diagnose file-upload delivery issues. Safe — no message content, no
+        # secrets, just structural metadata.
+        _files = event.get("files") or []
+        logger.info(
+            "Slack message event: subtype=%r, files_count=%d, has_text=%s, "
+            "channel_type=%s, thread=%s, first_file_mime=%r, first_file_url_host=%r",
+            event.get("subtype"),
+            len(_files),
+            bool(event.get("text")),
+            event.get("channel_type"),
+            bool(event.get("thread_ts")),
+            (_files[0].get("mimetype") if _files else None),
+            (urlparse(_files[0].get("url_private", "")).hostname if _files else None),
+        )
+
         # Ignore bot messages, message_changed, etc.
         subtype = event.get("subtype")
         if subtype and subtype != "file_share":
+            logger.info("Slack: dropping event with subtype=%r (not handled)", subtype)
             return
 
         text = event.get("text", "")
