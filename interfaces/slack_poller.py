@@ -533,8 +533,19 @@ async def poll_slack(get_runner_fn, process_init_fn):
                 mime_hint=file_obj.get("mimetype", "") or "",
                 filename_hint=file_obj.get("name", "") or "",
             )
+            if not file_data:
+                logger.warning(
+                    "Slack file download returned None: url=%s, mimetype=%r, name=%r",
+                    url_private,
+                    file_obj.get("mimetype"),
+                    file_obj.get("name"),
+                )
             if file_data:
                 blob_bytes, mime_type, filename = file_data
+                logger.info(
+                    "Slack file downloaded: name=%r mime=%r size=%d",
+                    filename, mime_type, len(blob_bytes),
+                )
                 from app.app_utils.file_convert import is_convertible, to_text, save_upload
                 saved_path = save_upload(blob_bytes, filename)
                 if is_convertible(mime_type):
@@ -570,6 +581,20 @@ async def poll_slack(get_runner_fn, process_init_fn):
         if enriched_text:
             message_content.parts.append(types.Part.from_text(text=enriched_text))
         message_content.parts.extend(file_parts)
+
+        # Diagnostic: log final message shape before dispatch so we can verify
+        # file parts actually reach the agent (not stripped by a callback).
+        _part_types = []
+        for p in message_content.parts:
+            if getattr(p, "inline_data", None):
+                _mt = getattr(p.inline_data, "mime_type", "unknown")
+                _sz = len(getattr(p.inline_data, "data", b"") or b"")
+                _part_types.append(f"inline_data({_mt},{_sz}B)")
+            elif getattr(p, "text", None):
+                _part_types.append(f"text({len(p.text)}c)")
+            else:
+                _part_types.append("other")
+        logger.info("Slack dispatching to agent: parts=[%s]", ", ".join(_part_types))
 
         # --- CHANNEL LOGGING ---
         log_message(session_id, user_id, display_name, text)
