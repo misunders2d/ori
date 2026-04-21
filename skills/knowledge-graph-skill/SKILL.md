@@ -1,73 +1,84 @@
 ---
 name: knowledge-graph-skill
-description: "How to use the professional memory system — Pinecone for semantic search, with an automatically-mirrored Neo4j knowledge graph behind the scenes. Use this skill when storing or retrieving knowledge, people, products, or concepts, when deciding what to put in Pinecone vs scratchpad, and when the user asks to turn background entity auto-extraction on or off for a chat."
+description: "How to use the knowledge base — a single Neo4j store with native vector search for memories, people, and their relationships. Use this skill when storing or retrieving knowledge, people, products, concepts, or when deciding what to put in the knowledge base vs the scratchpad."
 ---
 
-# Professional Memory
+# Knowledge Base
 
-Long-term memory lives in **Pinecone** (semantic content search). A Neo4j knowledge graph is kept in sync automatically as a side-effect of every Pinecone write — you do **not** call Neo4j directly.
+Long-term memory lives in **Neo4j** alone. Every memory and person record is stored as a graph node with a 1536-dim OpenAI embedding attached for semantic search, plus relationship edges between related records. Pinecone is no longer in use — one store, one credential, one write path.
 
-## Architecture (what happens when you write)
+## Namespaces and access control
 
-```
-You → Pinecone tool → Pinecone record (source of truth)
-                    → Neo4j entity + edges (auto-mirrored)
-```
+Memories live in three namespaces, each with its own read rule:
 
-- `create_record` → Pinecone record + Neo4j entity + `INVOLVES`/`RELATED_TO` edges to related people/memories.
-- `create_person` → Pinecone person + Neo4j person node + relationship edges parsed from the `relations` field.
-- `update_record` → Pinecone metadata updated **and** the mirrored Neo4j node/edges are refreshed (old outbound edges are removed and re-created from the new state, so updates never produce duplicates).
-- `delete_record` → Pinecone record deleted and the mirrored Neo4j entity removed.
+| Namespace | Who can read |
+|-----------|--------------|
+| `personal` | Admins only |
+| `professional` | Admins and users whose identifier ends with `@<COMPANY_DOMAIN>` |
+| `technical` | Everyone (shared bot-to-bot knowledge — cross-department gotchas, operational notes) |
 
-You have no tools for editing Neo4j directly. That's intentional — the graph is a derived view of Pinecone.
+People live in two scopes (each person can be tagged with one or both):
 
-## Pinecone Tools
+| Scope | Who can read |
+|-------|--------------|
+| `personal` | Admins only (family, friends, private contacts) |
+| `professional` | Admins and `@<COMPANY_DOMAIN>` users (colleagues, clients, vendors) |
+
+**Creation is allowed for any authenticated caller** in any namespace. **Updates and deletes are restricted to the record's creator** (or an admin). The gate is enforced in code — if a non-author tries to update, the tool returns `{"status": "forbidden"}`. Relay the message to the user unchanged; do NOT retry.
+
+## Tools
+
+### Memory tools
 
 | Tool | Purpose |
 |------|---------|
-| `search_knowledge` | Semantic search across namespaces |
-| `get_records` | Fetch specific records by ID |
-| `list_records` | List records (paginated) |
-| `create_record` | Store a memory, idea, knowledge item, incident, etc. |
-| `create_person` | Store a person profile with relations |
-| `update_record` | Update a record (creator/admin only — graph mirror updates automatically) |
-| `delete_record` | Delete a record (creator/admin only — graph mirror cleans up automatically) |
+| `search_knowledge(search_query, namespace, top_k)` | Semantic vector search in one namespace |
+| `get_records(record_ids, namespace)` | Fetch specific records by ID |
+| `list_records(namespace)` | Enumerate records in a namespace |
+| `create_record(namespace, text, short_description, category, tags, related_people?, related_memories?)` | Store a memory, idea, incident, etc. |
+| `update_record(record_id, namespace, updates)` | Creator-only update |
+| `delete_record(record_id, namespace)` | Creator-only delete |
+| `update_any_record(record_id, namespace, updates)` | **Admin-only** override — bypasses the creator gate |
 
-Namespaces: `personal`, `professional`, `people`, `technical`.
+### People tools
 
-For categories, schema fields, and workflow examples, read `references/entity-relationship-guide.md`.
+| Tool | Purpose |
+|------|---------|
+| `create_person(first_name, last_name, role, user_ids, relations?, scopes?)` | Store a person. `scopes` defaults to `["professional"]`; pass `["personal", "professional"]` for dual-scope people. |
+| `search_people(search_query, scope, top_k)` | Semantic search within one scope |
+| `update_person(person_id, updates)` | Creator-only |
+| `update_any_person(person_id, updates)` | **Admin-only** override |
+| `promote_person(person_id, add_scope)` | **Admin-only** — add a scope label to an existing person (e.g. a friend becomes a colleague) |
 
-## Authorship Rules
+Categories: `idea`, `memory`, `knowledge`, `procedure`, `experiment`, `incident`, `project`, `technical`, `strategy`, `communication_style`, `policy`, `operational`.
 
-Every memory record has an `author` field, which is critical for audit and update/delete permission checks:
+For categories with examples, schema fields, and workflow walkthroughs, read `references/entity-relationship-guide.md`.
 
-| Scenario | Author Value |
-|----------|-------------|
-| User explicitly says "remember this" | Leave `author` empty — defaults to the user's ID |
-| You decide to store something on your own | `author="agent"` |
-| Background auto-extraction | `"agent:auto"` (set automatically by the extraction process) |
+## Authorship
 
-Only the creator (or an admin) can update or delete a record.
+Every write records who made it via a `:AUTHORED` graph edge from the caller's `:Person` node to the record. The first time a caller invokes any memory tool, their `:Person` node is auto-provisioned (scope decided by email-domain match). Authorship is therefore always concrete — there is no `author="agent"` placeholder. If a scheduled task or system job writes a memory, the edge points to the admin that owns the task.
 
-## Auto-Extraction (Background Entity Extraction)
+## Relationships
 
-A background process can analyze chat turns and extract entities/relationships into the knowledge graph silently, with `author="agent:auto"`. This is **off by default for every chat** — no session gets auto-extraction until it is explicitly enabled.
+- `related_people=["per_..."]` on `create_record` creates `(:Memory)-[:INVOLVES]->(:Person)` edges.
+- `related_memories=["mem_..."]` creates `(:Memory)-[:RELATED_TO]->(:Memory)`.
+- `relations=[{"related_person_id": "per_...", "relation_type": "colleague"}]` on `create_person` creates `(:Person)-[:COLLEAGUE]->(:Person)` (relation type sanitized to UPPER_SNAKE_CASE).
 
-Control tools (only call these when the user explicitly asks):
+These are managed by the memory tools — you do not call Neo4j directly for relationships.
 
-- `enable_auto_extraction(session_id)` — turn extraction on for a session
-- `disable_auto_extraction(session_id)` — turn it off
-- `list_auto_extraction_sessions()` — show which sessions currently have it enabled
+## Namespace selection heuristics
 
-When the user says something like "enable auto-extraction here" or "turn on entity extraction for this chat," use the **current session's ID** (e.g. `sl_C01ABC`, `tg_-100123`). If you don't know the session ID, ask the user or check session state before calling.
+- The user's family, friends, private life → `personal`.
+- Business contacts, work decisions, client notes, internal processes → `professional`.
+- Engineering gotchas, deploy procedures, integration quirks, SP-API oddities, things another agent in another department would benefit from seeing → `technical`.
 
 ## Important
 
-- Pinecone is the source of truth. Neo4j is a derived mirror — never assume you can "correct" the graph by writing to it; correct the Pinecone record and the mirror updates itself.
-- If the Neo4j mirror fails on any write, the Pinecone write still succeeds (best-effort mirroring). Report the error to the user if you see one.
-- Don't duplicate data — store full text in Pinecone only. The graph stores only lightweight names/types/relationships.
+- Neo4j is the single source of truth. There is no dual-write or mirror any more.
+- If a tool returns `{"status": "forbidden"}`, the gate blocked the caller. Report to the user verbatim; don't retry.
+- If a tool returns `{"status": "error"}`, pass through the exact error text — never fabricate a success.
+- Text stays in the knowledge base. Lightweight structural state (agent notes, short-lived context) goes in the scratchpad, not here.
 
 ## Live References
 
-- [Pinecone Documentation](https://docs.pinecone.io/)
-- [Neo4j Cypher Query Language](https://neo4j.com/docs/cypher-manual/current/) (for reference — not directly callable)
+- [Neo4j Cypher Query Language](https://neo4j.com/docs/cypher-manual/current/) (for reference — you do not call Cypher directly)

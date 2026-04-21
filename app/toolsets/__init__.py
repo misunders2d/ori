@@ -8,7 +8,7 @@ from .keepa import KeepaToolset
 from .scratchpad import ScratchpadToolset
 from .visualization import VisualizationToolset, CreativesToolset
 from .google_workspace import GoogleWorkspaceToolset
-from .pinecone import PineconeToolset
+from .knowledge import KnowledgeToolset
 from .sp_api import SPApiToolset
 from .clickup import ClickUpToolset
 from .planner import PlannerToolset
@@ -27,7 +27,7 @@ __all__ = [
     "VisualizationToolset",
     "CreativesToolset",
     "GoogleWorkspaceToolset",
-    "PineconeToolset",
+    "KnowledgeToolset",
     "SPApiToolset",
     "ClickUpToolset",
     "PlannerToolset",
