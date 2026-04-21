@@ -390,3 +390,75 @@ async def test_gmail_get_thread_truncates_each_message():
          patch("app.tools.google_gmail.httpx.AsyncClient", client_cls):
         result = await gmail_get_thread("thr_1", tool_context=_mock_ctx())
     assert all("[truncated" in m["body"] for m in result["messages"])
+
+
+def _thread_metadata(id_: str, froms: list[str], last_date: str) -> dict:
+    messages = [
+        {
+            "id": f"{id_}_msg_{i}",
+            "payload": {"headers": [
+                {"name": "From", "value": f},
+                {"name": "Date", "value": last_date if i == len(froms) - 1 else "Mon, 20 Apr 2026 10:00:00 -0400"},
+            ]},
+        }
+        for i, f in enumerate(froms)
+    ]
+    return {
+        "id": id_,
+        "snippet": f"snippet for {id_}",
+        "messages": messages,
+    }
+
+
+@pytest.mark.asyncio
+async def test_gmail_list_threads_not_connected():
+    from app.tools.google_gmail import gmail_list_threads
+    with patch("app.tools.google_gmail.get_token", return_value=None):
+        result = await gmail_list_threads(tool_context=_mock_ctx())
+    assert result["status"] == "error"
+    assert "not connected" in result["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_gmail_list_threads_happy_path_with_enrichment():
+    from app.tools.google_gmail import gmail_list_threads
+    list_resp = _mock_response({"threads": [{"id": "t1"}, {"id": "t2"}]})
+    t1 = _mock_response(_thread_metadata(
+        "t1",
+        ["alice@example.com", "bob@example.com", "alice@example.com"],
+        "Tue, 21 Apr 2026 12:00:00 -0400",
+    ))
+    t2 = _mock_response(_thread_metadata(
+        "t2",
+        ["supplier@example.com"],
+        "Tue, 21 Apr 2026 09:00:00 -0400",
+    ))
+    client_cls, _ = _mock_async_client(get_responses=[list_resp, t1, t2])
+    with patch("app.tools.google_gmail._get_valid_token", AsyncMock(return_value="tok")), \
+         patch("app.tools.google_gmail._get_user_email", return_value="user@test.com"), \
+         patch("app.tools.google_gmail.httpx.AsyncClient", client_cls):
+        result = await gmail_list_threads(query="is:unread", max_results=2, tool_context=_mock_ctx())
+    assert result["status"] == "success"
+    assert result["count"] == 2
+    t1_out = result["threads"][0]
+    assert t1_out["id"] == "t1"
+    assert t1_out["message_count"] == 3
+    assert sorted(t1_out["participants"]) == ["alice@example.com", "bob@example.com"]
+    assert t1_out["last_date"] == "Tue, 21 Apr 2026 12:00:00 -0400"
+    t2_out = result["threads"][1]
+    assert t2_out["message_count"] == 1
+    assert t2_out["participants"] == ["supplier@example.com"]
+
+
+@pytest.mark.asyncio
+async def test_gmail_list_threads_empty():
+    from app.tools.google_gmail import gmail_list_threads
+    list_resp = _mock_response({})
+    client_cls, _ = _mock_async_client(get_responses=[list_resp])
+    with patch("app.tools.google_gmail._get_valid_token", AsyncMock(return_value="tok")), \
+         patch("app.tools.google_gmail._get_user_email", return_value="user@test.com"), \
+         patch("app.tools.google_gmail.httpx.AsyncClient", client_cls):
+        result = await gmail_list_threads(tool_context=_mock_ctx())
+    assert result["status"] == "success"
+    assert result["count"] == 0
+    assert result["threads"] == []

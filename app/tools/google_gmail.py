@@ -302,6 +302,77 @@ async def gmail_get_thread(
         return {"status": "error", "message": f"Gmail API error: {e}"}
 
 
+async def _fetch_thread_metadata(client: httpx.AsyncClient, token: str, thread_id: str) -> dict:
+    """Fetch thread metadata and summarize it for list output."""
+    resp = await client.get(
+        f"{_GMAIL_API}/threads/{thread_id}",
+        params={"format": "metadata"},
+        headers=_auth_headers(token),
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    messages = data.get("messages", []) or []
+    participants: list[str] = []
+    last_date = ""
+    for m in messages:
+        headers = _headers_to_dict(m.get("payload", {}).get("headers", []))
+        sender = headers.get("from", "")
+        if sender and sender not in participants:
+            participants.append(sender)
+        d = headers.get("date", "")
+        if d:
+            last_date = d
+    return {
+        "id": data.get("id", thread_id),
+        "snippet": data.get("snippet", ""),
+        "message_count": len(messages),
+        "participants": participants,
+        "last_date": last_date,
+    }
+
+
+async def gmail_list_threads(
+    query: str = "",
+    max_results: int = 25,
+    tool_context: ToolContext = None,
+) -> dict:
+    """List Gmail threads matching a query, enriched with participants and last date.
+
+    Args:
+        query: Gmail search syntax.
+        max_results: Max threads to return (default 25, capped at 100).
+
+    Returns:
+        dict with `threads`: list of {id, snippet, message_count, participants, last_date}.
+    """
+    email = _get_user_email(tool_context)
+    token = await _get_valid_token(email)
+    if not token:
+        return {"status": "error", "message": f"Gmail not connected for {email}. Use google_connect first."}
+
+    params: dict = {"maxResults": min(max(max_results, 1), 100)}
+    if query:
+        params["q"] = query
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{_GMAIL_API}/threads",
+                params=params,
+                headers=_auth_headers(token),
+            )
+            resp.raise_for_status()
+            ids = [t["id"] for t in resp.json().get("threads", []) or []]
+            if not ids:
+                return {"status": "success", "count": 0, "threads": []}
+            enriched = await asyncio.gather(
+                *(_fetch_thread_metadata(client, token, tid) for tid in ids)
+            )
+        return {"status": "success", "count": len(enriched), "threads": list(enriched)}
+    except Exception as e:
+        return {"status": "error", "message": f"Gmail API error: {e}"}
+
+
 async def gmail_list_messages(
     query: str = "",
     max_results: int = 25,
