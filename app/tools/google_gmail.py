@@ -302,6 +302,64 @@ async def gmail_get_thread(
         return {"status": "error", "message": f"Gmail API error: {e}"}
 
 
+def _safe_filename(name: str) -> str:
+    """Strip path separators and keep the basename only."""
+    return os.path.basename(name).replace("/", "_").replace("\\", "_") or "file"
+
+
+async def gmail_download_attachment(
+    message_id: str,
+    attachment_id: str,
+    filename: str = "",
+    tool_context: ToolContext = None,
+) -> dict:
+    """Download a Gmail attachment to the local cache.
+
+    Saves to ./tmp/gmail_attachments/{message_id}_{filename}. The cache is
+    swept at the start of this call — files older than GMAIL_ATTACHMENT_TTL_HOURS
+    (default 24) are removed.
+
+    Args:
+        message_id: Gmail message ID the attachment belongs to.
+        attachment_id: Attachment ID (from gmail_get_message).
+        filename: Optional original filename. Falls back to attachment_id if empty.
+    """
+    email = _get_user_email(tool_context)
+    token = await _get_valid_token(email)
+    if not token:
+        return {"status": "error", "message": f"Gmail not connected for {email}. Use google_connect first."}
+
+    _sweep_attachments()
+    os.makedirs(_ATTACHMENT_DIR, exist_ok=True)
+
+    safe_name = _safe_filename(filename or attachment_id)
+    out_path = os.path.join(_ATTACHMENT_DIR, f"{message_id}_{safe_name}")
+
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.get(
+                f"{_GMAIL_API}/messages/{message_id}/attachments/{attachment_id}",
+                headers=_auth_headers(token),
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        raw_b64 = data.get("data", "")
+        if not raw_b64:
+            return {"status": "error", "message": "Attachment payload was empty."}
+        padded = raw_b64 + "=" * (-len(raw_b64) % 4)
+        content = base64.urlsafe_b64decode(padded.encode())
+        with open(out_path, "wb") as f:
+            f.write(content)
+        return {
+            "status": "success",
+            "file_path": out_path,
+            "filename": safe_name,
+            "size_bytes": len(content),
+        }
+    except Exception as e:
+        return {"status": "error", "message": f"Gmail API error: {e}"}
+
+
 async def _fetch_thread_metadata(client: httpx.AsyncClient, token: str, thread_id: str) -> dict:
     """Fetch thread metadata and summarize it for list output."""
     resp = await client.get(

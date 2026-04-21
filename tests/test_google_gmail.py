@@ -462,3 +462,64 @@ async def test_gmail_list_threads_empty():
     assert result["status"] == "success"
     assert result["count"] == 0
     assert result["threads"] == []
+
+
+@pytest.mark.asyncio
+async def test_gmail_download_attachment_not_connected():
+    from app.tools.google_gmail import gmail_download_attachment
+    with patch("app.tools.google_gmail.get_token", return_value=None):
+        result = await gmail_download_attachment("msg_1", "att_1", tool_context=_mock_ctx())
+    assert result["status"] == "error"
+    assert "not connected" in result["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_gmail_download_attachment_writes_file_and_sweeps(tmp_path):
+    from app.tools.google_gmail import gmail_download_attachment
+    content = b"hello pdf bytes"
+    att_resp = _mock_response({
+        "size": len(content),
+        "data": base64.urlsafe_b64encode(content).decode(),
+    })
+    client_cls, _ = _mock_async_client(get_responses=[att_resp])
+    attach_dir = str(tmp_path / "gmail_attachments")
+    sweep_calls: list[int] = []
+
+    def fake_sweep():
+        sweep_calls.append(1)
+
+    with patch("app.tools.google_gmail._get_valid_token", AsyncMock(return_value="tok")), \
+         patch("app.tools.google_gmail._get_user_email", return_value="user@test.com"), \
+         patch("app.tools.google_gmail._ATTACHMENT_DIR", attach_dir), \
+         patch("app.tools.google_gmail._sweep_attachments", fake_sweep), \
+         patch("app.tools.google_gmail.httpx.AsyncClient", client_cls):
+        result = await gmail_download_attachment(
+            "msg_1", "att_1", filename="invoice.pdf", tool_context=_mock_ctx(),
+        )
+
+    assert sweep_calls == [1]
+    assert result["status"] == "success"
+    assert result["filename"] == "invoice.pdf"
+    assert result["size_bytes"] == len(content)
+    assert result["file_path"] == os.path.join(attach_dir, "msg_1_invoice.pdf")
+    with open(result["file_path"], "rb") as f:
+        assert f.read() == content
+
+
+@pytest.mark.asyncio
+async def test_gmail_download_attachment_default_filename(tmp_path):
+    from app.tools.google_gmail import gmail_download_attachment
+    att_resp = _mock_response({
+        "size": 3,
+        "data": base64.urlsafe_b64encode(b"abc").decode(),
+    })
+    client_cls, _ = _mock_async_client(get_responses=[att_resp])
+    attach_dir = str(tmp_path / "gmail_attachments")
+    with patch("app.tools.google_gmail._get_valid_token", AsyncMock(return_value="tok")), \
+         patch("app.tools.google_gmail._get_user_email", return_value="user@test.com"), \
+         patch("app.tools.google_gmail._ATTACHMENT_DIR", attach_dir), \
+         patch("app.tools.google_gmail._sweep_attachments", lambda: None), \
+         patch("app.tools.google_gmail.httpx.AsyncClient", client_cls):
+        result = await gmail_download_attachment("msg_1", "att_1", tool_context=_mock_ctx())
+    assert result["filename"] == "att_1"
+    assert result["file_path"] == os.path.join(attach_dir, "msg_1_att_1")
