@@ -236,12 +236,20 @@ class SlackAdapter(TransportAdapter):
 
         headers = {"Authorization": f"Bearer {self._token}"}
         try:
-            resp = await self._client.get(file_url, headers=headers)
+            # Slack file URLs redirect to their CDN (S3 / edge-hosted storage).
+            # Default httpx behavior is to NOT follow redirects, which would
+            # leave us with a 302 carrying no body. Explicit opt-in is needed.
+            resp = await self._client.get(file_url, headers=headers, follow_redirects=True)
             if resp.status_code != 200:
+                # Log response headers (redacted) on failure to distinguish
+                # 403 scope issues from other errors; body may contain a
+                # Slack error code like "missing_scope" or "not_authed".
+                body_snippet = resp.text[:200] if resp.text else ""
                 logger.error(
-                    "Failed to download Slack file from %s, status: %s",
+                    "Failed to download Slack file from %s, status: %s, body: %r",
                     file_url,
                     resp.status_code,
+                    body_snippet,
                 )
                 return None
 
