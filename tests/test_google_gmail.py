@@ -3,10 +3,39 @@
 import base64
 import os
 import time as time_mod
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from app.tools.google_gmail import _decode_body, _sweep_attachments, _truncate
 from app.tools.google_oauth.device_flow import SCOPES
+
+
+def _mock_response(json_data: dict, status: int = 200):
+    resp = MagicMock()
+    resp.json.return_value = json_data
+    resp.status_code = status
+    resp.raise_for_status = MagicMock()
+    return resp
+
+
+def _mock_async_client(get_responses=None, post_responses=None):
+    """Build a mock httpx.AsyncClient class that yields given responses from get/post."""
+    client = MagicMock()
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+    if get_responses is not None:
+        client.get = AsyncMock(side_effect=list(get_responses))
+    if post_responses is not None:
+        client.post = AsyncMock(side_effect=list(post_responses))
+    client_cls = MagicMock(return_value=client)
+    return client_cls, client
+
+
+def _mock_ctx(email: str = "user@test.com"):
+    ctx = MagicMock()
+    ctx.state.to_dict.return_value = {"user_id": email}
+    return ctx
 
 
 def test_gmail_readonly_scope_present():
@@ -125,3 +154,34 @@ def test_sweep_respects_env_ttl_override(tmp_path):
          patch.dict(os.environ, {"GMAIL_ATTACHMENT_TTL_HOURS": "1"}):
         _sweep_attachments()
     assert not f.exists()
+
+
+@pytest.mark.asyncio
+async def test_gmail_list_labels_not_connected():
+    from app.tools.google_gmail import gmail_list_labels
+    with patch("app.tools.google_gmail.get_token", return_value=None):
+        result = await gmail_list_labels(tool_context=_mock_ctx())
+    assert result["status"] == "error"
+    assert "not connected" in result["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_gmail_list_labels_happy_path():
+    from app.tools.google_gmail import gmail_list_labels
+    api_response = {
+        "labels": [
+            {"id": "INBOX", "name": "INBOX", "type": "system"},
+            {"id": "Label_1", "name": "Suppliers", "type": "user"},
+        ]
+    }
+    client_cls, _ = _mock_async_client(get_responses=[_mock_response(api_response)])
+    with patch("app.tools.google_gmail._get_valid_token", AsyncMock(return_value="tok")), \
+         patch("app.tools.google_gmail._get_user_email", return_value="user@test.com"), \
+         patch("app.tools.google_gmail.httpx.AsyncClient", client_cls):
+        result = await gmail_list_labels(tool_context=_mock_ctx())
+    assert result["status"] == "success"
+    assert result["count"] == 2
+    assert result["labels"] == [
+        {"id": "INBOX", "name": "INBOX", "type": "system"},
+        {"id": "Label_1", "name": "Suppliers", "type": "user"},
+    ]

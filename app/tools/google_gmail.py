@@ -5,11 +5,18 @@ Six tools: list/get messages, list/get threads, list labels, download attachment
 Write tools (send/modify/drafts) can be added alongside without refactoring.
 """
 
+import asyncio
 import base64
 import logging
 import os
 import time
 from html.parser import HTMLParser
+
+import httpx
+from google.adk.tools.tool_context import ToolContext
+
+from app.tools.google_drive import _auth_headers, _get_user_email, _get_valid_token
+from app.tools.google_oauth.token_store import get_token
 
 logger = logging.getLogger(__name__)
 
@@ -108,3 +115,33 @@ def _sweep_attachments() -> None:
                 os.remove(entry.path)
         except OSError as e:
             logger.warning("Failed to sweep %s: %s", entry.path, e)
+
+
+# ---------------------------------------------------------------------------
+# Tools
+# ---------------------------------------------------------------------------
+
+
+async def gmail_list_labels(tool_context: ToolContext = None) -> dict:
+    """List all Gmail labels for the current user.
+
+    Returns:
+        dict with `labels`: list of {id, name, type} where type is 'system' or 'user'.
+    """
+    email = _get_user_email(tool_context)
+    token = await _get_valid_token(email)
+    if not token:
+        return {"status": "error", "message": f"Gmail not connected for {email}. Use google_connect first."}
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(f"{_GMAIL_API}/labels", headers=_auth_headers(token))
+            resp.raise_for_status()
+            data = resp.json()
+        labels = [
+            {"id": l["id"], "name": l.get("name", ""), "type": l.get("type", "user")}
+            for l in data.get("labels", [])
+        ]
+        return {"status": "success", "count": len(labels), "labels": labels}
+    except Exception as e:
+        return {"status": "error", "message": f"Gmail API error: {e}"}
