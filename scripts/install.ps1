@@ -46,8 +46,11 @@ Set-Location "$TargetDir"
 Write-Host "  [+] Severing DNA connection (detaching from origin)..." -ForegroundColor Yellow
 Remove-Item -Recurse -Force .git
 
-# Initialize fresh local history
+# Initialize fresh local history. We keep canonical ori as 'upstream' so the
+# user can `git fetch upstream` later to pull platform fixes without losing
+# their independent local history.
 git init -b master
+git remote add upstream https://github.com/misunders2d/ori.git
 git config user.email "organism@local.host"
 git config user.name "Ori Birth Process"
 

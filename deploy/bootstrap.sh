@@ -71,12 +71,18 @@ echo ":: Cloning Ori platform..."
 git clone --depth 1 https://github.com/misunders2d/ori.git "$INSTALL_DIR"
 
 # --- Detach from Ori's remote, create fresh repo ---
+# The local history is independent (fresh init, no origin) so this instance
+# evolves on its own. But we keep a read-only pointer at canonical ori as
+# 'upstream' so the user can `git fetch upstream` later to diff or cherry-pick
+# platform improvements without re-cloning.
 cd "$INSTALL_DIR"
 rm -rf .git
 git init
+git remote add upstream https://github.com/misunders2d/ori.git
 git add .
 git commit -m "Initial commit — forked from Ori platform"
 echo ":: Created fresh local git repository."
+echo ":: Added 'upstream' remote → canonical Ori (use 'git fetch upstream' to sync)."
 
 # --- Install uv if not present ---
 if ! command -v uv &>/dev/null; then
