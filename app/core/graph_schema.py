@@ -24,7 +24,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Vector indexes use OpenAI text-embedding-3-small via Neo4j's GenAI plugin
-# (ai.text.embed). 1536 is the model's native dimensionality.
+# (genai.vector.encode — or ai.text.embed on 2025.11+). 1536 is the model's
+# native dimensionality.
 _VECTOR_DIMS = 1536
 _VECTOR_SIM = "cosine"
 

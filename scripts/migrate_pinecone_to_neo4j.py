@@ -1,7 +1,7 @@
 """One-shot migration: Pinecone knowledge base → Neo4j consolidated graph.
 
 Reads every record across the four Pinecone namespaces (personal, professional,
-technical, people), re-embeds them via Neo4j's ai.text.embed('OpenAI', ...) and
+technical, people), re-embeds them via Neo4j's genai.vector.encode('OpenAI', ...) and
 writes them into the new Neo4j schema defined in `app/core/graph_schema.py`.
 
 The target Neo4j is expected to be empty (or about to be wiped via --purge).
@@ -200,9 +200,9 @@ async def connect_neo4j():
 
 
 async def smoke_test_embedding(driver) -> None:
-    """Fail fast if ai.text.embed + OpenAI aren't reachable from Neo4j."""
+    """Fail fast if genai.vector.encode + OpenAI aren't reachable from Neo4j."""
     query = (
-        "WITH ai.text.embed($t, 'OpenAI', $cfg) AS vec "
+        "WITH genai.vector.encode($t, 'OpenAI', $cfg) AS vec "
         "RETURN size(vec) AS dim"
     )
     async with driver.session() as session:
@@ -215,7 +215,7 @@ async def smoke_test_embedding(driver) -> None:
         dim = row["dim"] if row else 0
         if dim != 1536:
             raise RuntimeError(
-                f"ai.text.embed returned {dim} dims (expected 1536). "
+                f"genai.vector.encode returned {dim} dims (expected 1536). "
                 "Check OPENAI_API_KEY and plugin version."
             )
     logger.info("Embedding smoke test OK (1536 dims).")
@@ -310,7 +310,7 @@ async def migrate_memory(driver, namespace: str, record: dict, dry_run: bool) ->
         f"CREATE (m:Memory:{label} {{ "
         "    record_id: $record_id, "
         "    text: $text, "
-        "    embedding: ai.text.embed($text, 'OpenAI', cfg), "
+        "    embedding: genai.vector.encode($text, 'OpenAI', cfg), "
         "    short_description: $short_description, "
         "    category: $category, "
         "    tags: $tags, "
@@ -394,7 +394,7 @@ async def migrate_person(
         "    full_name: $full_name, "
         "    role: $role, "
         "    user_ids: $user_ids, "
-        "    embedding: ai.text.embed($embed_text, 'OpenAI', cfg), "
+        "    embedding: genai.vector.encode($embed_text, 'OpenAI', cfg), "
         "    aliases: [], "
         "    is_auto_provisioned: false, "
         "    created_at: datetime({epochSeconds: $created_at_ts}), "

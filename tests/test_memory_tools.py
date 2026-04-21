@@ -290,7 +290,7 @@ class TestCypherConstruction:
         assert result["status"] == "success"
         # First call is auto-provision MERGE, then the create.
         _assert_query_contains(
-            patched_driver.run, ":Memory:ProfessionalMemory", "ai.text.embed", call_index=-1
+            patched_driver.run, ":Memory:ProfessionalMemory", "genai.vector.encode", call_index=-1
         )
 
     @pytest.mark.asyncio

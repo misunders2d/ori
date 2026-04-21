@@ -250,7 +250,7 @@ async def search_knowledge(
     query = (
         "WITH $query_text AS q, "
         "     {token: $openai_key, model: 'text-embedding-3-small'} AS cfg "
-        "WITH ai.text.embed(q, 'OpenAI', cfg) AS vec "
+        "WITH genai.vector.encode(q, 'OpenAI', cfg) AS vec "
         f"CALL db.index.vector.queryNodes('{index_name}', $top_k, vec) "
         "YIELD node, score "
         "RETURN node.record_id AS record_id, "
@@ -424,7 +424,7 @@ async def create_record(
         f"CREATE (m:Memory:{memory_label} {{ "
         "    record_id: $record_id, "
         "    text: $text, "
-        "    embedding: ai.text.embed($text, 'OpenAI', cfg), "
+        "    embedding: genai.vector.encode($text, 'OpenAI', cfg), "
         "    short_description: $short_description, "
         "    category: $category, "
         "    tags: $tags, "
@@ -531,7 +531,7 @@ async def update_record(
         if not openai_key:
             return _error("OPENAI_API_KEY required for text updates (embedding refresh).")
         set_parts.append(
-            "m.embedding = ai.text.embed($text, 'OpenAI', "
+            "m.embedding = genai.vector.encode($text, 'OpenAI', "
             "{token: $openai_key, model: 'text-embedding-3-small'})"
         )
     set_parts.append("m.updated_at = datetime()")
@@ -612,7 +612,7 @@ async def update_any_record(
         if not openai_key:
             return _error("OPENAI_API_KEY required for text updates (embedding refresh).")
         set_parts.append(
-            "m.embedding = ai.text.embed($text, 'OpenAI', "
+            "m.embedding = genai.vector.encode($text, 'OpenAI', "
             "{token: $openai_key, model: 'text-embedding-3-small'})"
         )
     set_parts.append("m.updated_at = datetime()")
@@ -788,7 +788,7 @@ async def create_person(
         "    full_name: $full_name, "
         "    role: $role, "
         "    user_ids: $user_ids, "
-        "    embedding: ai.text.embed($embed_text, 'OpenAI', cfg), "
+        "    embedding: genai.vector.encode($embed_text, 'OpenAI', cfg), "
         "    aliases: [], "
         "    is_auto_provisioned: false, "
         "    created_at: datetime(), "
@@ -871,7 +871,7 @@ async def search_people(
     query = (
         "WITH $query_text AS q, "
         "     {token: $openai_key, model: 'text-embedding-3-small'} AS cfg "
-        "WITH ai.text.embed(q, 'OpenAI', cfg) AS vec "
+        "WITH genai.vector.encode(q, 'OpenAI', cfg) AS vec "
         f"CALL db.index.vector.queryNodes('{index_name}', $top_k, vec) "
         "YIELD node, score "
         "RETURN node.person_id AS person_id, "
@@ -943,7 +943,7 @@ async def update_person(
         )
     if touches_embedding:
         set_parts.append(
-            "p.embedding = ai.text.embed("
+            "p.embedding = genai.vector.encode("
             "trim(coalesce(p.first_name, '') + ' ' + coalesce(p.last_name, '')) + "
             "'. Role: ' + coalesce(p.role, '') + '. IDs: ' + coalesce(p.user_ids, ''), "
             "'OpenAI', "
@@ -1025,7 +1025,7 @@ async def update_any_person(
         )
     if touches_embedding:
         set_parts.append(
-            "p.embedding = ai.text.embed("
+            "p.embedding = genai.vector.encode("
             "trim(coalesce(p.first_name, '') + ' ' + coalesce(p.last_name, '')) + "
             "'. Role: ' + coalesce(p.role, '') + '. IDs: ' + coalesce(p.user_ids, ''), "
             "'OpenAI', "
