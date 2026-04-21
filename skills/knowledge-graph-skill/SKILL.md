@@ -76,6 +76,29 @@ Every write records who made it via a `:AUTHORED` graph edge from the caller's `
 
 These are managed by the memory tools — you do not call Neo4j directly for relationships.
 
+### Linking follow-up and related memories (IMPORTANT)
+
+A knowledge graph with no relationships is just a list. Whenever you create a memory that **builds on, corrects, supersedes, or references prior knowledge**, link it — don't let related records drift apart.
+
+Proactive workflow when saving a memory that seems to relate to something existing:
+
+1. Before calling `create_record`, use `search_knowledge(search_query=<key terms from the new content>, namespace=<same>, top_k=3)` to find plausibly-related prior records.
+2. Review the results. For each match that is genuinely related (a follow-up, an update about the same topic, a clarification, a reference), collect its `record_id`.
+3. Pass the collected IDs as `related_memories=["mem_...", "mem_..."]` on `create_record`.
+
+Common trigger phrases from the user that imply linkage:
+- "update to [topic]" / "new info about [topic]" → link to the prior record on that topic
+- "correction to [previous statement]" → link to what's being corrected
+- "follow-up on [incident/decision]" → link to the origin record
+- "related to [project/person]" → link appropriately (`related_memories` for memory-to-memory, `related_people` for memory-to-person)
+
+Edge cases:
+- If the only "related" matches are the dedup-gate kind (cosine ≥ 0.92), don't create a new linked record — `update_record` the existing one instead. You'd be solving the wrong problem by linking two duplicates.
+- If `related_memories` references a `record_id` that doesn't exist, the link is silently skipped — harmless but wasteful. Verify via `search_knowledge` or `get_records` if unsure.
+- Explicit user instructions override this heuristic: if they say "don't link to anything," respect it.
+
+Retrieving related memories later: when you `get_records` or `search_knowledge` a memory, graph tools like `query_connections(entity_id)` or `find_connection_path(from_id, to_id)` from the graph toolset expose the full linkage web. Use them when asked "what do you know about X?" to surface the connected knowledge rather than just the direct hit.
+
 ## Preventing duplicate `:Memory` records
 
 Before writing a new memory, the code runs a **semantic dedup check**: embed the proposed `text`, vector-search the target namespace for top 3 matches with cosine ≥ 0.92, and if any hit, return `{"status": "possible_duplicate", "matches": [...], "threshold": 0.92}`. The create is **not** performed.
