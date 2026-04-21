@@ -8,7 +8,6 @@ class GoogleWorkspaceToolset(BaseToolset):
     async def get_tools(self, readonly_context=None):
         from app.tools.google_drive import (
             google_connect,
-            google_connect_complete,
             google_disconnect,
             drive_list_files,
             drive_download_file,
@@ -34,7 +33,6 @@ class GoogleWorkspaceToolset(BaseToolset):
 
         return [
             FunctionTool(func=google_connect),
-            FunctionTool(func=google_connect_complete),
             FunctionTool(func=google_disconnect),
             FunctionTool(func=drive_list_files),
             FunctionTool(func=drive_download_file),

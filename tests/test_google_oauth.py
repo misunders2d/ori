@@ -56,8 +56,10 @@ def test_expired_token():
 @pytest.mark.asyncio
 async def test_google_connect_no_client_id():
     from app.tools.google_drive import google_connect
+    mock_ctx = MagicMock()
+    mock_ctx.state.to_dict.return_value = {"user_id": "user@test.com"}
     with patch.dict(os.environ, {"GOOGLE_OAUTH_CLIENT_ID": ""}):
-        result = await google_connect()
+        result = await google_connect(tool_context=mock_ctx)
         assert result["status"] == "error"
         assert "CLIENT_ID" in result["message"]
 

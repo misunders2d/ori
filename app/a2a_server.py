@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 # Discovery paths that remain publicly accessible (no auth required)
 _PUBLIC_PATHS = {"/.well-known/agent.json", "/.well-known/agent-card.json"}
 
+# OAuth callback path — intercepted by the middleware itself (never reaches the agent).
+_OAUTH_CALLBACK_PATH = "/oauth/google/callback"
+
 DNA_EXPORTS_DIR = os.path.abspath("data/dna_exports")
 
 
@@ -26,6 +29,10 @@ class A2AApiKeyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         if request.url.path in _PUBLIC_PATHS:
             return await call_next(request)
+
+        # OAuth callback — handled here, no API key, never reaches the agent
+        if request.url.path == _OAUTH_CALLBACK_PATH:
+            return await _handle_oauth_callback(request)
 
         provided = request.headers.get("x-a2a-api-key", "")
         if provided != self.api_key:
@@ -57,6 +64,65 @@ class A2AApiKeyMiddleware(BaseHTTPMiddleware):
 
 
 FRIENDS_FILE = os.path.abspath("./data/friends.json")
+
+
+async def _handle_oauth_callback(request):
+    """Handle Google OAuth redirect: exchange the code for tokens, persist per-user.
+
+    URL shape: /oauth/google/callback?code=...&state=...  (or ?error=access_denied&state=...)
+    """
+    from starlette.responses import HTMLResponse
+
+    params = request.query_params
+    state = params.get("state", "")
+    code = params.get("code", "")
+    error = params.get("error", "")
+
+    if error:
+        return HTMLResponse(_oauth_page("Authorization denied", f"Google returned: {error}"), status_code=400)
+
+    if not state or not code:
+        return HTMLResponse(_oauth_page("Invalid callback", "Missing state or code parameter."), status_code=400)
+
+    from app.tools.google_oauth import web_flow
+    from app.tools.google_oauth.token_store import save_token, save_user_mapping
+
+    result = await web_flow.exchange_code(state, code)
+    if result.get("status") != "success":
+        return HTMLResponse(_oauth_page("Authorization failed", result.get("message", "Unknown error")), status_code=400)
+
+    try:
+        user_id = result["user_id"]
+        email = result["email"]
+        save_token(
+            email,
+            result["access_token"],
+            result.get("refresh_token", ""),
+            result.get("expires_in", 3600),
+            web_flow.SCOPES,
+        )
+        # Map platform user_id → email so per-user tools can find the token
+        if user_id and user_id != email:
+            save_user_mapping(user_id, email)
+        logger.info("OAuth connect complete for %s (user_id=%s)", email, user_id)
+    except Exception as e:
+        logger.error("Failed to persist OAuth token: %s", e)
+        return HTMLResponse(_oauth_page("Storage failed", str(e)), status_code=500)
+
+    return HTMLResponse(_oauth_page(
+        "Connected!",
+        f"Google account <strong>{email}</strong> is now connected. You can close this tab and return to the chat.",
+    ))
+
+
+def _oauth_page(title: str, body_html: str) -> str:
+    return (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        f"<title>{title}</title>"
+        "<style>body{font-family:system-ui,sans-serif;max-width:560px;margin:80px auto;padding:0 20px;color:#222;}"
+        "h1{font-size:24px;margin-bottom:12px;}p{line-height:1.5;color:#444;}</style>"
+        f"</head><body><h1>{title}</h1><p>{body_html}</p></body></html>"
+    )
 
 
 async def _handle_address_update(request) -> JSONResponse:
