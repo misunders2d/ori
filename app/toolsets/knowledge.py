@@ -36,6 +36,8 @@ class KnowledgeToolset(BaseToolset):
             merge_persons,
             promote_person,
             relate_entities,
+            relate_entity_to_person,
+            relate_person_to_entity,
             relate_persons,
             search_entities,
             search_knowledge,
@@ -72,4 +74,7 @@ class KnowledgeToolset(BaseToolset):
             FunctionTool(func=update_entity),
             FunctionTool(func=delete_entity),
             FunctionTool(func=relate_entities),
+            # Cross-type relations (:Person <-> :Entity, post-hoc)
+            FunctionTool(func=relate_person_to_entity),
+            FunctionTool(func=relate_entity_to_person),
         ]

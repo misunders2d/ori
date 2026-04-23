@@ -52,6 +52,8 @@ Relationships created by the tools:
 - `(:Entity)-[:RELATED_TO]->(:Entity)` — from `related_entities=[...]` on `create_entity`.
 - `(:Entity)-[:INVOLVES]->(:Person)` — from `related_people=[...]` on `create_entity`.
 - `(:Entity)-[:<RELATION_TYPE>]->(:Entity)` — from `relate_entities(from, to, relation_type)` after creation.
+- `(:Person)-[:<RELATION_TYPE>]->(:Entity)` — from `relate_person_to_entity(from_person_id, to_entity_id, relation_type)` after both nodes exist. Use when the person is the grammatical subject: `OWNS`, `WORKS_AT`, `MANAGES`, `USES`, `RUNS`, `LEADS`.
+- `(:Entity)-[:<RELATION_TYPE>]->(:Person)` — from `relate_entity_to_person(from_entity_id, to_person_id, relation_type)` after both nodes exist. Use when the entity is the grammatical subject: `LED_BY`, `EMPLOYS`, `OWNED_BY`.
 
 Authorship is not a graph edge — it's stored as `author_user_id`, `via_bot`, and `created_at` properties on each `:Memory` / `:Person` / `:Entity` node. The author's `:Person` node is resolvable by `primary_user_id` when you need name lookups.
 

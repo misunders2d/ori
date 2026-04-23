@@ -106,8 +106,22 @@ At creation time:
 After the fact (nodes already exist):
 - `relate_persons(from, to, relation_type)` — typed edge between two people (e.g. `manages`, `reports_to`).
 - `relate_entities(from, to, relation_type)` — typed edge between two entities (e.g. `part_of`, `owns`).
+- `relate_person_to_entity(from_person_id, to_entity_id, relation_type)` — person → entity. Typical relations where the person is the grammatical subject: `owns`, `works_at`, `manages`, `uses`, `runs`, `leads`. Example: *"Igor owns Poluco"* → `(:Person Igor)-[:OWNS]->(:Entity Poluco)`.
+- `relate_entity_to_person(from_entity_id, to_person_id, relation_type)` — entity → person. Typical relations where the entity is the grammatical subject: `led_by`, `employs`, `owned_by`. Example: *"Amazon Department is led by Sergey"* → `(:Entity Amazon Dept)-[:LED_BY]->(:Person Sergey)`.
+
+All MERGE-based (idempotent). All gated on the `from` node's authorship (or admin). All sanitize `relation_type` to UPPER_SNAKE_CASE.
 
 These are all managed by the tools — you do not call Neo4j directly for relationships.
+
+### Don't invent workarounds — bounce the gap back to the user (IMPORTANT)
+
+If a relationship, entity, or operation the user describes cannot be expressed cleanly with the current tools, **say so explicitly and ask** — do not silently degrade by shoving it into a `:Memory` record or creating a differently-shaped node that approximates it. A misshapen memory is worse than no memory: it pollutes search, hides the gap, and silently drifts from the user's intent.
+
+Examples of correct behavior:
+- User: *"Link Igor to Poluco with OWNS."* Tool exists → `relate_person_to_entity(from='per_igor', to='ent_poluco', relation_type='owns')`. Done.
+- User asks for something a tool doesn't support (e.g. multi-author edit, moving a memory across namespaces, creating a non-standard node type): report the gap clearly. *"I can't do X directly — the tools don't expose that. Want me to [specific alternative Y] instead?"* Wait for confirmation. Don't fabricate a `:Memory` that describes the intended relationship as a substitute.
+
+The knowledge graph has three kinds of nodes and a specific edge vocabulary — if the user's request doesn't map, the right move is to surface the mismatch, not paper over it. You're a janitor of the graph; keep it clean.
 
 ### Linking follow-up and related memories (IMPORTANT)
 

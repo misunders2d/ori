@@ -2279,6 +2279,212 @@ async def relate_entities(
         return _error(str(e))
 
 
+async def _relate_cross_type(
+    driver,
+    from_label: str,       # 'Person' or 'Entity'
+    from_key: str,         # 'person_id' or 'entity_id'
+    from_id: str,
+    to_label: str,
+    to_key: str,
+    to_id: str,
+    relation_type: str,
+    canonical_caller: str,
+    is_admin: bool,
+) -> dict:
+    """Shared core for (:Person)→(:Entity) and (:Entity)→(:Person) edges.
+
+    ACL: admin path matches both nodes unconditionally; non-admin path
+    requires the `from` node's `author_user_id` to equal the caller. On
+    gate failure the non-admin path does an existence check to return
+    `forbidden` (node exists, wrong author) vs `error` (node missing).
+    """
+    safe = _sanitize_relation_type(relation_type)
+
+    if is_admin:
+        query = (
+            f"MATCH (a:{from_label} {{{from_key}: $from_id}}), "
+            f"      (b:{to_label} {{{to_key}: $to_id}}) "
+            f"MERGE (a)-[r:{safe}]->(b) "
+            "ON CREATE SET r.created_at = datetime(), r.link_author_user_id = $caller "
+            "ON MATCH SET r.last_confirmed_at = datetime() "
+            f"RETURN a.{from_key} AS from_id, b.{to_key} AS to_id, "
+            "       type(r) AS relation_type, "
+            "       CASE WHEN r.last_confirmed_at IS NULL THEN 'created' ELSE 'existing' END AS outcome"
+        )
+    else:
+        query = (
+            f"MATCH (a:{from_label} {{{from_key}: $from_id}}) "
+            "WHERE a.author_user_id = $caller "
+            f"MATCH (b:{to_label} {{{to_key}: $to_id}}) "
+            f"MERGE (a)-[r:{safe}]->(b) "
+            "ON CREATE SET r.created_at = datetime(), r.link_author_user_id = $caller "
+            "ON MATCH SET r.last_confirmed_at = datetime() "
+            f"RETURN a.{from_key} AS from_id, b.{to_key} AS to_id, "
+            "       type(r) AS relation_type, "
+            "       CASE WHEN r.last_confirmed_at IS NULL THEN 'created' ELSE 'existing' END AS outcome"
+        )
+
+    params = {"from_id": from_id, "to_id": to_id, "caller": canonical_caller}
+    async with driver.session() as session:
+        result = await session.run(query, **params)
+        row = await result.single()
+        if not row:
+            if not is_admin:
+                existence_q = (
+                    f"MATCH (a:{from_label} {{{from_key}: $from_id}}) "
+                    "RETURN a.author_user_id AS author_user_id"
+                )
+                e_result = await session.run(existence_q, from_id=from_id)
+                e_row = await e_result.single()
+                if e_row is None:
+                    return _error(f"{from_label} `{from_id}` not found.")
+                return _forbidden(
+                    f"{from_label} `{from_id}` was not authored by you. "
+                    "Only the author or admins can add outgoing relations."
+                )
+            return _error(f"{from_label} `{from_id}` or {to_label} `{to_id}` not found.")
+        return {
+            "status": "success",
+            "from_id": row["from_id"],
+            "to_id": row["to_id"],
+            "relation_type": row["relation_type"],
+            "outcome": row["outcome"],
+            "message": (
+                f"Relation {row['from_id']} -[:{row['relation_type']}]-> {row['to_id']} "
+                f"{row['outcome']}."
+            ),
+        }
+
+
+async def relate_person_to_entity(
+    from_person_id: str,
+    to_entity_id: str,
+    relation_type: str,
+    tool_context: ToolContext = None,
+) -> dict:
+    """Create or reaffirm a typed edge (:Person)-[:<REL>]->(:Entity). Idempotent.
+
+    Use this when the person is the grammatical subject of the relation —
+    typical cases: 'owns', 'works_at', 'manages', 'uses', 'runs', 'leads'.
+    Example: "Igor owns Poluco" → `relate_person_to_entity(from='per_igor',
+    to='ent_poluco', relation_type='owns')` creating
+    `(:Person {Igor})-[:OWNS]->(:Entity {Poluco})`.
+
+    For the reverse direction (entity is subject, e.g. "Amazon Dept is led by
+    Sergey"), use `relate_entity_to_person`.
+
+    ACL: admin or author of the `from_person_id`. Re-calling with the same
+    triple is a no-op (MERGE).
+
+    Args:
+        from_person_id: source :Person.person_id.
+        to_entity_id: target :Entity.entity_id.
+        relation_type: Human-readable relation. Sanitized to UPPER_SNAKE_CASE;
+                       invalid forms fall back to 'RELATED_TO'.
+    """
+    if not from_person_id or not to_entity_id:
+        return _error("Both from_person_id and to_entity_id are required.")
+
+    caller = _get_caller(tool_context)
+    if caller == "unknown":
+        return _error("Could not resolve caller identity from tool context.")
+
+    is_admin, is_company = _get_acl_flags(caller)
+    driver = await _ready_driver()
+    if driver is None:
+        return _error("Neo4j not configured.")
+
+    canonical_caller = await _resolve_caller_person(driver, caller, is_company)
+
+    try:
+        result = await _relate_cross_type(
+            driver,
+            from_label="Person", from_key="person_id", from_id=from_person_id,
+            to_label="Entity", to_key="entity_id", to_id=to_entity_id,
+            relation_type=relation_type,
+            canonical_caller=canonical_caller,
+            is_admin=is_admin,
+        )
+        # Normalize payload keys for this tool's caller-facing shape.
+        if result.get("status") == "success":
+            return {
+                "status": "success",
+                "from_person_id": result["from_id"],
+                "to_entity_id": result["to_id"],
+                "relation_type": result["relation_type"],
+                "outcome": result["outcome"],
+                "message": result["message"],
+            }
+        return result
+    except Exception as e:
+        logger.exception("relate_person_to_entity failed")
+        return _error(str(e))
+
+
+async def relate_entity_to_person(
+    from_entity_id: str,
+    to_person_id: str,
+    relation_type: str,
+    tool_context: ToolContext = None,
+) -> dict:
+    """Create or reaffirm a typed edge (:Entity)-[:<REL>]->(:Person). Idempotent.
+
+    Use this when the entity is the grammatical subject — typical cases:
+    'led_by', 'employs', 'owned_by', 'contracted_with'. Example: "Amazon
+    Department is led by Sergey" → `relate_entity_to_person(from='ent_amz',
+    to='per_sergey', relation_type='led_by')` creating
+    `(:Entity {Amazon Dept})-[:LED_BY]->(:Person {Sergey})`.
+
+    For the reverse direction (person is subject), use
+    `relate_person_to_entity`.
+
+    ACL: admin or author of the `from_entity_id`. Re-calling with the same
+    triple is a no-op (MERGE).
+
+    Args:
+        from_entity_id: source :Entity.entity_id.
+        to_person_id: target :Person.person_id.
+        relation_type: Human-readable relation. Sanitized to UPPER_SNAKE_CASE;
+                       invalid forms fall back to 'RELATED_TO'.
+    """
+    if not from_entity_id or not to_person_id:
+        return _error("Both from_entity_id and to_person_id are required.")
+
+    caller = _get_caller(tool_context)
+    if caller == "unknown":
+        return _error("Could not resolve caller identity from tool context.")
+
+    is_admin, is_company = _get_acl_flags(caller)
+    driver = await _ready_driver()
+    if driver is None:
+        return _error("Neo4j not configured.")
+
+    canonical_caller = await _resolve_caller_person(driver, caller, is_company)
+
+    try:
+        result = await _relate_cross_type(
+            driver,
+            from_label="Entity", from_key="entity_id", from_id=from_entity_id,
+            to_label="Person", to_key="person_id", to_id=to_person_id,
+            relation_type=relation_type,
+            canonical_caller=canonical_caller,
+            is_admin=is_admin,
+        )
+        if result.get("status") == "success":
+            return {
+                "status": "success",
+                "from_entity_id": result["from_id"],
+                "to_person_id": result["to_id"],
+                "relation_type": result["relation_type"],
+                "outcome": result["outcome"],
+                "message": result["message"],
+            }
+        return result
+    except Exception as e:
+        logger.exception("relate_entity_to_person failed")
+        return _error(str(e))
+
+
 # ---------------------------------------------------------------------------
 # Relationship helpers (internal — called from create_record / create_person)
 # ---------------------------------------------------------------------------

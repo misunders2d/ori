@@ -1723,6 +1723,112 @@ class TestRelateEntities:
         assert "a.author_user_id" not in merge_q
 
 
+class TestRelatePersonToEntity:
+    @pytest.mark.asyncio
+    async def test_requires_both_ids(self, patched_driver):
+        result = await memory_tools.relate_person_to_entity(
+            "", "ent_a", "owns",
+            tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_admin_path_success(self, patched_driver):
+        patched_driver.run = _dispatched_run(
+            record_row={
+                "from_id": "per_igor", "to_id": "ent_poluco",
+                "relation_type": "OWNS", "outcome": "created",
+            },
+            resolve_hit={"canonical": "admin@example.com"},
+        )
+        result = await memory_tools.relate_person_to_entity(
+            "per_igor", "ent_poluco", "owns",
+            tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "success"
+        assert result["from_person_id"] == "per_igor"
+        assert result["to_entity_id"] == "ent_poluco"
+        assert result["relation_type"] == "OWNS"
+        # Query must match Person from, Entity to.
+        merge_q = next(
+            q for q in (c.args[0] for c in patched_driver.run.await_args_list)
+            if "MERGE (a)-[r:OWNS]->(b)" in q
+        )
+        assert "MATCH (a:Person" in merge_q
+        assert "(b:Entity" in merge_q
+
+    @pytest.mark.asyncio
+    async def test_author_path_gated(self, patched_driver):
+        patched_driver.run = _dispatched_run(
+            record_row={
+                "from_id": "per_x", "to_id": "ent_y",
+                "relation_type": "WORKS_AT", "outcome": "existing",
+            },
+            resolve_hit={"canonical": "bob@example.com"},
+        )
+        result = await memory_tools.relate_person_to_entity(
+            "per_x", "ent_y", "works_at",
+            tool_context=_make_ctx("bob@example.com"),
+        )
+        assert result["status"] == "success"
+        merge_q = next(
+            q for q in (c.args[0] for c in patched_driver.run.await_args_list)
+            if "MERGE (a)-[r:WORKS_AT]->(b)" in q
+        )
+        assert "a.author_user_id = $caller" in merge_q
+
+    @pytest.mark.asyncio
+    async def test_non_author_forbidden(self, patched_driver):
+        async def _run(*args, **kwargs):
+            query = args[0] if args else ""
+            r = AsyncMock()
+            if _is_resolve_caller_lookup(query):
+                r.single = AsyncMock(return_value={"canonical": "bob@example.com"})
+            elif "MERGE (a)-[r:" in query:
+                r.single = AsyncMock(return_value=None)
+            elif "a.author_user_id AS author_user_id" in query:
+                r.single = AsyncMock(
+                    return_value={"author_user_id": "someone_else@example.com"}
+                )
+            else:
+                r.single = AsyncMock(return_value=None)
+            return r
+
+        patched_driver.run = AsyncMock(side_effect=_run)
+        result = await memory_tools.relate_person_to_entity(
+            "per_x", "ent_y", "owns",
+            tool_context=_make_ctx("bob@example.com"),
+        )
+        assert result["status"] == "forbidden"
+        assert "not authored by you" in result["message"]
+
+
+class TestRelateEntityToPerson:
+    @pytest.mark.asyncio
+    async def test_admin_path_success(self, patched_driver):
+        patched_driver.run = _dispatched_run(
+            record_row={
+                "from_id": "ent_amz", "to_id": "per_sergey",
+                "relation_type": "LED_BY", "outcome": "created",
+            },
+            resolve_hit={"canonical": "admin@example.com"},
+        )
+        result = await memory_tools.relate_entity_to_person(
+            "ent_amz", "per_sergey", "led by",
+            tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "success"
+        assert result["from_entity_id"] == "ent_amz"
+        assert result["to_person_id"] == "per_sergey"
+        assert result["relation_type"] == "LED_BY"
+        merge_q = next(
+            q for q in (c.args[0] for c in patched_driver.run.await_args_list)
+            if "MERGE (a)-[r:LED_BY]->(b)" in q
+        )
+        assert "MATCH (a:Entity" in merge_q
+        assert "(b:Person" in merge_q
+
+
 # ---------------------------------------------------------------------------
 # create_record with related_entities → :ABOUT edge
 # ---------------------------------------------------------------------------
