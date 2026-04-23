@@ -44,7 +44,8 @@ Relationships created by the memory tools:
 - `(:Memory)-[:INVOLVES]->(:Person)` — from `related_people=[...]` on `create_record`.
 - `(:Memory)-[:RELATED_TO]->(:Memory)` — from `related_memories=[...]`.
 - `(:Person)-[:<RELATION_TYPE>]->(:Person)` — from the `relations=[...]` field on `create_person` (relation type sanitized to UPPER_SNAKE_CASE).
-- `(:Person)-[:AUTHORED]->(:Memory | :Person)` — created on every write; drives update/delete gating.
+
+Authorship is not a graph edge — it's stored as `author_user_id`, `via_bot`, and `created_at` properties on each `:Memory` / `:Person` node. The author's `:Person` node is resolvable by `primary_user_id` when you need name lookups.
 
 You do not call Neo4j directly. The memory tools manage all of this; you just supply the right arguments.
 
@@ -53,7 +54,7 @@ You do not call Neo4j directly. The memory tools manage all of this; you just su
 When a user shares something that involves people or prior memories:
 
 1. Call `create_record` (or `create_person`) with `related_people=[person_ids]` and/or `related_memories=[memory_ids]` populated. Graph edges are created in the same call.
-2. If later details change, call `update_record` — it enforces creator-only via the `:AUTHORED` edge. Non-authors get `{"status": "forbidden"}`.
+2. If later details change, call `update_record` — it enforces creator-only via the `author_user_id` property. Non-authors get `{"status": "forbidden"}`.
 
 ### Example
 
@@ -63,7 +64,7 @@ User says: *"Remember that Alice from SupplierCo switched us to DHL for returns.
 2. If no match, call `create_person("Alice", "", "supplier contact at SupplierCo", user_ids='[{"id_type":"email","id_value":"alice@supplierco.com"}]', scopes=["professional"])`.
 3. Call `create_record("professional", text="Alice from SupplierCo switched returns shipping to DHL.", short_description="SupplierCo returns now via DHL", category="operational", tags=["shipping","supplierco","returns"], related_people=["per_<alice_id>"])`.
 
-The `:INVOLVES` edge between the memory and Alice is created in the same call. The `:AUTHORED` edge back to the caller's `:Person` is also wired automatically.
+The `:INVOLVES` edge between the memory and Alice is created in the same call. Authorship (`author_user_id`, `via_bot`, `created_at`) is stamped on the memory automatically, resolvable back to the caller's `:Person` node.
 
 ## ACL Notes
 

@@ -110,6 +110,17 @@ async def _run_schema_statements(driver) -> None:
         "FOR (m:Memory) ON EACH [m.text, m.short_description]"
     )
 
+    # Authorship indexes — ACL gating on update/delete matches by
+    # `author_user_id` property, so an index keeps the property scan cheap.
+    statements.append(
+        "CREATE INDEX memory_author_user_id IF NOT EXISTS "
+        "FOR (m:Memory) ON (m.author_user_id)"
+    )
+    statements.append(
+        "CREATE INDEX person_author_user_id IF NOT EXISTS "
+        "FOR (p:Person) ON (p.author_user_id)"
+    )
+
     async with driver.session() as session:
         for stmt in statements:
             try:

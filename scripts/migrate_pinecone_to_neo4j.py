@@ -1,5 +1,13 @@
 """One-shot migration: Pinecone knowledge base → Neo4j consolidated graph.
 
+HISTORICAL — this script ran once at the Pinecone cutover (commit `3e25daa`).
+Kept for reference; not re-runnable against current state. The authorship
+model it wrote (`(:Person)-[:AUTHORED]->(record)`) has since been replaced
+by `author_user_id` / `via_bot` / `created_at` properties on each node; a
+subsequent migration (`drop_authored_edges`) stamped the properties and
+removed the edges. Any re-use of this script would need to inline those
+properties on the CREATE paths instead of creating :AUTHORED edges.
+
 Reads every record across the four Pinecone namespaces (personal, professional,
 technical, people), re-embeds them via Neo4j's genai.vector.encode('OpenAI', ...) and
 writes them into the new Neo4j schema defined in `app/core/graph_schema.py`.

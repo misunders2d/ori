@@ -1,6 +1,6 @@
 # Pinecone → Neo4j consolidation — amazon_manager
 
-**Status:** design, awaiting user review before implementation planning.
+**Status:** implemented (cutover commit `3e25daa`). **Superseded in part:** the authorship model originally specified here — `(:Person)-[:AUTHORED]->(record)` as a graph edge — was reversed. Authorship is now stored as `author_user_id`, `via_bot`, and `created_at` properties on each `:Memory` / `:Person` node; ACL gating uses `WHERE node.author_user_id = $caller_id`. The rest of the design (Neo4j-only, native vector search, namespace labels, identity enforcement) stands.
 **Date:** 2026-04-21.
 **Target:** `/media/misunderstood/DATA/projects/amazon_manager/` (Python + Google ADK, production).
 

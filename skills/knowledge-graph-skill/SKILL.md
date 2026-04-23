@@ -58,7 +58,7 @@ Handling a `needs_identity` response:
 | `delete_person(person_id)` | Creator-only delete |
 | `delete_any_person(person_id)` | **Admin-only** override |
 | `promote_person(person_id, add_scope)` | **Admin-only** — add a scope label to an existing person (e.g. a friend becomes a colleague) |
-| `merge_persons(canonical_id, alias_id)` | **Admin-only** — merge a duplicate `:Person` record into a canonical one. Reassigns `:AUTHORED` + `:INVOLVES` edges and adds the alias's identifier to the canonical's aliases list. Use when you discover two records represent the same real human. |
+| `merge_persons(canonical_id, alias_id)` | **Admin-only** — merge a duplicate `:Person` record into a canonical one. Reassigns `:INVOLVES` edges and rewrites `author_user_id` on every record the alias authored to the canonical's `primary_user_id`; also adds the alias's identifier to the canonical's aliases list. Use when you discover two records represent the same real human. |
 
 Categories: `idea`, `memory`, `knowledge`, `procedure`, `experiment`, `incident`, `project`, `technical`, `strategy`, `communication_style`, `policy`, `operational`.
 
@@ -66,7 +66,7 @@ For categories with examples, schema fields, and workflow walkthroughs, read `re
 
 ## Authorship
 
-Every write records who made it via a `:AUTHORED` graph edge from the caller's `:Person` node to the record. The first time a caller invokes any memory tool, their `:Person` node is auto-provisioned (scope decided by email-domain match). Authorship is therefore always concrete — there is no `author="agent"` placeholder. If a scheduled task or system job writes a memory, the edge points to the admin that owns the task.
+Every write stores the caller's `primary_user_id` as `author_user_id` on the record, alongside `via_bot` and `created_at`. Authorship is metadata on the node (indexed), not a graph edge — the `:Person` node remains the canonical identity for the author and is resolvable by `primary_user_id` or name. The first time a caller invokes any memory tool, their `:Person` node is auto-provisioned (scope decided by email-domain match). Authorship is therefore always concrete — there is no `author="agent"` placeholder. If a scheduled task or system job writes a memory, `author_user_id` is the admin that owns the task.
 
 ## Relationships
 

@@ -7,15 +7,18 @@ calling OpenAI's `text-embedding-3-small` (1536-dim cosine).
 Label convention (see `app/core/graph_schema.py` for the full rationale):
 - Memories: `:Memory` + one of `:PersonalMemory`, `:ProfessionalMemory`, `:TechnicalMemory`.
 - People: `:Person` + one or both of `:PersonalPerson`, `:ProfessionalPerson`.
-- Authorship: `(caller:Person)-[:AUTHORED {via_bot, created_at}]->(record)`.
+- Authorship: stored as `author_user_id`, `via_bot`, `created_at` properties
+  on each `:Memory` / `:Person` node. The author's `:Person` node remains the
+  canonical identity and is resolvable by `primary_user_id`; authorship is not
+  a graph edge.
 
 Access control is enforced in Python, per-namespace:
 - `personal` — admins only read.
 - `professional` — admins or callers whose `user_id` ends with `@<COMPANY_DOMAIN>`.
 - `technical` — open (bot-to-bot knowledge sharing across departments).
 Create is allowed for any authenticated caller. Update/delete run a Cypher
-MATCH on the `:AUTHORED` edge — non-authors get `{status: "forbidden"}` unless
-they use the admin-only `update_any_*` variants.
+MATCH with a `WHERE node.author_user_id = $caller_id` predicate — non-authors
+get `{status: "forbidden"}` unless they use the admin-only `update_any_*` variants.
 """
 
 import hashlib
@@ -243,7 +246,7 @@ async def _resolve_caller_person(driver, caller: str, is_company: bool) -> str:
 # until it's enriched via update_person(first_name=..., last_name=...).
 #
 # This is a hard gate (no bypass flag) because anonymous memories are exactly
-# what the :AUTHORED edge model is trying to prevent.
+# what the authorship model is trying to prevent.
 
 
 async def _get_person_info(driver, primary_user_id: str) -> dict | None:
@@ -555,14 +558,15 @@ async def create_record(
         related_people: Optional list of person IDs this memory involves.
         related_memories: Optional list of memory IDs this links to.
         author: Advisory only — retained for signature compat. Actual authorship
-                is captured via an `:AUTHORED` edge from the caller's Person node.
+                is stamped as `author_user_id` on the created node, resolved
+                from the caller's :Person node.
         force_create: Set to True ONLY after the user has explicitly confirmed
                 that a semantically-similar existing memory flagged by the
                 pre-create dedup check is a different record. Default False.
                 Do not set True pre-emptively to bypass the check — the whole
                 point is user confirmation on near-matches.
     """
-    # Intentionally unused — authorship is the edge, not a property.
+    # Intentionally unused — authorship is derived from the caller, not the arg.
     del author
 
     if namespace not in NAMESPACES:
@@ -626,6 +630,11 @@ async def create_record(
     bot_name = _get_bot_name()
     tags = tags or []
 
+    # The MATCH on the caller :Person is retained as an existence check — it
+    # guarantees the author is a real, identified Person, and fails the CREATE
+    # (no row returned) if the caller node was somehow purged between the
+    # identity gate above and this query. Authorship itself is stored as a
+    # property on the new :Memory node, not as an edge.
     query = (
         "MATCH (caller:Person {primary_user_id: $caller_id}) "
         "WITH caller, {token: $openai_key, model: 'text-embedding-3-small'} AS cfg "
@@ -636,10 +645,11 @@ async def create_record(
         "    short_description: $short_description, "
         "    category: $category, "
         "    tags: $tags, "
+        "    author_user_id: caller.primary_user_id, "
+        "    via_bot: $bot_name, "
         "    created_at: datetime(), "
         "    updated_at: datetime() "
         "}) "
-        "CREATE (caller)-[:AUTHORED {via_bot: $bot_name, created_at: datetime()}]->(m) "
         "RETURN m.record_id AS record_id"
     )
     try:
@@ -684,7 +694,7 @@ async def update_record(
     updates: str,
     tool_context: ToolContext = None,
 ) -> dict:
-    """Update a record. Only the creator (via :AUTHORED edge) or admins can modify.
+    """Update a record. Only the creator (via `author_user_id`) or admins can modify.
 
     Admins wanting to force-update a record they didn't author should use
     `update_any_record` instead.
@@ -747,10 +757,11 @@ async def update_record(
     set_parts.append("m.updated_at = datetime()")
     set_clause = ", ".join(set_parts)
 
-    # Admin path skips the :AUTHORED gate (handled by `update_any_record`). This
-    # tool enforces creator-only; admins who own the record also pass this.
+    # Admin path skips this creator gate (handled by `update_any_record`).
+    # This tool enforces creator-only; admins who own the record also pass.
     query = (
-        f"MATCH (caller:Person {{primary_user_id: $caller_id}})-[:AUTHORED]->(m:{label} {{record_id: $record_id}}) "
+        f"MATCH (m:{label} {{record_id: $record_id}}) "
+        "WHERE m.author_user_id = $caller_id "
         f"SET {set_clause} "
         "RETURN m.record_id AS record_id"
     )
@@ -785,7 +796,7 @@ async def update_any_record(
     updates: str,
     tool_context: ToolContext = None,
 ) -> dict:
-    """Admin-only: update a record bypassing the :AUTHORED creator gate.
+    """Admin-only: update a record bypassing the `author_user_id` creator gate.
 
     Args: same shape as `update_record`.
     """
@@ -858,7 +869,7 @@ async def delete_record(
     namespace: str,
     tool_context: ToolContext = None,
 ) -> dict:
-    """Delete a record. Only the creator (via :AUTHORED) or admins can delete.
+    """Delete a record. Only the creator (via `author_user_id`) or admins can delete.
 
     Args:
         record_id: ID of the record.
@@ -878,7 +889,7 @@ async def delete_record(
 
     label = _NAMESPACE_TO_MEMORY_LABEL[namespace]
 
-    # Admin bypass handled inline: if is_admin, match without the AUTHORED
+    # Admin bypass handled inline: if is_admin, match without the author
     # predicate; otherwise require it.
     if is_admin:
         query = (
@@ -890,7 +901,8 @@ async def delete_record(
     else:
         canonical_caller = await _resolve_caller_person(driver, caller, is_company)
         query = (
-            f"MATCH (caller:Person {{primary_user_id: $caller_id}})-[:AUTHORED]->(m:{label} {{record_id: $record_id}}) "
+            f"MATCH (m:{label} {{record_id: $record_id}}) "
+            "WHERE m.author_user_id = $caller_id "
             "DETACH DELETE m "
             "RETURN count(m) AS deleted"
         )
@@ -942,7 +954,7 @@ async def create_person(
         relations: Optional JSON string of relationships to other people.
         scopes: List of scope labels. Valid entries: "personal", "professional".
                 Default: ["professional"]. Dual-scope people pass both.
-        author: Advisory — authorship is captured via :AUTHORED edge.
+        author: Advisory — authorship is stamped as `author_user_id` on the node.
         force_create: Set to True ONLY after the user has explicitly confirmed
                 that a near-match found by the pre-create duplicate check is
                 actually a different person. Defaults to False. Do not set
@@ -1027,6 +1039,8 @@ async def create_person(
     # Build the label suffix as a single Cypher fragment.
     extra_labels = "".join(f":{label}" for label in scope_labels)
 
+    # See create_record: caller MATCH is an existence check on the author's
+    # :Person node; authorship itself is stored as a property on the new node.
     query = (
         "MATCH (caller:Person {primary_user_id: $caller_id}) "
         "WITH caller, {token: $openai_key, model: 'text-embedding-3-small'} AS cfg "
@@ -1040,10 +1054,11 @@ async def create_person(
         "    embedding: genai.vector.encode($embed_text, 'OpenAI', cfg), "
         "    aliases: [], "
         "    is_auto_provisioned: false, "
+        "    author_user_id: caller.primary_user_id, "
+        "    via_bot: $bot_name, "
         "    created_at: datetime(), "
         "    updated_at: datetime() "
         "}) "
-        "CREATE (caller)-[:AUTHORED {via_bot: $bot_name, created_at: datetime()}]->(p) "
         "RETURN p.person_id AS person_id"
     )
     try:
@@ -1149,7 +1164,7 @@ async def update_person(
     updates: str,
     tool_context: ToolContext = None,
 ) -> dict:
-    """Update a person record. Only the creator (via :AUTHORED) or admins can modify.
+    """Update a person record. Only the creator (via `author_user_id`) or admins can modify.
 
     Admins wanting to override should use `update_any_person`.
     """
@@ -1207,7 +1222,8 @@ async def update_person(
     set_clause = ", ".join(set_parts)
 
     query = (
-        "MATCH (caller:Person {primary_user_id: $caller_id})-[:AUTHORED]->(p:Person {person_id: $person_id}) "
+        "MATCH (p:Person {person_id: $person_id}) "
+        "WHERE p.author_user_id = $caller_id "
         f"SET {set_clause} "
         "RETURN p.person_id AS person_id"
     )
@@ -1241,7 +1257,7 @@ async def update_any_person(
     updates: str,
     tool_context: ToolContext = None,
 ) -> dict:
-    """Admin-only: update a person record bypassing the :AUTHORED creator gate."""
+    """Admin-only: update a person record bypassing the `author_user_id` creator gate."""
     caller = _get_caller(tool_context)
     is_admin, _ = _get_acl_flags(caller)
     if not is_admin:
@@ -1361,7 +1377,7 @@ async def delete_person(
     person_id: str,
     tool_context: ToolContext = None,
 ) -> dict:
-    """Delete a person. Only the creator (via :AUTHORED) or admins can delete.
+    """Delete a person. Only the creator (via `author_user_id`) or admins can delete.
 
     Use `delete_any_person` for admin override on a person you did not create.
 
@@ -1387,7 +1403,8 @@ async def delete_person(
     else:
         canonical_caller = await _resolve_caller_person(driver, caller, is_company)
         query = (
-            "MATCH (caller:Person {primary_user_id: $caller_id})-[:AUTHORED]->(p:Person {person_id: $person_id}) "
+            "MATCH (p:Person {person_id: $person_id}) "
+            "WHERE p.author_user_id = $caller_id "
             "DETACH DELETE p "
             "RETURN count(p) AS deleted"
         )
@@ -1418,7 +1435,7 @@ async def delete_any_person(
     person_id: str,
     tool_context: ToolContext = None,
 ) -> dict:
-    """Admin-only: delete a person bypassing the :AUTHORED creator gate."""
+    """Admin-only: delete a person bypassing the `author_user_id` creator gate."""
     caller = _get_caller(tool_context)
     is_admin, _ = _get_acl_flags(caller)
     if not is_admin:
@@ -1462,7 +1479,8 @@ async def merge_persons(
     and "tg_123") before alias-aware resolution was in place.
 
     What it does:
-    1. Reassigns every `:AUTHORED` edge from the alias :Person to the canonical.
+    1. Rewrites `author_user_id` on every memory/person the alias authored so
+       that it points at the canonical's `primary_user_id` instead.
     2. Reassigns every incoming `:INVOLVES` edge (memories that referenced the
        alias person) to point at the canonical.
     3. Appends alias's `primary_user_id` (and any of its own aliases) to the
@@ -1490,15 +1508,19 @@ async def merge_persons(
     if driver is None:
         return _error("Neo4j not configured.")
 
-    # Phase 1: reassign outbound :AUTHORED + inbound :INVOLVES edges.
-    # Done as two small queries so each is easy to read and debug.
-    reassign_authored = (
+    # Phase 1: rewrite authorship property on nodes the alias authored, and
+    # reassign inbound :INVOLVES edges onto the canonical.
+    rewrite_authored = (
         "MATCH (canon:Person {person_id: $canonical_id}), "
         "      (alias:Person {person_id: $alias_id}) "
         "WHERE canon.person_id <> alias.person_id "
-        "OPTIONAL MATCH (alias)-[:AUTHORED]->(target) "
-        "WITH canon, alias, collect(DISTINCT target) AS targets "
-        "FOREACH (t IN targets | MERGE (canon)-[:AUTHORED]->(t)) "
+        "WITH canon, alias "
+        "OPTIONAL MATCH (n) "
+        "WHERE (n:Memory OR n:Person) "
+        "  AND n.author_user_id = alias.primary_user_id "
+        "  AND n <> alias "
+        "WITH canon, alias, collect(DISTINCT n) AS targets "
+        "FOREACH (t IN targets | SET t.author_user_id = canon.primary_user_id) "
         "RETURN size(targets) AS moved"
     )
     reassign_involves = (
@@ -1530,14 +1552,14 @@ async def merge_persons(
     try:
         async with driver.session() as session:
             r1 = await (await session.run(
-                reassign_authored, canonical_id=canonical_id, alias_id=alias_id
+                rewrite_authored, canonical_id=canonical_id, alias_id=alias_id
             )).single()
             if r1 is None:
                 return _error(
                     f"Canonical `{canonical_id}` or alias `{alias_id}` not found, "
                     "or they're the same node."
                 )
-            authored_moved = r1["moved"]
+            authored_rewritten = r1["moved"]
 
             r2 = await (await session.run(
                 reassign_involves, canonical_id=canonical_id, alias_id=alias_id
@@ -1548,18 +1570,19 @@ async def merge_persons(
                 finalize, canonical_id=canonical_id, alias_id=alias_id
             )).single()
             if r3 is None:
-                return _error("Merge finalization failed after edges were reassigned.")
+                return _error("Merge finalization failed after authorship rewrite.")
 
         return {
             "status": "success",
             "person_id": r3["person_id"],
             "primary_user_id": r3["primary_user_id"],
             "aliases": r3["aliases"],
-            "authored_edges_moved": authored_moved,
+            "authored_records_rewritten": authored_rewritten,
             "involves_edges_moved": involves_moved,
             "message": (
                 f"Merged `{alias_id}` → `{canonical_id}`. "
-                f"Moved {authored_moved} :AUTHORED + {involves_moved} :INVOLVES edge(s). "
+                f"Rewrote author_user_id on {authored_rewritten} record(s); "
+                f"moved {involves_moved} :INVOLVES edge(s). "
                 f"Canonical now has {len(r3['aliases'])} alias(es)."
             ),
         }

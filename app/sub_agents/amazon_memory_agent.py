@@ -2,9 +2,10 @@
 
 Stores and retrieves memories + people in Neo4j alone. Access control is
 namespace-scoped (personal / professional / technical for memories, personal /
-professional for people) and enforced in code. Authorship lives on an
-`:AUTHORED` edge — the caller's `:Person` node is auto-provisioned on first
-tool call, and update/delete run a Cypher MATCH on that edge.
+professional for people) and enforced in code. Authorship is stored as the
+`author_user_id` property on each node (plus `via_bot` and `created_at`); the
+caller's `:Person` node is auto-provisioned on first tool call and remains the
+canonical identity, and update/delete run a property-predicate Cypher MATCH.
 """
 
 import pathlib

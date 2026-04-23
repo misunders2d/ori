@@ -426,13 +426,16 @@ class TestCypherConstruction:
         )
         assert result["status"] == "forbidden"
         assert "not authored by you" in result["message"]
-        # Find the MATCH-with-AUTHORED query among all calls.
+        # Find the author-gated UPDATE query among all calls.
         authored_query = next(
             (c.args[0] for c in patched_driver.run.await_args_list
-             if "[:AUTHORED]->(m:ProfessionalMemory" in c.args[0]),
+             if "(m:ProfessionalMemory" in c.args[0]
+             and "m.author_user_id = $caller_id" in c.args[0]),
             None,
         )
-        assert authored_query is not None, "expected an AUTHORED predicate on :ProfessionalMemory"
+        assert authored_query is not None, (
+            "expected an author_user_id predicate on :ProfessionalMemory"
+        )
 
     @pytest.mark.asyncio
     async def test_update_any_record_skips_authored_match(self, patched_driver):
@@ -449,7 +452,7 @@ class TestCypherConstruction:
         )
         assert result["status"] == "success"
         query = patched_driver.run.await_args_list[0].args[0]
-        assert "[:AUTHORED]" not in query
+        assert "author_user_id" not in query
         assert "MATCH (m:ProfessionalMemory" in query
 
     @pytest.mark.asyncio
@@ -474,9 +477,9 @@ class TestCypherConstruction:
             "mem_1", "personal", tool_context=_make_ctx("admin@example.com"),
         )
         assert result["status"] == "success"
-        # Admin path skips the :AUTHORED predicate.
+        # Admin path skips the author_user_id predicate.
         query = patched_driver.run.await_args_list[0].args[0]
-        assert ":AUTHORED" not in query
+        assert "author_user_id" not in query
         assert ":PersonalMemory" in query
         assert "DETACH DELETE m" in query
 
@@ -492,7 +495,9 @@ class TestCypherConstruction:
         assert result["status"] == "success"
         authored_query = next(
             (c.args[0] for c in patched_driver.run.await_args_list
-             if "[:AUTHORED]->(m:ProfessionalMemory" in c.args[0]),
+             if "(m:ProfessionalMemory" in c.args[0]
+             and "m.author_user_id = $caller_id" in c.args[0]
+             and "DETACH DELETE m" in c.args[0]),
             None,
         )
         assert authored_query is not None
@@ -758,12 +763,12 @@ class TestDeletePerson:
         )
         assert result["status"] == "success"
         assert "per_alice" in result["message"]
-        # Author path uses AUTHORED predicate.
+        # Author path gates on author_user_id property.
         delete_query = next(
             c.args[0] for c in patched_driver.run.await_args_list
             if "DETACH DELETE p" in c.args[0]
         )
-        assert "[:AUTHORED]" in delete_query
+        assert "p.author_user_id = $caller_id" in delete_query
 
     @pytest.mark.asyncio
     async def test_delete_non_author_forbidden(self, patched_driver):
@@ -795,7 +800,7 @@ class TestDeletePerson:
             c.args[0] for c in patched_driver.run.await_args_list
             if "DETACH DELETE p" in c.args[0]
         )
-        assert "[:AUTHORED]" not in delete_query
+        assert "author_user_id" not in delete_query
 
     @pytest.mark.asyncio
     async def test_delete_any_person_admin_only(self, patched_driver):
@@ -869,12 +874,14 @@ class TestMergePersons:
             "per_canon", "per_alias", tool_context=_make_ctx("admin@example.com"),
         )
         assert result["status"] == "success"
-        assert result["authored_edges_moved"] == 3
+        assert result["authored_records_rewritten"] == 3
         assert result["involves_edges_moved"] == 1
         assert "Telegram: 330959414" in result["aliases"]
         # All three phases ran.
         queries = [c.args[0] for c in patched_driver.run.await_args_list]
-        assert any("MERGE (canon)-[:AUTHORED]->(t)" in q for q in queries)
+        assert any(
+            "SET t.author_user_id = canon.primary_user_id" in q for q in queries
+        )
         assert any("MERGE (x)-[:INVOLVES]->(canon)" in q for q in queries)
         assert any("DETACH DELETE alias" in q for q in queries)
 
