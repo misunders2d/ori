@@ -35,6 +35,17 @@ _THINKING_GIFS = [
     "https://media.giphy.com/media/Zxzr2pp6qU64g/giphy.gif",
     "https://media.giphy.com/media/xCwYFe19SldXLrJlwm/giphy.gif",
     "https://media.giphy.com/media/Nde7zlveRCWPu/giphy.gif",
+    "https://media.giphy.com/media/k6r6lTYIL9j9ZeRT51/giphy.gif",
+    "https://media.giphy.com/media/6f15PceJUw8WGlj4uu/giphy.gif",
+    "https://media.giphy.com/media/f0sATHPZHuHAq2Wj34/giphy.gif",
+    "https://media.giphy.com/media/96DeW8wUdpN96/giphy.gif",
+    "https://media.giphy.com/media/sU511xfb7ORqw/giphy.gif",
+    "https://media.giphy.com/media/W3a0zO282fuBpsqqyD/giphy.gif",
+    "https://media.giphy.com/media/1xkMJIvxeKiDS/giphy.gif",
+    "https://media.giphy.com/media/pPhyAv5t9V8djyRFJH/giphy.gif",
+    "https://media.giphy.com/media/RILsqUte1MME7TzQJ9/giphy.gif",
+    "https://media.giphy.com/media/lcyIjjpGwQyrbe5Vhk/giphy.gif",
+    "https://media.giphy.com/media/fMvvwdTWamlA4/giphy.gif",
 ]
 
 SLACK_API_URL = "https://slack.com/api/{method}"
@@ -239,7 +250,9 @@ class SlackAdapter(TransportAdapter):
             # Slack file URLs redirect to their CDN (S3 / edge-hosted storage).
             # Default httpx behavior is to NOT follow redirects, which would
             # leave us with a 302 carrying no body. Explicit opt-in is needed.
-            resp = await self._client.get(file_url, headers=headers, follow_redirects=True)
+            resp = await self._client.get(
+                file_url, headers=headers, follow_redirects=True
+            )
             if resp.status_code != 200:
                 # Log response headers (redacted) on failure to distinguish
                 # 403 scope issues from other errors; body may contain a
@@ -268,6 +281,7 @@ class SlackAdapter(TransportAdapter):
             if not filename or not mime_type:
                 import mimetypes
                 import os as _os
+
                 if not filename:
                     filename = _os.path.basename(parsed.path) or "attachment"
                 if not mime_type:
