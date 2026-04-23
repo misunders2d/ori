@@ -39,13 +39,21 @@ Every person node carries:
 - `:Person` (generic kind-label)
 - One or both scope labels: `:PersonalPerson`, `:ProfessionalPerson`
 
-Relationships created by the memory tools:
+Every entity node carries:
+- `:Entity` (single label — no per-type sublabels; `entity_type` is a canonicalized property used as a filter)
+- Example: `(:Entity {entity_type: "brand", name: "Mellanni"})`, `(:Entity {entity_type: "department", name: "Amazon Department"})`
+
+Relationships created by the tools:
 
 - `(:Memory)-[:INVOLVES]->(:Person)` — from `related_people=[...]` on `create_record`.
 - `(:Memory)-[:RELATED_TO]->(:Memory)` — from `related_memories=[...]`.
-- `(:Person)-[:<RELATION_TYPE>]->(:Person)` — from the `relations=[...]` field on `create_person` (relation type sanitized to UPPER_SNAKE_CASE).
+- `(:Memory)-[:ABOUT]->(:Entity)` — from `related_entities=[...]` on `create_record`.
+- `(:Person)-[:<RELATION_TYPE>]->(:Person)` — from `relations=[...]` on `create_person`, or `relate_persons(from, to, relation_type)` after creation (relation type sanitized to UPPER_SNAKE_CASE).
+- `(:Entity)-[:RELATED_TO]->(:Entity)` — from `related_entities=[...]` on `create_entity`.
+- `(:Entity)-[:INVOLVES]->(:Person)` — from `related_people=[...]` on `create_entity`.
+- `(:Entity)-[:<RELATION_TYPE>]->(:Entity)` — from `relate_entities(from, to, relation_type)` after creation.
 
-Authorship is not a graph edge — it's stored as `author_user_id`, `via_bot`, and `created_at` properties on each `:Memory` / `:Person` node. The author's `:Person` node is resolvable by `primary_user_id` when you need name lookups.
+Authorship is not a graph edge — it's stored as `author_user_id`, `via_bot`, and `created_at` properties on each `:Memory` / `:Person` / `:Entity` node. The author's `:Person` node is resolvable by `primary_user_id` when you need name lookups.
 
 You do not call Neo4j directly. The memory tools manage all of this; you just supply the right arguments.
 
@@ -60,11 +68,24 @@ When a user shares something that involves people or prior memories:
 
 User says: *"Remember that Alice from SupplierCo switched us to DHL for returns."*
 
-1. Find Alice's person record — try `search_people("Alice SupplierCo", scope="professional")`.
+1. Find Alice's person record — `search_people("Alice SupplierCo", scope="professional")`.
 2. If no match, call `create_person("Alice", "", "supplier contact at SupplierCo", user_ids='[{"id_type":"email","id_value":"alice@supplierco.com"}]', scopes=["professional"])`.
-3. Call `create_record("professional", text="Alice from SupplierCo switched returns shipping to DHL.", short_description="SupplierCo returns now via DHL", category="operational", tags=["shipping","supplierco","returns"], related_people=["per_<alice_id>"])`.
+3. Find SupplierCo and DHL as entities — `search_entities("SupplierCo", entity_type="company")` and `search_entities("DHL", entity_type="company")`. Create them via `create_entity(entity_type="company", name="SupplierCo", description="...")` if missing.
+4. Call `create_record("professional", text="Alice from SupplierCo switched returns shipping to DHL.", short_description="SupplierCo returns now via DHL", category="operational", tags=["shipping","supplierco","returns"], related_people=["per_<alice_id>"], related_entities=["ent_<supplierco_id>", "ent_<dhl_id>"])`.
 
-The `:INVOLVES` edge between the memory and Alice is created in the same call. Authorship (`author_user_id`, `via_bot`, `created_at`) is stamped on the memory automatically, resolvable back to the caller's `:Person` node.
+Now the graph has Alice linked to the memory via `:INVOLVES`, and both SupplierCo and DHL linked via `:ABOUT`. Later searches like "what do we know about SupplierCo?" traverse those edges instead of only returning semantic-vector-match memories.
+
+### Workflow: Adding team structure (post-hoc relations)
+
+User says: *"Ruslan, Bohdan, and Vitalii are my Amazon managers. I'm the head of the Amazon department at Mellanni."*
+
+1. Find/create the people — `search_people` for each, `create_person` where missing.
+2. Find/create the entities — `search_entities` for "Mellanni" (type: brand) and "Amazon Department" (type: department). Create via `create_entity` where missing.
+3. Wire department-to-brand — `relate_entities(from=<amazon_dept_id>, to=<mellanni_id>, relation_type="part_of")`.
+4. Wire each person's employment — `relate_persons(from=<ruslan_id>, to=<sergey_id>, relation_type="reports_to")`, and so on for Bohdan and Vitalii.
+5. Optionally record the fact as a `:Memory` for later retrieval: `create_record(namespace="professional", text="...", category="knowledge", related_people=[...], related_entities=[<dept_id>, <mellanni_id>])`.
+
+This is the correct shape for "organizational structure" — entities for the org/department, people for the humans, typed edges for the reporting/ownership, and a memory that notes when/how the structure was established. No more shoving the brand/department into `:Memory`.
 
 ## ACL Notes
 

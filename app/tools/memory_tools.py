@@ -79,6 +79,11 @@ _PERSON_INDEX_BY_SCOPE = {
     "professional": "professional_person_embedding",
 }
 
+# :Entity is the catch-all referable-thing label (brand, company, department,
+# product, project, location, tool, etc.). Single generic vector index; the
+# agent-supplied `entity_type` is a canonicalized property, not a sublabel.
+_ENTITY_INDEX_NAME = "entity_embedding"
+
 # ---------------------------------------------------------------------------
 # Config + identity helpers
 # ---------------------------------------------------------------------------
@@ -183,6 +188,36 @@ def _auto_person_id(caller: str) -> str:
     drift if a caller's Person node is ever recreated manually.
     """
     return f"per_auto_{hashlib.md5(caller.encode('utf-8')).hexdigest()[:8]}"
+
+
+def _new_entity_id() -> str:
+    return f"ent_{datetime.now().strftime('%Y_%m_%d')}_{uuid.uuid4().hex[:8]}"
+
+
+def _sanitize_relation_type(rel_type: str) -> str:
+    """Uppercase + underscore-only form safe for direct Cypher label injection.
+
+    Used by `_link_person_relations`, `relate_persons`, and `relate_entities`.
+    Empty/invalid input falls back to `RELATED_TO`.
+    """
+    safe = "".join(
+        c for c in (rel_type or "").upper().replace(" ", "_")
+        if c.isalnum() or c == "_"
+    )
+    return safe or "RELATED_TO"
+
+
+def _canonicalize_entity_type(entity_type: str) -> str:
+    """Lowercase + snake_case form of the agent-supplied entity_type.
+
+    Kills case/space drift so `Brand`, `brand`, and `BRAND` all land as
+    `brand`. Invalid characters are dropped. Empty input returns ''.
+    """
+    out = []
+    for ch in (entity_type or "").strip().replace("-", "_").replace(" ", "_"):
+        if ch.isalnum() or ch == "_":
+            out.append(ch.lower())
+    return "".join(out)
 
 
 async def _resolve_caller_person(driver, caller: str, is_company: bool) -> str:
@@ -385,6 +420,47 @@ async def _find_semantic_duplicate_memory(
         return []
 
 
+_ENTITY_DUPLICATE_THRESHOLD = 0.92
+
+
+async def _find_semantic_duplicate_entity(
+    driver, embed_text: str, openai_key: str,
+    threshold: float = _ENTITY_DUPLICATE_THRESHOLD,
+) -> list[dict]:
+    """Same pattern as `_find_semantic_duplicate_memory` but for :Entity.
+
+    Catches synonym-level duplicates ('Mellanni' vs 'Mellanni Inc.') and the
+    common case where the agent reaches for a slightly different entity_type
+    label ('company' vs 'business') to refer to the same real thing.
+    """
+    query = (
+        "WITH genai.vector.encode($text, 'OpenAI', "
+        "{token: $openai_key, model: 'text-embedding-3-small'}) AS vec "
+        f"CALL db.index.vector.queryNodes('{_ENTITY_INDEX_NAME}', 3, vec) "
+        "YIELD node, score "
+        "WHERE score >= $threshold "
+        "RETURN node.entity_id AS entity_id, "
+        "       node.name AS name, "
+        "       node.entity_type AS entity_type, "
+        "       substring(coalesce(node.description, ''), 0, 200) AS description_preview, "
+        "       toString(node.created_at) AS created_at, "
+        "       score "
+        "ORDER BY score DESC"
+    )
+    try:
+        async with driver.session() as session:
+            result = await session.run(
+                query, text=embed_text, openai_key=openai_key, threshold=threshold,
+            )
+            return [dict(r) async for r in result]
+    except Exception:
+        logger.warning(
+            "Entity semantic duplicate check failed; proceeding without dedup.",
+            exc_info=True,
+        )
+        return []
+
+
 # ---------------------------------------------------------------------------
 # Memory tools
 # ---------------------------------------------------------------------------
@@ -546,6 +622,7 @@ async def create_record(
     tags: list[str],
     related_people: list[str] = None,
     related_memories: list[str] = None,
+    related_entities: list[str] = None,
     author: str = "",
     force_create: bool = False,
     tool_context: ToolContext = None,
@@ -561,6 +638,11 @@ async def create_record(
         tags: List of keyword tags.
         related_people: Optional list of person IDs this memory involves.
         related_memories: Optional list of memory IDs this links to.
+        related_entities: Optional list of entity IDs this memory is about —
+                          creates (:Memory)-[:ABOUT]->(:Entity) edges. Use when
+                          the memory references a brand / company / department /
+                          product / project / tool. Check `search_entities`
+                          first to find the right IDs.
         author: Advisory only — retained for signature compat. Actual authorship
                 is stamped as `author_user_id` on the created node, resolved
                 from the caller's :Person node.
@@ -681,6 +763,8 @@ async def create_record(
             await _link_memory_to_people(driver, created_id, related_people, canonical_caller)
         if related_memories:
             await _link_memory_to_memories(driver, created_id, related_memories, canonical_caller)
+        if related_entities:
+            await _link_memory_to_entities(driver, created_id, related_entities, canonical_caller)
 
         return {
             "status": "success",
@@ -1595,6 +1679,606 @@ async def merge_persons(
         return _error(str(e))
 
 
+async def relate_persons(
+    from_person_id: str,
+    to_person_id: str,
+    relation_type: str,
+    tool_context: ToolContext = None,
+) -> dict:
+    """Create or reaffirm a typed directional relationship between two existing people.
+
+    Idempotent: uses MERGE, so re-calling with the same triple is a no-op.
+    ACL: admin, or the author (`author_user_id`) of the `from` person. Author
+    of `to` alone is NOT sufficient — the edge is outgoing from `from`, so
+    it's considered a modification of `from`'s relationships.
+
+    Use this when the user describes a post-hoc relationship between people
+    who already exist as :Person nodes. Example: "Ruslan reports to Sergey"
+    → `relate_persons(from='per_ruslan', to='per_sergey', relation_type='reports_to')`.
+
+    For brand-new people, prefer `create_person(..., relations=[...])` which
+    wires the edge in the same transaction as the node creation.
+
+    Args:
+        from_person_id: source :Person.person_id (the owner of the outgoing edge).
+        to_person_id: target :Person.person_id.
+        relation_type: Human-readable relation, e.g. 'manages', 'reports_to',
+                       'spouse_of'. Sanitized to UPPER_SNAKE_CASE; invalid
+                       forms fall back to 'RELATED_TO'.
+    """
+    if not from_person_id or not to_person_id:
+        return _error("Both from_person_id and to_person_id are required.")
+    if from_person_id == to_person_id:
+        return _error("from_person_id and to_person_id must differ.")
+
+    caller = _get_caller(tool_context)
+    if caller == "unknown":
+        return _error("Could not resolve caller identity from tool context.")
+
+    is_admin, is_company = _get_acl_flags(caller)
+    driver = await _ready_driver()
+    if driver is None:
+        return _error("Neo4j not configured.")
+
+    canonical_caller = await _resolve_caller_person(driver, caller, is_company)
+    safe = _sanitize_relation_type(relation_type)
+
+    # ACL gate. Admin path matches both nodes unconditionally; non-admin
+    # must author the `from` person. A forbidden/missing match returns no
+    # row, which we distinguish from "nodes not found" via a follow-up
+    # existence check.
+    if is_admin:
+        query = (
+            "MATCH (a:Person {person_id: $from_id}), (b:Person {person_id: $to_id}) "
+            f"MERGE (a)-[r:{safe}]->(b) "
+            "ON CREATE SET r.created_at = datetime(), r.link_author_user_id = $caller "
+            "ON MATCH SET r.last_confirmed_at = datetime() "
+            "RETURN a.person_id AS from_id, b.person_id AS to_id, "
+            "       type(r) AS relation_type, "
+            "       CASE WHEN r.last_confirmed_at IS NULL THEN 'created' ELSE 'existing' END AS outcome"
+        )
+        params = {"from_id": from_person_id, "to_id": to_person_id, "caller": canonical_caller}
+    else:
+        query = (
+            "MATCH (a:Person {person_id: $from_id}) "
+            "WHERE a.author_user_id = $caller "
+            "MATCH (b:Person {person_id: $to_id}) "
+            f"MERGE (a)-[r:{safe}]->(b) "
+            "ON CREATE SET r.created_at = datetime(), r.link_author_user_id = $caller "
+            "ON MATCH SET r.last_confirmed_at = datetime() "
+            "RETURN a.person_id AS from_id, b.person_id AS to_id, "
+            "       type(r) AS relation_type, "
+            "       CASE WHEN r.last_confirmed_at IS NULL THEN 'created' ELSE 'existing' END AS outcome"
+        )
+        params = {"from_id": from_person_id, "to_id": to_person_id, "caller": canonical_caller}
+
+    try:
+        async with driver.session() as session:
+            result = await session.run(query, **params)
+            row = await result.single()
+            if not row:
+                # Distinguish forbidden-vs-not-found for the non-admin case.
+                if not is_admin:
+                    existence_q = (
+                        "MATCH (a:Person {person_id: $from_id}) "
+                        "RETURN a.author_user_id AS author_user_id"
+                    )
+                    e_result = await session.run(existence_q, from_id=from_person_id)
+                    e_row = await e_result.single()
+                    if e_row is None:
+                        return _error(f"Person `{from_person_id}` not found.")
+                    return _forbidden(
+                        f"Person `{from_person_id}` was not authored by you. "
+                        "Only the author or admins can add outgoing relations."
+                    )
+                return _error(
+                    f"Person `{from_person_id}` or `{to_person_id}` not found."
+                )
+            return {
+                "status": "success",
+                "from_person_id": row["from_id"],
+                "to_person_id": row["to_id"],
+                "relation_type": row["relation_type"],
+                "outcome": row["outcome"],
+                "message": (
+                    f"Relation {row['from_id']} -[:{row['relation_type']}]-> {row['to_id']} "
+                    f"{row['outcome']}."
+                ),
+            }
+    except Exception as e:
+        logger.exception("relate_persons failed")
+        return _error(str(e))
+
+
+# ---------------------------------------------------------------------------
+# Entity tools — referable-thing nodes (brand, company, department, product,
+# project, location, tool, etc.). Distinct from :Memory (observations) and
+# :Person (actors). entity_type is a canonicalized property (snake_case), not
+# a sublabel; add-a-new-type is zero-friction for the agent.
+# ---------------------------------------------------------------------------
+
+
+def _entity_embed_text(name: str, entity_type: str, description: str) -> str:
+    """Canonical text fed to the embedding model for :Entity nodes."""
+    parts = [name.strip()]
+    if entity_type:
+        parts.append(f"Type: {entity_type}")
+    if description:
+        parts.append(description.strip())
+    return ". ".join(p for p in parts if p)
+
+
+async def create_entity(
+    entity_type: str,
+    name: str,
+    description: str = "",
+    tags: list[str] = None,
+    related_entities: list[str] = None,
+    related_people: list[str] = None,
+    force_create: bool = False,
+    tool_context: ToolContext = None,
+) -> dict:
+    """Create a referable :Entity node (brand, company, department, product, etc.).
+
+    Use this when the content you want to represent is a *thing other things
+    point at*, not an observation. Brands, companies, departments, projects,
+    products, tools, marketplaces — these are entities. Meetings, decisions,
+    incidents, best-practices — these are memories; use `create_record`.
+
+    Args:
+        entity_type: Free-form type label. Will be canonicalized to snake_case
+                     (e.g. 'Brand' → 'brand'). Prefer re-using types you've
+                     seen via `search_entities` before inventing a new one.
+        name: Human-readable display name.
+        description: Optional longer context — what the entity is, why it
+                     matters, how it's used. Embedded alongside the name.
+        tags: Optional keyword list for filtered search.
+        related_entities: Optional list of :Entity.entity_id to link via
+                          (:Entity)-[:RELATED_TO]->(:Entity).
+        related_people: Optional list of :Person.person_id to link via
+                        (:Entity)-[:INVOLVES]->(:Person).
+        force_create: Set to True only after the user confirms a possible-
+                      duplicate (cosine ≥ 0.92) is a genuinely different
+                      entity. Default False.
+
+    Returns `{"status": "possible_duplicate", "matches": [...]}` on near-
+    matches — inspect and either update the existing entity or retry with
+    force_create=True.
+    """
+    if not name or not name.strip():
+        return _error("`name` is required.")
+    canonical_type = _canonicalize_entity_type(entity_type)
+    if not canonical_type:
+        return _error("`entity_type` is required (e.g. 'brand', 'company').")
+
+    caller = _get_caller(tool_context)
+    if caller == "unknown":
+        return _error("Could not resolve caller identity from tool context.")
+
+    _, is_company = _get_acl_flags(caller)
+    driver = await _ready_driver()
+    if driver is None:
+        return _error("Neo4j not configured.")
+
+    openai_key = _get_openai_key()
+    if not openai_key:
+        return _error("OPENAI_API_KEY not configured.")
+
+    canonical_caller = await _resolve_caller_person(driver, caller, is_company)
+    caller_info = await _get_person_info(driver, canonical_caller)
+    if not _has_identity(caller_info):
+        return _needs_identity_response(caller_info, canonical_caller)
+
+    embed_text = _entity_embed_text(name, canonical_type, description)
+
+    if not force_create:
+        dup_matches = await _find_semantic_duplicate_entity(
+            driver, embed_text, openai_key,
+        )
+        if dup_matches:
+            return {
+                "status": "possible_duplicate",
+                "matches": dup_matches,
+                "threshold": _ENTITY_DUPLICATE_THRESHOLD,
+                "message": (
+                    f"Found {len(dup_matches)} existing entity(ies) semantically "
+                    f"similar (cosine ≥ {_ENTITY_DUPLICATE_THRESHOLD}) to `{name}`. "
+                    "Before creating a new one:\n"
+                    "- If any match is the same real thing, use `update_entity` "
+                    "to enrich it, or `relate_entities` to link it. DO NOT "
+                    "create a duplicate.\n"
+                    "- If this is genuinely a different entity, retry "
+                    "`create_entity` with `force_create=true`."
+                ),
+            }
+
+    entity_id = _new_entity_id()
+    bot_name = _get_bot_name()
+    tags = tags or []
+    description = description or ""
+
+    query = (
+        "MATCH (caller:Person {primary_user_id: $caller_id}) "
+        "WITH caller, {token: $openai_key, model: 'text-embedding-3-small'} AS cfg "
+        "CREATE (e:Entity { "
+        "    entity_id: $entity_id, "
+        "    name: $name, "
+        "    entity_type: $entity_type, "
+        "    description: $description, "
+        "    tags: $tags, "
+        "    embedding: genai.vector.encode($embed_text, 'OpenAI', cfg), "
+        "    author_user_id: caller.primary_user_id, "
+        "    via_bot: $bot_name, "
+        "    created_at: datetime(), "
+        "    updated_at: datetime() "
+        "}) "
+        "RETURN e.entity_id AS entity_id"
+    )
+    try:
+        async with driver.session() as session:
+            result = await session.run(
+                query,
+                caller_id=canonical_caller,
+                openai_key=openai_key,
+                entity_id=entity_id,
+                name=name.strip(),
+                entity_type=canonical_type,
+                description=description,
+                tags=tags,
+                embed_text=embed_text,
+                bot_name=bot_name,
+            )
+            row = await result.single()
+            if not row:
+                return _error("Entity creation did not return an ID — caller Person missing?")
+            created_id = row["entity_id"]
+
+        if related_entities:
+            await _link_entity_to_entities(
+                driver, created_id, related_entities, canonical_caller,
+            )
+        if related_people:
+            await _link_entity_to_people(
+                driver, created_id, related_people, canonical_caller,
+            )
+
+        return {
+            "status": "success",
+            "entity_id": created_id,
+            "entity_type": canonical_type,
+            "message": (
+                f"Entity `{created_id}` created: {name} (type: {canonical_type})."
+            ),
+        }
+    except Exception as e:
+        logger.exception("create_entity failed")
+        return _error(str(e))
+
+
+async def search_entities(
+    search_query: str,
+    entity_type: str = "",
+    top_k: int = 5,
+    tool_context: ToolContext = None,
+) -> dict:
+    """Semantic search across :Entity nodes, optionally filtered by entity_type.
+
+    Args:
+        search_query: Natural-language description of what you're looking for.
+        entity_type: Optional — when set, only entities with that canonicalized
+                     type are returned. Omit or pass '' to search across all types.
+        top_k: Max results (default 5, max 20).
+    """
+    if not search_query or not search_query.strip():
+        return _error("`search_query` is required.")
+
+    driver = await _ready_driver()
+    if driver is None:
+        return _error("Neo4j not configured.")
+
+    openai_key = _get_openai_key()
+    if not openai_key:
+        return _error("OPENAI_API_KEY not configured.")
+
+    top_k = max(1, min(int(top_k), 20))
+    canonical_type = _canonicalize_entity_type(entity_type) if entity_type else ""
+
+    # Fetch more than top_k when filtering by type, so the type filter
+    # doesn't starve results when the top vector hits are other types.
+    fetch_k = top_k * 4 if canonical_type else top_k
+
+    query = (
+        "WITH $query_text AS q, "
+        "     {token: $openai_key, model: 'text-embedding-3-small'} AS cfg "
+        "WITH genai.vector.encode(q, 'OpenAI', cfg) AS vec "
+        f"CALL db.index.vector.queryNodes('{_ENTITY_INDEX_NAME}', $fetch_k, vec) "
+        "YIELD node, score "
+        "WHERE $canonical_type = '' OR node.entity_type = $canonical_type "
+        "RETURN node.entity_id AS entity_id, "
+        "       node.name AS name, "
+        "       node.entity_type AS entity_type, "
+        "       substring(coalesce(node.description, ''), 0, 300) AS description_preview, "
+        "       node.tags AS tags, "
+        "       toString(node.created_at) AS created_at, "
+        "       score "
+        "ORDER BY score DESC "
+        "LIMIT $top_k"
+    )
+    try:
+        async with driver.session() as session:
+            result = await session.run(
+                query,
+                query_text=search_query,
+                openai_key=openai_key,
+                fetch_k=fetch_k,
+                canonical_type=canonical_type,
+                top_k=top_k,
+            )
+            records = [dict(r) async for r in result]
+        return {
+            "status": "success",
+            "count": len(records),
+            "entity_type_filter": canonical_type or None,
+            "results": records,
+        }
+    except Exception as e:
+        logger.exception("search_entities failed")
+        return _error(str(e))
+
+
+async def update_entity(
+    entity_id: str,
+    updates: str,
+    tool_context: ToolContext = None,
+) -> dict:
+    """Update an :Entity. Only the creator (via `author_user_id`) or admins can modify.
+
+    Embedding is refreshed automatically if name, entity_type, or description
+    change. Admins wanting to force-update should use `update_any_entity`.
+
+    Args:
+        entity_id: ID of the entity.
+        updates: JSON string. Allowed fields: name, entity_type, description, tags.
+    """
+    try:
+        updates_dict = json.loads(updates) if isinstance(updates, str) else dict(updates)
+    except (json.JSONDecodeError, TypeError):
+        return _error("Invalid JSON in 'updates' parameter.")
+
+    allowed = {"name", "entity_type", "description", "tags"}
+    bad = [k for k in updates_dict if k not in allowed]
+    if bad:
+        return _error(
+            f"Cannot update fields: {', '.join(bad)}. Allowed: {', '.join(sorted(allowed))}"
+        )
+    if "entity_type" in updates_dict:
+        updates_dict["entity_type"] = _canonicalize_entity_type(
+            updates_dict["entity_type"]
+        )
+        if not updates_dict["entity_type"]:
+            return _error("`entity_type` cannot be empty.")
+
+    caller = _get_caller(tool_context)
+    if caller == "unknown":
+        return _error("Could not resolve caller identity from tool context.")
+
+    is_admin, is_company = _get_acl_flags(caller)
+    driver = await _ready_driver()
+    if driver is None:
+        return _error("Neo4j not configured.")
+
+    canonical_caller = await _resolve_caller_person(driver, caller, is_company)
+    openai_key = _get_openai_key()
+    touches_embedding = bool(
+        {"name", "entity_type", "description"} & updates_dict.keys()
+    )
+    if touches_embedding and not openai_key:
+        return _error("OPENAI_API_KEY required for updates that refresh embeddings.")
+
+    set_parts = []
+    params = {"entity_id": entity_id, "caller_id": canonical_caller, "openai_key": openai_key}
+    for key, value in updates_dict.items():
+        set_parts.append(f"e.{key} = ${key}")
+        params[key] = value
+    if touches_embedding:
+        set_parts.append(
+            "e.embedding = genai.vector.encode("
+            "coalesce(e.name, '') + '. Type: ' + coalesce(e.entity_type, '') + "
+            "'. ' + coalesce(e.description, ''), "
+            "'OpenAI', "
+            "{token: $openai_key, model: 'text-embedding-3-small'})"
+        )
+    set_parts.append("e.updated_at = datetime()")
+    set_clause = ", ".join(set_parts)
+
+    query = (
+        "MATCH (e:Entity {entity_id: $entity_id}) "
+        "WHERE e.author_user_id = $caller_id "
+        f"SET {set_clause} "
+        "RETURN e.entity_id AS entity_id"
+    )
+    try:
+        async with driver.session() as session:
+            result = await session.run(query, **params)
+            row = await result.single()
+            if not row:
+                if is_admin:
+                    return _forbidden(
+                        f"Entity `{entity_id}`: this tool enforces creator-only updates. "
+                        "Admins should implement `update_any_entity` if broader override is needed."
+                    )
+                return _forbidden(
+                    f"Entity `{entity_id}` was not authored by you. "
+                    "Only the creator or admins can modify it."
+                )
+        return {
+            "status": "success",
+            "entity_id": entity_id,
+            "updated_fields": sorted(updates_dict),
+            "message": f"Entity `{entity_id}` updated: {', '.join(sorted(updates_dict))}.",
+        }
+    except Exception as e:
+        logger.exception("update_entity failed")
+        return _error(str(e))
+
+
+async def delete_entity(
+    entity_id: str,
+    tool_context: ToolContext = None,
+) -> dict:
+    """Delete an :Entity. Only the creator (via `author_user_id`) or admins.
+
+    Removes all outgoing and incoming edges (DETACH DELETE).
+
+    Args:
+        entity_id: ID of the entity.
+    """
+    caller = _get_caller(tool_context)
+    if caller == "unknown":
+        return _error("Could not resolve caller identity from tool context.")
+
+    is_admin, is_company = _get_acl_flags(caller)
+    driver = await _ready_driver()
+    if driver is None:
+        return _error("Neo4j not configured.")
+
+    if is_admin:
+        query = (
+            "MATCH (e:Entity {entity_id: $entity_id}) "
+            "DETACH DELETE e "
+            "RETURN count(e) AS deleted"
+        )
+        params = {"entity_id": entity_id}
+    else:
+        canonical_caller = await _resolve_caller_person(driver, caller, is_company)
+        query = (
+            "MATCH (e:Entity {entity_id: $entity_id}) "
+            "WHERE e.author_user_id = $caller_id "
+            "DETACH DELETE e "
+            "RETURN count(e) AS deleted"
+        )
+        params = {"entity_id": entity_id, "caller_id": canonical_caller}
+
+    try:
+        async with driver.session() as session:
+            result = await session.run(query, **params)
+            row = await result.single()
+            deleted = row["deleted"] if row else 0
+            if not deleted:
+                if is_admin:
+                    return _error(f"Entity `{entity_id}` not found.")
+                return _forbidden(
+                    f"Entity `{entity_id}` was not authored by you. "
+                    "Only the creator or admins can delete."
+                )
+        return {
+            "status": "success",
+            "message": f"Entity `{entity_id}` deleted.",
+        }
+    except Exception as e:
+        logger.exception("delete_entity failed")
+        return _error(str(e))
+
+
+async def relate_entities(
+    from_entity_id: str,
+    to_entity_id: str,
+    relation_type: str,
+    tool_context: ToolContext = None,
+) -> dict:
+    """Create or reaffirm a typed edge (:Entity)-[:<REL>]->(:Entity). Idempotent.
+
+    ACL: admin, or the author of the `from` entity. Same pattern as
+    `relate_persons`. Re-calling with the same triple is a no-op.
+
+    Typical relations: 'part_of' (department → company), 'owns'
+    (brand → products), 'uses' (project → tool), 'located_in' (warehouse →
+    market). Sanitized to UPPER_SNAKE_CASE; invalid forms fall back to
+    'RELATED_TO'.
+
+    Args:
+        from_entity_id: source :Entity.entity_id.
+        to_entity_id: target :Entity.entity_id.
+        relation_type: Human-readable relation.
+    """
+    if not from_entity_id or not to_entity_id:
+        return _error("Both from_entity_id and to_entity_id are required.")
+    if from_entity_id == to_entity_id:
+        return _error("from_entity_id and to_entity_id must differ.")
+
+    caller = _get_caller(tool_context)
+    if caller == "unknown":
+        return _error("Could not resolve caller identity from tool context.")
+
+    is_admin, is_company = _get_acl_flags(caller)
+    driver = await _ready_driver()
+    if driver is None:
+        return _error("Neo4j not configured.")
+
+    canonical_caller = await _resolve_caller_person(driver, caller, is_company)
+    safe = _sanitize_relation_type(relation_type)
+
+    if is_admin:
+        query = (
+            "MATCH (a:Entity {entity_id: $from_id}), (b:Entity {entity_id: $to_id}) "
+            f"MERGE (a)-[r:{safe}]->(b) "
+            "ON CREATE SET r.created_at = datetime(), r.link_author_user_id = $caller "
+            "ON MATCH SET r.last_confirmed_at = datetime() "
+            "RETURN a.entity_id AS from_id, b.entity_id AS to_id, "
+            "       type(r) AS relation_type, "
+            "       CASE WHEN r.last_confirmed_at IS NULL THEN 'created' ELSE 'existing' END AS outcome"
+        )
+    else:
+        query = (
+            "MATCH (a:Entity {entity_id: $from_id}) "
+            "WHERE a.author_user_id = $caller "
+            "MATCH (b:Entity {entity_id: $to_id}) "
+            f"MERGE (a)-[r:{safe}]->(b) "
+            "ON CREATE SET r.created_at = datetime(), r.link_author_user_id = $caller "
+            "ON MATCH SET r.last_confirmed_at = datetime() "
+            "RETURN a.entity_id AS from_id, b.entity_id AS to_id, "
+            "       type(r) AS relation_type, "
+            "       CASE WHEN r.last_confirmed_at IS NULL THEN 'created' ELSE 'existing' END AS outcome"
+        )
+    params = {"from_id": from_entity_id, "to_id": to_entity_id, "caller": canonical_caller}
+
+    try:
+        async with driver.session() as session:
+            result = await session.run(query, **params)
+            row = await result.single()
+            if not row:
+                if not is_admin:
+                    e_result = await session.run(
+                        "MATCH (a:Entity {entity_id: $from_id}) "
+                        "RETURN a.author_user_id AS author_user_id",
+                        from_id=from_entity_id,
+                    )
+                    e_row = await e_result.single()
+                    if e_row is None:
+                        return _error(f"Entity `{from_entity_id}` not found.")
+                    return _forbidden(
+                        f"Entity `{from_entity_id}` was not authored by you. "
+                        "Only the author or admins can add outgoing relations."
+                    )
+                return _error(
+                    f"Entity `{from_entity_id}` or `{to_entity_id}` not found."
+                )
+            return {
+                "status": "success",
+                "from_entity_id": row["from_id"],
+                "to_entity_id": row["to_id"],
+                "relation_type": row["relation_type"],
+                "outcome": row["outcome"],
+                "message": (
+                    f"Relation {row['from_id']} -[:{row['relation_type']}]-> {row['to_id']} "
+                    f"{row['outcome']}."
+                ),
+            }
+    except Exception as e:
+        logger.exception("relate_entities failed")
+        return _error(str(e))
+
+
 # ---------------------------------------------------------------------------
 # Relationship helpers (internal — called from create_record / create_person)
 # ---------------------------------------------------------------------------
@@ -1636,6 +2320,24 @@ async def _link_memory_to_memories(
         logger.warning("Failed to link memory %s to memories: %s", record_id, e)
 
 
+async def _link_memory_to_entities(
+    driver, record_id: str, entity_ids: list[str], author_caller: str
+) -> None:
+    """Create (:Memory)-[:ABOUT]->(:Entity) edges from create_record."""
+    query = (
+        "MATCH (m:Memory {record_id: $record_id}) "
+        "UNWIND $entities AS eid "
+        "MATCH (e:Entity {entity_id: eid}) "
+        "MERGE (m)-[r:ABOUT]->(e) "
+        "ON CREATE SET r.created_at = datetime(), r.link_author_user_id = $caller"
+    )
+    try:
+        async with driver.session() as session:
+            await session.run(query, record_id=record_id, entities=entity_ids, caller=author_caller)
+    except Exception as e:
+        logger.warning("Failed to link memory %s to entities: %s", record_id, e)
+
+
 async def _link_person_relations(
     driver, person_id: str, relations: list, author_caller: str
 ) -> None:
@@ -1651,9 +2353,7 @@ async def _link_person_relations(
         rel_type = rel.get("relation_type", "RELATED_TO")
         if not target:
             continue
-        safe = "".join(c for c in rel_type.upper().replace(" ", "_") if c.isalnum() or c == "_")
-        if not safe:
-            safe = "RELATED_TO"
+        safe = _sanitize_relation_type(rel_type)
         query = (
             "MATCH (a:Person {person_id: $from}), (b:Person {person_id: $to}) "
             f"MERGE (a)-[r:{safe}]->(b) "
@@ -1664,3 +2364,40 @@ async def _link_person_relations(
                 await session.run(query, **{"from": person_id, "to": target, "caller": author_caller})
         except Exception as e:
             logger.warning("Failed to link person %s → %s (%s): %s", person_id, target, safe, e)
+
+
+async def _link_entity_to_entities(
+    driver, entity_id: str, entity_ids: list[str], author_caller: str
+) -> None:
+    """Create (:Entity)-[:RELATED_TO]->(:Entity) edges from create_entity."""
+    query = (
+        "MATCH (e:Entity {entity_id: $entity_id}) "
+        "UNWIND $others AS oid "
+        "MATCH (o:Entity {entity_id: oid}) "
+        "WHERE o.entity_id <> e.entity_id "
+        "MERGE (e)-[r:RELATED_TO]->(o) "
+        "ON CREATE SET r.created_at = datetime(), r.link_author_user_id = $caller"
+    )
+    try:
+        async with driver.session() as session:
+            await session.run(query, entity_id=entity_id, others=entity_ids, caller=author_caller)
+    except Exception as e:
+        logger.warning("Failed to link entity %s to entities: %s", entity_id, e)
+
+
+async def _link_entity_to_people(
+    driver, entity_id: str, people_ids: list[str], author_caller: str
+) -> None:
+    """Create (:Entity)-[:INVOLVES]->(:Person) edges from create_entity."""
+    query = (
+        "MATCH (e:Entity {entity_id: $entity_id}) "
+        "UNWIND $people AS pid "
+        "MATCH (p:Person {person_id: pid}) "
+        "MERGE (e)-[r:INVOLVES]->(p) "
+        "ON CREATE SET r.created_at = datetime(), r.link_author_user_id = $caller"
+    )
+    try:
+        async with driver.session() as session:
+            await session.run(query, entity_id=entity_id, people=people_ids, caller=author_caller)
+    except Exception as e:
+        logger.warning("Failed to link entity %s to people: %s", entity_id, e)

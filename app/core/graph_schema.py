@@ -90,6 +90,14 @@ async def _run_schema_statements(driver) -> None:
         "CREATE CONSTRAINT person_primary_user_id_unique IF NOT EXISTS "
         "FOR (p:Person) REQUIRE p.primary_user_id IS UNIQUE"
     )
+    # Entity is the catch-all referable-thing label (brand, company, department,
+    # product, project, etc.) — distinct from :Memory (observations) and
+    # :Person (actors). One unique id, one entity_type property (free-form but
+    # canonicalized to snake_case by the tool layer).
+    statements.append(
+        "CREATE CONSTRAINT entity_entity_id_unique IF NOT EXISTS "
+        "FOR (e:Entity) REQUIRE e.entity_id IS UNIQUE"
+    )
 
     # Vector indexes — one per scope label, OpenAI text-embedding-3-small shape.
     for scope in _MEMORY_SCOPE_LABELS + _PERSON_SCOPE_LABELS:
@@ -102,6 +110,16 @@ async def _run_schema_statements(driver) -> None:
             f"`vector.similarity_function`: '{_VECTOR_SIM}'"
             f"}}}}"
         )
+    # Entity vector index — single generic :Entity label (no per-type sub-
+    # indexes yet; entity_type is used as a filter property, not a label).
+    statements.append(
+        f"CREATE VECTOR INDEX entity_embedding IF NOT EXISTS "
+        f"FOR (e:Entity) ON (e.embedding) "
+        f"OPTIONS {{indexConfig: {{"
+        f"`vector.dimensions`: {_VECTOR_DIMS}, "
+        f"`vector.similarity_function`: '{_VECTOR_SIM}'"
+        f"}}}}"
+    )
 
     # Full-text index — covers all three memory scopes via the generic :Memory
     # label. Useful for admin ad-hoc keyword browsing in Neo4j Browser.
@@ -119,6 +137,15 @@ async def _run_schema_statements(driver) -> None:
     statements.append(
         "CREATE INDEX person_author_user_id IF NOT EXISTS "
         "FOR (p:Person) ON (p.author_user_id)"
+    )
+    statements.append(
+        "CREATE INDEX entity_author_user_id IF NOT EXISTS "
+        "FOR (e:Entity) ON (e.author_user_id)"
+    )
+    # entity_type filter — used by search_entities and get-by-type queries.
+    statements.append(
+        "CREATE INDEX entity_type_idx IF NOT EXISTS "
+        "FOR (e:Entity) ON (e.entity_type)"
     )
 
     async with driver.session() as session:

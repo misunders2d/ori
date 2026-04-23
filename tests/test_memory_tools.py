@@ -1317,3 +1317,451 @@ class TestMemoryDedupGate:
         )
         assert result["status"] == "success"
         assert result["record_id"] == "mem_despite_dedup_fail"
+
+
+# ---------------------------------------------------------------------------
+# Pure-Python helpers — canonicalization + sanitization
+# ---------------------------------------------------------------------------
+
+
+class TestHelpers:
+    def test_canonicalize_entity_type_basic(self):
+        assert memory_tools._canonicalize_entity_type("Brand") == "brand"
+        assert memory_tools._canonicalize_entity_type("BRAND") == "brand"
+        assert memory_tools._canonicalize_entity_type("Company Name") == "company_name"
+        assert memory_tools._canonicalize_entity_type("product-line") == "product_line"
+
+    def test_canonicalize_entity_type_drops_invalid(self):
+        assert memory_tools._canonicalize_entity_type("Product/Line!") == "productline"
+
+    def test_canonicalize_entity_type_empty(self):
+        assert memory_tools._canonicalize_entity_type("") == ""
+        assert memory_tools._canonicalize_entity_type("   ") == ""
+        assert memory_tools._canonicalize_entity_type(None) == ""
+
+    def test_sanitize_relation_type_basic(self):
+        assert memory_tools._sanitize_relation_type("manages") == "MANAGES"
+        assert memory_tools._sanitize_relation_type("reports to") == "REPORTS_TO"
+        assert memory_tools._sanitize_relation_type("Part_Of") == "PART_OF"
+
+    def test_sanitize_relation_type_fallback(self):
+        assert memory_tools._sanitize_relation_type("") == "RELATED_TO"
+        assert memory_tools._sanitize_relation_type("---") == "RELATED_TO"
+        assert memory_tools._sanitize_relation_type(None) == "RELATED_TO"
+
+
+# ---------------------------------------------------------------------------
+# relate_persons
+# ---------------------------------------------------------------------------
+
+
+class TestRelatePersons:
+    @pytest.mark.asyncio
+    async def test_rejects_self_link(self, patched_driver):
+        result = await memory_tools.relate_persons(
+            "per_a", "per_a", "manages",
+            tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "error"
+        assert "must differ" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_author_path_success(self, patched_driver):
+        patched_driver.run = _dispatched_run(
+            record_row={
+                "from_id": "per_a", "to_id": "per_b",
+                "relation_type": "MANAGES", "outcome": "created",
+            },
+            resolve_hit={"canonical": "bob@example.com"},
+        )
+        result = await memory_tools.relate_persons(
+            "per_a", "per_b", "manages",
+            tool_context=_make_ctx("bob@example.com"),
+        )
+        assert result["status"] == "success"
+        assert result["relation_type"] == "MANAGES"
+        assert result["outcome"] == "created"
+        # Non-admin path: query must include author_user_id predicate on `from`.
+        queries = [c.args[0] for c in patched_driver.run.await_args_list]
+        assert any(
+            "a.author_user_id = $caller" in q and "MERGE (a)-[r:MANAGES]->(b)" in q
+            for q in queries
+        )
+
+    @pytest.mark.asyncio
+    async def test_admin_path_skips_author_gate(self, patched_driver):
+        patched_driver.run = _dispatched_run(
+            record_row={
+                "from_id": "per_a", "to_id": "per_b",
+                "relation_type": "MANAGES", "outcome": "existing",
+            },
+            resolve_hit={"canonical": "admin@example.com"},
+        )
+        result = await memory_tools.relate_persons(
+            "per_a", "per_b", "MANAGES",
+            tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "success"
+        merge_q = next(
+            q for q in (c.args[0] for c in patched_driver.run.await_args_list)
+            if "MERGE (a)-[r:MANAGES]->(b)" in q
+        )
+        # Admin path has no author gate in the MATCH — only link_author_user_id
+        # on the created edge. Non-admin path would have `a.author_user_id = $caller`.
+        assert "a.author_user_id" not in merge_q
+
+    @pytest.mark.asyncio
+    async def test_non_author_forbidden(self, patched_driver):
+        # MERGE returns no row; existence query confirms `from` exists but
+        # was authored by someone else.
+        async def _run(*args, **kwargs):
+            query = args[0] if args else ""
+            r = AsyncMock()
+            if _is_resolve_caller_lookup(query):
+                r.single = AsyncMock(return_value={"canonical": "bob@example.com"})
+            elif "MERGE (a)-[r:" in query:
+                r.single = AsyncMock(return_value=None)  # gate failed
+            elif "a.author_user_id AS author_user_id" in query:
+                r.single = AsyncMock(
+                    return_value={"author_user_id": "someone_else@example.com"}
+                )
+            else:
+                r.single = AsyncMock(return_value=None)
+            return r
+
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.relate_persons(
+            "per_a", "per_b", "manages",
+            tool_context=_make_ctx("bob@example.com"),
+        )
+        assert result["status"] == "forbidden"
+        assert "not authored by you" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_from_not_found(self, patched_driver):
+        async def _run(*args, **kwargs):
+            query = args[0] if args else ""
+            r = AsyncMock()
+            if _is_resolve_caller_lookup(query):
+                r.single = AsyncMock(return_value={"canonical": "bob@example.com"})
+            else:
+                # Main MERGE and existence-check queries both return None.
+                r.single = AsyncMock(return_value=None)
+            return r
+
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.relate_persons(
+            "per_ghost", "per_b", "manages",
+            tool_context=_make_ctx("bob@example.com"),
+        )
+        assert result["status"] == "error"
+        assert "not found" in result["message"]
+
+
+# ---------------------------------------------------------------------------
+# create_entity / search_entities / update_entity / delete_entity
+# ---------------------------------------------------------------------------
+
+
+def _is_entity_dedup_query(query: str) -> bool:
+    return "entity_embedding" in query and "score >= $threshold" in query
+
+
+class TestCreateEntity:
+    @pytest.mark.asyncio
+    async def test_requires_name_and_type(self, patched_driver):
+        result = await memory_tools.create_entity(
+            "brand", "", tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "error"
+        result = await memory_tools.create_entity(
+            "", "Mellanni", tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_canonicalizes_type_on_write(self, patched_driver):
+        # Simulate identified caller + no dupes + successful create.
+        async def _run(*args, **kwargs):
+            query = args[0] if args else ""
+            r = AsyncMock()
+            if _is_resolve_caller_lookup(query):
+                r.single = AsyncMock(return_value={"canonical": "admin@example.com"})
+            elif "p.is_auto_provisioned AS is_auto_provisioned" in query:
+                r.single = AsyncMock(return_value={
+                    "person_id": "per_admin",
+                    "first_name": "Admin",
+                    "last_name": "User",
+                    "full_name": "Admin User",
+                    "is_auto_provisioned": False,
+                })
+            elif _is_entity_dedup_query(query):
+                async def aiter(self):
+                    if False:
+                        yield None
+                r.__aiter__ = aiter
+                r.single = AsyncMock(return_value=None)
+            else:
+                r.single = AsyncMock(return_value={"entity_id": "ent_test"})
+            return r
+
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.create_entity(
+            "Brand", "Mellanni", description="Home textiles brand",
+            tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "success"
+        assert result["entity_type"] == "brand"  # canonicalized from "Brand"
+        # CREATE query should carry the canonicalized type parameter.
+        create_call = next(
+            c for c in patched_driver.run.await_args_list
+            if "CREATE (e:Entity" in c.args[0]
+        )
+        assert create_call.kwargs["entity_type"] == "brand"
+
+    @pytest.mark.asyncio
+    async def test_returns_possible_duplicate_on_hit(self, patched_driver):
+        async def _run(*args, **kwargs):
+            query = args[0] if args else ""
+            r = AsyncMock()
+            if _is_resolve_caller_lookup(query):
+                r.single = AsyncMock(return_value={"canonical": "admin@example.com"})
+            elif "p.is_auto_provisioned AS is_auto_provisioned" in query:
+                r.single = AsyncMock(return_value={
+                    "person_id": "per_admin", "first_name": "A", "last_name": "U",
+                    "full_name": "A U", "is_auto_provisioned": False,
+                })
+            elif _is_entity_dedup_query(query):
+                async def aiter(self):
+                    yield {
+                        "entity_id": "ent_existing",
+                        "name": "Mellanni",
+                        "entity_type": "brand",
+                        "description_preview": "",
+                        "created_at": "2026-01-01",
+                        "score": 0.95,
+                    }
+                r.__aiter__ = aiter
+                r.single = AsyncMock(return_value=None)
+            else:
+                r.single = AsyncMock(return_value={"entity_id": "ent_should_not_create"})
+            return r
+
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.create_entity(
+            "brand", "Mellanni Inc",
+            tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "possible_duplicate"
+        assert len(result["matches"]) == 1
+        assert result["matches"][0]["entity_id"] == "ent_existing"
+        assert "force_create=true" in result["message"]
+
+
+class TestSearchEntities:
+    @pytest.mark.asyncio
+    async def test_requires_query(self, patched_driver):
+        result = await memory_tools.search_entities(
+            "", tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_type_filter_canonicalized(self, patched_driver):
+        async def _run(*args, **kwargs):
+            r = AsyncMock()
+            async def aiter(self):
+                yield {
+                    "entity_id": "ent_x", "name": "Mellanni", "entity_type": "brand",
+                    "description_preview": "", "tags": [], "created_at": "2026-01-01",
+                    "score": 0.88,
+                }
+            r.__aiter__ = aiter
+            r.single = AsyncMock(return_value=None)
+            return r
+
+        patched_driver.run = AsyncMock(side_effect=_run)
+        result = await memory_tools.search_entities(
+            "Mellanni", entity_type="Brand",  # non-canonical input
+            tool_context=_make_ctx("bob@example.com"),
+        )
+        assert result["status"] == "success"
+        assert result["entity_type_filter"] == "brand"
+        call = patched_driver.run.await_args_list[0]
+        assert call.kwargs["canonical_type"] == "brand"
+
+
+class TestUpdateEntity:
+    @pytest.mark.asyncio
+    async def test_author_path_success(self, patched_driver):
+        patched_driver.run = _dispatched_run(
+            record_row={"entity_id": "ent_x"},
+            resolve_hit={"canonical": "bob@example.com"},
+        )
+        result = await memory_tools.update_entity(
+            "ent_x", json.dumps({"name": "New Name"}),
+            tool_context=_make_ctx("bob@example.com"),
+        )
+        assert result["status"] == "success"
+        # Gate uses author_user_id predicate.
+        upd_q = next(
+            c.args[0] for c in patched_driver.run.await_args_list
+            if "MATCH (e:Entity" in c.args[0] and "SET " in c.args[0]
+        )
+        assert "e.author_user_id = $caller_id" in upd_q
+        # Name change should trigger embedding refresh.
+        assert "genai.vector.encode" in upd_q
+
+    @pytest.mark.asyncio
+    async def test_rejects_unknown_fields(self, patched_driver):
+        result = await memory_tools.update_entity(
+            "ent_x", json.dumps({"weird": "value"}),
+            tool_context=_make_ctx("bob@example.com"),
+        )
+        assert result["status"] == "error"
+        assert "weird" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_canonicalizes_type_on_update(self, patched_driver):
+        patched_driver.run = _dispatched_run(
+            record_row={"entity_id": "ent_x"},
+            resolve_hit={"canonical": "bob@example.com"},
+        )
+        result = await memory_tools.update_entity(
+            "ent_x", json.dumps({"entity_type": "Department"}),
+            tool_context=_make_ctx("bob@example.com"),
+        )
+        assert result["status"] == "success"
+        # The parameter carried to the SET clause should be canonicalized.
+        upd_call = next(
+            c for c in patched_driver.run.await_args_list
+            if "SET " in c.args[0] and "MATCH (e:Entity" in c.args[0]
+        )
+        assert upd_call.kwargs["entity_type"] == "department"
+
+    @pytest.mark.asyncio
+    async def test_non_author_forbidden(self, patched_driver):
+        patched_driver.run = _dispatched_run(
+            record_row=None,  # MERGE/SET returns nothing → author gate failed
+            resolve_hit={"canonical": "bob@example.com"},
+        )
+        result = await memory_tools.update_entity(
+            "ent_x", json.dumps({"name": "new"}),
+            tool_context=_make_ctx("bob@example.com"),
+        )
+        assert result["status"] == "forbidden"
+        assert "not authored by you" in result["message"]
+
+
+class TestDeleteEntity:
+    @pytest.mark.asyncio
+    async def test_admin_plain_match(self, patched_driver):
+        async def _run(*args, **kwargs):
+            r = AsyncMock()
+            r.single = AsyncMock(return_value={"deleted": 1})
+            return r
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.delete_entity(
+            "ent_x", tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "success"
+        delete_q = patched_driver.run.await_args_list[0].args[0]
+        assert "author_user_id" not in delete_q
+        assert "DETACH DELETE e" in delete_q
+
+    @pytest.mark.asyncio
+    async def test_author_path_gated(self, patched_driver):
+        patched_driver.run = _dispatched_run(
+            record_row={"deleted": 1},
+            resolve_hit={"canonical": "bob@example.com"},
+        )
+        result = await memory_tools.delete_entity(
+            "ent_x", tool_context=_make_ctx("bob@example.com"),
+        )
+        assert result["status"] == "success"
+        del_q = next(
+            q for q in (c.args[0] for c in patched_driver.run.await_args_list)
+            if "DETACH DELETE e" in q
+        )
+        assert "e.author_user_id = $caller_id" in del_q
+
+
+class TestRelateEntities:
+    @pytest.mark.asyncio
+    async def test_rejects_self_link(self, patched_driver):
+        result = await memory_tools.relate_entities(
+            "ent_a", "ent_a", "part_of",
+            tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_admin_path_success(self, patched_driver):
+        patched_driver.run = _dispatched_run(
+            record_row={
+                "from_id": "ent_a", "to_id": "ent_b",
+                "relation_type": "PART_OF", "outcome": "created",
+            },
+            resolve_hit={"canonical": "admin@example.com"},
+        )
+        result = await memory_tools.relate_entities(
+            "ent_a", "ent_b", "Part Of",
+            tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "success"
+        assert result["relation_type"] == "PART_OF"
+        merge_q = next(
+            q for q in (c.args[0] for c in patched_driver.run.await_args_list)
+            if "MERGE (a)-[r:PART_OF]->(b)" in q
+        )
+        # Admin path has no MATCH-level author gate.
+        assert "a.author_user_id" not in merge_q
+
+
+# ---------------------------------------------------------------------------
+# create_record with related_entities → :ABOUT edge
+# ---------------------------------------------------------------------------
+
+
+class TestCreateRecordEntityLink:
+    @pytest.mark.asyncio
+    async def test_related_entities_creates_about_edges(self, patched_driver):
+        async def _run(*args, **kwargs):
+            query = args[0] if args else ""
+            r = AsyncMock()
+            if _is_resolve_caller_lookup(query):
+                r.single = AsyncMock(return_value={"canonical": "admin@example.com"})
+            elif "p.is_auto_provisioned AS is_auto_provisioned" in query:
+                r.single = AsyncMock(return_value={
+                    "person_id": "per_admin", "first_name": "A", "last_name": "U",
+                    "full_name": "A U", "is_auto_provisioned": False,
+                })
+            elif _is_memory_dedup_query(query):
+                async def aiter(self):
+                    if False:
+                        yield None
+                r.__aiter__ = aiter
+                r.single = AsyncMock(return_value=None)
+            else:
+                r.single = AsyncMock(return_value={"record_id": "mem_new"})
+            return r
+
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.create_record(
+            "professional", "About Mellanni brand", "mellanni note",
+            "knowledge", [],
+            related_entities=["ent_mellanni"],
+            tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "success"
+        # Verify the :ABOUT link query fired.
+        queries = [c.args[0] for c in patched_driver.run.await_args_list]
+        assert any("MERGE (m)-[r:ABOUT]->(e)" in q for q in queries), (
+            "expected a (:Memory)-[:ABOUT]->(:Entity) link after create_record with related_entities"
+        )

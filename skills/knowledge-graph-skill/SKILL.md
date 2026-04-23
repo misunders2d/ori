@@ -5,7 +5,17 @@ description: "How to use the knowledge base — a single Neo4j store with native
 
 # Knowledge Base
 
-Long-term memory lives in **Neo4j** alone. Every memory and person record is stored as a graph node with a 1536-dim OpenAI embedding attached for semantic search, plus relationship edges between related records. Pinecone is no longer in use — one store, one credential, one write path.
+Long-term memory lives in **Neo4j** alone. Every memory, person, and entity record is stored as a graph node with a 1536-dim OpenAI embedding attached for semantic search, plus relationship edges between related records.
+
+Three node kinds, three distinct roles:
+
+| Label | What it represents | Examples |
+|-------|--------------------|----------|
+| `:Memory` | **Observations** — things that happened, were claimed, or were decided | Meetings, incidents, ideas, procedures, best-practices |
+| `:Person` | **Actors** — humans the system tracks | Team members, clients, vendors, the user themselves |
+| `:Entity` | **Referable things** — stable items other records point at | Brands, companies, departments, products, projects, locations, tools, marketplaces |
+
+When in doubt: if you'd say "we had a meeting about X" — X is probably an `:Entity`, and the meeting is a `:Memory` that links to it.
 
 ## Namespaces and access control
 
@@ -42,7 +52,7 @@ Handling a `needs_identity` response:
 | `search_knowledge(search_query, namespace, top_k)` | Semantic vector search in one namespace |
 | `get_records(record_ids, namespace)` | Fetch specific records by ID |
 | `list_records(namespace)` | Enumerate records in a namespace |
-| `create_record(namespace, text, short_description, category, tags, related_people?, related_memories?, force_create?)` | Store a memory, idea, incident, etc. Returns `{"status": "possible_duplicate"}` if a semantically similar record already exists (cosine ≥ 0.92). Pass `force_create=true` only after the user confirms it's a different record. |
+| `create_record(namespace, text, short_description, category, tags, related_people?, related_memories?, related_entities?, force_create?)` | Store a memory, idea, incident, etc. `related_entities=["ent_..."]` creates `(:Memory)-[:ABOUT]->(:Entity)` edges — use when the memory references a brand/company/department/product/tool. Returns `{"status": "possible_duplicate"}` if a semantically similar record already exists (cosine ≥ 0.92). Pass `force_create=true` only after the user confirms it's a different record. |
 | `update_record(record_id, namespace, updates)` | Creator-only update |
 | `delete_record(record_id, namespace)` | Creator-only delete |
 | `update_any_record(record_id, namespace, updates)` | **Admin-only** override — bypasses the creator gate |
@@ -59,8 +69,23 @@ Handling a `needs_identity` response:
 | `delete_any_person(person_id)` | **Admin-only** override |
 | `promote_person(person_id, add_scope)` | **Admin-only** — add a scope label to an existing person (e.g. a friend becomes a colleague) |
 | `merge_persons(canonical_id, alias_id)` | **Admin-only** — merge a duplicate `:Person` record into a canonical one. Reassigns `:INVOLVES` edges and rewrites `author_user_id` on every record the alias authored to the canonical's `primary_user_id`; also adds the alias's identifier to the canonical's aliases list. Use when you discover two records represent the same real human. |
+| `relate_persons(from_person_id, to_person_id, relation_type)` | Add or reaffirm a typed edge `(:Person {from})-[:<REL>]->(:Person {to})` between two existing people. Idempotent (MERGE). ACL: admin or author of `from`. Use when a relationship is described after both people already exist; for brand-new people, prefer `create_person(relations=[...])`. |
 
-Categories: `idea`, `memory`, `knowledge`, `procedure`, `experiment`, `incident`, `project`, `technical`, `strategy`, `communication_style`, `policy`, `operational`.
+### Entity tools
+
+Use `:Entity` for *referable things*: brands, companies, departments, products, projects, tools, marketplaces, locations — anything other records talk *about*. Do NOT use `:Entity` for observations (those are `:Memory`) or humans (those are `:Person`).
+
+| Tool | Purpose |
+|------|---------|
+| `create_entity(entity_type, name, description?, tags?, related_entities?, related_people?, force_create?)` | Create a referable entity. `entity_type` is canonicalized to snake_case (`Brand` → `brand`); prefer re-using types you've seen via `search_entities` over inventing new ones. Returns `{"status": "possible_duplicate"}` at cosine ≥ 0.92; pass `force_create=true` only after user confirmation. |
+| `search_entities(search_query, entity_type?, top_k)` | Semantic search. `entity_type` filter is optional — omit to search across all types. |
+| `update_entity(entity_id, updates)` | Creator-only (admin can also modify their own). Allowed fields: `name`, `entity_type`, `description`, `tags`. Embedding refreshes automatically if any of those three change. |
+| `delete_entity(entity_id)` | Creator-only / admin. DETACH DELETEs the entity and all its edges. |
+| `relate_entities(from_entity_id, to_entity_id, relation_type)` | Add or reaffirm a typed edge between two entities. Idempotent. ACL: admin or author of `from`. Typical relations: `part_of`, `owns`, `uses`, `located_in`, `supplies`. |
+
+Categories (for `:Memory`): `idea`, `memory`, `knowledge`, `procedure`, `experiment`, `incident`, `project`, `technical`, `strategy`, `communication_style`, `policy`, `operational`.
+
+Entity types are **free-form** but should reuse common forms. Expect to see: `brand`, `company`, `department`, `team`, `product`, `project`, `tool`, `marketplace`, `location`, `warehouse`, `channel`. Before inventing a new `entity_type`, run `search_entities` for existing entities of similar kind and prefer their type if one fits.
 
 For categories with examples, schema fields, and workflow walkthroughs, read `references/entity-relationship-guide.md`.
 
@@ -70,11 +95,19 @@ Every write stores the caller's `primary_user_id` as `author_user_id` on the rec
 
 ## Relationships
 
-- `related_people=["per_..."]` on `create_record` creates `(:Memory)-[:INVOLVES]->(:Person)` edges.
-- `related_memories=["mem_..."]` creates `(:Memory)-[:RELATED_TO]->(:Memory)`.
-- `relations=[{"related_person_id": "per_...", "relation_type": "colleague"}]` on `create_person` creates `(:Person)-[:COLLEAGUE]->(:Person)` (relation type sanitized to UPPER_SNAKE_CASE).
+At creation time:
+- `related_people=["per_..."]` on `create_record` → `(:Memory)-[:INVOLVES]->(:Person)`.
+- `related_memories=["mem_..."]` on `create_record` → `(:Memory)-[:RELATED_TO]->(:Memory)`.
+- `related_entities=["ent_..."]` on `create_record` → `(:Memory)-[:ABOUT]->(:Entity)` — use this to say "this memory is about Mellanni / Amazon Dept / Helium 10 / etc.".
+- `relations=[{"related_person_id": "per_...", "relation_type": "colleague"}]` on `create_person` → `(:Person)-[:COLLEAGUE]->(:Person)` (relation type sanitized to UPPER_SNAKE_CASE).
+- `related_entities=["ent_..."]` on `create_entity` → `(:Entity)-[:RELATED_TO]->(:Entity)`.
+- `related_people=["per_..."]` on `create_entity` → `(:Entity)-[:INVOLVES]->(:Person)`.
 
-These are managed by the memory tools — you do not call Neo4j directly for relationships.
+After the fact (nodes already exist):
+- `relate_persons(from, to, relation_type)` — typed edge between two people (e.g. `manages`, `reports_to`).
+- `relate_entities(from, to, relation_type)` — typed edge between two entities (e.g. `part_of`, `owns`).
+
+These are all managed by the tools — you do not call Neo4j directly for relationships.
 
 ### Linking follow-up and related memories (IMPORTANT)
 
@@ -136,6 +169,38 @@ Edge cases:
 - **Duplicate discovered after the fact**: admins merge with `merge_persons(canonical_id, alias_id)`. Pick whichever node has richer content as canonical.
 
 The caller's own `:Person` uses alias-aware lookup — Telegram/Email/Slack identifiers for the same human resolve to the same node once an admin has merged the legacy duplicates.
+
+## Preventing duplicate `:Entity` records
+
+Same pattern as memories: before writing, the code embeds `name + entity_type + description`, vector-searches the `entity_embedding` index, and if any result has cosine ≥ 0.92 returns `{"status": "possible_duplicate", "matches": [...]}` without creating.
+
+Handling a `possible_duplicate` on `create_entity`:
+1. Show the match(es) — each item includes `entity_id`, `name`, `entity_type`, `description_preview`, `score`.
+2. Ask the user: "I already have `<name>` (type: `<entity_type>`, similarity `<score>`). Is this the same thing, or something different?"
+3. Based on the answer:
+   - **Same thing** → use `update_entity` to enrich (better description, new tags), or `relate_entities` to link the new concept to the existing one. Don't create a duplicate.
+   - **Different thing** (user explicitly confirms) → retry `create_entity` with `force_create=true`.
+
+Good practice before `create_entity`: run `search_entities(search_query="<proposed name + context>")` yourself to see what's already there. Prefer linking to existing entities over creating new ones — the graph gets stronger with each reused reference.
+
+## When to use `:Memory` vs `:Entity` vs `:Person`
+
+The most common mistake is shoving something into `:Memory` when it should be an `:Entity`. Decision test:
+
+- **"Is this a thing other records will point at over time?"** → `:Entity`.
+  - "Mellanni brand" — yes. "Amazon Department" — yes. "Helium 10 tool" — yes. "Lightning Deals feature" — yes.
+- **"Is this an observation — something that happened, a decision, a fact I'm recording right now?"** → `:Memory`.
+  - "We decided to switch to DHL last week" — observation. "How LD scheduling works" — procedure/knowledge. "Igor raised a concern about X" — incident/communication.
+- **"Is this a human I'd want to reach for or reference by name?"** → `:Person`.
+  - "Sergey (department head)" — person. "Alice at SupplierCo" — person.
+
+When a user describes a new concept, ask yourself: "Will other memories or entities point at this over time?" If yes, it's an `:Entity`. If it's a standalone fact / event / procedure that might reference entities but won't be referenced itself, it's a `:Memory`.
+
+Typical linking patterns:
+- `(:Memory "Q2 review meeting about Mellanni")-[:ABOUT]->(:Entity {entity_type: "brand"})` — a meeting about a brand.
+- `(:Entity {entity_type: "department"})-[:PART_OF]->(:Entity {entity_type: "brand"})` — department belongs to a brand.
+- `(:Person)-[:WORKS_AT]->(:Entity {entity_type: "company"})` — employment.
+- `(:Person)-[:MANAGES]->(:Person)` — reporting chain.
 
 ## Namespace selection heuristics
 
