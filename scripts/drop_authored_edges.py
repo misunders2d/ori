@@ -62,9 +62,20 @@ STAMP = (
 # Drop every :AUTHORED edge in the graph. Run only after STAMP completes.
 DROP = "MATCH ()-[r:AUTHORED]->() DELETE r RETURN count(r) AS dropped"
 
+# Stamp self-authorship on orphan :Person nodes that never had an :AUTHORED
+# edge in the first place (auto-provisioned caller stubs pre-date the edge
+# model; also any legacy manually-created stubs). `author_user_id =
+# primary_user_id` treats them as self-authored, which matches the
+# forward-looking auto-provisioning path.
+STAMP_PERSON_ORPHANS = (
+    "MATCH (p:Person) "
+    "WHERE p.author_user_id IS NULL AND p.primary_user_id IS NOT NULL "
+    "SET p.author_user_id = p.primary_user_id "
+    "RETURN count(p) AS stamped"
+)
+
 # Post-migration sanity: :Memory / :Person nodes with no author_user_id
-# shouldn't exist (every authored node should have been stamped). Report
-# count so we can spot orphans.
+# shouldn't exist. Report count so we can spot orphans.
 COUNT_ORPHANS = (
     "MATCH (n) WHERE (n:Memory OR n:Person) AND n.author_user_id IS NULL "
     "RETURN labels(n) AS labels, count(n) AS n"
@@ -97,6 +108,15 @@ async def run(apply: bool) -> int:
 
         dropped = (await (await session.run(DROP)).single())["dropped"]
         logger.info("Dropped %d :AUTHORED edge(s).", dropped)
+
+        person_orphans_stamped = (
+            await (await session.run(STAMP_PERSON_ORPHANS)).single()
+        )["stamped"]
+        logger.info(
+            "Stamped %d orphan :Person node(s) with self-authorship "
+            "(author_user_id = primary_user_id).",
+            person_orphans_stamped,
+        )
 
         after_edges = (await (await session.run(COUNT_EDGES)).single())["n"]
         orphans = [dict(r) async for r in await session.run(COUNT_ORPHANS)]

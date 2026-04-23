@@ -220,6 +220,9 @@ async def _resolve_caller_person(driver, caller: str, is_company: bool) -> str:
 
     scope_label = _SCOPE_TO_PERSON_LABEL["professional" if is_company else "personal"]
     person_id = _auto_person_id(caller)
+    # author_user_id is set to the caller's own primary_user_id — an
+    # auto-provisioned stub is self-authored. Keeps the ACL invariant
+    # (every :Person has an author_user_id) from leaking.
     create_query = (
         "MERGE (p:Person {primary_user_id: $caller}) "
         "ON CREATE SET "
@@ -227,6 +230,7 @@ async def _resolve_caller_person(driver, caller: str, is_company: bool) -> str:
         "    p.full_name = $caller, "
         "    p.aliases = [], "
         "    p.is_auto_provisioned = true, "
+        "    p.author_user_id = $caller, "
         "    p.created_at = datetime(), "
         "    p.updated_at = datetime() "
         f"SET p:{scope_label}"
