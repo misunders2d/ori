@@ -37,6 +37,9 @@ class KnowledgeToolset(BaseToolset):
             promote_person,
             relate_entities,
             relate_entity_to_person,
+            relate_memories,
+            relate_memory_to_entity,
+            relate_memory_to_person,
             relate_person_to_entity,
             relate_persons,
             search_entities,
@@ -74,7 +77,10 @@ class KnowledgeToolset(BaseToolset):
             FunctionTool(func=update_entity),
             FunctionTool(func=delete_entity),
             FunctionTool(func=relate_entities),
-            # Cross-type relations (:Person <-> :Entity, post-hoc)
+            # Cross-type relations (post-hoc, typed edges)
             FunctionTool(func=relate_person_to_entity),
             FunctionTool(func=relate_entity_to_person),
+            FunctionTool(func=relate_memory_to_person),
+            FunctionTool(func=relate_memory_to_entity),
+            FunctionTool(func=relate_memories),
         ]

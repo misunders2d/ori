@@ -104,14 +104,35 @@ At creation time:
 - `related_people=["per_..."]` on `create_entity` → `(:Entity)-[:INVOLVES]->(:Person)`.
 
 After the fact (nodes already exist):
-- `relate_persons(from, to, relation_type)` — typed edge between two people (e.g. `manages`, `reports_to`).
-- `relate_entities(from, to, relation_type)` — typed edge between two entities (e.g. `part_of`, `owns`).
-- `relate_person_to_entity(from_person_id, to_entity_id, relation_type)` — person → entity. Typical relations where the person is the grammatical subject: `owns`, `works_at`, `manages`, `uses`, `runs`, `leads`. Example: *"Igor owns Poluco"* → `(:Person Igor)-[:OWNS]->(:Entity Poluco)`.
-- `relate_entity_to_person(from_entity_id, to_person_id, relation_type)` — entity → person. Typical relations where the entity is the grammatical subject: `led_by`, `employs`, `owned_by`. Example: *"Amazon Department is led by Sergey"* → `(:Entity Amazon Dept)-[:LED_BY]->(:Person Sergey)`.
+- `relate_persons(from, to, relation_type)` — two people (e.g. `manages`, `reports_to`, `spouse_of`).
+- `relate_entities(from, to, relation_type)` — two entities (e.g. `part_of`, `owns`, `supplies`).
+- `relate_person_to_entity(from_person_id, to_entity_id, relation_type)` — person → entity. Person is the grammatical subject: `owns`, `works_at`, `manages`, `uses`, `runs`, `leads`. Example: *"Igor owns Poluco"* → `(:Person Igor)-[:OWNS]->(:Entity Poluco)`.
+- `relate_entity_to_person(from_entity_id, to_person_id, relation_type)` — entity → person. Entity is the grammatical subject: `led_by`, `employs`, `owned_by`. Example: *"Amazon Department is led by Sergey"* → `(:Entity Amazon Dept)-[:LED_BY]->(:Person Sergey)`.
+- `relate_memory_to_person(from_memory_id, to_person_id, relation_type)` — add a typed person-link to an existing memory. Use when the default `:INVOLVES` from `related_people` is too generic. Examples: `raised_by`, `decided_by`, `reported_by`, `assigned_to`, `attended_by`.
+- `relate_memory_to_entity(from_memory_id, to_entity_id, relation_type)` — typed entity-link on an existing memory (beyond default `:ABOUT`). Examples: `affected`, `contradicts`, `implements`.
+- `relate_memories(from_memory_id, to_memory_id, relation_type)` — typed memory-to-memory edge (beyond default `:RELATED_TO`). Examples: `supersedes`, `follows_up`, `corrects`, `references`.
 
 All MERGE-based (idempotent). All gated on the `from` node's authorship (or admin). All sanitize `relation_type` to UPPER_SNAKE_CASE.
 
 These are all managed by the tools — you do not call Neo4j directly for relationships.
+
+### Typed related_* at creation time
+
+Every `related_*` list on `create_record` and `create_entity` accepts two shapes:
+
+```python
+# Shape 1 — bare IDs. Edge type defaults to INVOLVES / RELATED_TO / ABOUT
+# depending on which slot. Fast path for the common case.
+related_people=["per_alice", "per_bob"]
+
+# Shape 2 — typed dicts. One edge type per item, sanitized to UPPER_SNAKE_CASE.
+related_people=[
+    {"person_id": "per_igor", "relation_type": "raised_by"},
+    {"person_id": "per_sergey", "relation_type": "decided_by"},
+]
+```
+
+Mixed lists are fine (some bare, some typed — the bare ones inherit the default). Use typed form whenever the relationship has meaning richer than "involves" / "related to" / "about"; don't force everything into the default just because it's shorter to type. `create_person(relations=[...])` has always used this dict shape.
 
 ### Don't invent workarounds — bounce the gap back to the user (IMPORTANT)
 

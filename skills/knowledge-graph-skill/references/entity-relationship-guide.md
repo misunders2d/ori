@@ -54,6 +54,9 @@ Relationships created by the tools:
 - `(:Entity)-[:<RELATION_TYPE>]->(:Entity)` — from `relate_entities(from, to, relation_type)` after creation.
 - `(:Person)-[:<RELATION_TYPE>]->(:Entity)` — from `relate_person_to_entity(from_person_id, to_entity_id, relation_type)` after both nodes exist. Use when the person is the grammatical subject: `OWNS`, `WORKS_AT`, `MANAGES`, `USES`, `RUNS`, `LEADS`.
 - `(:Entity)-[:<RELATION_TYPE>]->(:Person)` — from `relate_entity_to_person(from_entity_id, to_person_id, relation_type)` after both nodes exist. Use when the entity is the grammatical subject: `LED_BY`, `EMPLOYS`, `OWNED_BY`.
+- `(:Memory)-[:<RELATION_TYPE>]->(:Person)` — typed form via `relate_memory_to_person` post-hoc or via `related_people=[{"person_id": ..., "relation_type": ...}]` at create time. Default is `INVOLVES`; typed examples: `RAISED_BY`, `DECIDED_BY`, `REPORTED_BY`, `ASSIGNED_TO`, `ATTENDED_BY`, `MENTIONED`.
+- `(:Memory)-[:<RELATION_TYPE>]->(:Entity)` — typed form via `relate_memory_to_entity` post-hoc or via `related_entities=[{"entity_id": ..., "relation_type": ...}]` at create time. Default is `ABOUT`; typed examples: `AFFECTED`, `CONTRADICTS`, `IMPLEMENTS`.
+- `(:Memory)-[:<RELATION_TYPE>]->(:Memory)` — typed form via `relate_memories` post-hoc or via `related_memories=[{"memory_id": ..., "relation_type": ...}]` at create time. Default is `RELATED_TO`; typed examples: `SUPERSEDES`, `FOLLOWS_UP`, `CORRECTS`, `REFERENCES`.
 
 Authorship is not a graph edge — it's stored as `author_user_id`, `via_bot`, and `created_at` properties on each `:Memory` / `:Person` / `:Entity` node. The author's `:Person` node is resolvable by `primary_user_id` when you need name lookups.
 

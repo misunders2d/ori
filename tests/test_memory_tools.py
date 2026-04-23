@@ -1830,6 +1830,226 @@ class TestRelateEntityToPerson:
 
 
 # ---------------------------------------------------------------------------
+# _normalize_related + _group_by_relation (pure)
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeRelated:
+    def test_bare_string_list_gets_default(self):
+        out = memory_tools._normalize_related(
+            ["per_1", "per_2"], "INVOLVES", ("person_id", "id"),
+        )
+        assert out == [("per_1", "INVOLVES"), ("per_2", "INVOLVES")]
+
+    def test_dict_with_relation_type(self):
+        out = memory_tools._normalize_related(
+            [{"person_id": "per_1", "relation_type": "raised_by"}],
+            "INVOLVES", ("person_id", "id"),
+        )
+        assert out == [("per_1", "RAISED_BY")]
+
+    def test_dict_without_relation_type_falls_back(self):
+        out = memory_tools._normalize_related(
+            [{"person_id": "per_1"}], "INVOLVES", ("person_id", "id"),
+        )
+        assert out == [("per_1", "INVOLVES")]
+
+    def test_mixed_bare_and_typed(self):
+        out = memory_tools._normalize_related(
+            ["per_1", {"person_id": "per_2", "relation_type": "decided_by"}],
+            "INVOLVES", ("person_id", "id"),
+        )
+        assert out == [("per_1", "INVOLVES"), ("per_2", "DECIDED_BY")]
+
+    def test_multiple_id_keys(self):
+        # Memory-side items can use memory_id OR record_id OR id.
+        out = memory_tools._normalize_related(
+            [{"memory_id": "mem_1"}, {"record_id": "mem_2"}, {"id": "mem_3"}],
+            "RELATED_TO", ("memory_id", "record_id", "id"),
+        )
+        assert out == [
+            ("mem_1", "RELATED_TO"),
+            ("mem_2", "RELATED_TO"),
+            ("mem_3", "RELATED_TO"),
+        ]
+
+    def test_invalid_items_dropped(self):
+        out = memory_tools._normalize_related(
+            [{}, {"relation_type": "no_id"}, None, 42, ""],
+            "INVOLVES", ("person_id", "id"),
+        )
+        assert out == []
+
+    def test_group_by_relation_collapses_common(self):
+        groups = memory_tools._group_by_relation(
+            [("per_1", "INVOLVES"), ("per_2", "INVOLVES"), ("per_3", "RAISED_BY")]
+        )
+        assert groups == {"INVOLVES": ["per_1", "per_2"], "RAISED_BY": ["per_3"]}
+
+
+# ---------------------------------------------------------------------------
+# create_record with typed related_people (→ non-default edge type)
+# ---------------------------------------------------------------------------
+
+
+class TestCreateRecordTypedRelations:
+    @pytest.mark.asyncio
+    async def test_typed_related_people_creates_typed_edge(self, patched_driver):
+        async def _run(*args, **kwargs):
+            query = args[0] if args else ""
+            r = AsyncMock()
+            if _is_resolve_caller_lookup(query):
+                r.single = AsyncMock(return_value={"canonical": "admin@example.com"})
+            elif "p.is_auto_provisioned AS is_auto_provisioned" in query:
+                r.single = AsyncMock(return_value={
+                    "person_id": "per_admin", "first_name": "A", "last_name": "U",
+                    "full_name": "A U", "is_auto_provisioned": False,
+                })
+            elif _is_memory_dedup_query(query):
+                async def aiter(self):
+                    if False:
+                        yield None
+                r.__aiter__ = aiter
+                r.single = AsyncMock(return_value=None)
+            else:
+                r.single = AsyncMock(return_value={"record_id": "mem_typed"})
+            return r
+
+        patched_driver.run = AsyncMock(side_effect=_run)
+        result = await memory_tools.create_record(
+            "professional", "Incident raised by Igor", "incident note",
+            "incident", [],
+            related_people=[{"person_id": "per_igor", "relation_type": "raised_by"}],
+            tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "success"
+        queries = [c.args[0] for c in patched_driver.run.await_args_list]
+        # The typed edge — :RAISED_BY, not :INVOLVES — must be emitted.
+        assert any("MERGE (m)-[r:RAISED_BY]->(p)" in q for q in queries), (
+            "expected typed :RAISED_BY edge from dict form of related_people"
+        )
+        # And no :INVOLVES for this record, since all items were typed.
+        assert not any("MERGE (m)-[r:INVOLVES]->(p)" in q for q in queries)
+
+    @pytest.mark.asyncio
+    async def test_bare_related_people_still_default_involves(self, patched_driver):
+        """Backward-compat: bare string IDs keep the old :INVOLVES behaviour."""
+        async def _run(*args, **kwargs):
+            query = args[0] if args else ""
+            r = AsyncMock()
+            if _is_resolve_caller_lookup(query):
+                r.single = AsyncMock(return_value={"canonical": "admin@example.com"})
+            elif "p.is_auto_provisioned AS is_auto_provisioned" in query:
+                r.single = AsyncMock(return_value={
+                    "person_id": "per_admin", "first_name": "A", "last_name": "U",
+                    "full_name": "A U", "is_auto_provisioned": False,
+                })
+            elif _is_memory_dedup_query(query):
+                async def aiter(self):
+                    if False:
+                        yield None
+                r.__aiter__ = aiter
+                r.single = AsyncMock(return_value=None)
+            else:
+                r.single = AsyncMock(return_value={"record_id": "mem_bare"})
+            return r
+
+        patched_driver.run = AsyncMock(side_effect=_run)
+        result = await memory_tools.create_record(
+            "professional", "Meeting involved Alice", "meeting note",
+            "memory", [],
+            related_people=["per_alice"],
+            tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "success"
+        queries = [c.args[0] for c in patched_driver.run.await_args_list]
+        assert any("MERGE (m)-[r:INVOLVES]->(p)" in q for q in queries)
+
+
+# ---------------------------------------------------------------------------
+# relate_memory_to_person / relate_memory_to_entity / relate_memories
+# ---------------------------------------------------------------------------
+
+
+class TestRelateMemoryTools:
+    @pytest.mark.asyncio
+    async def test_memory_to_person_admin(self, patched_driver):
+        patched_driver.run = _dispatched_run(
+            record_row={
+                "from_id": "mem_x", "to_id": "per_igor",
+                "relation_type": "RAISED_BY", "outcome": "created",
+            },
+            resolve_hit={"canonical": "admin@example.com"},
+        )
+        result = await memory_tools.relate_memory_to_person(
+            "mem_x", "per_igor", "raised_by",
+            tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "success"
+        assert result["from_memory_id"] == "mem_x"
+        assert result["to_person_id"] == "per_igor"
+        assert result["relation_type"] == "RAISED_BY"
+        merge_q = next(
+            q for q in (c.args[0] for c in patched_driver.run.await_args_list)
+            if "MERGE (a)-[r:RAISED_BY]->(b)" in q
+        )
+        assert "MATCH (a:Memory" in merge_q
+        assert "(b:Person" in merge_q
+
+    @pytest.mark.asyncio
+    async def test_memory_to_entity_author_gated(self, patched_driver):
+        patched_driver.run = _dispatched_run(
+            record_row={
+                "from_id": "mem_x", "to_id": "ent_mellanni",
+                "relation_type": "AFFECTED", "outcome": "created",
+            },
+            resolve_hit={"canonical": "bob@example.com"},
+        )
+        result = await memory_tools.relate_memory_to_entity(
+            "mem_x", "ent_mellanni", "affected",
+            tool_context=_make_ctx("bob@example.com"),
+        )
+        assert result["status"] == "success"
+        merge_q = next(
+            q for q in (c.args[0] for c in patched_driver.run.await_args_list)
+            if "MERGE (a)-[r:AFFECTED]->(b)" in q
+        )
+        # Author path must include the author_user_id gate.
+        assert "a.author_user_id = $caller" in merge_q
+
+    @pytest.mark.asyncio
+    async def test_memories_rejects_self_link(self, patched_driver):
+        result = await memory_tools.relate_memories(
+            "mem_x", "mem_x", "supersedes",
+            tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_memories_typed_edge(self, patched_driver):
+        patched_driver.run = _dispatched_run(
+            record_row={
+                "from_id": "mem_new", "to_id": "mem_old",
+                "relation_type": "SUPERSEDES", "outcome": "created",
+            },
+            resolve_hit={"canonical": "admin@example.com"},
+        )
+        result = await memory_tools.relate_memories(
+            "mem_new", "mem_old", "supersedes",
+            tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "success"
+        assert result["relation_type"] == "SUPERSEDES"
+        merge_q = next(
+            q for q in (c.args[0] for c in patched_driver.run.await_args_list)
+            if "MERGE (a)-[r:SUPERSEDES]->(b)" in q
+        )
+        # Both source and target are :Memory.
+        assert "MATCH (a:Memory" in merge_q
+        assert "(b:Memory" in merge_q
+
+
+# ---------------------------------------------------------------------------
 # create_record with related_entities → :ABOUT edge
 # ---------------------------------------------------------------------------
 

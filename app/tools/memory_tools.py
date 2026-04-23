@@ -220,6 +220,53 @@ def _canonicalize_entity_type(entity_type: str) -> str:
     return "".join(out)
 
 
+def _normalize_related(items, default_type: str, id_keys: tuple) -> list[tuple[str, str]]:
+    """Normalize polymorphic related_* input to [(id, sanitized_rel_type), ...].
+
+    Accepts both shapes for backwards compatibility:
+    - `["per_1", "per_2"]`  — bare IDs, all get `default_type`.
+    - `[{"person_id": "per_1", "relation_type": "raised_by"}, ...]` — typed.
+      Any of `id_keys` works as the ID field name; `relation_type` defaults
+      to `default_type` when omitted.
+
+    Returns tuples of `(id, UPPER_SNAKE_CASE_relation)`. Invalid items are
+    silently dropped (not worth surfacing — callers shouldn't have to handle
+    malformed lists).
+    """
+    default_safe = _sanitize_relation_type(default_type)
+    out: list[tuple[str, str]] = []
+    for item in items or []:
+        if isinstance(item, str):
+            if item:
+                out.append((item, default_safe))
+        elif isinstance(item, dict):
+            raw_id = None
+            for k in id_keys:
+                if item.get(k):
+                    raw_id = item[k]
+                    break
+            if not raw_id:
+                continue
+            rel_type = item.get("relation_type")
+            safe = _sanitize_relation_type(rel_type) if rel_type else default_safe
+            out.append((raw_id, safe))
+    return out
+
+
+def _group_by_relation(items: list[tuple[str, str]]) -> dict[str, list[str]]:
+    """Group normalized `(id, rel_type)` pairs by rel_type → list of IDs.
+
+    Lets the link helpers emit one UNWIND-MERGE per rel_type instead of one
+    query per item. For the common case (all items share the default type),
+    this collapses to a single query.
+    """
+    from collections import defaultdict
+    groups: dict[str, list[str]] = defaultdict(list)
+    for item_id, rel_type in items:
+        groups[rel_type].append(item_id)
+    return dict(groups)
+
+
 async def _resolve_caller_person(driver, caller: str, is_company: bool) -> str:
     """Find-or-create the caller's :Person node. Return its canonical primary_user_id.
 
@@ -637,11 +684,23 @@ async def create_record(
                   project, technical, strategy, communication_style, policy, operational.
         tags: List of keyword tags.
         related_people: Optional list of person IDs this memory involves.
-        related_memories: Optional list of memory IDs this links to.
-        related_entities: Optional list of entity IDs this memory is about —
-                          creates (:Memory)-[:ABOUT]->(:Entity) edges. Use when
-                          the memory references a brand / company / department /
-                          product / project / tool. Check `search_entities`
+                        Two shapes accepted:
+                        - `["per_1", "per_2"]` — bare IDs, edge type defaults
+                          to `:INVOLVES`.
+                        - `[{"person_id": "per_1", "relation_type": "raised_by"}, ...]`
+                          — typed edges. relation_type sanitized to
+                          UPPER_SNAKE_CASE. Useful types: `raised_by`,
+                          `decided_by`, `reported_by`, `assigned_to`,
+                          `attended_by`, `mentioned`.
+        related_memories: Optional list of memory IDs this links to. Same two
+                          shapes; default edge type is `:RELATED_TO`. Dict form
+                          accepts `memory_id`, `record_id`, or `id` as the key.
+                          Useful types: `supersedes`, `follows_up`, `corrects`,
+                          `references`.
+        related_entities: Optional list of entity IDs this memory is about.
+                          Same two shapes; default edge type is `:ABOUT`. Use
+                          when the memory references a brand / company /
+                          department / product / tool. Check `search_entities`
                           first to find the right IDs.
         author: Advisory only — retained for signature compat. Actual authorship
                 is stamped as `author_user_id` on the created node, resolved
@@ -758,13 +817,27 @@ async def create_record(
 
         # Secondary writes for relationship edges. Separate queries keep the
         # main create-Cypher small, and a failure here doesn't orphan the
-        # already-committed memory node.
+        # already-committed memory node. Each `related_*` list is normalized
+        # to `[(id, rel_type), ...]` — bare strings inherit the default
+        # (INVOLVES / RELATED_TO / ABOUT), dicts carry their own type.
         if related_people:
-            await _link_memory_to_people(driver, created_id, related_people, canonical_caller)
+            await _link_memory_to_people(
+                driver, created_id,
+                _normalize_related(related_people, "INVOLVES", ("person_id", "id")),
+                canonical_caller,
+            )
         if related_memories:
-            await _link_memory_to_memories(driver, created_id, related_memories, canonical_caller)
+            await _link_memory_to_memories(
+                driver, created_id,
+                _normalize_related(related_memories, "RELATED_TO", ("memory_id", "record_id", "id")),
+                canonical_caller,
+            )
         if related_entities:
-            await _link_memory_to_entities(driver, created_id, related_entities, canonical_caller)
+            await _link_memory_to_entities(
+                driver, created_id,
+                _normalize_related(related_entities, "ABOUT", ("entity_id", "id")),
+                canonical_caller,
+            )
 
         return {
             "status": "success",
@@ -1833,10 +1906,12 @@ async def create_entity(
         description: Optional longer context — what the entity is, why it
                      matters, how it's used. Embedded alongside the name.
         tags: Optional keyword list for filtered search.
-        related_entities: Optional list of :Entity.entity_id to link via
-                          (:Entity)-[:RELATED_TO]->(:Entity).
-        related_people: Optional list of :Person.person_id to link via
-                        (:Entity)-[:INVOLVES]->(:Person).
+        related_entities: Optional list of related entities. Accepts bare IDs
+                          (default edge type `:RELATED_TO`) or typed dicts
+                          `[{"entity_id": "ent_...", "relation_type": "part_of"}]`.
+        related_people: Optional list of related people. Accepts bare IDs
+                        (default edge type `:INVOLVES`) or typed dicts
+                        `[{"person_id": "per_...", "relation_type": "led_by"}]`.
         force_create: Set to True only after the user confirms a possible-
                       duplicate (cosine ≥ 0.92) is a genuinely different
                       entity. Default False.
@@ -1935,11 +2010,15 @@ async def create_entity(
 
         if related_entities:
             await _link_entity_to_entities(
-                driver, created_id, related_entities, canonical_caller,
+                driver, created_id,
+                _normalize_related(related_entities, "RELATED_TO", ("entity_id", "id")),
+                canonical_caller,
             )
         if related_people:
             await _link_entity_to_people(
-                driver, created_id, related_people, canonical_caller,
+                driver, created_id,
+                _normalize_related(related_people, "INVOLVES", ("person_id", "id")),
+                canonical_caller,
             )
 
         return {
@@ -2485,63 +2564,277 @@ async def relate_entity_to_person(
         return _error(str(e))
 
 
+async def relate_memory_to_person(
+    from_memory_id: str,
+    to_person_id: str,
+    relation_type: str,
+    tool_context: ToolContext = None,
+) -> dict:
+    """Create or reaffirm a typed edge (:Memory)-[:<REL>]->(:Person). Idempotent.
+
+    Use this when adding a person-link to an existing memory with semantics
+    richer than the generic `:INVOLVES` that `create_record(related_people=...)`
+    provides. Examples:
+    - *"Igor raised that incident about Alexa"* → add
+      `(:Memory incident)-[:RAISED_BY]->(:Person Igor)`.
+    - *"Sergey decided the DHL switch"* → add
+      `(:Memory DHL decision)-[:DECIDED_BY]->(:Person Sergey)`.
+
+    For generic "this memory involves this person" links, prefer passing
+    `related_people` on `create_record` at creation time. Use this tool when
+    the memory already exists, or when you need a non-default edge type.
+
+    ACL: admin or author of the memory. Idempotent (MERGE).
+
+    Args:
+        from_memory_id: source :Memory.record_id.
+        to_person_id: target :Person.person_id.
+        relation_type: Human-readable relation (e.g. 'raised_by',
+                       'decided_by', 'assigned_to'). Sanitized to
+                       UPPER_SNAKE_CASE; invalid forms → 'RELATED_TO'.
+    """
+    if not from_memory_id or not to_person_id:
+        return _error("Both from_memory_id and to_person_id are required.")
+
+    caller = _get_caller(tool_context)
+    if caller == "unknown":
+        return _error("Could not resolve caller identity from tool context.")
+
+    is_admin, is_company = _get_acl_flags(caller)
+    driver = await _ready_driver()
+    if driver is None:
+        return _error("Neo4j not configured.")
+
+    canonical_caller = await _resolve_caller_person(driver, caller, is_company)
+
+    try:
+        result = await _relate_cross_type(
+            driver,
+            from_label="Memory", from_key="record_id", from_id=from_memory_id,
+            to_label="Person", to_key="person_id", to_id=to_person_id,
+            relation_type=relation_type,
+            canonical_caller=canonical_caller,
+            is_admin=is_admin,
+        )
+        if result.get("status") == "success":
+            return {
+                "status": "success",
+                "from_memory_id": result["from_id"],
+                "to_person_id": result["to_id"],
+                "relation_type": result["relation_type"],
+                "outcome": result["outcome"],
+                "message": result["message"],
+            }
+        return result
+    except Exception as e:
+        logger.exception("relate_memory_to_person failed")
+        return _error(str(e))
+
+
+async def relate_memory_to_entity(
+    from_memory_id: str,
+    to_entity_id: str,
+    relation_type: str,
+    tool_context: ToolContext = None,
+) -> dict:
+    """Create or reaffirm a typed edge (:Memory)-[:<REL>]->(:Entity). Idempotent.
+
+    Use this when adding an entity-link to an existing memory with semantics
+    richer than the default `:ABOUT`. Examples:
+    - *"This incident affected the Mellanni brand"* → add
+      `(:Memory)-[:AFFECTED]->(:Entity Mellanni)`.
+    - *"This memory contradicts what we documented about Helium 10"* → add
+      `(:Memory)-[:CONTRADICTS_DOCS_ABOUT]->(:Entity Helium 10)`.
+
+    For generic "this memory is about this entity", prefer
+    `related_entities` on `create_record`. Use this tool for non-default
+    edge types or post-hoc additions.
+
+    ACL: admin or author of the memory. Idempotent (MERGE).
+
+    Args:
+        from_memory_id: source :Memory.record_id.
+        to_entity_id: target :Entity.entity_id.
+        relation_type: Sanitized to UPPER_SNAKE_CASE; invalid → 'RELATED_TO'.
+    """
+    if not from_memory_id or not to_entity_id:
+        return _error("Both from_memory_id and to_entity_id are required.")
+
+    caller = _get_caller(tool_context)
+    if caller == "unknown":
+        return _error("Could not resolve caller identity from tool context.")
+
+    is_admin, is_company = _get_acl_flags(caller)
+    driver = await _ready_driver()
+    if driver is None:
+        return _error("Neo4j not configured.")
+
+    canonical_caller = await _resolve_caller_person(driver, caller, is_company)
+
+    try:
+        result = await _relate_cross_type(
+            driver,
+            from_label="Memory", from_key="record_id", from_id=from_memory_id,
+            to_label="Entity", to_key="entity_id", to_id=to_entity_id,
+            relation_type=relation_type,
+            canonical_caller=canonical_caller,
+            is_admin=is_admin,
+        )
+        if result.get("status") == "success":
+            return {
+                "status": "success",
+                "from_memory_id": result["from_id"],
+                "to_entity_id": result["to_id"],
+                "relation_type": result["relation_type"],
+                "outcome": result["outcome"],
+                "message": result["message"],
+            }
+        return result
+    except Exception as e:
+        logger.exception("relate_memory_to_entity failed")
+        return _error(str(e))
+
+
+async def relate_memories(
+    from_memory_id: str,
+    to_memory_id: str,
+    relation_type: str,
+    tool_context: ToolContext = None,
+) -> dict:
+    """Create or reaffirm a typed edge between two existing memories. Idempotent.
+
+    Use this for typed memory-to-memory links beyond the default `:RELATED_TO`
+    that `related_memories` creates. Examples:
+    - `supersedes` — new SOP replaces an old one.
+    - `follows_up` — incident progression.
+    - `corrects` — a correction record refers back to the wrong one.
+    - `references` — a procedure references a policy.
+
+    ACL: admin or author of the `from` memory. Idempotent (MERGE).
+
+    Args:
+        from_memory_id: source :Memory.record_id.
+        to_memory_id: target :Memory.record_id.
+        relation_type: Sanitized to UPPER_SNAKE_CASE; invalid → 'RELATED_TO'.
+    """
+    if not from_memory_id or not to_memory_id:
+        return _error("Both from_memory_id and to_memory_id are required.")
+    if from_memory_id == to_memory_id:
+        return _error("from_memory_id and to_memory_id must differ.")
+
+    caller = _get_caller(tool_context)
+    if caller == "unknown":
+        return _error("Could not resolve caller identity from tool context.")
+
+    is_admin, is_company = _get_acl_flags(caller)
+    driver = await _ready_driver()
+    if driver is None:
+        return _error("Neo4j not configured.")
+
+    canonical_caller = await _resolve_caller_person(driver, caller, is_company)
+
+    try:
+        result = await _relate_cross_type(
+            driver,
+            from_label="Memory", from_key="record_id", from_id=from_memory_id,
+            to_label="Memory", to_key="record_id", to_id=to_memory_id,
+            relation_type=relation_type,
+            canonical_caller=canonical_caller,
+            is_admin=is_admin,
+        )
+        if result.get("status") == "success":
+            return {
+                "status": "success",
+                "from_memory_id": result["from_id"],
+                "to_memory_id": result["to_id"],
+                "relation_type": result["relation_type"],
+                "outcome": result["outcome"],
+                "message": result["message"],
+            }
+        return result
+    except Exception as e:
+        logger.exception("relate_memories failed")
+        return _error(str(e))
+
+
 # ---------------------------------------------------------------------------
 # Relationship helpers (internal — called from create_record / create_person)
 # ---------------------------------------------------------------------------
 
 
 async def _link_memory_to_people(
-    driver, record_id: str, people_ids: list[str], author_caller: str
+    driver, record_id: str, items: list[tuple[str, str]], author_caller: str
 ) -> None:
-    """Create (:Memory)-[:INVOLVES]->(:Person) edges."""
-    query = (
-        "MATCH (m:Memory {record_id: $record_id}) "
-        "UNWIND $people AS pid "
-        "MATCH (p:Person {person_id: pid}) "
-        "MERGE (m)-[r:INVOLVES]->(p) "
-        "ON CREATE SET r.created_at = datetime(), r.link_author_user_id = $caller"
-    )
-    try:
-        async with driver.session() as session:
-            await session.run(query, record_id=record_id, people=people_ids, caller=author_caller)
-    except Exception as e:
-        logger.warning("Failed to link memory %s to people: %s", record_id, e)
+    """Create (:Memory)-[:<REL>]->(:Person) edges.
+
+    `items` is the output of `_normalize_related(...)` — list of pre-sanitized
+    `(person_id, rel_type)` tuples. Items are grouped by rel_type and emitted
+    as one UNWIND-MERGE query per unique type. Default type (INVOLVES) is
+    applied at normalize time, not here.
+    """
+    if not items:
+        return
+    for rel_type, ids in _group_by_relation(items).items():
+        query = (
+            "MATCH (m:Memory {record_id: $record_id}) "
+            "UNWIND $people AS pid "
+            "MATCH (p:Person {person_id: pid}) "
+            f"MERGE (m)-[r:{rel_type}]->(p) "
+            "ON CREATE SET r.created_at = datetime(), r.link_author_user_id = $caller"
+        )
+        try:
+            async with driver.session() as session:
+                await session.run(query, record_id=record_id, people=ids, caller=author_caller)
+        except Exception as e:
+            logger.warning(
+                "Failed to link memory %s to people (%s): %s", record_id, rel_type, e,
+            )
 
 
 async def _link_memory_to_memories(
-    driver, record_id: str, memory_ids: list[str], author_caller: str
+    driver, record_id: str, items: list[tuple[str, str]], author_caller: str
 ) -> None:
-    """Create (:Memory)-[:RELATED_TO]->(:Memory) edges."""
-    query = (
-        "MATCH (m:Memory {record_id: $record_id}) "
-        "UNWIND $others AS oid "
-        "MATCH (o:Memory {record_id: oid}) "
-        "MERGE (m)-[r:RELATED_TO]->(o) "
-        "ON CREATE SET r.created_at = datetime(), r.link_author_user_id = $caller"
-    )
-    try:
-        async with driver.session() as session:
-            await session.run(query, record_id=record_id, others=memory_ids, caller=author_caller)
-    except Exception as e:
-        logger.warning("Failed to link memory %s to memories: %s", record_id, e)
+    """Create (:Memory)-[:<REL>]->(:Memory) edges. See `_link_memory_to_people`."""
+    if not items:
+        return
+    for rel_type, ids in _group_by_relation(items).items():
+        query = (
+            "MATCH (m:Memory {record_id: $record_id}) "
+            "UNWIND $others AS oid "
+            "MATCH (o:Memory {record_id: oid}) "
+            f"MERGE (m)-[r:{rel_type}]->(o) "
+            "ON CREATE SET r.created_at = datetime(), r.link_author_user_id = $caller"
+        )
+        try:
+            async with driver.session() as session:
+                await session.run(query, record_id=record_id, others=ids, caller=author_caller)
+        except Exception as e:
+            logger.warning(
+                "Failed to link memory %s to memories (%s): %s", record_id, rel_type, e,
+            )
 
 
 async def _link_memory_to_entities(
-    driver, record_id: str, entity_ids: list[str], author_caller: str
+    driver, record_id: str, items: list[tuple[str, str]], author_caller: str
 ) -> None:
-    """Create (:Memory)-[:ABOUT]->(:Entity) edges from create_record."""
-    query = (
-        "MATCH (m:Memory {record_id: $record_id}) "
-        "UNWIND $entities AS eid "
-        "MATCH (e:Entity {entity_id: eid}) "
-        "MERGE (m)-[r:ABOUT]->(e) "
-        "ON CREATE SET r.created_at = datetime(), r.link_author_user_id = $caller"
-    )
-    try:
-        async with driver.session() as session:
-            await session.run(query, record_id=record_id, entities=entity_ids, caller=author_caller)
-    except Exception as e:
-        logger.warning("Failed to link memory %s to entities: %s", record_id, e)
+    """Create (:Memory)-[:<REL>]->(:Entity) edges. Default rel_type is ABOUT."""
+    if not items:
+        return
+    for rel_type, ids in _group_by_relation(items).items():
+        query = (
+            "MATCH (m:Memory {record_id: $record_id}) "
+            "UNWIND $entities AS eid "
+            "MATCH (e:Entity {entity_id: eid}) "
+            f"MERGE (m)-[r:{rel_type}]->(e) "
+            "ON CREATE SET r.created_at = datetime(), r.link_author_user_id = $caller"
+        )
+        try:
+            async with driver.session() as session:
+                await session.run(query, record_id=record_id, entities=ids, caller=author_caller)
+        except Exception as e:
+            logger.warning(
+                "Failed to link memory %s to entities (%s): %s", record_id, rel_type, e,
+            )
 
 
 async def _link_person_relations(
@@ -2573,37 +2866,47 @@ async def _link_person_relations(
 
 
 async def _link_entity_to_entities(
-    driver, entity_id: str, entity_ids: list[str], author_caller: str
+    driver, entity_id: str, items: list[tuple[str, str]], author_caller: str
 ) -> None:
-    """Create (:Entity)-[:RELATED_TO]->(:Entity) edges from create_entity."""
-    query = (
-        "MATCH (e:Entity {entity_id: $entity_id}) "
-        "UNWIND $others AS oid "
-        "MATCH (o:Entity {entity_id: oid}) "
-        "WHERE o.entity_id <> e.entity_id "
-        "MERGE (e)-[r:RELATED_TO]->(o) "
-        "ON CREATE SET r.created_at = datetime(), r.link_author_user_id = $caller"
-    )
-    try:
-        async with driver.session() as session:
-            await session.run(query, entity_id=entity_id, others=entity_ids, caller=author_caller)
-    except Exception as e:
-        logger.warning("Failed to link entity %s to entities: %s", entity_id, e)
+    """Create (:Entity)-[:<REL>]->(:Entity) edges. Default rel_type is RELATED_TO."""
+    if not items:
+        return
+    for rel_type, ids in _group_by_relation(items).items():
+        query = (
+            "MATCH (e:Entity {entity_id: $entity_id}) "
+            "UNWIND $others AS oid "
+            "MATCH (o:Entity {entity_id: oid}) "
+            "WHERE o.entity_id <> e.entity_id "
+            f"MERGE (e)-[r:{rel_type}]->(o) "
+            "ON CREATE SET r.created_at = datetime(), r.link_author_user_id = $caller"
+        )
+        try:
+            async with driver.session() as session:
+                await session.run(query, entity_id=entity_id, others=ids, caller=author_caller)
+        except Exception as e:
+            logger.warning(
+                "Failed to link entity %s to entities (%s): %s", entity_id, rel_type, e,
+            )
 
 
 async def _link_entity_to_people(
-    driver, entity_id: str, people_ids: list[str], author_caller: str
+    driver, entity_id: str, items: list[tuple[str, str]], author_caller: str
 ) -> None:
-    """Create (:Entity)-[:INVOLVES]->(:Person) edges from create_entity."""
-    query = (
-        "MATCH (e:Entity {entity_id: $entity_id}) "
-        "UNWIND $people AS pid "
-        "MATCH (p:Person {person_id: pid}) "
-        "MERGE (e)-[r:INVOLVES]->(p) "
-        "ON CREATE SET r.created_at = datetime(), r.link_author_user_id = $caller"
-    )
-    try:
-        async with driver.session() as session:
-            await session.run(query, entity_id=entity_id, people=people_ids, caller=author_caller)
-    except Exception as e:
-        logger.warning("Failed to link entity %s to people: %s", entity_id, e)
+    """Create (:Entity)-[:<REL>]->(:Person) edges. Default rel_type is INVOLVES."""
+    if not items:
+        return
+    for rel_type, ids in _group_by_relation(items).items():
+        query = (
+            "MATCH (e:Entity {entity_id: $entity_id}) "
+            "UNWIND $people AS pid "
+            "MATCH (p:Person {person_id: pid}) "
+            f"MERGE (e)-[r:{rel_type}]->(p) "
+            "ON CREATE SET r.created_at = datetime(), r.link_author_user_id = $caller"
+        )
+        try:
+            async with driver.session() as session:
+                await session.run(query, entity_id=entity_id, people=ids, caller=author_caller)
+        except Exception as e:
+            logger.warning(
+                "Failed to link entity %s to people (%s): %s", entity_id, rel_type, e,
+            )
