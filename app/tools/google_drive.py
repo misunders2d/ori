@@ -190,6 +190,19 @@ def _export_mime_and_ext(google_mime: str) -> tuple[str, str]:
     return _GOOGLE_EXPORT.get(google_mime, _GOOGLE_EXPORT_FALLBACK)
 
 
+def _safe_drive_name(name: str) -> str:
+    """Sanitize a Drive file/doc title for safe use as a local filesystem path.
+
+    Drive titles are metadata and can contain any character, including `/` and
+    `\\` (common in meeting notes like 'Notes: "A/B 1:1"'). Filesystems treat
+    those as path separators, so `open(f"./dir/{title}", "wb")` silently tries
+    to write into a non-existent subdirectory. Replace separators rather than
+    basename'ing so the full title is preserved in the saved filename.
+    """
+    cleaned = (name or "file").strip().replace("/", "_").replace("\\", "_")
+    return cleaned or "file"
+
+
 async def drive_download_file(
     file_id: str,
     tool_context: ToolContext = None,
@@ -222,7 +235,8 @@ async def drive_download_file(
             meta_resp.raise_for_status()
             meta = meta_resp.json()
             source_mime = meta.get("mimeType", "")
-            name = meta.get("name", "file")
+            original_name = meta.get("name", "file")
+            name = _safe_drive_name(original_name)
 
             if source_mime.startswith("application/vnd.google-apps."):
                 export_mime, ext = _export_mime_and_ext(source_mime)
@@ -243,7 +257,7 @@ async def drive_download_file(
             resp.raise_for_status()
 
             os.makedirs("./tmp/drive_downloads", exist_ok=True)
-            path = f"./tmp/drive_downloads/{name}{ext}"
+            path = os.path.join("./tmp/drive_downloads", f"{name}{ext}")
             with open(path, "wb") as f:
                 f.write(resp.content)
 
