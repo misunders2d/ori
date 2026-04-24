@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 _ALLOWED_DIRS = [
     os.path.abspath("./tmp/uploads"),
     os.path.abspath("./tmp/exports"),
+    os.path.abspath("./tmp/gmail_attachments"),
+    os.path.abspath("./tmp/drive_downloads"),
 ]
 
 _ALLOWED_MODULES = {

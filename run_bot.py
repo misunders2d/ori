@@ -54,6 +54,7 @@ if is_cli_mode:
     logging.getLogger("google.adk").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
+from google.adk.artifacts import InMemoryArtifactService
 from google.adk.runners import Runner
 from google.adk.sessions import DatabaseSessionService
 from app.agent import app as ori_app
@@ -93,7 +94,15 @@ def get_runner():
                     conn.close()
         database_url = f"sqlite+aiosqlite:///{db_path}"
         session_service = DatabaseSessionService(db_url=database_url)
-        _global_runner = Runner(app=ori_app, session_service=session_service)
+        # Artifacts are in-memory, session-scoped by (app, user_id, session_id) —
+        # Gmail/Drive downloads of PDFs/images/audio/video save here so the model
+        # can perceive them via the load_artifacts tool. Lost on restart by design
+        # (user can re-download); in-process isolation prevents cross-user leaks.
+        _global_runner = Runner(
+            app=ori_app,
+            session_service=session_service,
+            artifact_service=InMemoryArtifactService(),
+        )
     return _global_runner
 
 def process_init_command(text: str, session_id: str = "") -> str:
@@ -185,6 +194,11 @@ async def run_proactive_diagnostics():
 async def main():
     logger.info("Initializing Autonomous Worker Daemon...")
     ensure_db_concurrency()
+    try:
+        from app.app_utils.tmp_sweeper import sweep_tmp
+        sweep_tmp()
+    except Exception as exc:
+        logger.warning("Startup tmp sweep failed: %s", exc)
     runner = get_runner()
     scheduler.start()
     tasks = []

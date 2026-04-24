@@ -5,16 +5,30 @@ retrieves their OAuth2 token, and makes authenticated API calls.
 """
 
 import logging
+import mimetypes
+import os
 from typing import Optional
 
 import httpx
 from google.adk.tools.tool_context import ToolContext
+from google.genai import types
 
+from app.app_utils.file_convert import is_convertible, to_text
+from app.app_utils.tmp_sweeper import sweep_tmp
 from app.tools.google_oauth.web_flow import refresh_access_token, start_auth_flow
 from app.tools.google_oauth.token_store import (
     get_token, save_token, delete_token,
     save_user_mapping, resolve_email, delete_user_mapping,
 )
+
+# Gemini inline-data acceptance — mirrors the gate in load_artifacts_tool.
+_ARTIFACT_INLINE_PREFIXES = ("image/", "audio/", "video/")
+_ARTIFACT_INLINE_EXACT = {"application/pdf"}
+
+
+def _is_artifact_inline(mime: str) -> bool:
+    mime = (mime or "").split(";", 1)[0].strip().lower()
+    return mime.startswith(_ARTIFACT_INLINE_PREFIXES) or mime in _ARTIFACT_INLINE_EXACT
 
 logger = logging.getLogger(__name__)
 
@@ -159,13 +173,34 @@ async def drive_list_files(
         return {"status": "error", "message": f"Drive API error: {e}"}
 
 
+# Export MIME + extension for each Google Workspace type. Text-based exports
+# (Docs → text/plain, Sheets → text/csv, Slides → text/plain) flow through
+# file_convert.to_text so the agent sees content directly in the tool response.
+# Drawings and everything else fall back to PDF.
+_GOOGLE_EXPORT = {
+    "application/vnd.google-apps.document": ("text/plain", ".txt"),
+    "application/vnd.google-apps.spreadsheet": ("text/csv", ".csv"),
+    "application/vnd.google-apps.presentation": ("text/plain", ".txt"),
+    "application/vnd.google-apps.drawing": ("image/png", ".png"),
+}
+_GOOGLE_EXPORT_FALLBACK = ("application/pdf", ".pdf")
+
+
+def _export_mime_and_ext(google_mime: str) -> tuple[str, str]:
+    return _GOOGLE_EXPORT.get(google_mime, _GOOGLE_EXPORT_FALLBACK)
+
+
 async def drive_download_file(
     file_id: str,
     tool_context: ToolContext = None,
 ) -> dict:
     """Download the content of a file from Google Drive.
 
-    For Google Docs/Sheets/Slides, exports as PDF. For regular files, downloads directly.
+    Google Docs/Slides export as text/plain, Sheets as CSV, Drawings as PNG —
+    text-based exports come back with their content in `extracted_text` so the
+    agent can read them directly. Other Workspace types fall back to PDF.
+    Regular files download as-is; convertible MIMEs (xlsx/csv/docx/pptx/rtf/
+    txt/md/json/yaml) also populate `extracted_text`.
 
     Args:
         file_id: The Google Drive file ID.
@@ -175,9 +210,10 @@ async def drive_download_file(
     if not token:
         return {"status": "error", "message": f"Google not connected for {email}. Use google_connect first."}
 
+    sweep_tmp()
+
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            # Get file metadata first
             meta_resp = await client.get(
                 f"{_DRIVE_API}/files/{file_id}",
                 params={"fields": "name,mimeType"},
@@ -185,36 +221,56 @@ async def drive_download_file(
             )
             meta_resp.raise_for_status()
             meta = meta_resp.json()
-            mime = meta.get("mimeType", "")
+            source_mime = meta.get("mimeType", "")
             name = meta.get("name", "file")
 
-            # Google Workspace files need export
-            if mime.startswith("application/vnd.google-apps."):
-                export_mime = "application/pdf"
-                if "spreadsheet" in mime:
-                    export_mime = "text/csv"
+            if source_mime.startswith("application/vnd.google-apps."):
+                export_mime, ext = _export_mime_and_ext(source_mime)
                 resp = await client.get(
                     f"{_DRIVE_API}/files/{file_id}/export",
                     params={"mimeType": export_mime},
                     headers=_auth_headers(token),
                 )
+                effective_mime = export_mime
             else:
                 resp = await client.get(
                     f"{_DRIVE_API}/files/{file_id}",
                     params={"alt": "media"},
                     headers=_auth_headers(token),
                 )
+                effective_mime = source_mime or (mimetypes.guess_type(name)[0] or "application/octet-stream")
+                ext = "" if os.path.splitext(name)[1] else (mimetypes.guess_extension(effective_mime) or "")
             resp.raise_for_status()
 
-            # Save to tmp
-            import os
             os.makedirs("./tmp/drive_downloads", exist_ok=True)
-            ext = ".csv" if "csv" in (export_mime if mime.startswith("application/vnd.google-apps.") else mime) else ""
             path = f"./tmp/drive_downloads/{name}{ext}"
             with open(path, "wb") as f:
                 f.write(resp.content)
 
-            return {"status": "success", "file_path": path, "filename": name, "size_bytes": len(resp.content)}
+            extracted_text = None
+            if is_convertible(effective_mime):
+                extracted_text = to_text(resp.content, effective_mime, name)
+
+            artifact_name = None
+            saved_filename = os.path.basename(path)
+            if tool_context and _is_artifact_inline(effective_mime):
+                part = types.Part.from_bytes(data=resp.content, mime_type=effective_mime)
+                try:
+                    await tool_context.save_artifact(saved_filename, part)
+                    artifact_name = saved_filename
+                except Exception as exc:
+                    logger.warning("save_artifact failed for %s: %s", saved_filename, exc)
+
+            return {
+                "status": "success",
+                "file_path": path,
+                "filename": name,
+                "mime": effective_mime,
+                "source_mime": source_mime,
+                "size_bytes": len(resp.content),
+                "extracted_text": extracted_text,
+                "artifact_name": artifact_name,
+            }
     except Exception as e:
         return {"status": "error", "message": f"Drive download error: {e}"}
 

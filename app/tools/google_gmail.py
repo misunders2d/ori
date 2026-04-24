@@ -8,15 +8,29 @@ Write tools (send/modify/drafts) can be added alongside without refactoring.
 import asyncio
 import base64
 import logging
+import mimetypes
 import os
-import time
+import re
 from html.parser import HTMLParser
 
 import httpx
 from google.adk.tools.tool_context import ToolContext
+from google.genai import types
 
+from app.app_utils.file_convert import is_convertible, to_text
+from app.app_utils.tmp_sweeper import sweep_tmp
 from app.tools.google_drive import _auth_headers, _get_user_email, _get_valid_token
 from app.tools.google_oauth.token_store import get_token
+
+# Gemini inline-data acceptance: any image/*, audio/*, video/*, plus application/pdf.
+# (Mirrors google.adk.tools.load_artifacts_tool._is_inline_mime_type_supported.)
+_ARTIFACT_INLINE_PREFIXES = ("image/", "audio/", "video/")
+_ARTIFACT_INLINE_EXACT = {"application/pdf"}
+
+
+def _is_artifact_inline(mime: str) -> bool:
+    mime = (mime or "").split(";", 1)[0].strip().lower()
+    return mime.startswith(_ARTIFACT_INLINE_PREFIXES) or mime in _ARTIFACT_INLINE_EXACT
 
 logger = logging.getLogger(__name__)
 
@@ -95,26 +109,6 @@ def _truncate(body: str, full: bool) -> str:
     return body[:_TRUNCATE_DEFAULT] + f"...[truncated, {dropped} more chars — call with full=True]"
 
 
-def _sweep_attachments() -> None:
-    """Remove expired files from the attachment cache. Missing dir is a no-op.
-
-    TTL hours read from GMAIL_ATTACHMENT_TTL_HOURS env var, default 24.
-    """
-    if not os.path.isdir(_ATTACHMENT_DIR):
-        return
-    try:
-        ttl_hours = float(os.environ.get("GMAIL_ATTACHMENT_TTL_HOURS", "24"))
-    except ValueError:
-        ttl_hours = 24.0
-    cutoff = time.time() - (ttl_hours * 3600)
-    for entry in os.scandir(_ATTACHMENT_DIR):
-        if not entry.is_file():
-            continue
-        try:
-            if entry.stat().st_mtime < cutoff:
-                os.remove(entry.path)
-        except OSError as e:
-            logger.warning("Failed to sweep %s: %s", entry.path, e)
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +145,49 @@ def _extract_attachments(payload: dict) -> list[dict]:
 
     walk(payload)
     return out
+
+
+# Matches Drive/Docs URLs that expose a file ID, plus the legacy ?id= form.
+# Drive folder URLs are intentionally excluded — drive_download_file can't pull folders.
+_DRIVE_URL_RE = re.compile(
+    r"https?://(?:drive|docs)\.google\.com/"
+    r"(?:(?P<kind>file|document|spreadsheets|presentation)/d/(?P<id>[A-Za-z0-9_-]{20,})"
+    r"|open\?id=(?P<open_id>[A-Za-z0-9_-]{20,}))",
+    re.IGNORECASE,
+)
+
+_KIND_LABEL = {
+    "file": "file",
+    "document": "document",
+    "spreadsheets": "spreadsheet",
+    "presentation": "presentation",
+}
+
+
+def _extract_drive_links(payload: dict) -> list[dict]:
+    """Walk text/plain and text/html parts for Drive file URLs.
+
+    Emails often deliver "Drive attachments" as inline links rather than MIME
+    parts with an attachmentId. Agents can chain drive_download_file on each
+    file_id returned here.
+    """
+    seen: dict[str, str] = {}
+
+    def visit(node: dict) -> None:
+        mime = node.get("mimeType", "")
+        if mime in ("text/plain", "text/html"):
+            raw = _decode_part_data(node.get("body", {}).get("data", ""))
+            for match in _DRIVE_URL_RE.finditer(raw):
+                fid = match.group("id") or match.group("open_id")
+                if not fid:
+                    continue
+                kind = _KIND_LABEL.get((match.group("kind") or "").lower(), "file")
+                seen.setdefault(fid, kind)
+        for child in node.get("parts", []) or []:
+            visit(child)
+
+    visit(payload)
+    return [{"file_id": fid, "kind": kind} for fid, kind in seen.items()]
 
 
 async def gmail_list_labels(tool_context: ToolContext = None) -> dict:
@@ -249,6 +286,7 @@ async def gmail_get_message(
             "headers": _headers_to_dict(payload.get("headers", [])),
             "body": body,
             "attachments": _extract_attachments(payload),
+            "drive_links": _extract_drive_links(payload),
         }
     except Exception as e:
         return {"status": "error", "message": f"Gmail API error: {e}"}
@@ -263,6 +301,7 @@ def _shape_message_full(data: dict, full: bool) -> dict:
         "headers": _headers_to_dict(payload.get("headers", [])),
         "body": _truncate(_decode_body(payload), full=full),
         "attachments": _extract_attachments(payload),
+        "drive_links": _extract_drive_links(payload),
     }
 
 
@@ -311,25 +350,32 @@ async def gmail_download_attachment(
     message_id: str,
     attachment_id: str,
     filename: str = "",
+    mime: str = "",
     tool_context: ToolContext = None,
 ) -> dict:
     """Download a Gmail attachment to the local cache.
 
-    Saves to ./tmp/gmail_attachments/{message_id}_{filename}. The cache is
-    swept at the start of this call — files older than GMAIL_ATTACHMENT_TTL_HOURS
+    Saves to ./tmp/gmail_attachments/{message_id}_{filename}. All tmp dirs are
+    swept at the start of this call — files older than TMP_STORAGE_TTL_HOURS
     (default 24) are removed.
+
+    For convertible MIME types (xlsx/csv/docx/pptx/rtf/txt/md/json/yaml), the
+    extracted text is included as `extracted_text` so the agent can read the
+    content directly. Non-convertible binaries (PDF/images/etc.) return only
+    metadata; run `analyze_data` on `file_path` for deeper inspection.
 
     Args:
         message_id: Gmail message ID the attachment belongs to.
         attachment_id: Attachment ID (from gmail_get_message).
         filename: Optional original filename. Falls back to attachment_id if empty.
+        mime: Attachment MIME type (from gmail_get_message). If omitted, guessed from filename.
     """
     email = _get_user_email(tool_context)
     token = await _get_valid_token(email)
     if not token:
         return {"status": "error", "message": f"Gmail not connected for {email}. Use google_connect first."}
 
-    _sweep_attachments()
+    sweep_tmp()
     os.makedirs(_ATTACHMENT_DIR, exist_ok=True)
 
     safe_name = _safe_filename(filename or attachment_id)
@@ -350,11 +396,29 @@ async def gmail_download_attachment(
         content = base64.urlsafe_b64decode(padded.encode())
         with open(out_path, "wb") as f:
             f.write(content)
+
+        resolved_mime = mime or mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
+        extracted_text = None
+        if is_convertible(resolved_mime):
+            extracted_text = to_text(content, resolved_mime, safe_name)
+
+        artifact_name = None
+        if tool_context and _is_artifact_inline(resolved_mime):
+            part = types.Part.from_bytes(data=content, mime_type=resolved_mime)
+            try:
+                await tool_context.save_artifact(safe_name, part)
+                artifact_name = safe_name
+            except Exception as exc:
+                logger.warning("save_artifact failed for %s: %s", safe_name, exc)
+
         return {
             "status": "success",
             "file_path": out_path,
             "filename": safe_name,
+            "mime": resolved_mime,
             "size_bytes": len(content),
+            "extracted_text": extracted_text,
+            "artifact_name": artifact_name,
         }
     except Exception as e:
         return {"status": "error", "message": f"Gmail API error: {e}"}

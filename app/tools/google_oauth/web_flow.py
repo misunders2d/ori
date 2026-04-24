@@ -27,6 +27,7 @@ USERINFO_ENDPOINT = "https://www.googleapis.com/oauth2/v2/userinfo"
 
 SCOPES = [
     "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/drive.readonly",
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/gmail.readonly",

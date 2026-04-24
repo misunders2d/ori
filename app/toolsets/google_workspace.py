@@ -1,3 +1,4 @@
+from google.adk.tools import load_artifacts
 from google.adk.tools.base_toolset import BaseToolset
 from google.adk.tools.function_tool import FunctionTool
 
@@ -50,4 +51,5 @@ class GoogleWorkspaceToolset(BaseToolset):
             FunctionTool(func=gmail_get_thread),
             FunctionTool(func=gmail_list_labels),
             FunctionTool(func=gmail_download_attachment),
+            load_artifacts,
         ]

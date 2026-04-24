@@ -7,7 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.tools.google_gmail import _decode_body, _sweep_attachments, _truncate
+from app.app_utils.tmp_sweeper import sweep_tmp
+from app.tools.google_gmail import _decode_body, _truncate
 from app.tools.google_oauth.web_flow import SCOPES
 
 
@@ -123,8 +124,7 @@ def test_truncate_exactly_at_threshold_unchanged():
 
 def test_sweep_missing_dir_is_noop(tmp_path):
     missing = str(tmp_path / "does_not_exist")
-    with patch("app.tools.google_gmail._ATTACHMENT_DIR", missing):
-        _sweep_attachments()  # must not raise
+    sweep_tmp(dirs=[missing])  # must not raise
     assert not os.path.exists(missing)
 
 
@@ -137,8 +137,8 @@ def test_sweep_removes_expired_files(tmp_path):
     fresh.write_bytes(b"fresh")
     old_mtime = time_mod.time() - 48 * 3600
     os.utime(old, (old_mtime, old_mtime))
-    with patch("app.tools.google_gmail._ATTACHMENT_DIR", str(d)):
-        _sweep_attachments()
+    removed = sweep_tmp(dirs=[str(d)])
+    assert removed == 1
     assert not old.exists()
     assert fresh.exists()
 
@@ -150,9 +150,8 @@ def test_sweep_respects_env_ttl_override(tmp_path):
     f.write_bytes(b"data")
     two_h_ago = time_mod.time() - 2 * 3600
     os.utime(f, (two_h_ago, two_h_ago))
-    with patch("app.tools.google_gmail._ATTACHMENT_DIR", str(d)), \
-         patch.dict(os.environ, {"GMAIL_ATTACHMENT_TTL_HOURS": "1"}):
-        _sweep_attachments()
+    with patch.dict(os.environ, {"TMP_STORAGE_TTL_HOURS": "1"}):
+        sweep_tmp(dirs=[str(d)])
     assert not f.exists()
 
 
@@ -491,7 +490,7 @@ async def test_gmail_download_attachment_writes_file_and_sweeps(tmp_path):
     with patch("app.tools.google_gmail._get_valid_token", AsyncMock(return_value="tok")), \
          patch("app.tools.google_gmail._get_user_email", return_value="user@test.com"), \
          patch("app.tools.google_gmail._ATTACHMENT_DIR", attach_dir), \
-         patch("app.tools.google_gmail._sweep_attachments", fake_sweep), \
+         patch("app.tools.google_gmail.sweep_tmp", fake_sweep), \
          patch("app.tools.google_gmail.httpx.AsyncClient", client_cls):
         result = await gmail_download_attachment(
             "msg_1", "att_1", filename="invoice.pdf", tool_context=_mock_ctx(),
@@ -518,7 +517,7 @@ async def test_gmail_download_attachment_default_filename(tmp_path):
     with patch("app.tools.google_gmail._get_valid_token", AsyncMock(return_value="tok")), \
          patch("app.tools.google_gmail._get_user_email", return_value="user@test.com"), \
          patch("app.tools.google_gmail._ATTACHMENT_DIR", attach_dir), \
-         patch("app.tools.google_gmail._sweep_attachments", lambda: None), \
+         patch("app.tools.google_gmail.sweep_tmp", lambda: None), \
          patch("app.tools.google_gmail.httpx.AsyncClient", client_cls):
         result = await gmail_download_attachment("msg_1", "att_1", tool_context=_mock_ctx())
     assert result["filename"] == "att_1"
@@ -530,7 +529,7 @@ async def test_google_workspace_toolset_registers_gmail_tools():
     from app.toolsets.google_workspace import GoogleWorkspaceToolset
     toolset = GoogleWorkspaceToolset()
     tools = await toolset.get_tools()
-    names = {t.func.__name__ for t in tools}
+    names = {getattr(t, "func", None).__name__ if getattr(t, "func", None) else t.name for t in tools}
     assert "gmail_list_messages" in names
     assert "gmail_get_message" in names
     assert "gmail_list_threads" in names
@@ -539,3 +538,4 @@ async def test_google_workspace_toolset_registers_gmail_tools():
     assert "gmail_download_attachment" in names
     assert "drive_list_files" in names
     assert "calendar_list_events" in names
+    assert "load_artifacts" in names
