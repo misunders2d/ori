@@ -12,10 +12,13 @@ when off.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Annotated, Any
 
+from google.adk.models import LlmRequest
 from google.adk.tools.tool_context import ToolContext
+from google.genai import types
 
 from app.util.models import (
     MODEL_DEFAULTS,
@@ -28,6 +31,50 @@ from app.util.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Probe budget: model swap is human-in-the-loop, so we can wait a bit, but
+# 30s feels long. Most reachable models respond to a 1-token "ping" in <5s.
+_PROBE_TIMEOUT_SECONDS = 15
+
+
+async def _probe_model(model: str) -> tuple[bool, str]:
+    """Construct and ping a model. Returns (ok, message).
+
+    Used by set_agent_model and verify_model_reachable to fail-fast before
+    persisting a swap that would brick the agent. The probe sends a 1-token
+    completion request — cheap, fast, and exercises the full provider path
+    (auth, model name, network). Any exception => not reachable.
+    """
+    provider, _, remainder = model.partition("/")
+    factory = PROVIDER_REGISTRY.get(provider)
+    if factory is None:
+        return False, (
+            f"Provider '{provider}' is not registered. "
+            f"Available: {sorted(PROVIDER_REGISTRY.keys())}."
+        )
+    try:
+        llm = factory(remainder, {})
+    except Exception as exc:
+        return False, f"Could not construct model: {type(exc).__name__}: {exc}"
+
+    req = LlmRequest(
+        model=model,
+        contents=[types.Content(role="user", parts=[types.Part.from_text(text="ping")])],
+        config=types.GenerateContentConfig(max_output_tokens=4),
+    )
+
+    async def _run():
+        async for _resp in llm.generate_content_async(req):
+            return  # first response is enough — provider is reachable
+    try:
+        await asyncio.wait_for(_run(), timeout=_PROBE_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        return False, f"Probe timed out after {_PROBE_TIMEOUT_SECONDS}s — provider unreachable or model very slow."
+    except Exception as exc:
+        # Surface the underlying error: missing API key, unknown model name,
+        # provider down, malformed model string, etc.
+        return False, f"Probe failed: {type(exc).__name__}: {exc}"
+    return True, "ok"
 
 
 async def list_available_models(
@@ -60,12 +107,35 @@ async def list_available_models(
     }
 
 
+async def verify_model_reachable(
+    model: Annotated[str, "Model string in <provider>/<rest> form, e.g. 'openrouter/deepseek/deepseek-chat'"],
+    tool_context: ToolContext = None,
+) -> dict[str, Any]:
+    """Probe a model with a 1-token 'ping' request. Does NOT persist anything.
+
+    Use this before set_agent_model when trying an unfamiliar model — confirms
+    the provider's API key is valid, the model name exists, and the endpoint
+    is reachable. Returns success/failure with the underlying error if any.
+    """
+    ok, msg = await _probe_model(model)
+    if ok:
+        return {"status": "success", "model": model, "message": f"Model '{model}' is reachable."}
+    return {"status": "error", "error_code": "MODEL_UNREACHABLE", "model": model, "message": msg}
+
+
 async def set_agent_model(
     component: Annotated[str, "Target agent or service (e.g. 'CoordinatorAgent', 'DeveloperAgent', 'summarizer')"],
     model: Annotated[str, "Model string in <provider>/<rest> form, e.g. 'litellm/anthropic/claude-3-5-sonnet-20241022' or 'gemini/gemini-2.5-flash'"],
+    skip_probe: Annotated[bool, "Skip the reachability probe. Default False — only set True when probing isn't possible (e.g. known offline)."] = False,
     tool_context: ToolContext = None,
 ) -> dict[str, Any]:
     """Hot-swap the model used by a component on the next LLM call.
+
+    BEFORE persisting, probes the model with a 1-token request to verify it's
+    reachable (provider configured, model exists, network up). If the probe
+    fails, the override is NOT persisted — the agent keeps its working model.
+    Set `skip_probe=True` to bypass (only when you know the probe will fail
+    transiently but want to swap anyway).
 
     Pinned components (google_search, embedding) reject swap attempts —
     they require their native ADK class for protocol-specific features
@@ -103,6 +173,22 @@ async def set_agent_model(
                 "Add a new one via app/util/models.py:PROVIDER_REGISTRY."
             ),
         }
+
+    # Pre-flight probe — refuse to persist a model we can't actually reach.
+    # This is the fail-safe against bricking the agent's own LLM access.
+    if not skip_probe:
+        ok, probe_msg = await _probe_model(model)
+        if not ok:
+            return {
+                "status": "error",
+                "error_code": "MODEL_UNREACHABLE",
+                "message": (
+                    f"Refusing to swap {component}: probe of '{model}' failed. "
+                    f"State unchanged — current model still active. Reason: {probe_msg}"
+                ),
+                "probe_error": probe_msg,
+            }
+
     # Stage in session state. ModelConfigPlugin picks it up on the next
     # before_model_callback.
     overrides = (tool_context.state.to_dict() if tool_context.state else {}).get("model") or {}
@@ -111,9 +197,10 @@ async def set_agent_model(
     old = get_model_string(component)
     return {
         "status": "success",
-        "message": f"Model for {component} changed: {old} -> {model}. Effect on next LLM call.",
+        "message": f"Model for {component} changed: {old} -> {model}. Probe passed. Effect on next LLM call.",
         "old": old,
         "new": model,
+        "probe": "passed" if not skip_probe else "skipped",
     }
 
 

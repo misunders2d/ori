@@ -21,7 +21,12 @@ from google.adk.tools import skill_toolset
 from google.genai import types
 
 from app.tools.google_search import google_search_agent_tool
-from app.tools.model_tools import list_available_models, set_agent_model, set_thinking_mode
+from app.tools.model_tools import (
+    list_available_models,
+    set_agent_model,
+    set_thinking_mode,
+    verify_model_reachable,
+)
 from app.tools.web import web_fetch
 from app.toolsets import EvolutionToolset, GitHubToolset, IntegrationToolset
 from app.toolsets.evolution import _is_child_container
@@ -113,6 +118,7 @@ _tools = [
     list_available_models,
     set_agent_model,
     set_thinking_mode,
+    verify_model_reachable,
 ]
 
 
