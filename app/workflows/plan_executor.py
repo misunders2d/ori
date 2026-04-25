@@ -44,7 +44,7 @@ _CONTINUATION_PROMPT = (
 )
 
 _MAX_ITERATIONS = 25
-_ITER_KEY = "_plan_workflow_iters"
+_ITER_KEY = "plan_workflow_iters"
 
 
 @node(name="plan_completion_check", rerun_on_resume=False)

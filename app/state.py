@@ -58,3 +58,7 @@ class OriSessionState(BaseModel):
     verify_failure_count: int = 0
     """Consecutive failures of evolution_verify_sandbox in this session.
     VerifyRetryPlugin caps at 3 and resets on success."""
+
+    plan_workflow_iters: int = 0
+    """Loop counter for plan_executor workflow (capped at MAX_ITERATIONS).
+    Incremented in plan_completion_check; reset implicitly on new session."""
