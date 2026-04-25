@@ -415,10 +415,28 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                                 chat_id, "/models is not yet wired in this build.",
                             )
                             continue
+                        # Fetch session state so we can show state-level overrides
+                        # (set_agent_model writes there). Without this, /models
+                        # only sees env vars and misleads when state has been
+                        # mutated at runtime.
+                        state_overrides: dict[str, str] = {}
+                        runner_obj = get_runner_fn()
+                        if runner_obj is not None:
+                            try:
+                                sess = await runner_obj.session_service.get_session(
+                                    app_name=runner_obj.app_name,
+                                    user_id=session_id,
+                                    session_id=session_id,
+                                )
+                                if sess and sess.state:
+                                    state_dict = sess.state if isinstance(sess.state, dict) else dict(sess.state)
+                                    state_overrides = state_dict.get("model") or {}
+                            except Exception:
+                                pass  # state read is best-effort
                         parts_ = text.strip().split()
                         if len(parts_) == 1:
                             await adapter.send_message(
-                                chat_id, "```\n" + format_model_assignments(markdown=False) + "\n```",
+                                chat_id, "```\n" + format_model_assignments(markdown=False, state_overrides=state_overrides) + "\n```",
                             )
                         elif len(parts_) >= 2 and parts_[1].lower() == "default":
                             valid = set(list_components())
@@ -429,7 +447,7 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                                     if cleared else "No overrides to reset — already on defaults."
                                 )
                                 await adapter.send_message(
-                                    chat_id, msg + "\n\n```\n" + format_model_assignments(markdown=False) + "\n```",
+                                    chat_id, msg + "\n\n```\n" + format_model_assignments(markdown=False, state_overrides=state_overrides) + "\n```",
                                 )
                             else:
                                 comp = parts_[2]

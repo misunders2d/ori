@@ -182,22 +182,34 @@ def reset_model(component: str) -> bool:
     return False
 
 
-def format_model_assignments(markdown: bool = True) -> str:
+def format_model_assignments(
+    markdown: bool = True,
+    state_overrides: dict[str, str] | None = None,
+) -> str:
     """Plain-text/Markdown table of effective model per component.
 
     Used by the /models command in the Telegram poller and CLI chat.
-    Highlights overrides (from env) vs. defaults.
+    Precedence: state_overrides > MODEL_<COMPONENT> env > MODEL_DEFAULTS.
+    Pass `state_overrides` to reflect runtime hot-swaps from set_agent_model;
+    omit it for the env-only view (e.g. when no session context is available).
     """
+    state_overrides = state_overrides or {}
     lines: list[str] = []
     header = "Component             Default                                              Effective                                            Source"
     lines.append(header)
     lines.append("-" * len(header))
     for component in sorted(MODEL_DEFAULTS):
         default = MODEL_DEFAULTS[component]
+        state_override = state_overrides.get(component)
         env_key = f"MODEL_{component}"
         env_override = os.environ.get(env_key)
-        effective = env_override or default
-        source = "env" if env_override else "default"
+        effective = state_override or env_override or default
+        if state_override:
+            source = "state"
+        elif env_override:
+            source = "env"
+        else:
+            source = "default"
         if is_pinned(component):
             source += " (pinned)"
         lines.append(f"{component:<22}{default:<54}{effective:<54}{source}")

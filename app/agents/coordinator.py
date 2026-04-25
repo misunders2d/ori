@@ -24,6 +24,7 @@ from google.adk.tools import skill_toolset
 from app.agents.developer import developer_agent
 from app.agents.knowledge import knowledge_agent
 from app.toolsets import (
+    IntegrationToolset,
     MemoryToolset,
     PlannerToolset,
     SchedulingToolset,
@@ -114,6 +115,7 @@ root_agent = Agent(
         MemoryToolset(),
         SystemToolset(),
         PlannerToolset(),
+        IntegrationToolset(),
         *([google_search_agent_tool] if google_search_agent_tool else []),
         web_fetch,
         whitelist_chat,
