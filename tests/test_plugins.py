@@ -203,13 +203,28 @@ async def test_admin_gate_skips_non_gated_tools():
 # StateInitializerPlugin
 # ===========================================================================
 
+def _invocation_ctx(state: dict | None = None, user_id: str = "tg_42"):
+    """Mock InvocationContext — what on_user_message_callback receives.
+    The plugin mutates session.state directly (a plain dict)."""
+    backing = dict(state or {})
+    sess = MagicMock()
+    sess.state = backing
+    sess.user_id = user_id
+    ic = MagicMock()
+    ic.session = sess
+    ic.user_id = user_id
+    return ic, backing
+
+
 @pytest.mark.asyncio
 async def test_state_init_writes_keys():
     from app.plugins.state_initializer import StateInitializerPlugin
+    from google.genai import types
     with patch.dict(os.environ, {"ADMIN_USER_IDS": "tg_1,tg_2", "BOT_NAME": "Scout"}):
-        cb, backing = _ctx({}, user_id="tg_1")
-        await StateInitializerPlugin().before_agent_callback(
-            agent=_agent("CoordinatorAgent"), callback_context=cb,
+        ic, backing = _invocation_ctx({}, user_id="tg_1")
+        await StateInitializerPlugin().on_user_message_callback(
+            invocation_context=ic,
+            user_message=types.Content(role="user", parts=[]),
         )
         assert backing["user_id"] == "tg_1"
         assert backing["master_user_id"] == ["tg_1", "tg_2"]
@@ -218,30 +233,17 @@ async def test_state_init_writes_keys():
 
 @pytest.mark.asyncio
 async def test_state_init_idempotent():
-    """Existing keys are preserved, not overwritten."""
+    """Existing keys are preserved, not overwritten (except bot_name, which
+    re-reads env every turn to support renames across restarts)."""
     from app.plugins.state_initializer import StateInitializerPlugin
+    from google.genai import types
     with patch.dict(os.environ, {"ADMIN_USER_IDS": "tg_x"}):
-        cb, backing = _ctx({"user_id": "preserved"}, user_id="tg_other")
-        await StateInitializerPlugin().before_agent_callback(
-            agent=_agent("CoordinatorAgent"), callback_context=cb,
+        ic, backing = _invocation_ctx({"user_id": "preserved"}, user_id="tg_other")
+        await StateInitializerPlugin().on_user_message_callback(
+            invocation_context=ic,
+            user_message=types.Content(role="user", parts=[]),
         )
         assert backing["user_id"] == "preserved"
-
-
-@pytest.mark.asyncio
-async def test_state_init_runs_on_subagents_too():
-    """ADK 2.0 doesn't fire before_agent_callback on the Workflow root —
-    the first callback is the workflow's first NODE (Coordinator) which has
-    parent_agent set. So the plugin must run on sub-agents too; the original
-    parent-check early-return left `bot_name` unset and the instruction
-    template substitution KeyError'd. Writes are idempotent."""
-    from app.plugins.state_initializer import StateInitializerPlugin
-    cb, backing = _ctx({})
-    parent = _agent("CoordinatorAgent")
-    await StateInitializerPlugin().before_agent_callback(
-        agent=_agent("DeveloperAgent", parent=parent), callback_context=cb,
-    )
-    assert backing.get("bot_name"), "bot_name MUST be set; otherwise {bot_name} substitution fails"
     assert "user_id" in backing
     assert "master_user_id" in backing
 
