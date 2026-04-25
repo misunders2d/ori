@@ -64,7 +64,7 @@ git commit -m "Initial birth of Ori Organism"
 # Run setup wizard on host
 Write-Host "  [+] Launching incubation wizard..." -ForegroundColor Green
 Write-Host ""
-python interfaces/setup_wizard.py
+python app/transports/setup_wizard.py
 
 # Start the bot (WSL launcher or docker compose directly)
 Write-Host ""

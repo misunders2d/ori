@@ -74,7 +74,7 @@ if needs_setup; then
         echo ""
         echo ":: First-time setup — let's configure your agent."
         echo ""
-        "$PYTHON" interfaces/setup_wizard.py
+        "$PYTHON" app/transports/setup_wizard.py
     else
         echo ""
         echo "  ERROR: First-time setup requires an interactive terminal."

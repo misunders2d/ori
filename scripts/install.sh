@@ -65,7 +65,7 @@ chmod +x launcher.sh install.sh deploy.sh start.sh
 # Run setup wizard on host (not in container — needs gcloud, browser, etc.)
 echo "  [+] Launching incubation wizard..."
 echo ""
-python3 interfaces/setup_wizard.py </dev/tty
+python3 app/transports/setup_wizard.py </dev/tty
 
 # Start the bot
 echo ""
