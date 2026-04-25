@@ -430,21 +430,19 @@ def _extract_response_text(task: Dict[str, Any]) -> str:
 
 async def call_friend(
     friend_name: str,
-    message: Union[str, types.Content],
+    message: str,
     tool_context: ToolContext = None,
 ) -> Dict[str, Any]:
     """
-    Sends a message to a registered friend via the A2A protocol and returns their response.
-    Uses async task polling — the message is sent non-blocking, then the task is polled
-    until the friend finishes processing. Falls back to blocking for non-ADK agents.
-
-    `message` may be a plain string OR a `types.Content` with mixed text +
-    binary parts (e.g. images, audio, DNA bundles). Binary parts ride
-    inline as base64 per the A2A spec.
+    Sends a TEXT message to a registered friend via A2A and returns their response.
+    Uses async task polling. For multimodal (text + binary) messages — DNA
+    bundles, images, audio — use `call_friend_with_artifact` instead, which
+    references binary content via an artifact_id (string) so ADK's automatic
+    function calling can declare the tool.
 
     Args:
         friend_name: The local nickname of the friend to contact.
-        message:     str or Content with text + binary parts.
+        message:     The text message to send.
     """
     try:
         if not os.path.exists(FRIENDS_FILE):
@@ -496,21 +494,19 @@ async def call_friend(
 
 async def call_agent(
     url: str,
-    message: Union[str, types.Content],
+    message: str,
     tool_context: ToolContext,
-    api_key: Optional[str] = None,
+    api_key: str = "",
 ) -> Dict[str, Any]:
     """
-    Sends a one-off message to any A2A-compliant agent by URL.
-    Use this for agents NOT in the friends list.
-
-    `message` may be a plain string OR a `types.Content` with mixed text +
-    binary parts.
+    Sends a one-off TEXT message to any A2A-compliant agent by URL.
+    Use this for agents NOT in the friends list. For multimodal payloads,
+    use `call_agent_with_artifact` instead.
 
     Args:
         url:     Base URL of the remote A2A agent (e.g. 'https://agent.example.com').
-        message: str or Content with text + binary parts.
-        api_key: Optional API key for authentication.
+        message: The text message to send.
+        api_key: Optional API key for authentication. Empty string to skip.
     """
     try:
         card = await _discover_agent_card(url)
@@ -557,6 +553,81 @@ async def call_agent(
         }
     except Exception as e:
         logger.error("A2A one-off call to %s failed: %s", url, e)
+        return {"status": "error", "message": f"A2A call failed: {e}"}
+
+
+async def _build_multimodal_content(
+    text: str,
+    artifact_id: str,
+    tool_context: ToolContext,
+) -> "types.Content | None":
+    """Load an artifact and wrap it + text into a Content payload."""
+    if tool_context is None:
+        return None
+    try:
+        part = await tool_context.load_artifact(filename=artifact_id)
+    except Exception as e:
+        logger.error("Failed to load artifact %s: %s", artifact_id, e)
+        return None
+    if part is None:
+        return None
+    return types.Content(
+        role="user",
+        parts=[types.Part.from_text(text=text), part],
+    )
+
+
+async def call_friend_with_artifact(
+    friend_name: str,
+    text: str,
+    artifact_id: str,
+    tool_context: ToolContext = None,
+) -> Dict[str, Any]:
+    """
+    Sends a multimodal message (text + binary attachment) to a registered
+    friend. The binary part is loaded from an artifact saved earlier in this
+    session — typical for DNA bundles (`export_dna` returns an artifact_id),
+    images, audio, etc.
+
+    Args:
+        friend_name: The local nickname of the friend.
+        text:        Accompanying text (manifest, caption, instruction).
+        artifact_id: Filename of the artifact to attach.
+    """
+    content = await _build_multimodal_content(text, artifact_id, tool_context)
+    if content is None:
+        return {"status": "error", "message": f"Could not load artifact '{artifact_id}'."}
+    try:
+        if not os.path.exists(FRIENDS_FILE):
+            return {"status": "error", "message": "No friends registered yet."}
+        with open(FRIENDS_FILE, "r") as f:
+            friends = json.load(f)
+        if friend_name not in friends:
+            return {"status": "error", "message": f"Friend '{friend_name}' not found."}
+        friend = friends[friend_name]
+        endpoint_url = friend.get("endpoint_url", friend.get("base_url"))
+        api_key = _load_friend_key(friend_name)
+        try:
+            result = await _send_a2a_message(endpoint_url, content, api_key=api_key, blocking=False)
+        except Exception:
+            result = await _send_a2a_message(endpoint_url, content, api_key=api_key, blocking=True)
+        if "error" in result:
+            return {"status": "error", "message": f"Remote agent error: {result['error']}"}
+        task = result.get("result", {})
+        task_id = task.get("id")
+        state = (task.get("status", {}).get("state") or "").lower()
+        if task_id and state not in _TERMINAL_STATES:
+            poll_result = await _poll_until_terminal(endpoint_url, task_id, api_key)
+            if "error" not in poll_result:
+                task = poll_result.get("result", task)
+        return {
+            "status": "success",
+            "friend": friend_name,
+            "task_id": task_id,
+            "response": _extract_response_text(task),
+        }
+    except Exception as e:
+        logger.error("A2A multimodal call to %s failed: %s", friend_name, e)
         return {"status": "error", "message": f"A2A call failed: {e}"}
 
 
@@ -952,37 +1023,26 @@ def _import_dna_legacy(dna_package: dict) -> list:
 
 
 async def import_dna(
-    dna: Union[bytes, str, types.Part],
+    artifact_id: str,
     tool_context: ToolContext = None,
 ) -> Dict[str, Any]:
-    """Import a DNA bundle into the per-session sandbox for verification.
+    """Import a DNA bundle (saved as an artifact) into the per-session sandbox.
 
-    Accepts:
-      - `bytes`: a tar.gz blob extracted from an inbound A2A `Part.inline_data`.
-      - `str`: an artifact_id (loaded via tool_context.load_artifact).
-      - `types.Part`: an inline_data part holding the tarball.
+    The DNA tarball must already exist as an artifact — typically because an
+    inbound A2A message with a binary part triggered an artifact save, OR
+    because the same session ran `export_dna` earlier. Pass the artifact_id
+    string here; the tarball is loaded, extracted, and verified.
 
-    No HTTP fetch. Replaces the legacy URL-based flow.
+    Args:
+        artifact_id: Artifact filename to load (e.g. 'dna_<timestamp>.tar.gz').
     """
     try:
-        # Resolve `dna` into raw tarball bytes.
-        tarball: bytes
-        if isinstance(dna, (bytes, bytearray)):
-            tarball = bytes(dna)
-        elif isinstance(dna, types.Part):
-            blob = getattr(dna, "inline_data", None)
-            if blob is None:
-                return {"status": "error", "message": "Part has no inline_data."}
-            tarball = bytes(getattr(blob, "data", b"") or b"")
-        elif isinstance(dna, str):
-            if tool_context is None:
-                return {"status": "error", "message": "import_dna(str) requires tool_context to load artifact."}
-            part = await tool_context.load_artifact(dna)
-            if part is None or getattr(part, "inline_data", None) is None:
-                return {"status": "error", "message": f"Artifact {dna} not found or empty."}
-            tarball = bytes(part.inline_data.data or b"")
-        else:
-            return {"status": "error", "message": f"Unsupported dna argument type: {type(dna).__name__}"}
+        if tool_context is None:
+            return {"status": "error", "message": "import_dna requires tool_context."}
+        part = await tool_context.load_artifact(artifact_id)
+        if part is None or getattr(part, "inline_data", None) is None:
+            return {"status": "error", "message": f"Artifact {artifact_id} not found or empty."}
+        tarball = bytes(part.inline_data.data or b"")
 
         if not tarball:
             return {"status": "error", "message": "DNA payload is empty."}
