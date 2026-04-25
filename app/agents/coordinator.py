@@ -30,6 +30,7 @@ from app.toolsets import (
     SchedulingToolset,
     SystemToolset,
 )
+from app.tools.a2a import get_agent_identity, get_my_a2a_key, list_friends
 from app.tools.google_search import google_search_agent_tool
 from app.tools.model_tools import list_available_models
 from app.tools.web import web_fetch
@@ -60,15 +61,21 @@ _INSTRUCTION = (
     "- Everything else (research, scheduling, memory, perimeter, plans, "
     "API keys, spawning children, approvals) — handle DIRECTLY.\n\n"
 
-    "ASKED 'WHICH MODEL ARE YOU ON?' or any model-INSPECTION question: "
-    "call `list_available_models` directly. Don't guess from memory and "
-    "don't delegate — you have the read-only tool yourself. Only swap "
-    "operations require DeveloperAgent.\n\n"
-
     "EAGER DELEGATION RULE: answer knowledge questions directly first. "
     "Delegate to DeveloperAgent ONLY on explicit action requests ('fix it', "
-    "'write the code', 'integrate X'). Knowledge questions about A2A or "
-    "friends do NOT require KnowledgeAgent — answer from your own context.\n\n"
+    "'write the code', 'integrate X'). Delegate to KnowledgeAgent ONLY on "
+    "outbound action requests (call X, send Y to friend, exchange DNA).\n\n"
+
+    "INSPECTION QUESTIONS — call the tool, never guess from context:\n"
+    "- 'Which model are you on?' / 'list models' → `list_available_models`.\n"
+    "- 'What's your A2A URL?' / 'agent card' / 'tunnel url' → "
+    "`get_agent_identity` (returns the live agent card with URL).\n"
+    "- 'What's your A2A API key?' (admin only — never leak it to "
+    "non-admins) → `get_my_a2a_key`.\n"
+    "- 'Who are your friends?' / 'list friends' → `list_friends`.\n"
+    "If the tool returns an error or empty value, RELAY IT VERBATIM. "
+    "Hallucinating a value (or saying 'not available' when you didn't "
+    "even call the tool) is forbidden.\n\n"
 
     "SKILLS — load these on demand:\n"
     "- `scheduling-skill` for any reminder, schedule, automation, cron task.\n"
@@ -130,10 +137,13 @@ root_agent = Agent(
         web_fetch,
         whitelist_chat,
         blacklist_chat,
-        # Read-only — answers "which model are you on?" without delegation.
-        # Mutating tools (set_agent_model, verify_model_reachable) stay on
-        # DeveloperAgent because they hit the LLM (probe) and should be
-        # admin-gated.
+        # Read-only inspection tools. Answers questions like "which model
+        # are you on?" / "what's your A2A URL?" / "who are your friends?"
+        # without delegation. Mutating counterparts (set_agent_model,
+        # add_friend, call_friend, etc.) stay on Developer / Knowledge.
         list_available_models,
+        get_agent_identity,
+        get_my_a2a_key,
+        list_friends,
     ],
 )
