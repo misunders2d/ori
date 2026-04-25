@@ -41,6 +41,9 @@ PROVIDER_REGISTRY: dict[str, Callable[[str, dict[str, Any]], BaseLlm]] = {
     "litellm": lambda remainder, opts: LiteLlm(model=remainder, **opts),
     "gemini": lambda remainder, opts: Gemini(model_name=remainder, **opts),
     "anthropic": lambda remainder, opts: Claude(model_name=remainder, **opts),
+    # OpenRouter routes through LiteLlm; the prefix must be preserved so
+    # litellm picks the OpenRouter endpoint. Requires OPENROUTER_API_KEY.
+    "openrouter": lambda remainder, opts: LiteLlm(model=f"openrouter/{remainder}", **opts),
 }
 
 

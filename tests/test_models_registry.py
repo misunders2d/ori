@@ -20,6 +20,17 @@ def test_registry_has_litellm_and_natives():
     assert "litellm" in PROVIDER_REGISTRY
     assert "gemini" in PROVIDER_REGISTRY
     assert "anthropic" in PROVIDER_REGISTRY
+    assert "openrouter" in PROVIDER_REGISTRY
+
+
+def test_openrouter_prefix_preserved_for_litellm():
+    """OpenRouter factory must reconstruct the `openrouter/` prefix so LiteLlm
+    routes to the right endpoint."""
+    from google.adk.models import LiteLlm
+    state = OriSessionState(model={"DeveloperAgent": "openrouter/anthropic/claude-3.5-sonnet"})
+    llm = resolve_model("DeveloperAgent", state)
+    assert isinstance(llm, LiteLlm)
+    assert llm.model == "openrouter/anthropic/claude-3.5-sonnet"
 
 
 def test_defaults_cover_all_components():
