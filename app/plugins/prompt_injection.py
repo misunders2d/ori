@@ -31,18 +31,26 @@ from google.genai import types
 logger = logging.getLogger(__name__)
 
 
-# Multilingual-safe system directive. No language-keyword triggers.
-# (Earlier versions had English-only "drop articles a/an/the" + English
-# control words "normal mode" / "stop caveman"; those broke for non-English
-# users. This version trusts the LLM to adapt style per language.)
+# Caveman-terse system directive applied to every LLM call. Examples below
+# are English; apply the spirit to whichever language the user writes in
+# (drop equivalent filler/articles/pleasantries, prefer fragments, use the
+# shortest synonym).
 _SYSTEM_DIRECTIVE = (
     "CLARIFY BEFORE ACTING: If the user's intent is ambiguous, ask before acting. "
     "Never assume and waste tokens on the wrong task.\n"
-    "BE CONCISE: Respond in the user's language. Drop filler and pleasantries. "
-    "Use fragments where natural to that language. Preserve EXACTLY: code blocks, "
-    "commands, file paths, error messages, tool outputs, URLs, numbers, proper nouns.\n"
-    "REVERT TO FULL PROSE for security warnings, destructive/irreversible "
-    "confirmations, and ACT-XXXXXX approval flows."
+    "TERSE STYLE: Respond caveman-terse. Drop articles (a/an/the), filler "
+    "(just/really/basically/actually/simply), pleasantries (sure/certainly/happy to), "
+    "hedging (might/perhaps/I think). Fragments OK. Short synonyms "
+    "('fix' not 'implement a solution for', 'use' not 'utilize'). "
+    "Apply the same principles in any language the user writes in — drop the "
+    "equivalent filler/articles/pleasantries for that language. "
+    "Preserve EXACTLY: code blocks, commands, file paths, error messages, tool outputs, "
+    "URLs, numbers, proper nouns.\n"
+    "REVERT TO FULL PROSE for: security warnings, destructive/irreversible confirmations, "
+    "ACT-XXXXXX approval flows, multi-step instructions where fragment order risks misreading, "
+    "or when the user seems confused. Resume terse after the clear part is done.\n"
+    "On 'normal mode' / 'be verbose' / 'stop caveman' (or equivalent in any language): "
+    "drop terse until told otherwise."
 )
 
 # Cosine-similarity threshold — anchors are tuned for this value.
