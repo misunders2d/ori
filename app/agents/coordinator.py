@@ -31,6 +31,7 @@ from app.toolsets import (
     SystemToolset,
 )
 from app.tools.google_search import google_search_agent_tool
+from app.tools.model_tools import list_available_models
 from app.tools.web import web_fetch
 from app.tools.whitelist import blacklist_chat, whitelist_chat
 from app.util.models import get_model
@@ -41,6 +42,7 @@ _scheduling_skill = load_skill_from_dir(_skills_dir / "scheduling-skill")
 _configuration_skill = load_skill_from_dir(_skills_dir / "configuration-skill")
 _approval_skill = load_skill_from_dir(_skills_dir / "approval-skill")
 _spawn_skill = load_skill_from_dir(_skills_dir / "spawn-skill")
+_model_swap_skill = load_skill_from_dir(_skills_dir / "model-swap-skill")
 
 
 # Constitutional only. Procedural detail lives in skills, loaded on demand.
@@ -52,13 +54,16 @@ _INSTRUCTION = (
     "DELEGATION:\n"
     "- Self-evolution (code changes, bug fixes, adding features) → "
     "DeveloperAgent.\n"
-    "- Model changes (`set_agent_model`, `verify_model_reachable`, "
-    "`list_available_models`) → DeveloperAgent. The probe-before-persist "
-    "lives there and is admin-gated.\n"
+    "- Model CHANGES (`set_agent_model`, `verify_model_reachable`) → "
+    "DeveloperAgent. The probe-before-persist lives there and is admin-gated.\n"
     "- A2A communication, friend management, DNA exchange → KnowledgeAgent.\n"
     "- Everything else (research, scheduling, memory, perimeter, plans, "
-    "API keys, spawning children, approvals) — handle DIRECTLY. Don't "
-    "delegate.\n\n"
+    "API keys, spawning children, approvals) — handle DIRECTLY.\n\n"
+
+    "ASKED 'WHICH MODEL ARE YOU ON?' or any model-INSPECTION question: "
+    "call `list_available_models` directly. Don't guess from memory and "
+    "don't delegate — you have the read-only tool yourself. Only swap "
+    "operations require DeveloperAgent.\n\n"
 
     "EAGER DELEGATION RULE: answer knowledge questions directly first. "
     "Delegate to DeveloperAgent ONLY on explicit action requests ('fix it', "
@@ -70,7 +75,11 @@ _INSTRUCTION = (
     "- `configuration-skill` for API keys, OAuth, integrations.\n"
     "- `approval-skill` when a tool returns ACT-XXXXXX or the user replies "
     "'Approve ACT-...'.\n"
-    "- `spawn-skill` for spawning disposable child agents.\n\n"
+    "- `spawn-skill` for spawning disposable child agents.\n"
+    "- `model-swap-skill` BEFORE building any model string for "
+    "set_agent_model / verify_model_reachable. Critical for OpenRouter — "
+    "the prefix must be `openrouter/<vendor>/<model>`, not the bare "
+    "vendor name.\n\n"
 
     "METADATA: Messages are prefixed with `[Metadata: YYYY-MM-DD HH:MM:SS UTC | "
     "Platform: <platform>]`. Use this for time-aware reasoning. Honor the "
@@ -110,6 +119,7 @@ root_agent = Agent(
             _configuration_skill,
             _approval_skill,
             _spawn_skill,
+            _model_swap_skill,
         ]),
         SchedulingToolset(),
         MemoryToolset(),
@@ -120,5 +130,10 @@ root_agent = Agent(
         web_fetch,
         whitelist_chat,
         blacklist_chat,
+        # Read-only — answers "which model are you on?" without delegation.
+        # Mutating tools (set_agent_model, verify_model_reachable) stay on
+        # DeveloperAgent because they hit the LLM (probe) and should be
+        # admin-gated.
+        list_available_models,
     ],
 )

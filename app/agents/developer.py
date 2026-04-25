@@ -39,6 +39,7 @@ _google_adk_a2a_skill = load_skill_from_dir(_skills_dir / "google-adk-a2a-skill"
 _skill_creator_skill = load_skill_from_dir(_skills_dir / "skill-creator-skill")
 _external_research_skill = load_skill_from_dir(_skills_dir / "external-research-skill")
 _evolution_workflow_skill = load_skill_from_dir(_skills_dir / "evolution-workflow-skill")
+_model_swap_skill = load_skill_from_dir(_skills_dir / "model-swap-skill")
 
 
 _IS_CHILD = _is_child_container()
@@ -93,6 +94,8 @@ _BASE_INSTRUCTION = (
     "- `google-adk-a2a-skill` for the A2A protocol when touching A2A code.\n"
     "- `skill-creator-skill` when adding a new skill.\n"
     "- `external-research-skill` when documentation/version research is needed.\n"
+    "- `model-swap-skill` BEFORE building any model string for set_agent_model "
+    "or verify_model_reachable. Critical for OpenRouter routing.\n"
 )
 
 
@@ -109,6 +112,7 @@ _tools = [
         _skill_creator_skill,
         _external_research_skill,
         _evolution_workflow_skill,
+        _model_swap_skill,
     ]),
     EvolutionToolset(),
     IntegrationToolset(),
