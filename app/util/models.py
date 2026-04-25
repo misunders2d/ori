@@ -110,3 +110,102 @@ def get_default_model(component: str) -> str:
 def is_pinned(component: str) -> bool:
     """Whether the component ignores hot-swap overrides."""
     return component in PINNED_COMPONENTS
+
+
+# ---------------------------------------------------------------------------
+# Helpers used by tools and the /models command (legacy-shaped API for
+# convenience; built on top of the registry above).
+# ---------------------------------------------------------------------------
+
+# Set of valid component names — alias used by the /models command.
+VALID_COMPONENTS: frozenset[str] = frozenset(MODEL_DEFAULTS)
+
+
+def get_model(component: str, **opts: Any) -> BaseLlm:
+    """Construction-time helper used in agent definitions. State-free —
+    runtime hot-swap is handled by ModelConfigPlugin reading state.model[].
+    """
+    return resolve_model(component, state=None, **opts)
+
+
+def get_model_string(component: str) -> str:
+    """The effective model string for `component` (env override or default)."""
+    return os.environ.get(f"MODEL_{component}") or MODEL_DEFAULTS[component]
+
+
+def get_model_name(component: str) -> str:
+    """Just the model name (everything after the provider prefix).
+
+    Used by callers that need the bare provider model id, e.g. the embedding
+    client that takes `gemini-embedding-001` without the `gemini/` prefix.
+    """
+    full = get_model_string(component)
+    _, _, remainder = full.partition("/")
+    # If it's a litellm-routed string ("litellm/gemini/gemini-2.5-flash"),
+    # strip the inner provider too so we get just the model name.
+    if "/" in remainder:
+        _, _, remainder = remainder.partition("/")
+    return remainder
+
+
+def _parse_model_str(model_str: str) -> tuple[str, str]:
+    """(provider, model_name) split. Returns ("", "") on empty input."""
+    if not model_str:
+        return ("", "")
+    provider, _, model = model_str.partition("/")
+    return (provider, model)
+
+
+def reset_all_models() -> list[str]:
+    """Clear all `MODEL_<component>` env overrides; return list of cleared keys."""
+    cleared: list[str] = []
+    for component in MODEL_DEFAULTS:
+        key = f"MODEL_{component}"
+        if key in os.environ:
+            os.environ.pop(key)
+            cleared.append(component)
+    return cleared
+
+
+def reset_model(component: str) -> bool:
+    """Clear one component's env override. Returns True if a value was cleared."""
+    key = f"MODEL_{component}"
+    if key in os.environ:
+        os.environ.pop(key)
+        return True
+    return False
+
+
+def format_model_assignments(markdown: bool = True) -> str:
+    """Plain-text/Markdown table of effective model per component.
+
+    Used by the /models command in the Telegram poller and CLI chat.
+    Highlights overrides (from env) vs. defaults.
+    """
+    lines: list[str] = []
+    header = "Component             Default                                              Effective                                            Source"
+    lines.append(header)
+    lines.append("-" * len(header))
+    for component in sorted(MODEL_DEFAULTS):
+        default = MODEL_DEFAULTS[component]
+        env_key = f"MODEL_{component}"
+        env_override = os.environ.get(env_key)
+        effective = env_override or default
+        source = "env" if env_override else "default"
+        if is_pinned(component):
+            source += " (pinned)"
+        lines.append(f"{component:<22}{default:<54}{effective:<54}{source}")
+    return "\n".join(lines)
+
+
+def normalize_assignments() -> None:
+    """Clean up legacy/quoted MODEL_<component> env values.
+
+    Some shells store quoted values; strip them so resolve_model() sees the
+    raw string. Idempotent.
+    """
+    for component in MODEL_DEFAULTS:
+        key = f"MODEL_{component}"
+        val = os.environ.get(key)
+        if val and (val.startswith('"') or val.startswith("'")):
+            os.environ[key] = val.strip("\"'")

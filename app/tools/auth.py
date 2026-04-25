@@ -5,7 +5,7 @@ import logging
 from typing import Dict, Any
 
 from google.adk.tools.tool_context import ToolContext
-from app.core.auth import auth_service
+from app.runtime.auth import auth_service
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +131,7 @@ async def _start_device_code_flow(
     async def _poll():
         try:
             await auth_service.poll_for_token(platform_id, device_code, interval, expires_in)
-            from app.core.transport import parse_notify_from_session_id, get_adapter
+            from app.runtime.transport import parse_notify_from_session_id, get_adapter
             info = parse_notify_from_session_id(session_id)
             if info:
                 adapter = get_adapter(info["type"])

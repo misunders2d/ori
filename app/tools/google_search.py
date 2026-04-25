@@ -24,7 +24,7 @@ if _has_google_credentials():
         from google.adk.tools.google_search_tool import google_search
         from google.genai import types
 
-        from app.app_utils.models import get_model
+        from app.util.models import get_model
 
         google_search_agent_tool = GoogleSearchAgentTool(
             agent=Agent(

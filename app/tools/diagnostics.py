@@ -1,6 +1,6 @@
 import os
 import logging
-from app.core.health import get_system_health
+from app.runtime.health import get_system_health
 from google.adk.tools.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ async def report_health(tool_context: ToolContext) -> dict:
 
 def inspect_secure_env(tool_context: ToolContext) -> dict:
     """Lists environment variables with sensitive values redacted."""
-    from app.app_utils.config import ALLOWED_CONFIG_KEYS
+    from app.util.config import ALLOWED_CONFIG_KEYS
     
     redacted_env = {}
     for key, val in os.environ.items():

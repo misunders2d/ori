@@ -1,338 +1,109 @@
-"""Structured plan-and-execute system for complex multi-step tasks.
+"""Agent-facing planner tools — thin async wrappers over `app.runtime.plan_storage`.
 
-Creates sequential plans with enforcement — the agent can only see and
-execute the current step. A before_model_callback injects plan context
-to prevent drift.
+The storage layer (SQLite-backed, durable across restarts — Phase B) is the
+single source of truth. Tools just translate between the agent's calling
+convention and the storage API.
 """
 
-import json
+from __future__ import annotations
+
 import logging
-import os
-import time
-from typing import Optional
+from typing import Any
 
 from google.adk.tools.tool_context import ToolContext
 
+from app.plugins._common import state_session_id
+from app.runtime import plan_storage
+
 logger = logging.getLogger(__name__)
 
-_PLANS_DIR = os.path.abspath("./tmp/plans")
+
+def _session_id(tool_context: ToolContext) -> str | None:
+    return state_session_id(tool_context) if tool_context else None
 
 
-def _plan_path(session_id: str) -> str:
-    return os.path.join(_PLANS_DIR, f"{session_id}.json")
-
-
-def _load_plan(session_id: str) -> dict | None:
-    path = _plan_path(session_id)
-    if not os.path.exists(path):
-        return None
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except Exception:
-        return None
-
-
-def _save_plan(session_id: str, plan: dict):
-    os.makedirs(_PLANS_DIR, exist_ok=True)
-    with open(_plan_path(session_id), "w") as f:
-        json.dump(plan, f, indent=2)
-
-
-def _get_session_id(tool_context: ToolContext) -> str:
-    session = getattr(tool_context, "session", None)
-    return getattr(session, "session_id", None) or getattr(session, "id", None) or "default"
-
-
-def plan_has_pending_steps(session_id: str) -> bool:
-    """True if there's an active plan for this session with steps not yet done.
-
-    Used by the scheduler's plan-driven loop to decide whether to re-invoke the
-    agent after its turn ends — a pending step means the agent stopped mid-plan
-    (typically by emitting a user-facing text summary) and needs another push.
-    """
-    plan = _load_plan(session_id)
-    if not plan or plan.get("status") != "active":
-        return False
-    return any(s.get("status") != "done" for s in plan.get("steps", []))
-
-
-def seed_plan(session_id: str, task: str, steps: list[str]) -> None:
-    """Programmatically populate a plan in storage — no LLM, no tool_context.
-
-    Used by the scheduler at fire time when a task carries an enforced step list.
-    The plan is written before the agent's first turn, so `plan_enforcer` has
-    something to inject from turn one — the LLM has no opportunity to skip the
-    plan-creation step.
-
-    Overwrites any existing plan for the session (scheduler sessions are ephemeral,
-    so collisions are unexpected; if one occurs, the caller's intent wins).
-    """
-    if not steps:
-        return
-    plan = {
-        "task": task[:500],
-        "status": "active",
-        "created_at": time.time(),
-        "current_step": 0,
-        "steps": [
-            {"id": i, "description": desc, "status": "pending", "result": None}
-            for i, desc in enumerate(steps)
-        ],
-    }
-    _save_plan(session_id, plan)
-
-
-def create_plan(
-    task_description: str,
+async def create_plan(
+    task: str,
     steps: list[str],
-    tool_context: ToolContext,
-) -> dict:
-    """Create a structured execution plan for a complex task.
+    tool_context: ToolContext = None,
+) -> dict[str, Any]:
+    """Create a multi-step plan for the current session.
 
-    Break the task into sequential steps. Once created, you MUST execute
-    steps one at a time using get_next_step and complete_step.
-
-    Args:
-        task_description: High-level description of what you're trying to accomplish.
-        steps: Ordered list of step descriptions (e.g. ["Fetch sales data from BigQuery", "Generate chart", "Post to Slack"]).
-
-    Returns:
-        dict with the plan overview.
+    Fails if there is already an active plan in this session — abandon it
+    first via `abandon_plan`.
     """
+    sid = _session_id(tool_context)
+    if not sid:
+        return {"status": "error", "message": "create_plan requires a session_id"}
     if not steps:
-        return {"status": "error", "message": "Plan must have at least one step."}
+        return {"status": "error", "message": "create_plan requires at least one step"}
+    return await plan_storage.create_plan(sid, task, steps)
 
-    session_id = _get_session_id(tool_context)
 
-    # Check for existing active plan
-    existing = _load_plan(session_id)
-    if existing and existing.get("status") == "active":
-        pending = sum(1 for s in existing["steps"] if s["status"] == "pending")
-        return {
-            "status": "error",
-            "message": f"A plan is already active with {pending} pending steps. "
-                       "Complete or abandon it first (use abandon_plan).",
-        }
-
-    plan = {
-        "task": task_description,
-        "status": "active",
-        "created_at": time.time(),
-        "current_step": 0,
-        "steps": [
-            {"id": i, "description": desc, "status": "pending", "result": None}
-            for i, desc in enumerate(steps)
-        ],
-    }
-    _save_plan(session_id, plan)
-
+async def get_next_step(tool_context: ToolContext = None) -> dict[str, Any]:
+    """Claim the next pending step. If a step is already in_progress (e.g.
+    after a crash mid-step), return that one — do not double-claim."""
+    sid = _session_id(tool_context)
+    if not sid:
+        return {"status": "error", "message": "get_next_step requires a session_id"}
+    step = await plan_storage.get_next_step(sid)
+    if step is None:
+        return {"status": "success", "message": "No pending steps. Plan is complete or absent."}
     return {
         "status": "success",
-        "message": f"Plan created with {len(steps)} steps. Use get_next_step to begin.",
-        "plan": {
-            "task": task_description,
-            "total_steps": len(steps),
-            "steps": [f"[ ] {s}" for s in steps],
-        },
+        "step_index": step["step_index"],
+        "description": step["description"],
+        "instruction": (
+            f"Execute step {step['step_index']}: {step['description']}. "
+            "When done, call complete_step(result=<your-summary>)."
+        ),
     }
 
 
-def get_next_step(tool_context: ToolContext) -> dict:
-    """Get the next pending step in the active plan.
-
-    Returns ONLY the current step — you must complete it before moving on.
-    Do not skip ahead or work on multiple steps at once.
-
-    Returns:
-        dict with the current step details, or completion status if all done.
-    """
-    session_id = _get_session_id(tool_context)
-    plan = _load_plan(session_id)
-
-    if not plan or plan.get("status") != "active":
-        return {"status": "no_plan", "message": "No active plan. Create one with create_plan."}
-
-    for step in plan["steps"]:
-        if step["status"] == "pending":
-            step["status"] = "in_progress"
-            plan["current_step"] = step["id"]
-            _save_plan(session_id, plan)
-
-            completed = sum(1 for s in plan["steps"] if s["status"] == "done")
-            total = len(plan["steps"])
-
-            return {
-                "status": "success",
-                "task": plan["task"],
-                "progress": f"{completed}/{total}",
-                "current_step": {
-                    "id": step["id"],
-                    "description": step["description"],
-                },
-                "instruction": f"Execute ONLY this step: {step['description']}. "
-                               "When done, call complete_step with the result.",
-            }
-
-    # All steps done
-    plan["status"] = "completed"
-    _save_plan(session_id, plan)
-    return {
-        "status": "plan_complete",
-        "message": "All steps completed!",
-        "results": [
-            {"step": s["description"], "result": s["result"]}
-            for s in plan["steps"]
-        ],
-    }
+async def complete_step(result: str, tool_context: ToolContext = None) -> dict[str, Any]:
+    """Mark the current in_progress step as done. Returns the next step (if
+    any) or 'All steps completed!' when the plan is finished."""
+    sid = _session_id(tool_context)
+    if not sid:
+        return {"status": "error", "message": "complete_step requires a session_id"}
+    return await plan_storage.complete_step(sid, result)
 
 
-def complete_step(
-    result: str,
-    tool_context: ToolContext,
-) -> dict:
-    """Mark the current step as done and record its result.
-
-    Args:
-        result: Brief summary of what was accomplished in this step.
-
-    Returns:
-        dict with updated progress and the next step preview.
-    """
-    session_id = _get_session_id(tool_context)
-    plan = _load_plan(session_id)
-
-    if not plan or plan.get("status") != "active":
-        return {"status": "error", "message": "No active plan."}
-
-    current_id = plan.get("current_step", 0)
-    step = plan["steps"][current_id]
-
-    if step["status"] != "in_progress":
-        return {"status": "error", "message": f"Step {current_id} is not in progress (status: {step['status']})."}
-
-    step["status"] = "done"
-    step["result"] = result
-
-    _save_plan(session_id, plan)
-
-    completed = sum(1 for s in plan["steps"] if s["status"] == "done")
-    total = len(plan["steps"])
-
-    # Preview next step
-    next_step = None
-    for s in plan["steps"]:
-        if s["status"] == "pending":
-            next_step = s["description"]
-            break
-
-    response = {
-        "status": "success",
-        "progress": f"{completed}/{total}",
-        "completed_step": step["description"],
-    }
-
-    if next_step:
-        response["next_step_preview"] = next_step
-        response["instruction"] = "Call get_next_step to proceed."
-    else:
-        plan["status"] = "completed"
-        _save_plan(session_id, plan)
-        response["message"] = "All steps completed! Plan finished."
-        response["results"] = [
-            {"step": s["description"], "result": s["result"]}
-            for s in plan["steps"]
-        ]
-
-    return response
-
-
-def get_plan_status(tool_context: ToolContext) -> dict:
-    """Show the full plan with current progress and checkboxes.
-
-    Returns:
-        dict with the complete plan status.
-    """
-    session_id = _get_session_id(tool_context)
-    plan = _load_plan(session_id)
-
-    if not plan:
-        return {"status": "no_plan", "message": "No active plan."}
-
-    checklist = []
-    for s in plan["steps"]:
-        if s["status"] == "done":
-            checklist.append(f"[x] {s['description']} — {s['result']}")
-        elif s["status"] == "in_progress":
-            checklist.append(f"[>] {s['description']} (in progress)")
-        else:
-            checklist.append(f"[ ] {s['description']}")
-
-    completed = sum(1 for s in plan["steps"] if s["status"] == "done")
-    total = len(plan["steps"])
-
+async def abandon_plan(tool_context: ToolContext = None) -> dict[str, Any]:
+    """Mark the active plan as abandoned. Use when an unrecoverable error
+    means the plan can't continue."""
+    sid = _session_id(tool_context)
+    if not sid:
+        return {"status": "error", "message": "abandon_plan requires a session_id"}
+    changed = await plan_storage.abandon_plan(sid)
     return {
         "status": "success",
-        "task": plan["task"],
-        "plan_status": plan["status"],
-        "progress": f"{completed}/{total}",
-        "checklist": checklist,
+        "message": "Plan abandoned." if changed else "No active plan to abandon.",
     }
 
 
-def abandon_plan(tool_context: ToolContext) -> dict:
-    """Abandon the current active plan. Use when the task is no longer needed.
-
-    Returns:
-        dict confirming abandonment.
-    """
-    session_id = _get_session_id(tool_context)
-    plan = _load_plan(session_id)
-
-    if not plan or plan.get("status") != "active":
-        return {"status": "no_plan", "message": "No active plan to abandon."}
-
-    plan["status"] = "abandoned"
-    _save_plan(session_id, plan)
-
-    completed = sum(1 for s in plan["steps"] if s["status"] == "done")
-    total = len(plan["steps"])
-
-    return {
-        "status": "success",
-        "message": f"Plan abandoned ({completed}/{total} steps were completed).",
-    }
+async def get_plan_status(tool_context: ToolContext = None) -> dict[str, Any]:
+    """Full status of the current session's plan: task, status, steps, results."""
+    sid = _session_id(tool_context)
+    if not sid:
+        return {"status": "error", "message": "get_plan_status requires a session_id"}
+    plan = await plan_storage.get_plan_status(sid)
+    if plan is None:
+        return {"status": "success", "message": "No plan exists for this session."}
+    return {"status": "success", "plan": plan}
 
 
-def get_active_plan_context(session_id: str) -> str | None:
-    """Called by the before_model_callback to inject plan context.
+# Convenience used by the scheduler — invoked OUTSIDE a tool context, so
+# takes session_id directly.
+async def seed_plan_for_session(session_id: str, task: str, steps: list[str]) -> None:
+    await plan_storage.seed_plan(session_id, task, steps)
 
-    Returns a context string if a plan is active, None otherwise.
-    Not a tool — internal use only.
-    """
-    plan = _load_plan(session_id)
-    if not plan or plan.get("status") != "active":
-        return None
 
-    current = None
-    for s in plan["steps"]:
-        if s["status"] == "in_progress":
-            current = s
-            break
+# Re-exports used by callers that don't have a tool_context but do have a
+# session_id (the workflow's completion-check node, the scheduler driver).
+async def has_pending_steps_for(session_id: str) -> bool:
+    return await plan_storage.has_pending_steps(session_id)
 
-    completed = sum(1 for s in plan["steps"] if s["status"] == "done")
-    total = len(plan["steps"])
 
-    if current:
-        return (
-            f"[ACTIVE PLAN: {plan['task']}] "
-            f"Progress: {completed}/{total}. "
-            f"CURRENT STEP ({current['id']}): {current['description']}. "
-            "Focus ONLY on this step. When done, call complete_step with the result."
-        )
-    else:
-        return (
-            f"[ACTIVE PLAN: {plan['task']}] "
-            f"Progress: {completed}/{total}. "
-            "No step in progress. Call get_next_step to continue."
-        )
+async def get_active_plan_context_for(session_id: str) -> str | None:
+    return await plan_storage.get_active_plan_context(session_id)

@@ -111,7 +111,7 @@ def _get_session_id(tool_context: ToolContext) -> str:
 
 def _get_session_notify_info(tool_context: ToolContext) -> dict:
     """Extract notification info (channel type + id) from the current session via the adapter registry."""
-    from app.core.transport import parse_notify_from_session_id
+    from app.runtime.transport import parse_notify_from_session_id
 
     sid = _get_session_id(tool_context)
     if not sid:
@@ -122,7 +122,7 @@ def _get_session_notify_info(tool_context: ToolContext) -> dict:
 def _resolve_notify(tool_context: ToolContext, deliver_to: str = "") -> dict:
     """Resolve notification target — use deliver_to if provided, otherwise fall back to current session."""
     if deliver_to:
-        from app.core.transport import parse_notify_from_session_id
+        from app.runtime.transport import parse_notify_from_session_id
         notify = parse_notify_from_session_id(deliver_to)
         if notify:
             return notify

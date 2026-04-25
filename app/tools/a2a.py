@@ -1,13 +1,18 @@
-import re
 import asyncio
-import os
+import base64
+import io
 import json
 import logging
+import os
+import re
+import tarfile
 import uuid
-import httpx
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional, Union
+
+import httpx
 from google.adk.tools.tool_context import ToolContext
+from google.genai import types
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +193,7 @@ def update_friend_key(friend_name: str, tool_context: ToolContext) -> Dict[str, 
         if friend_name not in friends:
             return {"status": "error", "message": f"Friend '{friend_name}' not found."}
 
-        from app.secure_config import expect_friend_key
+        from app.runtime.secure_capture import expect_friend_key
 
         session = getattr(tool_context, "session", None)
         session_id = getattr(session, "session_id", None) or getattr(session, "id", None) or "default"
@@ -247,14 +252,41 @@ def _a2a_headers(api_key: Optional[str] = None) -> Dict[str, str]:
     return headers
 
 
+def _content_to_a2a_parts(message: Union[str, types.Content]) -> List[Dict[str, Any]]:
+    """Translate a string OR a `types.Content` into A2A wire-format parts.
+
+    Per the A2A spec, parts is a list of `{"text": "..."}` for text and
+    `{"file": {"mimeType": "...", "bytes": "<base64>"}}` for inline binary.
+    """
+    if isinstance(message, str):
+        return [{"text": message}]
+    if not isinstance(message, types.Content):
+        return [{"text": str(message)}]
+    out: List[Dict[str, Any]] = []
+    for part in message.parts or []:
+        if getattr(part, "text", None):
+            out.append({"text": part.text})
+            continue
+        blob = getattr(part, "inline_data", None)
+        if blob is not None:
+            data: bytes = getattr(blob, "data", b"") or b""
+            mime: str = getattr(blob, "mime_type", "") or "application/octet-stream"
+            out.append({"file": {"mimeType": mime, "bytes": base64.b64encode(data).decode("ascii")}})
+    return out or [{"text": ""}]
+
+
 async def _send_a2a_message(
     endpoint_url: str,
-    message_text: str,
+    message: Union[str, types.Content],
     task_id: Optional[str] = None,
     api_key: Optional[str] = None,
     blocking: bool = True,
 ) -> Dict[str, Any]:
     """Send a JSON-RPC message/send request to a remote A2A agent.
+
+    `message` accepts a plain string (legacy text-only) or a `types.Content`
+    with mixed text + binary parts. Binary parts are base64-encoded into the
+    A2A `file` wire format.
 
     When blocking=False, includes configuration.blocking=false so the server
     returns immediately with a task in 'working' state.
@@ -262,7 +294,7 @@ async def _send_a2a_message(
     message_obj: Dict[str, Any] = {
         "messageId": str(uuid.uuid4()),
         "role": "user",
-        "parts": [{"text": message_text}],
+        "parts": _content_to_a2a_parts(message),
     }
 
     if task_id:
@@ -396,15 +428,23 @@ def _extract_response_text(task: Dict[str, Any]) -> str:
     return "\n".join(texts) if texts else "(no text in response)"
 
 
-async def call_friend(friend_name: str, message: str, tool_context: ToolContext = None) -> Dict[str, Any]:
+async def call_friend(
+    friend_name: str,
+    message: Union[str, types.Content],
+    tool_context: ToolContext = None,
+) -> Dict[str, Any]:
     """
     Sends a message to a registered friend via the A2A protocol and returns their response.
     Uses async task polling — the message is sent non-blocking, then the task is polled
     until the friend finishes processing. Falls back to blocking for non-ADK agents.
 
+    `message` may be a plain string OR a `types.Content` with mixed text +
+    binary parts (e.g. images, audio, DNA bundles). Binary parts ride
+    inline as base64 per the A2A spec.
+
     Args:
         friend_name: The local nickname of the friend to contact.
-        message: The message to send to the friend.
+        message:     str or Content with text + binary parts.
     """
     try:
         if not os.path.exists(FRIENDS_FILE):
@@ -454,14 +494,22 @@ async def call_friend(friend_name: str, message: str, tool_context: ToolContext 
         return {"status": "error", "message": f"A2A call failed: {e}"}
 
 
-async def call_agent(url: str, message: str, tool_context: ToolContext, api_key: Optional[str] = None) -> Dict[str, Any]:
+async def call_agent(
+    url: str,
+    message: Union[str, types.Content],
+    tool_context: ToolContext,
+    api_key: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Sends a one-off message to any A2A-compliant agent by URL.
     Use this for agents NOT in the friends list.
 
+    `message` may be a plain string OR a `types.Content` with mixed text +
+    binary parts.
+
     Args:
-        url: The base URL of the remote A2A agent (e.g., 'https://agent.example.com').
-        message: The message to send to the remote agent.
+        url:     Base URL of the remote A2A agent (e.g. 'https://agent.example.com').
+        message: str or Content with text + binary parts.
         api_key: Optional API key for authentication.
     """
     try:
@@ -756,7 +804,7 @@ def _scan_for_secrets(file_path: str, rel_path: str) -> list:
     try:
         with open(file_path, "r") as f:
             text = f.read()
-        from app.app_utils.config import ALLOWED_CONFIG_KEYS
+        from app.util.config import ALLOWED_CONFIG_KEYS
         _SAFE_KEYS = {"BOT_NAME", "GITHUB_REPO", "APP_NAME"}
         for key in ALLOWED_CONFIG_KEYS:
             if key in _SAFE_KEYS:
@@ -774,30 +822,30 @@ def _scan_for_secrets(file_path: str, rel_path: str) -> list:
     return findings
 
 
-def export_dna(source_paths: list[str], tool_context: ToolContext) -> Dict[str, Any]:
-    """
-    Packages project files into a .tar.gz archive and returns a download URL.
-    Reads directly from the project tree — no sandbox staging needed.
-    Files are scanned for hardcoded secrets before archiving.
+async def export_dna(
+    source_paths: list[str],
+    tool_context: ToolContext,
+) -> Dict[str, Any]:
+    """Pack project files into a .tar.gz, save as an artifact, return manifest + bytes.
+
+    The clean ADK 2.0 flow: no public download URL. The bytes are returned
+    directly so the caller can immediately attach them to a `call_friend`
+    Content payload (binary inline_data per the A2A spec). The artifact id
+    serves as a local audit trail.
 
     Args:
-        source_paths: List of project-relative paths to include
-            (e.g. ["app/tools/keepa.py", "skills/keepa-skill/SKILL.md"]).
-            Directories are included recursively.
+        source_paths: project-relative paths to include (files or dirs).
+            Directories are included recursively. Hidden files and __pycache__
+            are skipped.
     """
-    import tarfile
-
     try:
         project_root = os.path.abspath(".")
-
         if not source_paths:
-            return {"status": "error", "message": "source_paths is required. Provide a list of project-relative paths to export."}
+            return {"status": "error", "message": "source_paths is required."}
 
-        # Resolve and collect files
-        collected = []  # (absolute_path, archive_relative_path)
+        collected: list[tuple[str, str]] = []
         for src in source_paths:
             full = os.path.normpath(os.path.join(project_root, src))
-            # Block path traversal
             if not full.startswith(project_root):
                 return {"status": "error", "message": f"Path escapes project root: {src}"}
             if os.path.isfile(full):
@@ -819,46 +867,55 @@ def export_dna(source_paths: list[str], tool_context: ToolContext) -> Dict[str, 
             return {"status": "error", "message": "No files found at the given paths."}
 
         # Pre-archive secret scan
-        all_findings = []
+        all_findings: list[str] = []
         for full_path, rel_path in collected:
             findings = _scan_for_secrets(full_path, rel_path)
             for line_num, hint in findings:
                 all_findings.append(f"  {rel_path}:{line_num} ({hint})")
-
         if all_findings:
             report = "\n".join(all_findings)
             return {
                 "status": "error",
+                "error_code": "DNA_HARDCODED_SECRETS",
                 "message": (
                     f"DNA export BLOCKED: {len(all_findings)} hardcoded secret(s) detected. "
                     f"Replace with vault.get() calls, then retry.\n{report}"
                 ),
             }
 
-        # Create archive
-        os.makedirs(DNA_EXPORTS_DIR, exist_ok=True)
-        archive_id = uuid.uuid4().hex[:10]
-        archive_name = f"dna_{archive_id}.tar.gz"
-        archive_path = os.path.join(DNA_EXPORTS_DIR, archive_name)
-
-        with tarfile.open(archive_path, "w:gz") as tar:
+        # Build the tarball in memory.
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
             for full_path, rel_path in collected:
                 tar.add(full_path, arcname=rel_path)
+        tarball: bytes = buf.getvalue()
 
-        # Build download URL
-        base_url = os.environ.get("A2A_BASE_URL", "http://localhost:8000")
-        download_url = f"{base_url}/dna/{archive_name}"
+        # Save as artifact for receiver-side audit trail.
+        archive_id = f"dna_{uuid.uuid4().hex[:10]}.tar.gz"
+        try:
+            await tool_context.save_artifact(
+                archive_id, types.Part(inline_data=types.Blob(data=tarball, mime_type="application/gzip")),
+            )
+        except Exception:
+            logger.debug("DNA export: save_artifact unavailable; returning bytes only")
 
-        file_list = ", ".join(sorted(p for _, p in collected))
-        archive_kb = os.path.getsize(archive_path) / 1024
+        manifest = sorted(rel for _, rel in collected)
         return {
             "status": "success",
-            "message": f"DNA archived: {len(collected)} file(s) ({archive_kb:.1f} KB) — {file_list}",
-            "dna_url": download_url,
+            "artifact_id": archive_id,
+            "size_bytes": len(tarball),
+            "manifest": manifest,
+            "tarball": tarball,
+            "message": (
+                f"DNA archived: {len(collected)} file(s), {len(tarball) / 1024:.1f} KB. "
+                "Attach `tarball` (bytes) to a call_friend Content payload as a "
+                "Part.from_bytes with mime_type='application/gzip'; include the "
+                "manifest in a Part.from_text alongside it."
+            ),
         }
     except Exception as e:
         logger.error("DNA export failed: %s", e)
-        return {"status": "error", "message": f"DNA sequencing failed: {e}"}
+        return {"status": "error", "error_code": "DNA_EXPORT_FAILED", "message": str(e)}
 
 
 
@@ -894,62 +951,79 @@ def _import_dna_legacy(dna_package: dict) -> list:
     return imported
 
 
-def import_dna(dna_url: str, tool_context: ToolContext = None) -> Dict[str, Any]:
+async def import_dna(
+    dna: Union[bytes, str, types.Part],
+    tool_context: ToolContext = None,
+) -> Dict[str, Any]:
+    """Import a DNA bundle into the per-session sandbox for verification.
+
+    Accepts:
+      - `bytes`: a tar.gz blob extracted from an inbound A2A `Part.inline_data`.
+      - `str`: an artifact_id (loaded via tool_context.load_artifact).
+      - `types.Part`: an inline_data part holding the tarball.
+
+    No HTTP fetch. Replaces the legacy URL-based flow.
     """
-    Imports DNA into the sandbox for verification by fetching a .tar.gz archive from the given URL.
-    The URL is provided by export_dna on the source agent.
-
-    Args:
-        dna_url (str): The download URL for the DNA archive (e.g. 'https://agent.example.com/dna/dna_abc123.tar.gz').
-
-    Returns:
-        dict: Status and list of imported files.
-    """
-    import tarfile
-    import io
-
     try:
-        sandbox_dir = os.path.abspath("./data/sandbox")
+        # Resolve `dna` into raw tarball bytes.
+        tarball: bytes
+        if isinstance(dna, (bytes, bytearray)):
+            tarball = bytes(dna)
+        elif isinstance(dna, types.Part):
+            blob = getattr(dna, "inline_data", None)
+            if blob is None:
+                return {"status": "error", "message": "Part has no inline_data."}
+            tarball = bytes(getattr(blob, "data", b"") or b"")
+        elif isinstance(dna, str):
+            if tool_context is None:
+                return {"status": "error", "message": "import_dna(str) requires tool_context to load artifact."}
+            part = await tool_context.load_artifact(dna)
+            if part is None or getattr(part, "inline_data", None) is None:
+                return {"status": "error", "message": f"Artifact {dna} not found or empty."}
+            tarball = bytes(part.inline_data.data or b"")
+        else:
+            return {"status": "error", "message": f"Unsupported dna argument type: {type(dna).__name__}"}
+
+        if not tarball:
+            return {"status": "error", "message": "DNA payload is empty."}
+
+        # Per-session sandbox isolation — see memory `Per-Session Sandbox Isolation`.
+        session_id = ""
+        if tool_context and getattr(tool_context, "session", None):
+            session_id = (
+                getattr(tool_context.session, "session_id", "")
+                or getattr(tool_context.session, "id", "")
+            )
+        sandbox_dir = os.path.abspath(
+            os.path.join("./data/sandbox", session_id) if session_id else "./data/sandbox"
+        )
         os.makedirs(sandbox_dir, exist_ok=True)
-        imported = []
 
-        # Look up API key for the source agent
-        api_key = None
-        try:
-            with open(FRIENDS_FILE, "r") as f:
-                friends = json.load(f)
-            for name, info in friends.items():
-                endpoint = info.get("endpoint_url", "")
-                if endpoint and dna_url.startswith(endpoint.rstrip("/")):
-                    api_key = _load_friend_key(name)
-                    break
-        except (FileNotFoundError, json.JSONDecodeError):
-            pass
-
-        headers = {}
-        if api_key:
-            headers["x-a2a-api-key"] = api_key
-
-        resp = httpx.get(dna_url, headers=headers, timeout=60, follow_redirects=True)
-        if resp.status_code != 200:
-            return {"status": "error", "message": f"Failed to fetch DNA archive: HTTP {resp.status_code}"}
-
-        with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz") as tar:
-            # Security: reject paths that escape the sandbox
+        imported: list[str] = []
+        with tarfile.open(fileobj=io.BytesIO(tarball), mode="r:gz") as tar:
             for member in tar.getmembers():
+                # Reject path traversal.
                 if member.name.startswith("/") or ".." in member.name:
-                    return {"status": "error", "message": f"Unsafe path in archive: {member.name}"}
+                    return {
+                        "status": "error",
+                        "error_code": "DNA_UNSAFE_PATH",
+                        "message": f"Unsafe path in archive: {member.name}",
+                    }
                 imported.append(member.name)
             tar.extractall(path=sandbox_dir)
 
         if not imported:
             return {"status": "error", "message": "DNA archive was empty."}
 
-        file_list = ", ".join(sorted(imported))
         return {
             "status": "success",
-            "message": f"Imported {len(imported)} file(s) into sandbox: {file_list}. Run 'evolution_verify_sandbox' to test compatibility.",
+            "sandbox_path": sandbox_dir,
+            "manifest": sorted(imported),
+            "message": (
+                f"Imported {len(imported)} file(s) into {sandbox_dir}. "
+                "Run `evolution_verify_sandbox` to test compatibility."
+            ),
         }
     except Exception as e:
         logger.error("DNA import failed: %s", e)
-        return {"status": "error", "message": f"DNA integration failed: {e}"}
+        return {"status": "error", "error_code": "DNA_IMPORT_FAILED", "message": str(e)}

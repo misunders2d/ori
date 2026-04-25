@@ -1,114 +1,164 @@
-"""Tools for runtime model discovery and hot-swapping."""
+"""Model hot-swap and thinking-mode toggle tools.
+
+Cross-provider hot-swap works without restart for any LiteLlm-routed agent
+(LiteLlm is the BaseLlm class; the model string changes, the class doesn't).
+Native-class agents (`google_search`, `embedding` — see PINNED_COMPONENTS)
+ignore overrides; attempting to swap them returns a structured error.
+
+`set_thinking_mode(on)` flips `state.use_thinking`. ModelConfigPlugin reads
+this on `before_model_callback` and strips `thinking_config` per request
+when off.
+"""
+
+from __future__ import annotations
 
 import logging
-from typing import Annotated
+from typing import Annotated, Any
 
 from google.adk.tools.tool_context import ToolContext
 
-from app.app_utils.models import (
-    SUPPORTED_PROVIDERS,
+from app.util.models import (
+    MODEL_DEFAULTS,
+    PROVIDER_REGISTRY,
     VALID_COMPONENTS,
-    get_all_assignments,
-    get_auth_mode,
+    format_model_assignments,
+    get_default_model,
     get_model_string,
-    set_model,
-    list_provider_models,
-    _parse_model_str,
+    is_pinned,
 )
 
 logger = logging.getLogger(__name__)
 
 
 async def list_available_models(
-    provider: Annotated[str, "Model provider to query: 'google' or 'anthropic' (default 'google')"] = "google",
-    filter: Annotated[str, "Optional substring filter (e.g. 'flash', 'pro')"] = "",
     tool_context: ToolContext = None,
-) -> dict:
-    """List available models from a provider and show current agent assignments."""
-    models = await list_provider_models(provider=provider, filter_str=filter)
-    assignments = get_all_assignments()
-
+) -> dict[str, Any]:
+    """Show the current effective model per component, plus the registry of
+    available providers and the per-component defaults."""
+    state = tool_context.state.to_dict() if (tool_context and tool_context.state) else {}
+    overrides = state.get("model") or {}
+    rows: list[dict[str, str]] = []
+    for component in sorted(MODEL_DEFAULTS):
+        default = MODEL_DEFAULTS[component]
+        env_str = get_model_string(component)
+        override = overrides.get(component)
+        effective = override or env_str
+        source = "state" if override else ("env" if env_str != default else "default")
+        if is_pinned(component):
+            source += " (pinned)"
+        rows.append({
+            "component": component,
+            "default": default,
+            "effective": effective,
+            "source": source,
+        })
     return {
-        "available_models": models,
-        "current_assignments": assignments,
-        "valid_components": sorted(VALID_COMPONENTS),
-        "auth_mode": get_auth_mode(),
+        "status": "success",
+        "providers": sorted(PROVIDER_REGISTRY.keys()),
+        "components": rows,
+        "table": format_model_assignments(markdown=False),
     }
 
 
 async def set_agent_model(
-    component_name: Annotated[str, "Target component (e.g. 'DeveloperAgent', 'channel_summarizer')"],
-    model_name: Annotated[str, (
-        "Model identifier. MUST call list_available_models first and pick from the returned list. "
-        "Do NOT guess or invent model names. "
-        "Use 'google/' or 'anthropic/' prefix, or bare name (auto-inferred)."
-    )],
+    component: Annotated[str, "Target agent or service (e.g. 'CoordinatorAgent', 'DeveloperAgent', 'summarizer')"],
+    model: Annotated[str, "Model string in <provider>/<rest> form, e.g. 'litellm/anthropic/claude-3-5-sonnet-20241022' or 'gemini/gemini-2.5-flash'"],
     tool_context: ToolContext = None,
-) -> dict:
-    """Switch the model for a specific agent or component.
+) -> dict[str, Any]:
+    """Hot-swap the model used by a component on the next LLM call.
 
-    IMPORTANT: You MUST call list_available_models first, then pick a model
-    name from the returned list. Arbitrary model names are rejected.
+    Pinned components (google_search, embedding) reject swap attempts —
+    they require their native ADK class for protocol-specific features
+    (Gemini-native search grounding, Gemini embedding endpoint).
     """
-    if component_name not in VALID_COMPONENTS:
+    if tool_context is None:
+        return {"status": "error", "message": "set_agent_model requires tool_context"}
+    if component not in VALID_COMPONENTS:
         return {
             "status": "error",
-            "message": f"Unknown component '{component_name}'. Valid: {sorted(VALID_COMPONENTS)}",
+            "error_code": "UNKNOWN_COMPONENT",
+            "message": (
+                f"Unknown component '{component}'. "
+                f"Valid: {sorted(VALID_COMPONENTS)}"
+            ),
         }
-
-    # Normalize: require provider prefix
-    if "/" not in model_name:
-        if model_name.startswith("claude"):
-            model_name = f"anthropic/{model_name}"
-        else:
-            model_name = f"google/{model_name}"
-
-    provider, bare_name = _parse_model_str(model_name)
-
-    # Fetch the live model list and validate against it
-    available = await list_provider_models(provider=provider)
-    if not available or (len(available) == 1 and "error" in available[0]):
+    if is_pinned(component):
         return {
             "status": "error",
-            "message": f"Could not fetch model list from '{provider}'. Try again later.",
+            "error_code": "COMPONENT_PINNED",
+            "message": (
+                f"Component '{component}' is pinned to its native model class — "
+                "hot-swap is not supported. The pin is required for protocol "
+                "features (e.g. native Google Search grounding, Gemini embedding)."
+            ),
         }
-
-    valid_names = set()
-    for m in available:
-        name = m.get("name", "")
-        valid_names.add(name)
-        valid_names.add(name.replace("models/", ""))
-
-    if bare_name not in valid_names and f"models/{bare_name}" not in valid_names:
-        # Show a few similar names to help
-        suggestions = sorted(n.replace("models/", "") for n in valid_names if any(
-            k in n.lower() for k in bare_name.lower().split("-")[:2]
-        ))[:5]
-        hint = f" Similar: {suggestions}" if suggestions else " Use list_available_models to see valid options."
+    provider, _, _ = model.partition("/")
+    if provider not in PROVIDER_REGISTRY:
         return {
             "status": "error",
-            "message": f"Model '{bare_name}' not found on {provider}.{hint}",
+            "error_code": "UNKNOWN_PROVIDER",
+            "message": (
+                f"Provider '{provider}' is not registered. "
+                f"Available: {sorted(PROVIDER_REGISTRY.keys())}. "
+                "Add a new one via app/util/models.py:PROVIDER_REGISTRY."
+            ),
         }
-
-    old_model = get_model_string(component_name)
-
-    # Persist to env + vault
-    set_model(component_name, model_name)
-
-    # Write to session state for immediate hot-swap (picked up by before_model_callback)
-    if tool_context:
-        tool_context.state[f"model:{component_name}"] = model_name
-
-    old_provider, _ = _parse_model_str(old_model)
-    new_provider, _ = _parse_model_str(model_name)
-    cross_provider = old_provider != new_provider
-
-    msg = f"Model for {component_name} changed: {old_model} -> {model_name}"
-    if cross_provider:
-        msg += " (cross-provider change — takes full effect after restart)"
-
+    # Stage in session state. ModelConfigPlugin picks it up on the next
+    # before_model_callback.
+    overrides = (tool_context.state.to_dict() if tool_context.state else {}).get("model") or {}
+    overrides[component] = model
+    tool_context.state["model"] = overrides
+    old = get_model_string(component)
     return {
         "status": "success",
-        "message": msg,
-        "restart_required": cross_provider,
+        "message": f"Model for {component} changed: {old} -> {model}. Effect on next LLM call.",
+        "old": old,
+        "new": model,
     }
+
+
+async def set_thinking_mode(
+    on: Annotated[bool, "True enables thinking_config on LLM requests; False strips it"],
+    tool_context: ToolContext = None,
+) -> dict[str, Any]:
+    """Toggle the LLM's thinking/planner mode for this session.
+
+    When off (default), ModelConfigPlugin strips `thinking_config` from
+    every request. Useful when verbose reasoning isn't worth the latency.
+    """
+    if tool_context is None:
+        return {"status": "error", "message": "set_thinking_mode requires tool_context"}
+    tool_context.state["use_thinking"] = bool(on)
+    state = "ON" if on else "OFF"
+    return {
+        "status": "success",
+        "message": f"Thinking mode is now {state}. Effect on next LLM call.",
+    }
+
+
+async def reset_model_override(
+    component: Annotated[str, "Component to reset; pass empty string to reset all"] = "",
+    tool_context: ToolContext = None,
+) -> dict[str, Any]:
+    """Clear a specific component's hot-swap override (or all overrides).
+
+    Effect on the next LLM call: the component falls back to its
+    `MODEL_<component>` env var, then to `MODEL_DEFAULTS`.
+    """
+    if tool_context is None:
+        return {"status": "error", "message": "reset_model_override requires tool_context"}
+    overrides = (tool_context.state.to_dict() if tool_context.state else {}).get("model") or {}
+    if not component:
+        cleared = list(overrides.keys())
+        tool_context.state["model"] = {}
+        if cleared:
+            return {"status": "success", "message": f"Cleared {len(cleared)} override(s): {cleared}"}
+        return {"status": "success", "message": "No overrides to clear."}
+    if component in overrides:
+        del overrides[component]
+        tool_context.state["model"] = overrides
+        return {
+            "status": "success",
+            "message": f"Cleared override for {component}. Falls back to {get_default_model(component)}.",
+        }
+    return {"status": "success", "message": f"No override set for {component}."}

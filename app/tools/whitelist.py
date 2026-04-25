@@ -2,7 +2,7 @@ import logging
 import os
 from typing import Annotated
 
-from app.core.whitelist import (
+from app.runtime.perimeter import (
     blacklist_chat as _bl,
     get_blacklist,
     get_whitelist,
