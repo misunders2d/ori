@@ -87,6 +87,13 @@ _INSTRUCTION = (
 
 root_agent = Agent(
     name="CoordinatorAgent",
+    # mode='chat' is required when this Agent runs as a Workflow node.
+    # Workflow node default is 'single_turn' which forces
+    # include_contents='none' — strips all conversation history. With
+    # 'chat', the LlmAgent keeps its default include_contents='default'
+    # and sees the full session events as conversation history.
+    # See google.adk.workflow._llm_agent_wrapper:run_llm_agent_as_node.
+    mode="chat",
     model=get_model("CoordinatorAgent"),
     description=(
         "The primary interface for the autonomous agent platform. "
