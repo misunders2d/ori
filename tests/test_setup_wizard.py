@@ -3,7 +3,7 @@ import json
 import pytest
 from unittest.mock import patch, MagicMock
 
-from interfaces.setup_wizard import _decode_secret, _generate_code, verify_totp, main
+from app.transports.setup_wizard import _decode_secret, _generate_code, verify_totp, main
 
 
 def test_setup_wizard_totp_functions():
@@ -19,7 +19,7 @@ def test_setup_wizard_totp_functions():
 
 @patch("builtins.input")
 @patch("builtins.print")
-@patch("interfaces.setup_wizard.clear_screen")
+@patch("app.transports.setup_wizard.clear_screen")
 def test_setup_wizard_main_all_inputs(mock_clear, mock_print, mock_input, monkeypatch, tmp_path):
     """Test the complete interactive setup flow including TOTP enablement."""
     monkeypatch.setattr(os, "environ", {})
@@ -43,7 +43,7 @@ def test_setup_wizard_main_all_inputs(mock_clear, mock_print, mock_input, monkey
     mock_tg_response.__enter__ = lambda s: s
     mock_tg_response.__exit__ = MagicMock(return_value=False)
 
-    with patch("interfaces.setup_wizard.verify_totp", return_value=True):
+    with patch("app.transports.setup_wizard.verify_totp", return_value=True):
         mock_input.side_effect = [
             "MyCustomBot",    # Bot Name
             "1",              # Provider: Google API key
@@ -77,7 +77,7 @@ def test_setup_wizard_main_all_inputs(mock_clear, mock_print, mock_input, monkey
 
 @patch("builtins.input")
 @patch("builtins.print")
-@patch("interfaces.setup_wizard.clear_screen")
+@patch("app.transports.setup_wizard.clear_screen")
 def test_setup_wizard_main_skip_optional(mock_clear, mock_print, mock_input, monkeypatch, tmp_path):
     """Test the setup flow when optional components are skipped."""
     monkeypatch.setattr(os, "environ", {})
