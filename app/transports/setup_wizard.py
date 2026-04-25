@@ -177,20 +177,38 @@ def setup_anthropic_api_key(env_path, set_key_fn):
     return True
 
 
+def setup_openrouter_api_key(env_path, set_key_fn):
+    """Collect an OpenRouter API key."""
+    cprint("  Auth method: API Key (OpenRouter)", "96")
+    print("  Get a key at: https://openrouter.ai/keys")
+    print("  OpenRouter routes to many providers (Anthropic, OpenAI, Meta, Mistral, x-ai, …)")
+    key = prompt("  Enter your OPENROUTER_API_KEY:", required=True)
+    set_key_fn(env_path, "OPENROUTER_API_KEY", key)
+    cprint("  Saved.\n", "92")
+    return True
+
+
 def select_default_model(env_path, set_key_fn, providers):
     """Let user pick the default model for agents."""
-    # Build model menu based on selected providers
+    # Build model menu based on selected providers. We prefer LiteLlm-routed
+    # strings ("litellm/<provider>/<model>") so agents stay hot-swappable.
     models = []
     if "google" in providers:
         models.extend([
-            ("google/gemini-3-flash-preview", "Gemini 3 Flash (fast, free tier)"),
-            ("google/gemini-3.1-pro-preview", "Gemini 3.1 Pro (most capable Google model)"),
+            ("litellm/gemini/gemini-2.5-flash", "Gemini 2.5 Flash (fast, free tier)"),
+            ("litellm/gemini/gemini-2.5-pro", "Gemini 2.5 Pro (most capable Google model)"),
         ])
     if "anthropic" in providers:
         models.extend([
-            ("anthropic/claude-sonnet-4-6", "Claude Sonnet 4.6 (balanced)"),
-            ("anthropic/claude-opus-4-6", "Claude Opus 4.6 (most capable)"),
-            ("anthropic/claude-haiku-4-5-20251001", "Claude Haiku 4.5 (fast, cheap)"),
+            ("litellm/anthropic/claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet (balanced)"),
+            ("litellm/anthropic/claude-3-5-haiku-20241022", "Claude 3.5 Haiku (fast, cheap)"),
+        ])
+    if "openrouter" in providers:
+        models.extend([
+            ("openrouter/anthropic/claude-3.5-sonnet", "OpenRouter → Claude 3.5 Sonnet"),
+            ("openrouter/openai/gpt-4o", "OpenRouter → GPT-4o"),
+            ("openrouter/meta-llama/llama-3.1-405b-instruct", "OpenRouter → Llama 3.1 405B"),
+            ("openrouter/x-ai/grok-2", "OpenRouter → Grok 2"),
         ])
 
     cprint("  Select default model for agents:", "96")
@@ -204,9 +222,10 @@ def select_default_model(env_path, set_key_fn, providers):
             break
         cprint(f"  Please enter a number between 1 and {len(models)}.", "91")
 
-    # Set the main agents to this model
+    # Set the main agents to this model. Component names are case-preserved
+    # (must match `MODEL_<Component>` lookup in app/util/models.py:resolve_model).
     for component in ("CoordinatorAgent", "DeveloperAgent", "KnowledgeAgent"):
-        set_key_fn(env_path, f"MODEL_{component.upper()}", selected)
+        set_key_fn(env_path, f"MODEL_{component}", selected)
 
     cprint(f"  Default model set to: {selected}\n", "92")
     return selected
@@ -347,19 +366,22 @@ def main():
     # -----------------------------------------------------------------------
     # 2. LLM Provider (MANDATORY)
     # -----------------------------------------------------------------------
-    # Check if provider is already configured
-    has_google = bool(os.environ.get("GOOGLE_API_KEY", "").strip())
-    has_vertex = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").upper() == "TRUE"
-    has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
-    has_any_provider = has_google or has_vertex or has_anthropic
+    # Check vault directly — env-var checks are unreliable because stale
+    # data/.env files can populate os.environ with values that aren't in the
+    # vault, masking the prompt and leaving the install half-configured.
+    has_google = bool(_vault_cache.get("GOOGLE_API_KEY", "").strip())
+    has_vertex = str(_vault_cache.get("GOOGLE_GENAI_USE_VERTEXAI", "")).upper() == "TRUE"
+    has_anthropic = bool(_vault_cache.get("ANTHROPIC_API_KEY", "").strip())
+    has_openrouter = bool(_vault_cache.get("OPENROUTER_API_KEY", "").strip())
+    has_any_provider = has_google or has_vertex or has_anthropic or has_openrouter
 
     if not has_any_provider:
         cprint("[2] LLM Provider Setup (Required)", "93")
         print("You must configure at least one AI provider for your agent to think.\n")
         cprint("  NOTE: A Google API key (option 1) is strongly recommended even if you", "93")
-        cprint("  choose Claude as your primary model. It powers the embedding-based", "93")
-        cprint("  security guardrails (prompt injection defense). Without it, security", "93")
-        cprint("  features will be reduced. Use option 4 to combine providers (e.g. 1,3).\n", "93")
+        cprint("  choose another provider as your primary model. It powers the embedding-", "93")
+        cprint("  based security guardrails (prompt injection defense). Without it, security", "93")
+        cprint("  features will be reduced. Combine options with commas (e.g. 1,4).\n", "93")
 
         has_gcloud = subprocess.run(["which", "gcloud"], capture_output=True).returncode == 0
 
@@ -371,14 +393,15 @@ def main():
             cprint("    2. Google Cloud login — UNAVAILABLE (gcloud CLI not installed)", "90")
             cprint("       Install: curl https://sdk.cloud.google.com | bash && gcloud init", "90")
         print("    3. Anthropic Claude — paste an API key")
+        print("    4. OpenRouter — paste an API key (multi-provider routing: Anthropic, OpenAI, Meta, x-ai, …)")
         print("")
-        cprint("  TIP: For both Gemini + Claude, combine options (e.g. 2,3 or 1,3).", "96")
+        cprint("  TIP: For Gemini + OpenRouter (recommended), use option 1,4.", "96")
         cprint("  Anthropic does not support login — API key is the only option.\n", "96")
 
         providers_configured = set()
 
         while not providers_configured:
-            choice = prompt("  Select option(s) — comma-separated (e.g. 1,3):", required=True)
+            choice = prompt("  Select option(s) — comma-separated (e.g. 1,4):", required=True)
             choices = [c.strip() for c in choice.split(",")]
 
             for c in choices:
@@ -401,7 +424,8 @@ def main():
                     if setup_anthropic_api_key(ENV_FILE_PATH, set_key):
                         providers_configured.add("anthropic")
                 elif c == "4":
-                    cprint("  There's no option 4. Combine options with commas (e.g. 1,3 or 2,3).", "93")
+                    if setup_openrouter_api_key(ENV_FILE_PATH, set_key):
+                        providers_configured.add("openrouter")
                 else:
                     cprint(f"  Unknown option: {c}", "91")
 

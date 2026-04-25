@@ -61,7 +61,7 @@ needs_setup() {
         "$PYTHON" -c "
 import json, sys
 d = json.load(open('$VAULT_FILE'))
-if any(d.get(k) for k in ['GOOGLE_API_KEY','ANTHROPIC_API_KEY']) or d.get('GOOGLE_GENAI_USE_VERTEXAI','').upper()=='TRUE':
+if any(d.get(k) for k in ['GOOGLE_API_KEY','ANTHROPIC_API_KEY','OPENROUTER_API_KEY']) or d.get('GOOGLE_GENAI_USE_VERTEXAI','').upper()=='TRUE':
     sys.exit(0)
 sys.exit(1)
 " 2>/dev/null && return 1

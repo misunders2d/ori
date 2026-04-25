@@ -341,6 +341,7 @@ def main():
         bool(vault_data.get("GOOGLE_API_KEY"))
         or vault_data.get("GOOGLE_GENAI_USE_VERTEXAI", "").upper() == "TRUE"
         or bool(vault_data.get("ANTHROPIC_API_KEY"))
+        or bool(vault_data.get("OPENROUTER_API_KEY"))
     )
     if not has_provider:
         logger.error(
