@@ -14,12 +14,51 @@ Covers inter-agent communication via the A2A standard.
 | Tool | Purpose |
 |------|---------|
 | `get_agent_identity` | Read-only. Returns our Agent Card. Does NOT regenerate it. |
-| `add_friend(url, name)` | Discovers remote card, validates, saves to `data/friends.json`. |
-| `list_friends()` | Returns all registered friends with capabilities. |
-| `call_friend(name, msg)` | Sends JSON-RPC `message/send` to a known friend. |
+| `get_my_a2a_key` | Returns this agent's `A2A_API_KEY` for sharing with trusted friends. |
+| `add_friend(url, name)` | Discovers remote card, validates, saves to `data/friends.json`. If the friend requires auth, immediately call `update_friend_key`. |
+| `update_friend_key(friend_name)` | Arms secure-capture for a friend's API key. The user's NEXT message is intercepted, saved to vault, and never reaches the LLM. If the next message in your context looks unrelated (a greeting, a different command), the capture ALREADY succeeded — do NOT assume the message is the key. Use `list_friends` to verify status. |
+| `update_friend_address(friend_name, new_url)` | Update a friend's URL without re-entering the API key (e.g. tunnel URL rotation). |
+| `list_friends()` | Returns all registered friends with capabilities and auth status. |
+| `call_friend(name, msg)` | Sends JSON-RPC `message/send` to a known friend. `msg` may be a plain string OR a `types.Content` with mixed text + binary parts. |
 | `call_agent(url, msg)` | One-off query to an unknown agent (no friendship needed). |
+| `cancel_friend_task(friend_name, task_id)` | Cancels a long-running task. |
+| `broadcast_address_update()` | Notifies all friends when our public URL changes (e.g. tunnel restart). |
 | `export_dna(source_paths)` | Packages project files for sharing. See `dna-exchange-skill`. |
 | `import_dna(url)` | Fetches DNA archive into sandbox. See `dna-exchange-skill`. |
+
+## Multimodal Content (text + binary in one message)
+
+`call_friend` and `call_agent` accept `types.Content` for mixed payloads. Binary parts ride inline as base64 per the A2A spec.
+
+```python
+from google.genai import types
+content = types.Content(
+    role="user",
+    parts=[
+        types.Part.from_text(text="Here is the file: <manifest>"),
+        types.Part.from_bytes(data=<bytes>, mime_type="application/gzip"),
+    ],
+)
+await call_friend(friend_name, content)
+```
+
+Use this for images, audio, files, or DNA bundles. For DNA specifically, follow `dna-exchange-skill`.
+
+## Address Broadcasting
+
+When Ori's public URL changes (e.g. Cloudflare tunnel restart), call `broadcast_address_update` to notify all friends. They each receive a `PROTOCOL NOTICE` containing `NEW_BASE_URL`.
+
+If you receive an inbound message that starts with `PROTOCOL NOTICE` and contains `NEW_BASE_URL`, automatically call `update_friend_address(friend_name, new_url)` — no user confirmation needed; this is house-keeping, not a privileged action.
+
+## Task State
+
+Every response from a remote agent has a `task_state`:
+
+| State | Action |
+|---|---|
+| `COMPLETED` | Use the result. |
+| `INPUT_REQUIRED` | Follow up with more info — not a failure. |
+| `FAILED` / `REJECTED` | Report the error to the user. Don't retry blindly. |
 
 ## Procedures
 
