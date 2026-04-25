@@ -43,7 +43,9 @@ PROVIDER_REGISTRY: dict[str, Callable[[str, dict[str, Any]], BaseLlm]] = {
     "anthropic": lambda remainder, opts: Claude(model_name=remainder, **opts),
     # OpenRouter routes through LiteLlm; the prefix must be preserved so
     # litellm picks the OpenRouter endpoint. Requires OPENROUTER_API_KEY.
-    "openrouter": lambda remainder, opts: LiteLlm(model=f"openrouter/{remainder}", **opts),
+    "openrouter": lambda remainder, opts: LiteLlm(
+        model=f"openrouter/{remainder}", **opts
+    ),
 }
 
 
@@ -61,8 +63,8 @@ MODEL_DEFAULTS: dict[str, str] = {
     # Service models — keyed by role, not agent name
     "summarizer": "litellm/gemini/gemini-3.1-flash-lite-preview",
     # Pinned components — must use a native class (NOT hot-swappable)
-    "google_search": "gemini/gemini-3.1-flash-lite-preview",
-    "embedding": "gemini/gemini-embedding-001",
+    "google_search": "litellm/gemini/gemini-3.1-flash-lite-preview",
+    "embedding": "litellm/gemini/gemini-embedding-001",
 }
 
 
@@ -91,7 +93,9 @@ def resolve_model(
     if component in PINNED_COMPONENTS:
         # Pinned: ignore state override entirely. Fall back to env then default.
         override = None
-    model_str = override or os.environ.get(f"MODEL_{component}") or MODEL_DEFAULTS[component]
+    model_str = (
+        override or os.environ.get(f"MODEL_{component}") or MODEL_DEFAULTS[component]
+    )
     provider, _, remainder = model_str.partition("/")
     factory = PROVIDER_REGISTRY.get(provider)
     if factory is None:
