@@ -37,6 +37,7 @@ from app.util.models import get_model
 
 _skills_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 _scheduling_skill = load_skill_from_dir(_skills_dir / "scheduling-skill")
+_configuration_skill = load_skill_from_dir(_skills_dir / "configuration-skill")
 
 
 _INSTRUCTION = (
@@ -50,21 +51,8 @@ _INSTRUCTION = (
     "2. A2A communication, friend management, DNA exchange: delegate to "
     "KnowledgeAgent.\n"
     "3. Everything else (research, scheduling, memory, perimeter, plans, "
-    "API key configuration, small text answers): handle directly.\n\n"
-
-    "CONFIGURATION (API keys & integrations) — handle DIRECTLY, do NOT "
-    "delegate or look up skills first:\n"
-    "- Flat-token API keys (OPENROUTER_API_KEY, GOOGLE_API_KEY, "
-    "ANTHROPIC_API_KEY, TELEGRAM_BOT_TOKEN, GITHUB_TOKEN, …): call "
-    "`configure_integration` with the key name. It arms secure-capture; "
-    "the user's NEXT message is intercepted at the transport layer, "
-    "saved to vault, and never reaches you. Tell the user to send the "
-    "key as their next message.\n"
-    "- OAuth providers (google, github): call `configure_integration` "
-    "with the provider name. It returns an authorize URL. The OAuth "
-    "callback finalizes the token.\n"
-    "- `list_integrations` shows what's configured; `remove_integration` "
-    "deletes one. None of this requires reading a skill.\n\n"
+    "API keys & integration setup, small text answers): handle directly. "
+    "For API keys / integrations, see the `configuration-skill`.\n\n"
 
     "EAGER DELEGATION RULE: answer questions directly first. Delegate to "
     "DeveloperAgent ONLY on explicit action requests ('fix it', 'write the "
@@ -120,7 +108,7 @@ root_agent = Agent(
         knowledge_agent,
     ],
     tools=[
-        skill_toolset.SkillToolset(skills=[_scheduling_skill]),
+        skill_toolset.SkillToolset(skills=[_scheduling_skill, _configuration_skill]),
         SchedulingToolset(),
         MemoryToolset(),
         SystemToolset(),
