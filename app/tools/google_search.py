@@ -22,19 +22,23 @@ if _has_google_credentials():
         from google.adk.agents import Agent
         from google.adk.tools.google_search_agent_tool import GoogleSearchAgentTool
         from google.adk.tools.google_search_tool import google_search
-        from google.genai import types
 
         from app.util.models import get_model
 
+        # Match ADK's reference factory `create_google_search_agent` exactly —
+        # a single-purpose sub-agent whose only tool is google_search. We do
+        # NOT set `include_server_side_tool_invocations=True`: that flag is
+        # for "tool context circulation" (Gemini 3+), needed only when
+        # combining google_search with other tools in the same request.
+        # Our sub-agent has only google_search, so the flag is unnecessary
+        # and forces a 400 "Tool call context circulation is not enabled"
+        # on any pre-Gemini-3 model.
         google_search_agent_tool = GoogleSearchAgentTool(
             agent=Agent(
                 name="google_search_agent",
                 model=get_model("google_search"),
                 description="An agent that performs web search using google search tool",
                 tools=[google_search],
-                generate_content_config=types.GenerateContentConfig(
-                    tool_config=types.ToolConfig(include_server_side_tool_invocations=True)
-                ),
             )
         )
     except Exception as e:
