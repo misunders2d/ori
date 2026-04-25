@@ -207,24 +207,13 @@ async def _handle_oauth_callback(request) -> Response:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
-# ---------------------------------------------------------------------------
-# Pending OAuth state map — minimal in-memory binding from flow start to callback.
-# `tools/integrations.py:configure_integration` should call
-# `register_pending_oauth(state_token, user_id, session_id)` when issuing
-# the authorize URL. (Wired in run_bot.py / tools layer.)
-# ---------------------------------------------------------------------------
-
-_PENDING_OAUTH: dict[str, dict[str, str]] = {}
-
-
-def register_pending_oauth(state_token: str, user_id: str, session_id: str) -> None:
-    """Store a binding from `state_token` (random) to (user_id, session_id)."""
-    _PENDING_OAUTH[state_token] = {"user_id": user_id, "session_id": session_id}
-
-
-def _consume_pending_oauth(state_token: str) -> dict[str, str] | None:
-    """Pop a binding (single-use)."""
-    return _PENDING_OAUTH.pop(state_token, None)
+# Pending OAuth state map lives in `app.runtime.oauth_state` so both this
+# module and `tools/integrations.py` can use it without triggering each
+# other's heavy imports.
+from app.runtime.oauth_state import (  # noqa: E402  (deliberate placement)
+    consume_pending_oauth as _consume_pending_oauth,
+    register_pending_oauth,
+)
 
 
 # ---------------------------------------------------------------------------

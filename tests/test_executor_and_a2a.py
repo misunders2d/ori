@@ -103,3 +103,52 @@ def test_pending_oauth_registration_round_trip():
 
 def test_pending_oauth_unknown_token_returns_none():
     assert _consume_pending_oauth("never-registered") is None
+
+
+# ---------------------------------------------------------------------------
+# OAuth flow stitch — configure_integration → callback round-trip
+# ---------------------------------------------------------------------------
+
+import pytest
+from unittest.mock import AsyncMock, MagicMock
+
+
+@pytest.mark.asyncio
+async def test_configure_integration_registers_oauth_binding(monkeypatch):
+    """configure_integration on an OAuth provider must register the state
+    token with the pending-OAuth map BEFORE returning the authorize URL,
+    so the callback can bind the resulting credential to the right user.
+    """
+    # Wipe any leftover bindings from other tests.
+    from app.runtime.oauth_state import clear_all, list_pending_tokens
+    clear_all()
+
+    # Mock vault so the provider has client credentials.
+    monkeypatch.setattr(
+        "app.integrations.base.vault.get",
+        lambda key, default="": "client-id" if "CLIENT_ID" in key else "",
+    )
+
+    # Build a tool_context with a session + user_id state.
+    from app.tools.integrations import configure_integration
+    state_mock = MagicMock()
+    state_mock.to_dict.return_value = {"user_id": "tg_42"}
+    sess_mock = MagicMock()
+    sess_mock.session_id = "tg_chat_99"
+    sess_mock.id = "tg_chat_99"
+    tc = MagicMock()
+    tc.state = state_mock
+    tc.session = sess_mock
+
+    result = await configure_integration("google", tool_context=tc)
+
+    assert result["status"] == "awaiting_user"
+    state_token = result["state"]
+    assert state_token  # non-empty
+
+    # The state token must now be in the pending map. Consume it and verify
+    # the binding is correct.
+    binding = _consume_pending_oauth(state_token)
+    assert binding == {"user_id": "tg_42", "session_id": "tg_chat_99"}
+    # Map is now empty.
+    assert list_pending_tokens() == []

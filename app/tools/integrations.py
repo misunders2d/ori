@@ -27,6 +27,7 @@ from typing import Any
 from google.adk.tools.tool_context import ToolContext
 
 from app.integrations import REGISTRY as OAUTH_REGISTRY
+from app.runtime.oauth_state import register_pending_oauth
 from app.runtime.secure_capture import expect_key
 from app.util.config import AGENT_CONFIG_KEYS
 
@@ -73,7 +74,16 @@ async def configure_integration(
                     f"OAUTH_{name.upper()}_CLIENT_SECRET first."
                 ),
             }
+        # Bind the random state token to the originating user+session BEFORE
+        # issuing the authorize URL — the OAuth callback consumes this to
+        # save the credential under the right user.
+        sid = _session_id(tool_context)
+        from app.plugins._common import state_user_id
+        uid = state_user_id(tool_context) if (tool_context and getattr(tool_context, "state", None)) else "_global"
+        if not sid:
+            return {"status": "error", "message": "configure_integration requires a session_id"}
         state_token = secrets.token_urlsafe(24)
+        register_pending_oauth(state_token, uid or "_global", sid)
         url = await provider.authorize_url(state=state_token)
         return {
             "status": "awaiting_user",
