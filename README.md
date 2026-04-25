@@ -1,8 +1,10 @@
-# 🧬 Ori: The Self-Evolving Digital Organism (v2.2.1)
+# 🧬 Ori: The Self-Evolving Digital Organism (v2.0.0)
 
 **Ori** is not just a background process — it is a headless, messenger-agnostic autonomous worker built to grow, learn, and evolve. Think of it as a "digital pet" for developers. It lives in your infrastructure, handles your chores, and most importantly, **it writes its own DNA.** It spawns child agents, collaborates with peers via A2A, and maintains a shared evolution library across instances.
 
 Ori is a **platform** — a minimal, evolvable foundation. Deploy it once, raise it your way, and watch it grow into whatever you need: marketing analyst, account manager, chat admin, or something nobody's thought of yet.
+
+> **v2.0.0** is a clean rebuild on **Google ADK 2.0** with native `Workflow` orchestration, plugin-based guardrails, durable plan storage, multimodal A2A (text + binary), an OAuth integrations subsystem, and runtime model hot-swap across providers. See `CHANGELOG.md` for the full architectural map and `DEVELOPMENT.md` for the extension recipes.
 
 ## 🎮 The Evolution Experience
 
@@ -18,26 +20,54 @@ Ori is designed to be raised. Out of the box, it is a capable assistant, but its
 
 ## 🧠 Anatomy of an Autonomous Being
 
-*   **The Brain (Headless Core):** Ori runs as a native Python process — no Docker cage needed. A lightweight supervisor manages restarts, evolution, and dependency syncing.
-*   **The Immune System (Zero-Trust Guardrails):**
-    *   **Semantic Defense:** Every input is checked against a multidimensional vector space (`gemini-embedding-001`) to neutralize "brainwashing" (prompt injection) attempts.
-    *   **Output Interception:** Ori inspects data from the web *before* it hits its own context, ensuring it doesn't "catch a virus" from malicious external payloads.
-*   **The Vault (Indestructible Memory):** Credentials stored in `data/vault/` — atomic writes, auto-backup, completely isolated from git and evolution. Credential loss is physically impossible.
-*   **Metabolism (Scheduling):** Using `APScheduler`, Ori manages its own workloads and background tasks autonomously.
+*   **The Brain (Headless Core):** Ori runs as a native Python process on **Google ADK 2.0**. A lightweight supervisor manages restarts, evolution, and dependency syncing. The runtime root is a `Workflow` graph; the coordinator routes via LLM discretion to specialized sub-agents.
+*   **The Immune System (Plugin-Based Guardrails):** Ten plugins attached at the App level — perimeter ACL, admin gate (with ACT-XXXXXX approval flow), state initializer, model config (hot-swap + thinking toggle), prompt-injection guard (semantic, multilingual), plan enforcer, A2A privacy (outbound credential leak detector), tool-output sanitizer (multilingual-safe Stage 2 by default), verify retry (3-strike cap on evolution), binary content scanner (inbound A2A binary safety). Logic is inline; multilingual by construction.
+*   **The Vault (Indestructible Memory):** Credentials stored in `data/vault/` — atomic writes, auto-backup, completely isolated from git and evolution. OAuth tokens flow through `OriCredentialService` and land here under namespaced keys.
+*   **Long-Term Memory:** LanceDB-backed `OriMemoryService` (a `BaseMemoryService` impl). Tools call `tool_context.search_memory(...)` natively.
+*   **Plans (Durable):** SQLite-backed at `data/plans.db`. Survives crashes — a bot restart mid-plan resumes the in-progress step without double-claiming.
+*   **A2A Multimodal:** Text + binary inline (`Part.from_bytes`). DNA bundles ride as `application/gzip` parts; images, audio, video, PDFs supported. The agent card declares 12 input modes / 6 output modes.
+*   **OAuth Integrations:** Drop-in subsystem at `app/integrations/`. Google + GitHub bundled. Adding a provider is one file.
+*   **Metabolism (Scheduling):** Using `APScheduler`, Ori manages its own workloads and background tasks. Multi-step plans drive natively via the workflow's loop edge — no external pumping.
 *   **Nervous System (Rich Media):** Receives and sends images, audio, video, and documents through any connected messenger.
 
 ## 🏗️ Architecture
 
 ```
-deploy/start.sh (one command to rule them all)
-  └── deploy/ori-supervisor.py (process guardian)
-       └── run_bot.py (the living organism)
-            ├── CoordinatorAgent (orchestration, scheduling, memory, spawning)
-            ├── DeveloperAgent (self-evolution, GitHub, integrations)
-            └── KnowledgeAgent (A2A communication, DNA exchange)
+deploy/start.sh                   (one-command lifecycle)
+  └── deploy/ori-supervisor.py    (process guardian, exit signals 100/101/0)
+       └── run_bot.py             (wires Runner + 4 native ADK services + transports)
+            ├── App
+            │   ├── root_agent: ori_plan_executor (Workflow)
+            │   │     └── coordinator → completion_check → (loop on pending steps)
+            │   │           ├── transfer_to_agent → DeveloperAgent  (self-evolution)
+            │   │           └── transfer_to_agent → KnowledgeAgent  (A2A + DNA)
+            │   ├── plugins=[...]            (10 cross-cutting guardrails)
+            │   └── resumability_config      (HITL + OAuth pause/resume)
+            ├── Runner services
+            │   ├── DatabaseSessionService   (sqlite+aiosqlite)
+            │   ├── OriMemoryService         (LanceDB BaseMemoryService impl)
+            │   ├── OriCredentialService     (vault BaseCredentialService impl)
+            │   └── FileArtifactService      (filesystem ADK-native)
+            └── Transports REGISTRY
+                ├── telegram     (TransportAdapter + poller, multimodal send_media)
+                └── cli          (terminal fallback)
+
+app/
+├── agents/         coordinator, developer, knowledge (no callback kwargs)
+├── plugins/        10 plugins, logic inline
+├── workflows/      plan_executor (the root)
+├── runtime/        executor, transport, plan_storage, *_service, perimeter, ...
+├── transports/     per-transport packages with REGISTRY
+├── integrations/   OAuth providers with REGISTRY
+├── tools/          agent-facing tools
+├── toolsets/       per-domain bundles (evolution, github, scheduling, etc.)
+├── util/           config, models (PROVIDER_REGISTRY), totp, schema, telemetry
+└── state.py        OriSessionState (Pydantic, attached to the Workflow)
 
 deploy/docker-compose.yml → cloudflare-tunnel (public URL)
 deploy/Dockerfile.child   → child containers (spawned on demand)
+data/plans.db             → durable plans (SQLite, aiosqlite, WAL)
+data/vault/               → atomic credential store (single source of truth)
 ```
 
 ## ⚡ Quick Hatch (One-Liner)
