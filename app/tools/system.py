@@ -12,8 +12,9 @@ from google.adk.tools.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
-EXIT_CODE_UPDATE = 100
-EXIT_CODE_ROLLBACK = 101
+EXIT_CODE_UPDATE = 100   # evolution_commit_and_push: code changed, supervisor pulls + syncs deps + restarts
+EXIT_CODE_ROLLBACK = 101  # trigger_rollback: revert one commit + restart
+EXIT_CODE_RESTART = 102  # update_self: plain restart, NO git operations, NO dep sync
 SIGNAL_FILE = os.path.abspath('./data/.exit_signal')
 
 
@@ -56,8 +57,12 @@ def _is_child_container() -> bool:
 
 
 def update_self(tool_context: ToolContext) -> dict:
-    """Signals the system to restart. On the parent, the supervisor handles git pull + dep sync.
-    On children, Docker's restart policy restarts the container (proving the process survives reboot)."""
+    """Signals the system to restart cleanly — no code update, no git operations.
+
+    Use this for a plain reboot. For pulling updated code, use the
+    evolution_commit_and_push flow (which writes exit code 100 and triggers
+    apply_evolution in the supervisor).
+    """
     if _is_child_container():
         # Children reboot via direct exit — Docker restart: on-failure:3 brings them back.
         # No code changes on disk (children don't commit), just a clean restart to prove stability.
@@ -67,10 +72,10 @@ def update_self(tool_context: ToolContext) -> dict:
         threading.Timer(2.0, lambda: sys.exit(0)).start()
         return {"status": "success", "message": "Child reboot initiated. Docker will restart the container."}
     logger.info('========================================')
-    logger.info('🧬 [Ori System] PERIMETER LOCKDOWN: Exit signal dispatched (Code 100).')
+    logger.info('Restart signal dispatched (Code 102).')
     logger.info('========================================')
-    _write_exit_signal(EXIT_CODE_UPDATE)
-    return {"status": "success", "message": "Reboot signal dispatched. The system will shut down cleanly after this response is delivered."}
+    _write_exit_signal(EXIT_CODE_RESTART)
+    return {"status": "success", "message": "Restart signal dispatched. The system will shut down cleanly after this response is delivered."}
 
 def trigger_rollback(tool_context: ToolContext) -> dict:
     """Signals the system to revert to the previous commit and rebuild."""

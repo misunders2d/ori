@@ -177,11 +177,14 @@ def apply_evolution():
         except Exception as e:
             logger.error("Git pull failed: %s", e)
     else:
-        # Local evolution: files are already committed to master by the worktree flow
-        # Just checkout to update working tree from git state
+        # Local evolution: files are already committed by the worktree flow.
+        # Sync the working tree to whatever the current branch's HEAD is —
+        # NEVER hardcode 'master', that destroys non-master feature branches
+        # (the working tree gets reverted to master's content while HEAD stays
+        # on the feature branch — silent corruption).
         try:
             subprocess.run(
-                ["git", "checkout", "master", "--", "."],
+                ["git", "checkout", "HEAD", "--", "."],
                 cwd=PROJECT_ROOT, capture_output=True, timeout=30,
             )
         except Exception as e:
@@ -411,6 +414,13 @@ def main():
             # Rollback: revert one commit, sync deps, restart
             logger.info("Rollback signal (101). Reverting...")
             apply_rollback()
+            refresh_tunnel()
+            crash_count = 0
+            continue
+
+        elif exit_code == 102:
+            # Restart: plain reboot. No git, no dep sync. Just relaunch.
+            logger.info("Restart signal (102). Relaunching...")
             refresh_tunnel()
             crash_count = 0
             continue
