@@ -52,13 +52,13 @@ PROVIDER_REGISTRY: dict[str, Callable[[str, dict[str, Any]], BaseLlm]] = {
 # MODEL_<COMPONENT> env vars (e.g. MODEL_CoordinatorAgent).
 MODEL_DEFAULTS: dict[str, str] = {
     # Hot-swappable agents — LiteLlm routes through litellm
-    "CoordinatorAgent": "litellm/gemini/gemini-2.5-flash",
-    "DeveloperAgent": "litellm/anthropic/claude-3-5-sonnet-20241022",
-    "KnowledgeAgent": "litellm/gemini/gemini-2.5-flash",
+    "CoordinatorAgent": "litellm/gemini/gemini-3-flash-preview",
+    "DeveloperAgent": "litellm/anthropic/claude-sonnet-4-6",
+    "KnowledgeAgent": "litellm/gemini/gemini-3-flash-preview",
     # Service models — keyed by role, not agent name
-    "summarizer": "litellm/gemini/gemini-2.5-flash-lite",
+    "summarizer": "litellm/gemini/gemini-3-flash-preview",
     # Pinned components — must use a native class (NOT hot-swappable)
-    "google_search": "gemini/gemini-2.5-flash",
+    "google_search": "gemini/gemini-3-flash-preview",
     "embedding": "gemini/gemini-embedding-001",
 }
 

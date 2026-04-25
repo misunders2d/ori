@@ -195,13 +195,14 @@ def select_default_model(env_path, set_key_fn, providers):
     models = []
     if "google" in providers:
         models.extend([
-            ("litellm/gemini/gemini-2.5-flash", "Gemini 2.5 Flash (fast, free tier)"),
-            ("litellm/gemini/gemini-2.5-pro", "Gemini 2.5 Pro (most capable Google model)"),
+            ("litellm/gemini/gemini-3-flash-preview", "Gemini 3 Flash (fast, free tier)"),
+            ("litellm/gemini/gemini-3.1-pro-preview", "Gemini 3.1 Pro (most capable Google model)"),
         ])
     if "anthropic" in providers:
         models.extend([
-            ("litellm/anthropic/claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet (balanced)"),
-            ("litellm/anthropic/claude-3-5-haiku-20241022", "Claude 3.5 Haiku (fast, cheap)"),
+            ("litellm/anthropic/claude-sonnet-4-6", "Claude Sonnet 4.6 (balanced)"),
+            ("litellm/anthropic/claude-opus-4-7", "Claude Opus 4.7 (most capable)"),
+            ("litellm/anthropic/claude-haiku-4-5-20251001", "Claude Haiku 4.5 (fast, cheap)"),
         ])
     if "openrouter" in providers:
         models.extend([
