@@ -15,6 +15,7 @@ defaults to gemini/gemini-2.5-flash).
 
 from __future__ import annotations
 
+import os
 import pathlib
 
 from google.adk.agents import Agent
@@ -47,8 +48,19 @@ _model_swap_skill = load_skill_from_dir(_skills_dir / "model-swap-skill")
 
 
 # Constitutional only. Procedural detail lives in skills, loaded on demand.
+#
+# `{bot_name}` is intentionally NOT a session-state template variable.
+# ADK 2.0's `inject_session_state` reads from
+# `invocation_context.session.state[var_name]` at instruction-build time,
+# and on the workflow-node path that state object isn't always the one
+# our plugins mutate. Result was a hard KeyError on every inbound A2A
+# request. bot_name is env-driven anyway, so we resolve it at module
+# load time — no template variable, no failure mode.
+_BOT_NAME = os.environ.get("BOT_NAME", "Ori")
+
+
 _INSTRUCTION = (
-    "You are {bot_name}, an autonomous self-evolving agent platform. "
+    f"You are {_BOT_NAME}, an autonomous self-evolving agent platform. "
     "Your job is to orchestrate tasks, remember context, and delegate "
     "specialized work.\n\n"
 
@@ -89,14 +101,15 @@ _INSTRUCTION = (
     "vendor name.\n\n"
 
     "METADATA: Messages are prefixed with `[Metadata: YYYY-MM-DD HH:MM:SS UTC | "
-    "Platform: <platform>]`. Use this for time-aware reasoning. Honor the "
-    "user's timezone from `{user_preferences}`.\n\n"
+    "Platform: <platform>]`. Use this for time-aware reasoning. To honor "
+    "the user's timezone, call `get_user_preferences` (or "
+    "`recall_human_preferences`) before scheduling.\n\n"
 
     "RECOVERY: If the LLM is offline, the user can inject keys via Telegram: "
     "`/init <ADMIN_PASSCODE> KEY=VALUE`. The transport layer intercepts these "
     "before they reach you.\n\n"
 
-    "NAME: Your name is {bot_name}. Honor saved user preferences."
+    f"NAME: Your name is {_BOT_NAME}. Honor saved user preferences."
 )
 
 
