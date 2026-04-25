@@ -31,8 +31,11 @@ class OriSessionState(BaseModel):
     """Display name; used in agent instructions and admin alerts."""
 
     # ----- User profile -----------------------------------------------------
-    user_preferences: dict[str, Any] = Field(default_factory=dict)
-    """Loaded from disk by StateInitializerPlugin on session start."""
+    user_preferences: str = ""
+    """Free-form markdown preferences (timezone, comm style, etc.). Loaded from
+    disk by StateInitializerPlugin on session start; written by the
+    save_user_preferences tool. Interpolated into agent instructions via
+    `{user_preferences}`."""
 
     # ----- Model / generation -----------------------------------------------
     model: dict[str, str] = Field(default_factory=dict)

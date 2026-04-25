@@ -7,7 +7,7 @@ def test_defaults():
     assert s.user_id is None
     assert s.master_user_id == []
     assert s.bot_name == "Ori"
-    assert s.user_preferences == {}
+    assert s.user_preferences == ""
     assert s.model == {}
     assert s.use_thinking is False
     assert s.plan_id is None
