@@ -31,6 +31,7 @@ def test_plugin_order_canonical():
         "output_sanitizer",
         "verify_retry",
         "binary_content_scanner",
+        "model_error_handler",
     ]
     assert [p.name for p in PLUGINS] == expected
     assert [p.name for p in app.plugins] == expected

@@ -30,6 +30,7 @@ from app.plugins import (
     AdminGatePlugin,
     BinaryContentScannerPlugin,
     ModelConfigPlugin,
+    ModelErrorHandlerPlugin,
     OutputSanitizerPlugin,
     PerimeterAclPlugin,
     PlanEnforcerPlugin,
@@ -73,6 +74,11 @@ PLUGINS = [
     VerifyRetryPlugin(),
     # Validate inbound A2A binary content (size, magic-bytes).
     BinaryContentScannerPlugin(),
+    # Last: catch any model error and translate it to a user-visible
+    # message. Position-last so other plugins can short-circuit (block,
+    # sanitize) before this; if those don't return a value but the model
+    # call itself errors, this hook substitutes a clean message.
+    ModelErrorHandlerPlugin(),
 ]
 
 

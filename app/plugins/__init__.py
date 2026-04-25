@@ -15,12 +15,15 @@ and enforced in `app/agent.py`:
   8. OutputSanitizerPlugin        — scan high-risk tool outputs (multilingual-safe)
   9. VerifyRetryPlugin            — 3-strike cap on evolution_verify_sandbox
  10. BinaryContentScannerPlugin   — validate inbound A2A binary parts
+ 11. ModelErrorHandlerPlugin      — translate raw LLM errors into user-visible
+                                    messages (rate limit, auth, model-not-found, …)
 """
 
 from app.plugins.a2a_privacy import A2APrivacyPlugin
 from app.plugins.admin_gate import AdminGatePlugin
 from app.plugins.binary_content_scanner import BinaryContentScannerPlugin
 from app.plugins.model_config import ModelConfigPlugin
+from app.plugins.model_error_handler import ModelErrorHandlerPlugin
 from app.plugins.output_sanitizer import OutputSanitizerPlugin
 from app.plugins.perimeter import PerimeterAclPlugin
 from app.plugins.plan_enforcer import PlanEnforcerPlugin
@@ -33,6 +36,7 @@ __all__ = [
     "AdminGatePlugin",
     "BinaryContentScannerPlugin",
     "ModelConfigPlugin",
+    "ModelErrorHandlerPlugin",
     "OutputSanitizerPlugin",
     "PerimeterAclPlugin",
     "PlanEnforcerPlugin",
