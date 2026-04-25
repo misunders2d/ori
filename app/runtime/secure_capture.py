@@ -13,7 +13,7 @@ import logging
 import os
 import json
 
-from app.app_utils.config import ALLOWED_CONFIG_KEYS
+from app.util.config import ALLOWED_CONFIG_KEYS
 from deploy.vault import set as vault_set
 
 logger = logging.getLogger(__name__)

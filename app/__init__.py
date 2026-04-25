@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .agent import app
-
-__all__ = ["app"]
+# Top-level package marker. The App instance is defined in app/agent.py
+# but not re-exported here — importers should `from app.agent import app`
+# directly. This keeps `import app.runtime.*` and `import app.util.*`
+# decoupled from the full agent stack at import time (relevant during the
+# clean rebuild when downstream subpackages are added incrementally).

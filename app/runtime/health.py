@@ -6,7 +6,11 @@ from datetime import datetime
 from typing import Dict, Any
 
 from google import genai
-from interfaces.telegram_poller import HEARTBEAT_FILE
+
+# Path constant lives here (the reader) so transports can import it without
+# inverting the dependency. The Telegram poller writes to this file; health
+# checks read it for liveness.
+HEARTBEAT_FILE = os.path.abspath("./data/.tg_heartbeat")
 
 async def get_system_health() -> Dict[str, Any]:
     """Compiles a comprehensive health report of the agent's vitals."""

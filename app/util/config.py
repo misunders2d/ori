@@ -68,7 +68,7 @@ def verify_pending_totp(session_id: str, code: str) -> tuple[bool, str]:
     Returns (success, message). On success, the pending config update is applied.
     On failure, the pending state is preserved for retry (up to max attempts).
     """
-    from app.app_utils.totp import verify_totp
+    from app.util.totp import verify_totp
 
     pending = _pending_totp.get(session_id)
     if not pending:
