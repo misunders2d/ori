@@ -1,12 +1,12 @@
 import os
 import pytest
-from app.core.whitelist import whitelist_chat, blacklist_chat, is_allowed, is_blacklisted, should_notify_admin, get_whitelist
+from app.runtime.perimeter import whitelist_chat, blacklist_chat, is_allowed, is_blacklisted, should_notify_admin, get_whitelist
 
 def test_whitelist_basic():
     cid = "tg_test_123"
     # Ensure clean state
     if cid in get_whitelist():
-        from app.core.whitelist import unwhitelist_chat
+        from app.runtime.perimeter import unwhitelist_chat
         unwhitelist_chat(cid)
         
     assert is_allowed(cid) is False

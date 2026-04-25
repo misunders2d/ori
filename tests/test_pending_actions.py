@@ -1,7 +1,7 @@
 import pytest
 import os
 import time
-from app.core.pending_actions import stage_action, get_and_delete_action, cleanup_expired
+from app.runtime.pending_actions import stage_action, get_and_delete_action, cleanup_expired
 
 def test_stage_and_retrieve_action():
     tool_name = "update_self"

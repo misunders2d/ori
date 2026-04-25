@@ -5,7 +5,7 @@ import os
 import time
 import pytest
 
-from app.core.auth import OAuthService
+from app.runtime.auth import OAuthService
 
 
 @pytest.fixture
@@ -15,7 +15,7 @@ def tmp_service(tmp_path):
     tokens_path = str(tmp_path / "tokens.json")
 
     # Patch module-level paths
-    import app.core.auth as auth_mod
+    import app.runtime.auth as auth_mod
     orig_platforms = auth_mod.PLATFORMS_PATH
     orig_tokens = auth_mod.TOKENS_PATH
     auth_mod.PLATFORMS_PATH = platforms_path
@@ -131,7 +131,7 @@ def test_list_platforms_with_entries(tmp_service):
 
 def test_platform_persistence(tmp_service):
     """Platforms should survive a service restart (reload from file)."""
-    import app.core.auth as auth_mod
+    import app.runtime.auth as auth_mod
     tmp_service.register_platform("persist", {
         "name": "Persistent",
         "flow": "auth_code_pkce",

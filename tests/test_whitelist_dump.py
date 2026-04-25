@@ -1,6 +1,6 @@
 import os
 import pytest
-from app.core.whitelist import get_whitelist, get_blacklist
+from app.runtime.perimeter import get_whitelist, get_blacklist
 
 def test_whitelist_dump():
     print(f"\nWhitelist content: {get_whitelist()}")

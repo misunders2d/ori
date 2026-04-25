@@ -1,6 +1,6 @@
 import os
 import pytest
-from app.core.channel_logger import log_message, get_logs
+from app.runtime.channel_logger import log_message, get_logs
 
 def test_channel_logging():
     cid = "tg_-100channel"

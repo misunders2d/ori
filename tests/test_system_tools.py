@@ -11,7 +11,7 @@ async def test_execute_approved_action_invalid_token():
         if "ADMIN_TOTP_SECRET" in os.environ:
             del os.environ["ADMIN_TOTP_SECRET"]
             
-        with patch("app.core.pending_actions.get_and_delete_action", return_value=None):
+        with patch("app.runtime.pending_actions.get_and_delete_action", return_value=None):
             result = await execute_approved_action("BAD-TOKEN")
             assert result["status"] == "error"
             assert "Invalid token" in result["message"]
@@ -28,8 +28,8 @@ async def test_execute_approved_action_totp_required_but_missing():
 @pytest.mark.asyncio
 async def test_execute_approved_action_totp_valid():
     from app.tools.system import execute_approved_action
-    from app.core.pending_actions import get_and_delete_action
-    from app.app_utils.totp import verify_totp
+    from app.runtime.pending_actions import get_and_delete_action
+    from app.util.totp import verify_totp
     from app.tools.system import session_refresh
     
     mock_action = {
@@ -38,8 +38,8 @@ async def test_execute_approved_action_totp_valid():
     }
     
     with patch.dict(os.environ, {"ADMIN_TOTP_SECRET": "A" * 16, "REQUIRE_2FA": "true"}, clear=False):
-        with patch("app.app_utils.totp.verify_totp", return_value=True):
-            with patch("app.core.pending_actions.get_and_delete_action", return_value=mock_action):
+        with patch("app.util.totp.verify_totp", return_value=True):
+            with patch("app.runtime.pending_actions.get_and_delete_action", return_value=mock_action):
                 result = await execute_approved_action("ACT-VALID", totp_code="123456", tool_context=MagicMock())
                 assert result["status"] == "success"
                 assert "Session refreshed" in result["message"]

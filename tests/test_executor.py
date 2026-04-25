@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from google.genai import types
-from app.core.agent_executor import extract_agent_response, AgentResponse
+from app.runtime.executor import extract_agent_response, AgentResponse
 
 
 @pytest.mark.asyncio

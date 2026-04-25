@@ -1,6 +1,6 @@
 import pytest
 from datetime import datetime
-from app.core.agent_executor import _inject_metadata_header
+from app.runtime.executor import _inject_metadata_header
 
 class MockMessage:
     def __init__(self, text, timestamp, platform):

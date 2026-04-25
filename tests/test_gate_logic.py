@@ -4,11 +4,11 @@ import sys
 from unittest.mock import MagicMock, patch
 
 # Force fresh reload of whitelist module
-if "app.core.whitelist" in sys.modules:
-    del sys.modules["app.core.whitelist"]
+if "app.runtime.perimeter" in sys.modules:
+    del sys.modules["app.runtime.perimeter"]
 
 def test_gate_logic_user_vs_chat():
-    from app.core.whitelist import whitelist_chat, is_allowed, reload
+    from app.runtime.perimeter import whitelist_chat, is_allowed, reload
     
     # Setup: whitelist a group but not a user
     group_id = "tg_group_123"
@@ -18,7 +18,7 @@ def test_gate_logic_user_vs_chat():
     with patch.dict(os.environ, {"ADMIN_USER_IDS": admin_id}):
         reload()
         # Clean state for test
-        from app.core.whitelist import _whitelist, WHITELIST_PATH
+        from app.runtime.perimeter import _whitelist, WHITELIST_PATH
         _whitelist.clear()
         _whitelist.add(admin_id)
         if os.path.exists(WHITELIST_PATH):
@@ -32,7 +32,7 @@ def test_gate_logic_user_vs_chat():
         assert is_allowed(user_id) is False
         
 def test_whitelist_reload_after_env_change():
-    from app.core.whitelist import is_allowed, reload
+    from app.runtime.perimeter import is_allowed, reload
     
     # Note: ALLOWED_USER_IDS is now ignored for security. We use ADMIN_USER_IDS.
     with patch.dict(os.environ, {"ADMIN_USER_IDS": "tg_a"}):

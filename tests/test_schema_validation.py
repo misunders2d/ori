@@ -1,7 +1,7 @@
 import inspect
 import pytest
 from typing import get_type_hints, List, Any
-from app.sub_agents.coordinator_agent import root_agent
+from app.agents.coordinator import root_agent
 
 def validate_tool_schema(func: callable) -> None:
     """Checks for common pitfalls in Gemini tool declarations."""
