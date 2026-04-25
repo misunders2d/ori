@@ -6,8 +6,6 @@ data/vault/
 data/.env
 data/*
 data/.*
-!data/agent.json
-!data/agent-card.json
 
 # Temporary Folders
 .pytest_cache/
