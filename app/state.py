@@ -62,3 +62,12 @@ class OriSessionState(BaseModel):
     plan_workflow_iters: int = 0
     """Loop counter for plan_executor workflow (capped at MAX_ITERATIONS).
     Incremented in plan_completion_check; reset implicitly on new session."""
+
+    evolution_cycle_active: bool = False
+    """True while an evolution cycle is in progress (from
+    evolution_stage_change through evolution_commit_and_push). Used by
+    evolution tools to detect and prevent overlapping cycles."""
+
+    use_planner: bool = False
+    """When True, the agent prefers plan-and-execute over single-turn replies
+    for non-trivial tasks. Toggled by the `set_use_planner` system tool."""
