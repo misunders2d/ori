@@ -63,8 +63,8 @@ MODEL_DEFAULTS: dict[str, str] = {
     # Service models — keyed by role, not agent name
     "summarizer": "litellm/gemini/gemini-3.1-flash-lite-preview",
     # Pinned components — must use a native class (NOT hot-swappable)
-    "google_search": "litellm/gemini/gemini-3.1-flash-lite-preview",
-    "embedding": "litellm/gemini/gemini-embedding-001",
+    "google_search": "gemini/gemini-2.5-flash",
+    "embedding": "gemini/gemini-embedding-001",
 }
 
 
