@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
-# Ori — Stop the agent.
+# Ori — Stop the agent AND disable auto-start on reboot.
+#
+# Symmetric with start.sh:
+#   start.sh = enable + start
+#   stop.sh  = stop + disable
+#
+# Project files, vault, code, git history are NEVER touched here.
+# For the destructive "delete everything" path, use deploy/uninstall.sh.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-# Derive service name
+# Derive service name (matches install.sh / start.sh)
 _bot_name="ori"
 VAULT_FILE="$PROJECT_ROOT/data/vault/credentials.json"
 if [ -f "$VAULT_FILE" ] && command -v python3 &>/dev/null; then
@@ -15,28 +22,56 @@ if [ -f "$VAULT_FILE" ] && command -v python3 &>/dev/null; then
 fi
 SERVICE_NAME="$(echo "$_bot_name" | tr '[:upper:]' '[:lower:]' | tr ' _' '-' | sed 's/[^a-z0-9-]//g')-agent"
 
+# Pick up the originally-installed name in case BOT_NAME changed since install.
+ORIGINAL_SERVICE_NAME=""
+if [ -f "$PROJECT_ROOT/data/.service_name" ]; then
+    ORIGINAL_SERVICE_NAME=$(cat "$PROJECT_ROOT/data/.service_name" 2>/dev/null || true)
+fi
+
 OS="$(uname -s)"
 case "$OS" in
     Linux)
-        if systemctl --user is-active "$SERVICE_NAME" &>/dev/null; then
-            systemctl --user stop "$SERVICE_NAME"
-            echo ":: $SERVICE_NAME stopped."
-        else
-            echo ":: $SERVICE_NAME is not running."
+        _stop_and_disable() {
+            local svc="$1"
+            [ -z "$svc" ] && return
+            if ! systemctl --user cat "$svc" &>/dev/null; then
+                return  # unit doesn't exist on this machine
+            fi
+            if systemctl --user is-active "$svc" &>/dev/null; then
+                systemctl --user stop "$svc"
+                echo ":: $svc stopped."
+            else
+                echo ":: $svc was already stopped."
+            fi
+            if systemctl --user is-enabled "$svc" &>/dev/null; then
+                systemctl --user disable "$svc"
+                echo ":: $svc disabled — will NOT auto-start on reboot."
+            fi
+        }
+        _stop_and_disable "$SERVICE_NAME"
+        if [ -n "$ORIGINAL_SERVICE_NAME" ] && [ "$ORIGINAL_SERVICE_NAME" != "$SERVICE_NAME" ]; then
+            _stop_and_disable "$ORIGINAL_SERVICE_NAME"
         fi
         ;;
     Darwin)
-        plist="$HOME/Library/LaunchAgents/com.${SERVICE_NAME}.plist"
-        if [ -f "$plist" ]; then
-            launchctl unload "$plist" 2>/dev/null || true
-            echo ":: $SERVICE_NAME stopped."
-        else
-            echo ":: $SERVICE_NAME is not running."
+        _unload_persistently() {
+            local svc="$1"
+            [ -z "$svc" ] && return
+            local plist="$HOME/Library/LaunchAgents/com.${svc}.plist"
+            [ ! -f "$plist" ] && return
+            # `unload -w` adds a persistent Disabled flag in the override DB
+            # so the agent does NOT load on next login. The plist itself stays.
+            launchctl unload -w "$plist" 2>/dev/null || launchctl unload "$plist" 2>/dev/null || true
+            echo ":: $svc unloaded and disabled."
+        }
+        _unload_persistently "$SERVICE_NAME"
+        if [ -n "$ORIGINAL_SERVICE_NAME" ] && [ "$ORIGINAL_SERVICE_NAME" != "$SERVICE_NAME" ]; then
+            _unload_persistently "$ORIGINAL_SERVICE_NAME"
         fi
         ;;
 esac
 
-# Stop tunnel
+# Stop the Cloudflare tunnel container too.
 if command -v docker &>/dev/null; then
     docker compose -f "$SCRIPT_DIR/docker-compose.yml" down 2>/dev/null || true
 fi

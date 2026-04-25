@@ -113,11 +113,20 @@ is_service_installed() {
 if is_service_installed; then
     OS="$(uname -s)"
     case "$OS" in
-        Linux)  systemctl --user restart "$SERVICE_NAME" ;;
+        Linux)
+            # Re-enable in case stop.sh disabled it. Symmetric pair:
+            # stop.sh = stop+disable, start.sh = enable+start.
+            if ! systemctl --user is-enabled "$SERVICE_NAME" &>/dev/null; then
+                systemctl --user enable "$SERVICE_NAME"
+                echo ":: $SERVICE_NAME enabled — will auto-start on reboot."
+            fi
+            systemctl --user restart "$SERVICE_NAME"
+            ;;
         Darwin)
             plist="$HOME/Library/LaunchAgents/com.${SERVICE_NAME}.plist"
+            # `load -w` clears any persistent Disabled flag and loads.
             launchctl unload "$plist" 2>/dev/null || true
-            launchctl load "$plist"
+            launchctl load -w "$plist"
             ;;
     esac
     echo ":: $SERVICE_NAME restarted."
