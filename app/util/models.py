@@ -52,16 +52,16 @@ PROVIDER_REGISTRY: dict[str, Callable[[str, dict[str, Any]], BaseLlm]] = {
 # MODEL_<COMPONENT> env vars (e.g. MODEL_CoordinatorAgent).
 MODEL_DEFAULTS: dict[str, str] = {
     # Hot-swappable agents — LiteLlm routes through litellm.
-    # All three default to Gemini so a Google-only install works out of the
-    # box. Users with an Anthropic key can hot-swap DeveloperAgent to Claude
-    # with `set_agent_model("DeveloperAgent", "litellm/anthropic/claude-...")`.
-    "CoordinatorAgent": "litellm/gemini/gemini-3-flash-preview",
-    "DeveloperAgent": "litellm/gemini/gemini-3.1-pro-preview",
-    "KnowledgeAgent": "litellm/gemini/gemini-3-flash-preview",
+    # Defaults are the LITE variant for cost/latency. Users hot-swap to
+    # heavier models (gemini-3.1-pro-preview, claude-sonnet-4-6, etc.) per
+    # task with `set_agent_model("<Component>", "litellm/<provider>/<model>")`.
+    "CoordinatorAgent": "litellm/gemini/gemini-3.1-flash-lite-preview",
+    "DeveloperAgent": "litellm/gemini/gemini-3.1-flash-lite-preview",
+    "KnowledgeAgent": "litellm/gemini/gemini-3.1-flash-lite-preview",
     # Service models — keyed by role, not agent name
-    "summarizer": "litellm/gemini/gemini-3-flash-preview",
+    "summarizer": "litellm/gemini/gemini-3.1-flash-lite-preview",
     # Pinned components — must use a native class (NOT hot-swappable)
-    "google_search": "gemini/gemini-3-flash-preview",
+    "google_search": "gemini/gemini-3.1-flash-lite-preview",
     "embedding": "gemini/gemini-embedding-001",
 }
 

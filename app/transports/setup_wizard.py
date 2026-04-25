@@ -195,8 +195,9 @@ def select_default_model(env_path, set_key_fn, providers):
     models = []
     if "google" in providers:
         models.extend([
-            ("litellm/gemini/gemini-3-flash-preview", "Gemini 3 Flash (fast, free tier)"),
-            ("litellm/gemini/gemini-3.1-pro-preview", "Gemini 3.1 Pro (most capable Google model)"),
+            ("litellm/gemini/gemini-3.1-flash-lite-preview", "Gemini 3.1 Flash Lite (cheapest, recommended default)"),
+            ("litellm/gemini/gemini-3-flash-preview", "Gemini 3 Flash (balanced)"),
+            ("litellm/gemini/gemini-3.1-pro-preview", "Gemini 3.1 Pro (most capable, slower/expensive)"),
         ])
     if "anthropic" in providers:
         models.extend([
