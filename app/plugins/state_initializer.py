@@ -33,10 +33,14 @@ class StateInitializerPlugin(BasePlugin):
     async def before_agent_callback(
         self, *, agent: BaseAgent, callback_context: CallbackContext
     ) -> types.Content | None:
-        # Only run on the root agent — descendants inherit the root's state.
-        if getattr(agent, "parent_agent", None) is not None:
-            return None
-
+        # NOTE: we used to early-return for sub-agents (parent_agent is not
+        # None), but ADK 2.0 doesn't fire before_agent_callback on the
+        # Workflow root itself (Workflow isn't a BaseAgent). The first
+        # callback is the Coordinator-as-node, which has parent_agent set
+        # to the workflow — so the early return left state empty and the
+        # `{bot_name}` template substitution KeyError'd. The writes are
+        # idempotent (user_id/master_user_id are guarded; bot_name is a
+        # cheap env read), so just always run.
         state = callback_context.state
         current = state.to_dict() if state else {}
 

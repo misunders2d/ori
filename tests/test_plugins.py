@@ -229,14 +229,21 @@ async def test_state_init_idempotent():
 
 
 @pytest.mark.asyncio
-async def test_state_init_skips_subagents():
+async def test_state_init_runs_on_subagents_too():
+    """ADK 2.0 doesn't fire before_agent_callback on the Workflow root —
+    the first callback is the workflow's first NODE (Coordinator) which has
+    parent_agent set. So the plugin must run on sub-agents too; the original
+    parent-check early-return left `bot_name` unset and the instruction
+    template substitution KeyError'd. Writes are idempotent."""
     from app.plugins.state_initializer import StateInitializerPlugin
     cb, backing = _ctx({})
     parent = _agent("CoordinatorAgent")
     await StateInitializerPlugin().before_agent_callback(
         agent=_agent("DeveloperAgent", parent=parent), callback_context=cb,
     )
-    assert backing == {}
+    assert backing.get("bot_name"), "bot_name MUST be set; otherwise {bot_name} substitution fails"
+    assert "user_id" in backing
+    assert "master_user_id" in backing
 
 
 # ===========================================================================
