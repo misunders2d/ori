@@ -42,55 +42,11 @@ def _log_job_event(event: str, **fields) -> None:
         logger.warning("Failed to write scheduler job log: %s", e)
 
 
-# Max re-invocations for plan-driven continuation. A plan with N steps typically
-# needs N+1 turns (N executions + final summary), but tool failures and retries
-# can extend this. 25 leaves comfortable slack for a 6-step plan while capping
-# runaway costs if the agent gets stuck in a loop.
-_MAX_PLAN_ITERATIONS = 25
-
-_PLAN_CONTINUATION_PROMPT = (
-    "Your enforced plan still has pending steps. Do NOT emit a user-facing "
-    "summary yet. Call get_next_step immediately and continue executing. "
-    "Only produce a final summary after complete_step reports "
-    "'All steps completed!'."
-)
-
-
-async def _drive_plan_to_completion(
-    runner,
-    user_id: str,
-    session_id: str,
-    first_response,
-    actual_caller_id: str | None,
-    task_id: str,
-):
-    """Re-invoke the runner while the plan still has pending steps.
-
-    The ADK runner ends an invocation when the agent emits text without a
-    trailing tool call. For enforced multi-step plans the LLM often summarizes
-    after each step, ending the turn before the plan completes. This helper
-    pumps the agent back in with a continuation prompt until the plan is done
-    (or the iteration cap is hit).
-
-    Returns the final AgentResponse.
-    """
-    from app.core.agent_executor import extract_agent_response
-    from app.tools.planner import plan_has_pending_steps
-
-    response = first_response
-    iterations = 0
-    while plan_has_pending_steps(session_id) and iterations < _MAX_PLAN_ITERATIONS:
-        iterations += 1
-        response = await extract_agent_response(
-            runner, user_id, session_id, _PLAN_CONTINUATION_PROMPT,
-            actual_caller_id=actual_caller_id,
-        )
-    if iterations >= _MAX_PLAN_ITERATIONS and plan_has_pending_steps(session_id):
-        logger.warning(
-            "Task %s hit plan-iteration cap (%d); plan still has pending steps.",
-            task_id, _MAX_PLAN_ITERATIONS,
-        )
-    return response
+# Plan-driven continuation is now handled by the workflow itself
+# (`app/workflows/plan_executor.py`). When a scheduled task seeds a plan,
+# the workflow's loop edge keeps the coordinator running until
+# `plan_storage.has_pending_steps` returns False — no external pumping
+# needed. The legacy `_drive_plan_to_completion` is gone.
 
 
 async def run_scheduled_task(
@@ -115,7 +71,7 @@ async def run_scheduled_task(
     LLM cannot skip or paraphrase steps. If `steps` is None, the task runs
     under normal (LLM-decided) flow.
     """
-    from app.core.agent_executor import extract_agent_response
+    from app.runtime.executor import extract_agent_response
     from run_bot import get_runner
     import uuid
 
@@ -183,11 +139,12 @@ async def run_scheduled_task(
             )
 
             # Enforced task: seed the plan BEFORE the agent's first turn so
-            # plan_enforcer has something to inject immediately. The LLM has
-            # no opportunity to skip create_plan — the plan already exists.
+            # PlanEnforcerPlugin injects context from turn one. The workflow's
+            # loop edge then drives the coordinator until plan_storage shows
+            # no pending steps — no external pumping needed.
             if steps:
-                from app.tools.planner import seed_plan
-                seed_plan(session_id, task_prompt[:500], steps)
+                from app.tools.planner import seed_plan_for_session
+                await seed_plan_for_session(session_id, task_prompt[:500], steps)
                 logger.info(
                     "Scheduled task %s: seeded enforced plan with %d step(s)",
                     task_id, len(steps),
@@ -197,12 +154,6 @@ async def run_scheduled_task(
                 runner, user_id, session_id, query,
                 actual_caller_id=owner_user_id or None,
             )
-            if steps:
-                response = await _drive_plan_to_completion(
-                    runner, user_id, session_id, response,
-                    actual_caller_id=owner_user_id or None,
-                    task_id=task_id,
-                )
             response = response.text if hasattr(response, "text") else str(response)
             if not response or not response.strip():
                 # Agent returned empty — treat as failure so user sees something.
@@ -278,7 +229,7 @@ async def run_system_task(
     """
     import uuid
 
-    from app.core.agent_executor import extract_agent_response
+    from app.runtime.executor import extract_agent_response
     from run_bot import get_runner
 
     if not task_id:
@@ -332,27 +283,22 @@ async def run_system_task(
             app_name=runner.app_name, user_id=user_id, session_id=session_id
         )
 
-        # Enforced task: seed the plan before first turn. See run_scheduled_task
-        # for the same pattern.
+        # Enforced task: seed the plan before first turn. The workflow's
+        # loop edge handles iteration natively (see run_scheduled_task).
         if steps:
-            from app.tools.planner import seed_plan
-            seed_plan(session_id, task_prompt[:500], steps)
+            from app.tools.planner import seed_plan_for_session
+            await seed_plan_for_session(session_id, task_prompt[:500], steps)
             logger.info(
                 "System task %s: seeded enforced plan with %d step(s)",
                 task_id, len(steps),
             )
 
-        # Pass admin identity via actual_caller_id so state_setter picks it up
+        # Pass admin identity via actual_caller_id so StateInitializerPlugin
+        # picks it up.
         logger.info("System Task: Executing agent for %s", task_id)
         response = await extract_agent_response(
             runner, user_id, session_id, query, actual_caller_id=admin_user_id
         )
-        if steps:
-            response = await _drive_plan_to_completion(
-                runner, user_id, session_id, response,
-                actual_caller_id=admin_user_id,
-                task_id=task_id,
-            )
         response = response.text if hasattr(response, "text") else str(response)
 
         is_failure = any(
@@ -407,7 +353,7 @@ async def _deliver_message(notify: dict, message: str, task_id: str = "") -> boo
     The injection is what makes scheduled task output visible to the agent on the
     user's next turn.
     """
-    from app.core.transport import get_adapter
+    from app.runtime.transport import get_adapter
 
     if not notify:
         logger.warning("Notification delivery skipped: no notification info")
@@ -454,7 +400,7 @@ async def _deliver_with_fallback(notify: dict, message: str, task_id: str) -> No
     if origin == f"sl_{primary}" or origin == f"tg_{primary}" or origin.endswith(f"_{primary}"):
         return  # same channel as primary, nothing to retry
 
-    from app.core.transport import parse_notify_from_session_id
+    from app.runtime.transport import parse_notify_from_session_id
     fallback_notify = parse_notify_from_session_id(origin)
     if not fallback_notify:
         return
