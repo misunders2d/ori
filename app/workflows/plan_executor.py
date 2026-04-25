@@ -28,7 +28,7 @@ from google.adk.workflow import Workflow, node
 
 from app.agents.coordinator import root_agent as coordinator_agent
 from app.runtime.plan_storage import has_pending_steps
-from app.state import OriSessionState
+from app.state import OriSessionState  # noqa: F401  # referenced in the state_schema comment below
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +81,14 @@ plan_executor_workflow = Workflow(
         "(check returns None, terminates). Multi-step plans loop the "
         "coordinator until plan_storage.has_pending_steps is False."
     ),
-    state_schema=OriSessionState,
+    # NOTE: We can't pass `state_schema=OriSessionState` here.
+    # ADK 2.0's state validator (sessions/state.py:_validate_state_entry) is
+    # strict on declared keys, but ADK's own SkillToolset writes dynamic keys
+    # like `_adk_activated_skill_<AgentName>` (skill_toolset.py:166) that
+    # nothing in OUR schema can declare. Pydantic's `extra='allow'` is
+    # bypassed by ADK's own validator. So we use the schema as documentation
+    # and IDE help, but don't pass it to the Workflow — state stays an
+    # unrestricted dict at runtime.
     edges=[
         ("START", coordinator_agent),
         (coordinator_agent, plan_completion_check),

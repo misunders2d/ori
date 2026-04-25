@@ -51,9 +51,12 @@ PROVIDER_REGISTRY: dict[str, Callable[[str, dict[str, Any]], BaseLlm]] = {
 # Override per-session via state.model[component]; per-environment via
 # MODEL_<COMPONENT> env vars (e.g. MODEL_CoordinatorAgent).
 MODEL_DEFAULTS: dict[str, str] = {
-    # Hot-swappable agents — LiteLlm routes through litellm
+    # Hot-swappable agents — LiteLlm routes through litellm.
+    # All three default to Gemini so a Google-only install works out of the
+    # box. Users with an Anthropic key can hot-swap DeveloperAgent to Claude
+    # with `set_agent_model("DeveloperAgent", "litellm/anthropic/claude-...")`.
     "CoordinatorAgent": "litellm/gemini/gemini-3-flash-preview",
-    "DeveloperAgent": "litellm/anthropic/claude-sonnet-4-6",
+    "DeveloperAgent": "litellm/gemini/gemini-3.1-pro-preview",
     "KnowledgeAgent": "litellm/gemini/gemini-3-flash-preview",
     # Service models — keyed by role, not agent name
     "summarizer": "litellm/gemini/gemini-3-flash-preview",
