@@ -183,11 +183,6 @@ def get_model_string(component: str) -> str:
     return os.environ.get(f"MODEL_{component}") or MODEL_DEFAULTS[component]
 
 
-def is_vertex_mode() -> bool:
-    """True if the runtime is configured for Vertex AI (vs the public Gemini API)."""
-    return os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").upper() == "TRUE"
-
-
 def get_model_name(component: str) -> str:
     """Just the model name (everything after the provider prefix).
 
