@@ -106,8 +106,124 @@ async def recall_human_preferences(query: str, tool_context: ToolContext = None)
     return await search_memory(query, category="human_preferences", limit=5, tool_context=tool_context)
 
 
-# Note on update/delete: the BaseMemoryService API doesn't expose
-# update_memory / delete_memory. Adding them would require subclassing.
-# For the rebuild we accept this limitation — agents that need to mark a
-# memory stale should write a new entry tagging the original as superseded
-# rather than mutating in place. Documented in the agent instructions.
+async def modify_memory(
+    category: str,
+    record_id: str,
+    content: str = "",
+    importance: int = 0,
+    tags: str = "",
+    tool_context: ToolContext = None,
+) -> dict[str, Any]:
+    """Update an existing memory record by its ID.
+
+    Empty `content` means leave text unchanged. `importance=0` means leave
+    importance unchanged. Empty `tags` means leave tags unchanged.
+
+    Args:
+        category: Memory bucket (human_preferences, technical_context, ...).
+        record_id: UUID of the record to update (from search_memory results).
+        content: New text content. Empty = leave unchanged.
+        importance: New importance score 1-5. 0 = leave unchanged.
+        tags: New comma-separated tags. Empty = leave unchanged.
+    """
+    if tool_context is None:
+        return {"status": "error", "message": "modify_memory requires tool_context"}
+    svc = _resolve_memory_service(tool_context)
+    if svc is None:
+        return {
+            "status": "error",
+            "error_code": "MEMORY_SERVICE_UNAVAILABLE",
+            "message": "OriMemoryService not wired on the runner.",
+        }
+    metadata_updates: dict[str, Any] = {}
+    if importance:
+        metadata_updates["importance"] = importance
+    if tags:
+        metadata_updates["tags"] = [t.strip() for t in tags.split(",") if t.strip()]
+    app_name, user_id = _resolve_scope(tool_context)
+    try:
+        ok = await svc.update_memory_record(
+            app_name=app_name,
+            user_id=user_id,
+            category=category.lower(),
+            record_id=record_id,
+            text=content if content else None,
+            metadata_updates=metadata_updates or None,
+        )
+    except Exception as e:
+        logger.exception("modify_memory failed")
+        return {"status": "error", "error_code": "MEMORY_UPDATE", "message": str(e)}
+    if not ok:
+        return {
+            "status": "error",
+            "error_code": "RECORD_NOT_FOUND",
+            "message": f"No record {record_id} in {category} for this user.",
+        }
+    return {
+        "status": "success",
+        "message": f"Updated memory record {record_id} in {category}.",
+    }
+
+
+async def delete_memory(
+    category: str,
+    record_id: str,
+    tool_context: ToolContext = None,
+) -> dict[str, Any]:
+    """Delete a memory record by ID. Scoped to the current (app, user).
+
+    Args:
+        category: Memory bucket the record lives in.
+        record_id: UUID of the record (from search_memory results).
+    """
+    if tool_context is None:
+        return {"status": "error", "message": "delete_memory requires tool_context"}
+    svc = _resolve_memory_service(tool_context)
+    if svc is None:
+        return {
+            "status": "error",
+            "error_code": "MEMORY_SERVICE_UNAVAILABLE",
+            "message": "OriMemoryService not wired on the runner.",
+        }
+    app_name, user_id = _resolve_scope(tool_context)
+    try:
+        ok = await svc.delete_memory_record(
+            app_name=app_name,
+            user_id=user_id,
+            category=category.lower(),
+            record_id=record_id,
+        )
+    except Exception as e:
+        logger.exception("delete_memory failed")
+        return {"status": "error", "error_code": "MEMORY_DELETE", "message": str(e)}
+    if not ok:
+        return {
+            "status": "error",
+            "error_code": "RECORD_NOT_FOUND",
+            "message": f"No record {record_id} in {category} for this user.",
+        }
+    return {
+        "status": "success",
+        "message": f"Deleted memory record {record_id} from {category}.",
+    }
+
+
+def _resolve_memory_service(tool_context: ToolContext):
+    """Pull OriMemoryService off the invocation context. modify/delete need
+    direct service access — they're not part of BaseMemoryService's public
+    surface."""
+    inv = getattr(tool_context, "_invocation_context", None) or getattr(tool_context, "invocation_context", None)
+    if inv is None:
+        return None
+    return getattr(inv, "memory_service", None)
+
+
+def _resolve_scope(tool_context: ToolContext) -> tuple[str, str]:
+    """(app_name, user_id) for the current invocation, used as the
+    LanceDB scope filter."""
+    inv = getattr(tool_context, "_invocation_context", None) or getattr(tool_context, "invocation_context", None)
+    sess = getattr(inv, "session", None) if inv else None
+    return (
+        getattr(sess, "app_name", "") or "",
+        getattr(sess, "user_id", "") or "",
+    )
