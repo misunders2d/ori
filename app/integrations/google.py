@@ -1,9 +1,9 @@
 """Google OAuth provider — Drive, Gmail, Calendar, etc.
 
 To use: set vault keys
-    OAUTH_GOOGLE_CLIENT_ID
-    OAUTH_GOOGLE_CLIENT_SECRET
-    OAUTH_GOOGLE_REDIRECT_URI    # optional
+    GOOGLE_OAUTH_CLIENT_ID
+    GOOGLE_OAUTH_CLIENT_SECRET
+    GOOGLE_OAUTH_REDIRECT_URI    # optional
 
 Default scopes are scoped to "openid email" — enough for identity. Tools
 that need more (Drive, Gmail) request additional scopes per-call.

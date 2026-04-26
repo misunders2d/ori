@@ -2,9 +2,9 @@
 
 To use: register an OAuth app at https://github.com/settings/developers
 and set vault keys
-    OAUTH_GITHUB_CLIENT_ID
-    OAUTH_GITHUB_CLIENT_SECRET
-    OAUTH_GITHUB_REDIRECT_URI    # optional
+    GITHUB_OAUTH_CLIENT_ID
+    GITHUB_OAUTH_CLIENT_SECRET
+    GITHUB_OAUTH_REDIRECT_URI    # optional
 
 GitHub's OAuth response is form-encoded by default; we send
 `Accept: application/json` to get JSON back. This is handled by the base

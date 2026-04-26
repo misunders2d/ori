@@ -42,7 +42,7 @@ The user almost always wants Socket Mode (no public URL needed).
 - Only relevant if the user has explicitly chosen webhook delivery. Default is Socket Mode.
 
 **Path C — Multi-tenant OAuth:**
-- Needs: `OAUTH_SLACK_CLIENT_ID` and `OAUTH_SLACK_CLIENT_SECRET`. Then `configure_integration("slack")` to start the OAuth flow.
+- Needs: `SLACK_OAUTH_CLIENT_ID` and `SLACK_OAUTH_CLIENT_SECRET`. Then `configure_integration("slack")` to start the OAuth flow.
 - Rare. Only for installs where each user authenticates separately.
 
 **Recognizing user intent:**
@@ -62,7 +62,7 @@ The user almost always wants Socket Mode (no public URL needed).
 - Optional: `GITHUB_REPO` (the `owner/repo` to push evolutions to).
 
 **OAuth (multi-tenant):**
-- `OAUTH_GITHUB_CLIENT_ID` + `OAUTH_GITHUB_CLIENT_SECRET`, then `configure_integration("github")`.
+- `GITHUB_OAUTH_CLIENT_ID` + `GITHUB_OAUTH_CLIENT_SECRET`, then `configure_integration("github")`.
 
 ### Google (LLM provider)
 
@@ -70,7 +70,7 @@ Three modes, mutually exclusive:
 
 - **Direct API key:** `GOOGLE_API_KEY` from aistudio.google.com. One token, one approval. Set `GOOGLE_GENAI_USE_VERTEXAI` to `FALSE` (or leave unset).
 - **Vertex AI:** `GOOGLE_GENAI_USE_VERTEXAI=TRUE` + `GOOGLE_CLOUD_PROJECT` + `GOOGLE_CLOUD_LOCATION` + ADC (configured via `gcloud auth application-default login` outside the bot).
-- **OAuth (Drive/Gmail/Calendar):** `OAUTH_GOOGLE_CLIENT_ID` + `OAUTH_GOOGLE_CLIENT_SECRET`, then `configure_integration("google")`.
+- **OAuth (Drive/Gmail/Calendar):** `GOOGLE_OAUTH_CLIENT_ID` + `GOOGLE_OAUTH_CLIENT_SECRET`, then `configure_integration("google")`.
 
 ### Anthropic / OpenAI / OpenRouter
 
@@ -79,7 +79,7 @@ Three modes, mutually exclusive:
 ### ClickUp (when present)
 
 - Personal token: `CLICKUP_API_TOKEN` + optional `CLICKUP_TEAM_ID`. Single-user.
-- OAuth: `OAUTH_CLICKUP_CLIENT_ID` + `OAUTH_CLICKUP_CLIENT_SECRET`, then `configure_integration("clickup")`.
+- OAuth: `CLICKUP_OAUTH_CLIENT_ID` + `CLICKUP_OAUTH_CLIENT_SECRET`, then `configure_integration("clickup")`.
 
 ### Domain integrations (when present in this build)
 

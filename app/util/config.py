@@ -57,13 +57,18 @@ ALLOWED_CONFIG_KEYS = frozenset({
     "NEO4J_PASSWORD",
     # OAuth integrations subsystem (multi-tenant flows for ClickUp/Slack
     # via configure_integration). Distinct from the per-user Google OAuth
-    # token store above.
-    "OAUTH_CLICKUP_CLIENT_ID",
-    "OAUTH_CLICKUP_CLIENT_SECRET",
-    "OAUTH_CLICKUP_REDIRECT_URI",
-    "OAUTH_SLACK_CLIENT_ID",
-    "OAUTH_SLACK_CLIENT_SECRET",
-    "OAUTH_SLACK_REDIRECT_URI",
+    # token store above. Provider-prefixed convention matches GOOGLE_OAUTH_*
+    # so the integrations subsystem and legacy per-user OAuth share keys.
+    "GITHUB_OAUTH_CLIENT_ID",
+    "GITHUB_OAUTH_CLIENT_SECRET",
+    "GITHUB_OAUTH_REDIRECT_URI",
+    "GOOGLE_OAUTH_REDIRECT_URI",
+    "CLICKUP_OAUTH_CLIENT_ID",
+    "CLICKUP_OAUTH_CLIENT_SECRET",
+    "CLICKUP_OAUTH_REDIRECT_URI",
+    "SLACK_OAUTH_CLIENT_ID",
+    "SLACK_OAUTH_CLIENT_SECRET",
+    "SLACK_OAUTH_REDIRECT_URI",
 })
 
 # Keys the agent can set via configure_integration (conversational flow).

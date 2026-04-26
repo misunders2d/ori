@@ -20,9 +20,9 @@ app/integrations/__init__.py.
 
 Provider config (client_id, client_secret) is pulled from the vault at
 provider construction. To add credentials for a provider, set vault keys:
-    OAUTH_<provider_upper>_CLIENT_ID
-    OAUTH_<provider_upper>_CLIENT_SECRET
-    OAUTH_<provider_upper>_REDIRECT_URI    # optional; default uses A2A_BASE_URL
+    <PROVIDER_UPPER>_OAUTH_CLIENT_ID
+    <PROVIDER_UPPER>_OAUTH_CLIENT_SECRET
+    <PROVIDER_UPPER>_OAUTH_REDIRECT_URI    # optional; default uses A2A_BASE_URL
 """
 
 from __future__ import annotations
@@ -47,8 +47,13 @@ logger = logging.getLogger(__name__)
 
 
 def _vault_lookup(provider: str, suffix: str, default: str = "") -> str:
-    """Read a per-provider vault key. Falls back to env, then default."""
-    key = f"OAUTH_{provider.upper()}_{suffix.upper()}"
+    """Read a per-provider vault key. Falls back to env, then default.
+
+    Convention: `<PROVIDER>_OAUTH_<SUFFIX>` (e.g. `GOOGLE_OAUTH_CLIENT_ID`).
+    Provider-prefixed to match the rest of the project's env naming and
+    to share keys with legacy per-user OAuth tooling.
+    """
+    key = f"{provider.upper()}_OAUTH_{suffix.upper()}"
     return vault.get(key) or os.environ.get(key) or default
 
 

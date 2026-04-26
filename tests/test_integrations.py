@@ -61,8 +61,8 @@ def test_google_provider_reads_vault(monkeypatch):
     monkeypatch.setattr(
         "app.integrations.base.vault.get",
         lambda key, default="": {
-            "OAUTH_GOOGLE_CLIENT_ID": "abc-id",
-            "OAUTH_GOOGLE_CLIENT_SECRET": "abc-secret",
+            "GOOGLE_OAUTH_CLIENT_ID": "abc-id",
+            "GOOGLE_OAUTH_CLIENT_SECRET": "abc-secret",
         }.get(key, default),
     )
     g = GoogleProvider()
@@ -73,7 +73,7 @@ def test_google_provider_reads_vault(monkeypatch):
 def test_redirect_uri_default_uses_a2a_base_url(monkeypatch):
     monkeypatch.setattr("app.integrations.base.vault.get", lambda key, default="": "")
     monkeypatch.setenv("A2A_BASE_URL", "https://ori.example.com")
-    monkeypatch.delenv("OAUTH_GOOGLE_REDIRECT_URI", raising=False)
+    monkeypatch.delenv("GOOGLE_OAUTH_REDIRECT_URI", raising=False)
     g = GoogleProvider()
     assert g.redirect_uri() == "https://ori.example.com/oauth/google/callback"
 
@@ -82,7 +82,7 @@ def test_redirect_uri_explicit_overrides(monkeypatch):
     monkeypatch.setattr(
         "app.integrations.base.vault.get",
         lambda key, default="": "https://my.callback/oauth"
-        if key == "OAUTH_GOOGLE_REDIRECT_URI"
+        if key == "GOOGLE_OAUTH_REDIRECT_URI"
         else "",
     )
     g = GoogleProvider()

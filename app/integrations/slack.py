@@ -1,9 +1,9 @@
 """Slack OAuth provider — Bot tokens via the v2 OAuth flow.
 
 To use: register an OAuth app at https://api.slack.com/apps and set
-    OAUTH_SLACK_CLIENT_ID
-    OAUTH_SLACK_CLIENT_SECRET
-    OAUTH_SLACK_REDIRECT_URI    # optional
+    SLACK_OAUTH_CLIENT_ID
+    SLACK_OAUTH_CLIENT_SECRET
+    SLACK_OAUTH_REDIRECT_URI    # optional
 
 Most installs use a workspace bot token directly via `SLACK_BOT_TOKEN`
 (see app/util/config.py). This provider is for multi-workspace flows

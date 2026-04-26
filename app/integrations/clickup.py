@@ -2,9 +2,9 @@
 
 To use: register an OAuth app at https://app.clickup.com/settings/team/<id>/apps
 and set vault keys
-    OAUTH_CLICKUP_CLIENT_ID
-    OAUTH_CLICKUP_CLIENT_SECRET
-    OAUTH_CLICKUP_REDIRECT_URI    # optional
+    CLICKUP_OAUTH_CLIENT_ID
+    CLICKUP_OAUTH_CLIENT_SECRET
+    CLICKUP_OAUTH_REDIRECT_URI    # optional
 
 ClickUp's OAuth flow is non-standard: token exchange uses query params
 (not form-encoded body), and it issues a long-lived access token with no

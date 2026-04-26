@@ -70,8 +70,8 @@ async def configure_integration(
                 "error_code": "PROVIDER_NOT_CONFIGURED",
                 "message": (
                     f"OAuth provider '{name}' has no client credentials. "
-                    f"Set vault keys OAUTH_{name.upper()}_CLIENT_ID and "
-                    f"OAUTH_{name.upper()}_CLIENT_SECRET first."
+                    f"Set vault keys {name.upper()}_OAUTH_CLIENT_ID and "
+                    f"{name.upper()}_OAUTH_CLIENT_SECRET first."
                 ),
             }
         # Bind the random state token to the originating user+session BEFORE
