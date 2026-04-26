@@ -314,7 +314,6 @@ async def extract_agent_response(
             if "readonly database" in error_msg.lower():
                 logger.error("Session DB is readonly — attempting self-heal.")
                 try:
-                    import os
                     db_path = os.path.abspath("./data/ori-sessions.db")
                     for suffix in ("", "-wal", "-shm", "-journal"):
                         try:
