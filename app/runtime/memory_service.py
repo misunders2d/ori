@@ -201,6 +201,94 @@ class OriMemoryService(BaseMemoryService):
                 app_name=app_name, user_id=user_id, memories=memories, custom_metadata=md,
             )
 
+    async def update_memory_record(
+        self,
+        *,
+        app_name: str,
+        user_id: str,
+        category: str,
+        record_id: str,
+        text: str | None = None,
+        metadata_updates: Mapping[str, Any] | None = None,
+    ) -> bool:
+        """Update an existing memory record's text and/or metadata fields.
+
+        BaseMemoryService doesn't define update — this is an OriMemoryService
+        extension exposed via app/tools/memory.py:modify_memory. If the new
+        text changes, the vector is re-embedded.
+
+        Returns True on update, False if the record wasn't found in the
+        category for this (app_name, user_id).
+        """
+        self._ensure()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            if category not in list(self._db.table_names()):
+                return False
+        table = self._db.open_table(category)
+        # Verify the record exists and belongs to this user.
+        existing = (
+            table.search()
+            .where(
+                f"id = '{record_id}' AND "
+                + self._scope_filter(app_name, user_id)
+            )
+            .limit(1)
+            .to_list()
+        )
+        if not existing:
+            return False
+        # LanceDB's update doesn't merge metadata — we fetch, merge, replace.
+        record = existing[0]
+        new_md = dict(record.get("metadata") or {})
+        if metadata_updates:
+            new_md.update(metadata_updates)
+        new_text = text if text is not None else record.get("text", "")
+        values: dict[str, Any] = {"metadata": new_md}
+        if text is not None:
+            values["text"] = new_text
+            values["vector"] = self._embed(new_text)
+        table.update(values=values, where=f"id = '{record_id}'")
+        return True
+
+    async def delete_memory_record(
+        self,
+        *,
+        app_name: str,
+        user_id: str,
+        category: str,
+        record_id: str,
+    ) -> bool:
+        """Delete a memory record by id, scoped to (app_name, user_id).
+
+        BaseMemoryService doesn't define delete — this is an OriMemoryService
+        extension exposed via app/tools/memory.py:delete_memory.
+
+        Returns True if a row was removed, False if no matching record.
+        """
+        self._ensure()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            if category not in list(self._db.table_names()):
+                return False
+        table = self._db.open_table(category)
+        # Verify the record exists and belongs to this user before deleting.
+        existing = (
+            table.search()
+            .where(
+                f"id = '{record_id}' AND "
+                + self._scope_filter(app_name, user_id)
+            )
+            .limit(1)
+            .to_list()
+        )
+        if not existing:
+            return False
+        table.delete(
+            f"id = '{record_id}' AND " + self._scope_filter(app_name, user_id)
+        )
+        return True
+
     async def search_memory(
         self,
         *,

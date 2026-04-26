@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Annotated, Any
 
 from google.adk.models import LlmRequest
@@ -25,6 +26,7 @@ from app.util.models import (
     PROVIDER_REGISTRY,
     VALID_COMPONENTS,
     format_model_assignments,
+    get_auth_mode,
     get_default_model,
     get_model_string,
     is_pinned,
@@ -249,3 +251,112 @@ async def reset_model_override(
             "message": f"Cleared override for {component}. Falls back to {get_default_model(component)}.",
         }
     return {"status": "success", "message": f"No override set for {component}."}
+
+
+def get_llm_provider(tool_context: ToolContext = None) -> dict:
+    """Show the current LLM provider mode (API key vs Vertex AI) and its status.
+
+    Use this when the user asks what mode they're in, or before switching
+    providers. Returns the active mode plus readiness flags for switching
+    to the other mode.
+    """
+    auth = get_auth_mode()
+    mode_label = "Google One / Vertex AI" if auth["vertex_ai"] else "Direct API keys"
+    result: dict[str, Any] = {
+        "status": "success",
+        "current_mode": mode_label,
+        "details": auth,
+    }
+    if auth["vertex_ai"]:
+        has_api_key = bool(os.environ.get("GOOGLE_API_KEY", "").strip())
+        result["can_switch_to_api_key"] = has_api_key
+        if not has_api_key:
+            result["missing_for_api_key"] = ["GOOGLE_API_KEY"]
+    else:
+        has_project = bool(os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip())
+        has_adc = bool(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip())
+        result["can_switch_to_vertex"] = has_project
+        missing = []
+        if not has_project:
+            missing.append("GOOGLE_CLOUD_PROJECT (GCP project ID)")
+        if not has_adc:
+            result["adc_note"] = (
+                "No service account configured (GOOGLE_APPLICATION_CREDENTIALS). "
+                "This is fine if ADC is set up via "
+                "'gcloud auth application-default login' on the server."
+            )
+        if missing:
+            result["missing_for_vertex"] = missing
+    return result
+
+
+def switch_llm_provider(
+    target: Annotated[str, "Either 'api_key' or 'vertex'"],
+    tool_context: ToolContext = None,
+) -> dict:
+    """Switch between Direct API key mode and Vertex AI mode.
+
+    Validates prerequisites BEFORE flipping the vault key. The change takes
+    effect on the next LLM call (the runner's model resolution re-reads the
+    env at request time).
+
+    Args:
+        target: 'api_key' for Direct API key mode, 'vertex' for Vertex AI
+            (Google One / ADC) mode.
+    """
+    from deploy.vault import set as vault_set
+
+    target = (target or "").strip().lower()
+    if target not in ("api_key", "vertex"):
+        return {
+            "status": "error",
+            "error_code": "INVALID_TARGET",
+            "message": "target must be 'api_key' or 'vertex'.",
+        }
+
+    current = get_auth_mode()
+    current_is_vertex = current["vertex_ai"]
+
+    if target == "vertex" and current_is_vertex:
+        return {"status": "no_change", "message": "Already in Vertex AI mode."}
+    if target == "api_key" and not current_is_vertex:
+        return {"status": "no_change", "message": "Already in Direct API key mode."}
+
+    if target == "vertex":
+        project = os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
+        if not project:
+            return {
+                "status": "error",
+                "error_code": "MISSING_GCP_PROJECT",
+                "message": (
+                    "Cannot switch to Vertex AI: GOOGLE_CLOUD_PROJECT is not "
+                    "configured. Use configure_integration to set it first."
+                ),
+            }
+        vault_set("GOOGLE_GENAI_USE_VERTEXAI", "TRUE")
+        os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "TRUE"
+        return {
+            "status": "success",
+            "message": (
+                f"Switched to Vertex AI mode (project: {project}). "
+                "Effect on next LLM call."
+            ),
+        }
+
+    # target == "api_key"
+    has_key = bool(os.environ.get("GOOGLE_API_KEY", "").strip())
+    if not has_key:
+        return {
+            "status": "error",
+            "error_code": "MISSING_API_KEY",
+            "message": (
+                "Cannot switch to API key mode: GOOGLE_API_KEY is not "
+                "configured. Use configure_integration to set it first."
+            ),
+        }
+    vault_set("GOOGLE_GENAI_USE_VERTEXAI", "FALSE")
+    os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "FALSE"
+    return {
+        "status": "success",
+        "message": "Switched to Direct API key mode. Effect on next LLM call.",
+    }

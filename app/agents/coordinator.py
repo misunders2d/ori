@@ -28,7 +28,11 @@ from app.agents.developer import developer_agent
 from app.agents.knowledge import knowledge_agent
 from app.tools.a2a import get_agent_identity, get_my_a2a_key, list_friends
 from app.tools.google_search import google_search_agent_tool
-from app.tools.model_tools import list_available_models
+from app.tools.model_tools import (
+    get_llm_provider,
+    list_available_models,
+    switch_llm_provider,
+)
 from app.tools.web import web_fetch
 from app.tools.whitelist import blacklist_chat, whitelist_chat
 from app.toolsets import (
@@ -168,6 +172,8 @@ root_agent = Agent(
         # without delegation. Mutating counterparts (set_agent_model,
         # add_friend, call_friend, etc.) stay on Developer / Knowledge.
         list_available_models,
+        get_llm_provider,
+        switch_llm_provider,
         get_agent_identity,
         get_my_a2a_key,
         list_friends,
