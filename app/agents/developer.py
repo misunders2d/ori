@@ -28,7 +28,12 @@ from app.tools.model_tools import (
     verify_model_reachable,
 )
 from app.tools.web import web_fetch
-from app.toolsets import EvolutionToolset, GitHubToolset, IntegrationToolset, ScratchpadToolset
+from app.toolsets import (
+    EvolutionToolset,
+    GitHubToolset,
+    IntegrationToolset,
+    ScratchpadToolset,
+)
 from app.toolsets.evolution import _is_child_container
 from app.util.models import get_model
 

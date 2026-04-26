@@ -20,7 +20,6 @@ from google.adk.agents import Agent
 from google.adk.skills import load_skill_from_dir
 from google.adk.tools import skill_toolset
 
-from app.toolsets import ScratchpadToolset
 from app.tools.a2a import (
     add_friend,
     broadcast_address_update,
@@ -36,6 +35,7 @@ from app.tools.a2a import (
     update_friend_address,
     update_friend_key,
 )
+from app.toolsets import ScratchpadToolset
 from app.util.models import get_model
 
 _skills_dir = pathlib.Path(__file__).parent.parent.parent / "skills"

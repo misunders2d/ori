@@ -1,8 +1,7 @@
 """Neo4j-backed shared-knowledge toolset.
 
-Kept distinct from:
-- `MemoryToolset` (app/toolsets/memory.py) — Ori's local LanceDB memory.
-- `GraphToolset` (app/toolsets/graph.py) — graph-traversal primitives.
+Kept distinct from `MemoryToolset` (app/toolsets/memory.py) — Ori's local
+LanceDB memory.
 
 ACL is enforced per-tool inside `app/tools/memory_tools.py`. Authorship is
 stored as a property on each node; update/delete gates use a Cypher
