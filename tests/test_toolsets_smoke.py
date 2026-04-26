@@ -8,25 +8,44 @@ that path so import bugs surface in CI, not on first live boot.
 
 import pytest
 
+from app.toolsets.clickup import ClickUpToolset
 from app.toolsets.evolution import EvolutionToolset
 from app.toolsets.github import GitHubToolset
+from app.toolsets.google_workspace import GoogleWorkspaceToolset
+from app.toolsets.graph import GraphToolset
+from app.toolsets.h10 import H10Toolset
 from app.toolsets.integration import IntegrationToolset
+from app.toolsets.keepa import KeepaToolset
+from app.toolsets.knowledge import KnowledgeToolset
 from app.toolsets.memory import MemoryToolset
 from app.toolsets.planner import PlannerToolset
 from app.toolsets.scheduling import SchedulingToolset
+from app.toolsets.scratchpad import ScratchpadToolset
+from app.toolsets.sp_api import SPApiToolset
 from app.toolsets.system import SystemToolset
+from app.toolsets.visualization import CreativesToolset, VisualizationToolset
 
 
 @pytest.mark.parametrize(
     "toolset_cls",
     [
+        ClickUpToolset,
+        CreativesToolset,
         EvolutionToolset,
         GitHubToolset,
+        GoogleWorkspaceToolset,
+        GraphToolset,
+        H10Toolset,
         IntegrationToolset,
+        KeepaToolset,
+        KnowledgeToolset,
         MemoryToolset,
         PlannerToolset,
+        SPApiToolset,
         SchedulingToolset,
+        ScratchpadToolset,
         SystemToolset,
+        VisualizationToolset,
     ],
 )
 @pytest.mark.asyncio
