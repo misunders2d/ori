@@ -1,7 +1,8 @@
-import httpx
-from typing import Optional, Dict, Any
+from typing import Any
 
+import httpx
 from google.adk.tools.tool_context import ToolContext
+
 from deploy import vault
 
 
@@ -15,7 +16,7 @@ def _get_headers():
     return headers
 
 
-async def slack_post_message(channel: str, text: str, thread_ts: Optional[str] = None, tool_context: ToolContext = None) -> Dict[str, Any]:
+async def slack_post_message(channel: str, text: str, thread_ts: str | None = None, tool_context: ToolContext = None) -> dict[str, Any]:
     """Sends a message to a Slack channel.
 
     Args:
@@ -44,7 +45,7 @@ async def slack_post_message(channel: str, text: str, thread_ts: Optional[str] =
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-async def slack_list_channels(types: str = "public_channel,private_channel", tool_context: ToolContext = None) -> Dict[str, Any]:
+async def slack_list_channels(types: str = "public_channel,private_channel", tool_context: ToolContext = None) -> dict[str, Any]:
     """Lists all channels the bot has access to.
 
     Args:
@@ -76,7 +77,7 @@ async def slack_list_channels(types: str = "public_channel,private_channel", too
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-async def slack_read_history(channel: str, limit: int = 10, tool_context: ToolContext = None) -> Dict[str, Any]:
+async def slack_read_history(channel: str, limit: int = 10, tool_context: ToolContext = None) -> dict[str, Any]:
     """Reads the most recent messages from a channel.
 
     Args:
@@ -99,7 +100,7 @@ async def slack_read_history(channel: str, limit: int = 10, tool_context: ToolCo
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-async def slack_read_replies(channel: str, thread_ts: str, tool_context: ToolContext = None) -> Dict[str, Any]:
+async def slack_read_replies(channel: str, thread_ts: str, tool_context: ToolContext = None) -> dict[str, Any]:
     """Retrieves all messages in a specific thread.
 
     Args:
@@ -122,7 +123,7 @@ async def slack_read_replies(channel: str, thread_ts: str, tool_context: ToolCon
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-async def slack_get_user_info(user: str, tool_context: ToolContext = None) -> Dict[str, Any]:
+async def slack_get_user_info(user: str, tool_context: ToolContext = None) -> dict[str, Any]:
     """Retrieves profile information for a Slack user ID.
 
     Args:

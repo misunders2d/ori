@@ -10,7 +10,7 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any
+from typing import Any
 
 import httpx
 from google.adk.tools.tool_context import ToolContext
@@ -206,7 +206,7 @@ def _check_tokens_or_error(token_info: dict) -> dict | None:
 # FETCH tools — call Keepa API, store raw data, return lightweight summary
 # ---------------------------------------------------------------------------
 
-async def keepa_check_tokens(tool_context: Optional[ToolContext] = None) -> dict:
+async def keepa_check_tokens(tool_context: ToolContext | None = None) -> dict:
     """Check remaining Keepa API token balance. Costs 0 tokens."""
     api_key = _get_api_key()
     if not api_key:
@@ -221,7 +221,7 @@ async def keepa_check_tokens(tool_context: Optional[ToolContext] = None) -> dict
 async def keepa_fetch_product(
     asin: str,
     domain: int = 1,
-    tool_context: Optional[ToolContext] = None,
+    tool_context: ToolContext | None = None,
 ) -> dict:
     """Fetch product data from Keepa and cache it locally. Returns a lightweight summary only.
 
@@ -272,7 +272,7 @@ async def keepa_fetch_product(
         return {"status": "error", "message": f"Keepa API error: {e}"}
 
 
-def _build_summary(asin: str, product: dict, from_cache: bool = False, tokens_left: int = None) -> dict:
+def _build_summary(asin: str, product: dict, from_cache: bool = False, tokens_left: int | None = None) -> dict:
     """Build a lightweight summary from cached product data."""
     csv_data = product.get("csv", [])
 
@@ -319,7 +319,7 @@ def _build_summary(asin: str, product: dict, from_cache: bool = False, tokens_le
 # EXTRACT tools — read from cache, return focused slices
 # ---------------------------------------------------------------------------
 
-def keepa_extract_pricing(asin: str, tool_context: Optional[ToolContext] = None) -> dict:
+def keepa_extract_pricing(asin: str, tool_context: ToolContext | None = None) -> dict:
     """Extract detailed current pricing from cached Keepa data.
 
     Returns all price types, coupon details, and best current offer analysis.
@@ -396,7 +396,7 @@ def keepa_extract_history(
     asin: str,
     metric: str = "buy_box",
     days: int = 90,
-    tool_context: Optional[ToolContext] = None,
+    tool_context: ToolContext | None = None,
 ) -> dict:
     """Extract price or rank history from cached Keepa data.
 
@@ -437,7 +437,7 @@ def keepa_extract_history(
     return {"status": "success", "asin": asin.upper(), "metric": metric, "days": days, "data_points": len(history), "history": history}
 
 
-def keepa_extract_offers(asin: str, tool_context: Optional[ToolContext] = None) -> dict:
+def keepa_extract_offers(asin: str, tool_context: ToolContext | None = None) -> dict:
     """Extract current seller/offer information from cached Keepa data.
 
     Returns buy box holder, FBA vs FBM breakdown, seller count, and top offers.
@@ -491,7 +491,7 @@ def keepa_extract_offers(asin: str, tool_context: Optional[ToolContext] = None) 
     }
 
 
-def keepa_extract_stats(asin: str, tool_context: Optional[ToolContext] = None) -> dict:
+def keepa_extract_stats(asin: str, tool_context: ToolContext | None = None) -> dict:
     """Extract key product stats from cached Keepa data.
 
     Returns sales rank, monthly sold, rating, review count, availability, listing age.
@@ -530,7 +530,7 @@ def keepa_extract_stats(asin: str, tool_context: Optional[ToolContext] = None) -
     }
 
 
-def keepa_extract_competitors(asin: str, tool_context: Optional[ToolContext] = None) -> dict:
+def keepa_extract_competitors(asin: str, tool_context: ToolContext | None = None) -> dict:
     """Extract competitor/seller information from cached Keepa data.
 
     Returns unique seller IDs from buy box history and current offers.
@@ -575,7 +575,7 @@ def keepa_extract_competitors(asin: str, tool_context: Optional[ToolContext] = N
 def keepa_extract_sales_analysis(
     asin: str,
     days: int = 90,
-    tool_context: Optional[ToolContext] = None,
+    tool_context: ToolContext | None = None,
 ) -> dict:
     """Extract comprehensive sales analysis from cached Keepa data.
 
@@ -753,7 +753,7 @@ def keepa_extract_sales_analysis(
 async def keepa_product_finder(
     selection: str,
     domain: int = 1,
-    tool_context: Optional[ToolContext] = None,
+    tool_context: ToolContext | None = None,
 ) -> dict:
     """Search for products using Keepa's Product Finder with filters.
 
@@ -785,7 +785,7 @@ async def keepa_product_finder(
 
 
 async def keepa_get_categories(
-    domain: int, category: Optional[int] = None, tool_context: Optional[ToolContext] = None,
+    domain: int, category: int | None = None, tool_context: ToolContext | None = None,
 ) -> dict:
     """Retrieve Keepa's category tree or details for a specific category.
 
@@ -814,7 +814,7 @@ async def keepa_get_categories(
 
 
 async def keepa_get_bestsellers(
-    domain: int, category: int, tool_context: Optional[ToolContext] = None,
+    domain: int, category: int, tool_context: ToolContext | None = None,
 ) -> dict:
     """Retrieve the bestseller list for a specific category.
 
@@ -859,7 +859,7 @@ async def keepa_get_bestsellers(
 
 
 async def keepa_get_seller_info(
-    domain: int, seller_id: str, tool_context: Optional[ToolContext] = None,
+    domain: int, seller_id: str, tool_context: ToolContext | None = None,
 ) -> dict:
     """Retrieve information about a specific Amazon seller.
 
@@ -886,7 +886,7 @@ async def keepa_get_seller_info(
 
 
 async def keepa_get_top_sellers(
-    domain: int, tool_context: Optional[ToolContext] = None,
+    domain: int, tool_context: ToolContext | None = None,
 ) -> dict:
     """Retrieve the list of top sellers for a given Amazon locale.
 

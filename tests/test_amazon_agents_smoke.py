@@ -13,7 +13,6 @@ phase 4 of the migration.
 import pytest
 from google.adk.tools.function_tool import FunctionTool
 
-
 _ALWAYS_BUILT = [
     ("amazon_agent", "AmazonAgent"),
     ("amazon_data_analyst_agent", "AmazonDataAnalystAgent"),
@@ -38,13 +37,13 @@ async def _collect_failures(agent) -> list[tuple[str, str]]:
             for inner in await t.get_tools():
                 try:
                     inner._get_declaration()
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     name = getattr(inner, "name", None) or getattr(getattr(inner, "func", None), "__name__", "?")
                     failures.append((name, f"{type(e).__name__}: {e}"))
         elif callable(t):
             try:
                 FunctionTool(func=t)._get_declaration()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 failures.append((t.__name__, f"{type(e).__name__}: {e}"))
     return failures
 

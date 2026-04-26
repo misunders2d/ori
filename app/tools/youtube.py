@@ -2,8 +2,10 @@
 
 import logging
 import os
+
 from google import genai
 from google.genai import types
+
 from app.util.models import get_model_name, is_vertex_mode
 
 logger = logging.getLogger(__name__)
@@ -12,7 +14,7 @@ async def youtube_summary(url: str, query: str):
     """
     Answer questions about a specific YouTube video, focusing on a specific query.
     This tool summarizes both VISUAL and audio sources from YouTube.
-    
+
     Args:
         url (str): A YouTube video URL.
         query (str): The query or question to answer about the video content.
@@ -21,7 +23,7 @@ async def youtube_summary(url: str, query: str):
         # Resolve model name and auth
         model_name = get_model_name("youtube_summarizer")
         is_vertex = is_vertex_mode()
-        
+
         # Initialize client based on auth mode
         if is_vertex:
             client = genai.Client(vertexai=True, project=os.environ.get("GOOGLE_CLOUD_PROJECT"), location=os.environ.get("GOOGLE_CLOUD_LOCATION"))

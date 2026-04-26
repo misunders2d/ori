@@ -15,7 +15,6 @@ import os
 import random
 import re
 from datetime import datetime
-from typing import Optional, Tuple
 from urllib.parse import urlparse
 
 import httpx
@@ -260,7 +259,7 @@ class SlackAdapter(TransportAdapter):
         file_url: str,
         mime_hint: str = "",
         filename_hint: str = "",
-    ) -> Optional[Tuple[bytes, str, str]]:
+    ) -> tuple[bytes, str, str] | None:
         """Download a Slack-hosted file with auth + SSRF guard + size cap.
 
         Slack event payloads carry authoritative `mimetype` and `name` on each

@@ -7,7 +7,6 @@ Returns the file path for the transport layer to deliver.
 
 import logging
 import os
-import time
 import traceback
 import uuid
 from typing import Any
@@ -20,6 +19,7 @@ _PLOTS_DIR = os.path.abspath("./tmp/plots")
 
 # Force matplotlib to non-interactive backend BEFORE any matplotlib imports
 import matplotlib
+
 matplotlib.use("Agg")
 
 # All modules are lazy-loaded on first use to avoid import-time failures on headless servers

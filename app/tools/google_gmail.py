@@ -17,10 +17,9 @@ import httpx
 from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 
+from app.tools.google_drive import _auth_headers, _get_user_email, _get_valid_token
 from app.util.file_convert import is_convertible, to_text
 from app.util.tmp_sweeper import sweep_tmp
-from app.tools.google_drive import _auth_headers, _get_user_email, _get_valid_token
-from app.tools.google_oauth.token_store import get_token
 
 # Gemini inline-data acceptance: any image/*, audio/*, video/*, plus application/pdf.
 # (Mirrors google.adk.tools.load_artifacts_tool._is_inline_mime_type_supported.)
@@ -207,8 +206,8 @@ async def gmail_list_labels(tool_context: ToolContext = None) -> dict:
             resp.raise_for_status()
             data = resp.json()
         labels = [
-            {"id": l["id"], "name": l.get("name", ""), "type": l.get("type", "user")}
-            for l in data.get("labels", [])
+            {"id": lbl["id"], "name": lbl.get("name", ""), "type": lbl.get("type", "user")}
+            for lbl in data.get("labels", [])
         ]
         return {"status": "success", "count": len(labels), "labels": labels}
     except Exception as e:

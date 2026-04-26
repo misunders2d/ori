@@ -9,7 +9,6 @@ import logging
 import os
 import sqlite3
 import time
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +52,7 @@ def save_token(email: str, access_token: str, refresh_token: str, expires_in: in
         conn.close()
 
 
-def get_token(email: str) -> Optional[dict]:
+def get_token(email: str) -> dict | None:
     """Retrieve stored tokens for a user. Returns None if not found."""
     conn = _get_conn()
     try:

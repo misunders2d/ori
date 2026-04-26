@@ -4,7 +4,9 @@ Usage: python inspect_file.py <file_path>
 Or paste into analyze_data(file_path, code) — df is pre-loaded.
 """
 import sys
+
 import pandas as pd
+
 
 def inspect(file_path=None, df=None):
     if df is None:
@@ -18,19 +20,19 @@ def inspect(file_path=None, df=None):
             df = pd.read_csv(file_path)
 
     print(f"\nShape: {df.shape[0]} rows x {df.shape[1]} columns")
-    print(f"\nColumns and types:")
+    print("\nColumns and types:")
     for col in df.columns:
         non_null = df[col].count()
         null_pct = (1 - non_null / len(df)) * 100
-        print(f"  {col:40s} {str(df[col].dtype):10s} {non_null}/{len(df)} ({null_pct:.0f}% null)")
+        print(f"  {col:40s} {df[col].dtype!s:10s} {non_null}/{len(df)} ({null_pct:.0f}% null)")
 
-    print(f"\nFirst 5 rows:")
+    print("\nFirst 5 rows:")
     print(df.head().to_string())
 
     # Detect numeric columns and show basic stats
     numeric = df.select_dtypes(include='number')
     if len(numeric.columns) > 0:
-        print(f"\nNumeric summary:")
+        print("\nNumeric summary:")
         print(numeric.describe().to_string())
 
     # Detect date-like columns

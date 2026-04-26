@@ -30,16 +30,16 @@ def _get_credentials() -> dict | None:
     refresh_token = os.environ.get("SP_API_REFRESH_TOKEN", "")
     if not all([client_id, client_secret, refresh_token]):
         return None
-    return dict(
-        lwa_app_id=client_id,
-        lwa_client_secret=client_secret,
-        refresh_token=refresh_token,
-    )
+    return {
+        "lwa_app_id": client_id,
+        "lwa_client_secret": client_secret,
+        "refresh_token": refresh_token,
+    }
 
 
 async def _sp_call(fn, *args, **kwargs):
     """Execute SP-API call with retry on throttling."""
-    from sp_api.base import SellingApiRequestThrottledException, SellingApiException
+    from sp_api.base import SellingApiException, SellingApiRequestThrottledException
 
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
@@ -119,7 +119,7 @@ async def _poll_download_and_deliver(
 
     # Poll until ready
     document_id = None
-    for poll in range(1, _MAX_POLL_ATTEMPTS + 1):
+    for _poll in range(1, _MAX_POLL_ATTEMPTS + 1):
         await asyncio.sleep(_POLL_INTERVAL)
         try:
             payload = await _sp_call(reports.get_report, reportId=report_id)

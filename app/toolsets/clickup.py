@@ -7,16 +7,16 @@ class ClickUpToolset(BaseToolset):
 
     async def get_tools(self, readonly_context=None):
         from app.tools.clickup import (
+            clickup_add_comment,
+            clickup_create_task,
+            clickup_delete_task,
+            clickup_get_task,
             clickup_get_workspace,
             clickup_list_folders_and_lists,
             clickup_list_tasks,
-            clickup_get_task,
-            clickup_create_task,
-            clickup_update_task,
-            clickup_add_comment,
-            clickup_delete_task,
-            clickup_timestamp,
             clickup_task_link,
+            clickup_timestamp,
+            clickup_update_task,
         )
 
         return [

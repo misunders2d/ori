@@ -7,11 +7,11 @@ class ScratchpadToolset(BaseToolset):
 
     async def get_tools(self, readonly_context=None):
         from app.tools.scratchpad import (
-            scratchpad_write,
-            scratchpad_read,
-            scratchpad_replace,
             scratchpad_clear,
             scratchpad_list,
+            scratchpad_read,
+            scratchpad_replace,
+            scratchpad_write,
         )
 
         return [

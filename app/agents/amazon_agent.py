@@ -19,7 +19,7 @@ from google.adk.agents import Agent
 from google.adk.skills import load_skill_from_dir
 from google.adk.tools import skill_toolset
 
-from app.toolsets import H10Toolset, KeepaToolset, SPApiToolset, ScratchpadToolset
+from app.toolsets import H10Toolset, KeepaToolset, ScratchpadToolset, SPApiToolset
 from app.util.models import get_model
 
 _SKILLS_DIR = pathlib.Path(__file__).parent.parent.parent / "skills"

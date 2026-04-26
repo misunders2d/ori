@@ -7,7 +7,6 @@ that are ratios (like conversion rate, ACoS, CTR, average price).
 Simple averaging of these metrics produces wrong results because it
 gives equal weight to each row regardless of volume.
 """
-import pandas as pd
 import numpy as np
 
 

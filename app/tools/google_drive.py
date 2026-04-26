@@ -7,19 +7,21 @@ retrieves their OAuth2 token, and makes authenticated API calls.
 import logging
 import mimetypes
 import os
-from typing import Optional
 
 import httpx
 from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 
+from app.tools.google_oauth.token_store import (
+    delete_token,
+    delete_user_mapping,
+    get_token,
+    resolve_email,
+    save_token,
+)
+from app.tools.google_oauth.web_flow import refresh_access_token, start_auth_flow
 from app.util.file_convert import is_convertible, to_text
 from app.util.tmp_sweeper import sweep_tmp
-from app.tools.google_oauth.web_flow import refresh_access_token, start_auth_flow
-from app.tools.google_oauth.token_store import (
-    get_token, save_token, delete_token,
-    save_user_mapping, resolve_email, delete_user_mapping,
-)
 
 # Gemini inline-data acceptance — mirrors the gate in load_artifacts_tool.
 _ARTIFACT_INLINE_PREFIXES = ("image/", "audio/", "video/")
@@ -54,7 +56,7 @@ def _get_user_email(tool_context: ToolContext) -> str:
     return resolve_email(user_id)
 
 
-async def _get_valid_token(email: str) -> Optional[str]:
+async def _get_valid_token(email: str) -> str | None:
     """Get a valid access token for the user, refreshing if expired."""
     stored = get_token(email)
     if not stored:

@@ -21,9 +21,8 @@ import logging
 import os
 import re
 import weakref
+from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Callable
-from urllib.parse import urlparse
 
 import httpx
 from google.genai import types
@@ -38,9 +37,11 @@ from app.runtime.executor import (
 from app.runtime.perimeter import (
     is_allowed,
     is_blacklisted,
-    reload as reload_perimeter,
     should_notify_admin,
     whitelist_chat,
+)
+from app.runtime.perimeter import (
+    reload as reload_perimeter,
 )
 from app.runtime.transport import (
     get_adapter,
@@ -206,7 +207,7 @@ async def poll_slack(get_runner_fn, process_init_fn):
         slack_app.event(_evt)(_noop_handler)
 
     @slack_app.command("/reset")
-    async def handle_reset_command(ack, body, respond):  # noqa: ARG001
+    async def handle_reset_command(ack, body, respond):
         await ack()
         channel_id = body.get("channel_id", "")
         session_id = adapter.make_session_id(channel_id)

@@ -80,6 +80,9 @@ ignore = [
               # fire-and-forget pattern (background dispatch, polling tasks)
               # is intentional in transports and scheduling. Storing a ref
               # just to satisfy the lint adds noise without benefit.
+    "RUF002", # ambiguous unicode in docstrings (×, —, etc.) — these
+              # improve readability in math/units; not a real bug.
+    "RUF003", # same for comments.
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -97,6 +100,9 @@ ignore = [
 "tests/test_executor_and_a2a.py" = ["E402"]
 "tests/test_mcp_import.py" = ["F401"]
 "tests/conftest.py" = ["E402", "F401"]  # F401 covers optional-import probes in try/except
+# matplotlib.use("Agg") must run BEFORE pyplot is imported, so the
+# import order is load-bearing (cannot all live at top of file).
+"app/tools/visualize.py" = ["E402"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["app", "frontend"]

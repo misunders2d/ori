@@ -9,8 +9,8 @@ class H10Toolset(BaseToolset):
         from app.tools.h10_analysis import (
             analyze_keywords,
             find_keyword_gaps,
-            find_trending_keywords,
             find_long_tail_opportunities,
+            find_trending_keywords,
             keyword_score_report,
             keyword_summary,
         )

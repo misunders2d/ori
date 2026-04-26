@@ -667,9 +667,9 @@ async def create_record(
     short_description: str,
     category: str,
     tags: list[str],
-    related_people: list[str] = None,
-    related_memories: list[str] = None,
-    related_entities: list[str] = None,
+    related_people: list[str] | None = None,
+    related_memories: list[str] | None = None,
+    related_entities: list[str] | None = None,
     author: str = "",
     force_create: bool = False,
     tool_context: ToolContext = None,
@@ -727,7 +727,7 @@ async def create_record(
     if caller == "unknown":
         return _error("Could not resolve caller identity from tool context.")
 
-    is_admin, is_company = _get_acl_flags(caller)
+    _is_admin, is_company = _get_acl_flags(caller)
     driver = await _ready_driver()
     if driver is None:
         return _error("Neo4j not configured.")
@@ -1101,7 +1101,7 @@ async def create_person(
     role: str,
     user_ids: str,
     relations: str = "[]",
-    scopes: list[str] = None,
+    scopes: list[str] | None = None,
     author: str = "",
     force_create: bool = False,
     tool_context: ToolContext = None,
@@ -1885,9 +1885,9 @@ async def create_entity(
     entity_type: str,
     name: str,
     description: str = "",
-    tags: list[str] = None,
-    related_entities: list[str] = None,
-    related_people: list[str] = None,
+    tags: list[str] | None = None,
+    related_entities: list[str] | None = None,
+    related_people: list[str] | None = None,
     force_create: bool = False,
     tool_context: ToolContext = None,
 ) -> dict:

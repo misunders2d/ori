@@ -446,7 +446,7 @@ def keyword_summary(
         stats["trending_down"] = int((trend < 0).sum())
     if "organic_rank" in df.columns:
         ranked = df["organic_rank"].dropna()
-        stats["you_rank_for"] = int(len(ranked))
+        stats["you_rank_for"] = len(ranked)
         stats["you_dont_rank"] = int(df["organic_rank"].isna().sum())
     if "word_count" in df.columns:
         stats["avg_word_count"] = round(df["word_count"].mean(), 1)

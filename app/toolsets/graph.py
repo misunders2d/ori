@@ -8,10 +8,10 @@ class GraphToolset(BaseToolset):
     async def get_tools(self, readonly_context=None):
         from app.tools.graph_tools import (
             add_entity,
+            entity_timeline,
+            find_connection_path,
             link_entities,
             query_connections,
-            find_connection_path,
-            entity_timeline,
             search_graph,
         )
 

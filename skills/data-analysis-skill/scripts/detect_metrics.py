@@ -6,8 +6,6 @@ Usage: paste into analyze_data() code block.
 This helps avoid the weighted aggregation trap by flagging columns
 that look like rates before you accidentally average them.
 """
-import pandas as pd
-import numpy as np
 
 
 # Known rate/ratio column name patterns (case-insensitive)

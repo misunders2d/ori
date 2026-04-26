@@ -9,21 +9,21 @@ class KeepaToolset(BaseToolset):
         from app.tools.keepa_api import (
             # Token management
             keepa_check_tokens,
-            # Fetch (API call → cache)
-            keepa_fetch_product,
-            # Extract (cache → focused data)
-            keepa_extract_pricing,
+            keepa_extract_competitors,
             keepa_extract_history,
             keepa_extract_offers,
-            keepa_extract_stats,
-            keepa_extract_competitors,
+            # Extract (cache → focused data)
+            keepa_extract_pricing,
             keepa_extract_sales_analysis,
-            # Other API endpoints
-            keepa_product_finder,
-            keepa_get_categories,
+            keepa_extract_stats,
+            # Fetch (API call → cache)
+            keepa_fetch_product,
             keepa_get_bestsellers,
+            keepa_get_categories,
             keepa_get_seller_info,
             keepa_get_top_sellers,
+            # Other API endpoints
+            keepa_product_finder,
         )
 
         return [

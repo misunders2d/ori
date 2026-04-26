@@ -7,29 +7,29 @@ class GoogleWorkspaceToolset(BaseToolset):
     """Google Drive, Sheets, Calendar, and Gmail tools with per-user OAuth2."""
 
     async def get_tools(self, readonly_context=None):
-        from app.tools.google_drive import (
-            google_connect,
-            google_disconnect,
-            drive_list_files,
-            drive_download_file,
-            sheets_read,
-            sheets_write,
-            sheets_create,
-        )
         from app.tools.google_calendar import (
+            calendar_create_event,
+            calendar_delete_event,
             calendar_list,
             calendar_list_events,
-            calendar_create_event,
             calendar_update_event,
-            calendar_delete_event,
+        )
+        from app.tools.google_drive import (
+            drive_download_file,
+            drive_list_files,
+            google_connect,
+            google_disconnect,
+            sheets_create,
+            sheets_read,
+            sheets_write,
         )
         from app.tools.google_gmail import (
-            gmail_list_messages,
+            gmail_download_attachment,
             gmail_get_message,
-            gmail_list_threads,
             gmail_get_thread,
             gmail_list_labels,
-            gmail_download_attachment,
+            gmail_list_messages,
+            gmail_list_threads,
         )
 
         return [

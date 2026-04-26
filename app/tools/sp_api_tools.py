@@ -27,11 +27,11 @@ def _get_credentials() -> dict | None:
     refresh_token = os.environ.get("SP_API_REFRESH_TOKEN", "")
     if not all([client_id, client_secret, refresh_token]):
         return None
-    return dict(
-        lwa_app_id=client_id,
-        lwa_client_secret=client_secret,
-        refresh_token=refresh_token,
-    )
+    return {
+        "lwa_app_id": client_id,
+        "lwa_client_secret": client_secret,
+        "refresh_token": refresh_token,
+    }
 
 
 def _get_seller_id() -> str:
@@ -40,13 +40,13 @@ def _get_seller_id() -> str:
 
 async def _call_with_retry(fn, *args, **kwargs) -> dict:
     """Execute an SP-API call with progressive backoff on throttling."""
-    from sp_api.base import SellingApiRequestThrottledException, SellingApiException
+    from sp_api.base import SellingApiException, SellingApiRequestThrottledException
 
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
             response = fn(*args, **kwargs)
             return {"ok": True, "payload": response.payload}
-        except SellingApiRequestThrottledException as e:
+        except SellingApiRequestThrottledException:
             wait = min(2 ** attempt, 30)
             logger.warning("SP-API throttled (attempt %d/%d), waiting %ds", attempt, _MAX_RETRIES, wait)
             if attempt < _MAX_RETRIES:
@@ -264,13 +264,13 @@ async def sp_get_fees_estimate(
     from sp_api.api import ProductFees
     fees = ProductFees(credentials=creds)
 
-    kwargs = dict(
-        asin=asin,
-        price=price,
-        currency=currency,
-        is_fba=is_fba,
-        marketplace_id=_US_MARKETPLACE,
-    )
+    kwargs = {
+        "asin": asin,
+        "price": price,
+        "currency": currency,
+        "is_fba": is_fba,
+        "marketplace_id": _US_MARKETPLACE,
+    }
     if shipping_price:
         kwargs["shipping_price"] = shipping_price
 

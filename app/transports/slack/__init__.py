@@ -14,11 +14,10 @@ from app.transports.slack.adapter import (
     _update_heartbeat,
 )
 
-
 __all__ = [
-    "SlackAdapter",
     "SLACK_API_URL",
     "SLACK_HEARTBEAT_FILE",
+    "SlackAdapter",
     "_scrub_secrets",
     "_update_heartbeat",
 ]

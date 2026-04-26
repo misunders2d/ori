@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import httpx
 from fastapi.openapi.models import OAuth2, OAuthFlowAuthorizationCode, OAuthFlows
-
 from google.adk.auth.auth_credential import (
     AuthCredential,
     AuthCredentialTypes,

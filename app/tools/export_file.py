@@ -7,7 +7,6 @@ the tool executes it with data-processing libraries available.
 import logging
 import os
 import traceback
-import uuid
 
 from google.adk.tools.tool_context import ToolContext
 

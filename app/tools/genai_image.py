@@ -8,7 +8,7 @@ import json
 import logging
 import os
 import uuid
-from typing import Literal, Optional, List, Dict
+from typing import Literal
 
 import PIL.Image
 from google import genai
@@ -62,8 +62,8 @@ _IMAGES_DIR = os.path.abspath("./tmp/images")
 
 async def generate_image(
     prompt: str,
-    base_image_path: Optional[str] = None,
-    reference_images: Optional[List[Dict[str, str]]] = None,
+    base_image_path: str | None = None,
+    reference_images: list[dict[str, str]] | None = None,
     aspect_ratio: Literal[
         "1:1", "1:4", "1:8", "2:3", "3:2", "3:4",
         "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9",
@@ -171,8 +171,8 @@ async def generate_image(
 
 async def enhance_image_prompt(
     prompt: str,
-    base_image_path: Optional[str] = None,
-    reference_images: Optional[List[Dict[str, str]]] = None,
+    base_image_path: str | None = None,
+    reference_images: list[dict[str, str]] | None = None,
 ) -> dict:
     """Analyze an image and generate a highly detailed structured prompt for precise editing.
 
