@@ -62,6 +62,7 @@ MODEL_DEFAULTS: dict[str, str] = {
     "KnowledgeAgent": "litellm/gemini/gemini-3.1-flash-lite-preview",
     # Service models — keyed by role, not agent name
     "summarizer": "litellm/gemini/gemini-3.1-flash-lite-preview",
+    "youtube_summarizer": "gemini/gemini-3-flash-preview",
     # Pinned components — must use a native class (NOT hot-swappable)
     "google_search": "gemini/gemini-3-flash-preview",
     "embedding": "gemini/gemini-embedding-001",
@@ -141,6 +142,11 @@ def get_model(component: str, **opts: Any) -> BaseLlm:
 def get_model_string(component: str) -> str:
     """The effective model string for `component` (env override or default)."""
     return os.environ.get(f"MODEL_{component}") or MODEL_DEFAULTS[component]
+
+
+def is_vertex_mode() -> bool:
+    """True if the runtime is configured for Vertex AI (vs the public Gemini API)."""
+    return os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").upper() == "TRUE"
 
 
 def get_model_name(component: str) -> str:
