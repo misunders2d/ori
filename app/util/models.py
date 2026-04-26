@@ -60,6 +60,14 @@ MODEL_DEFAULTS: dict[str, str] = {
     "CoordinatorAgent": "litellm/gemini/gemini-3.1-flash-lite-preview",
     "DeveloperAgent": "litellm/gemini/gemini-3.1-flash-lite-preview",
     "KnowledgeAgent": "litellm/gemini/gemini-3.1-flash-lite-preview",
+    # amazon_manager domain sub-agents
+    "AmazonAgent": "litellm/gemini/gemini-3.1-flash-lite-preview",
+    "AmazonHeadAgent": "litellm/gemini/gemini-3.1-flash-lite-preview",
+    "AmazonMemoryAgent": "litellm/gemini/gemini-3.1-flash-lite-preview",
+    "AmazonWorkspaceAgent": "litellm/gemini/gemini-3.1-flash-lite-preview",
+    "AmazonDataAnalystAgent": "litellm/gemini/gemini-3.1-flash-lite-preview",
+    "BigQueryAgent": "litellm/gemini/gemini-3.1-flash-lite-preview",
+    "ClickUpAgent": "litellm/gemini/gemini-3.1-flash-lite-preview",
     # Service models — keyed by role, not agent name
     "summarizer": "litellm/gemini/gemini-3.1-flash-lite-preview",
     "youtube_summarizer": "gemini/gemini-3-flash-preview",

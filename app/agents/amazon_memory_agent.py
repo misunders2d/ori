@@ -1,0 +1,53 @@
+"""Amazon Memory sub-agent — Neo4j knowledge base with native vector search.
+
+Stores and retrieves memories + people in Neo4j alone. Access control is
+namespace-scoped (personal / professional / technical for memories, personal /
+professional for people) and enforced inside the tool functions in
+app/tools/memory_tools.py. Authorship is the `author_user_id` property on each
+node; update/delete tools run a property-predicate Cypher MATCH.
+"""
+
+from __future__ import annotations
+
+import pathlib
+
+from google.adk.agents import Agent
+from google.adk.skills import load_skill_from_dir
+from google.adk.tools import skill_toolset
+
+from app.toolsets import KnowledgeToolset, ScratchpadToolset
+from app.util.models import get_model
+
+_SKILLS_DIR = pathlib.Path(__file__).parent.parent.parent / "skills"
+_knowledge_graph_skill = load_skill_from_dir(_SKILLS_DIR / "knowledge-graph-skill")
+
+
+amazon_memory_agent = Agent(
+    name="AmazonMemoryAgent",
+    model=get_model("AmazonMemoryAgent"),
+    description=(
+        "Knowledge specialist. Stores and retrieves memories, people, and their "
+        "relationships in Neo4j. Three memory namespaces (personal / professional / "
+        "technical) and two people scopes (personal / professional); admins see all, "
+        "company-domain users see professional + technical, everyone else sees "
+        "technical only. Only the creator (or admins) can modify a record."
+    ),
+    instruction=(
+        "You are the knowledge specialist. "
+        "Load the `knowledge-graph-skill` for architecture, tool reference, "
+        "namespace rules, and workflow examples.\n\n"
+        "Use the memory tools for all storage and retrieval: `create_record`, "
+        "`create_person`, `search_knowledge`, `search_people`, `get_records`, "
+        "`list_records`, `update_record`, `update_person`, `delete_record`. "
+        "The `update_any_record`, `update_any_person`, and `promote_person` tools "
+        "are admin-only overrides — only call them when explicitly needed.\n\n"
+        "If a tool returns `{status: \"forbidden\"}`, relay the message to the user "
+        "unchanged — do NOT retry with a different tool. If a tool returns "
+        "`{status: \"error\"}`, report the exact error text verbatim."
+    ),
+    tools=[
+        skill_toolset.SkillToolset(skills=[_knowledge_graph_skill]),
+        KnowledgeToolset(),
+        ScratchpadToolset(),
+    ],
+)
