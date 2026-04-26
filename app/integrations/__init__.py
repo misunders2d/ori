@@ -3,7 +3,7 @@
 Drop a new provider by:
 1. Adding `app/integrations/<name>.py` with a `IntegrationProvider` subclass.
 2. Importing it here so the module-level `register_provider(<name>())` runs.
-3. Setting vault keys `OAUTH_<NAME>_CLIENT_ID` / `_CLIENT_SECRET`.
+3. Setting vault keys `<NAME>_OAUTH_CLIENT_ID` / `_CLIENT_SECRET`.
 
 The REGISTRY is the single lookup point. Tools and the OAuth callback
 handler use `REGISTRY[name]` to dispatch flows.

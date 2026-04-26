@@ -25,6 +25,15 @@ ALLOWED_CONFIG_KEYS = frozenset({
     "BOT_NAME",
     "APP_NAME",
     "REQUIRE_2FA",
+    # OAuth integrations subsystem (configure_integration). One key set per
+    # provider — `<PROVIDER>_OAUTH_CLIENT_ID` / `_CLIENT_SECRET` /
+    # `_REDIRECT_URI`. Provider-prefixed to match legacy convention.
+    "GOOGLE_OAUTH_CLIENT_ID",
+    "GOOGLE_OAUTH_CLIENT_SECRET",
+    "GOOGLE_OAUTH_REDIRECT_URI",
+    "GITHUB_OAUTH_CLIENT_ID",
+    "GITHUB_OAUTH_CLIENT_SECRET",
+    "GITHUB_OAUTH_REDIRECT_URI",
 })
 
 # Keys the agent can set via configure_integration (conversational flow).
@@ -43,6 +52,12 @@ AGENT_CONFIG_KEYS = frozenset({
     "GITHUB_REPO",
     "BOT_NAME",
     "APP_NAME",
+    "GOOGLE_OAUTH_CLIENT_ID",
+    "GOOGLE_OAUTH_CLIENT_SECRET",
+    "GOOGLE_OAUTH_REDIRECT_URI",
+    "GITHUB_OAUTH_CLIENT_ID",
+    "GITHUB_OAUTH_CLIENT_SECRET",
+    "GITHUB_OAUTH_REDIRECT_URI",
 })
 
 
