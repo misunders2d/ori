@@ -71,7 +71,12 @@ case "$OS" in
         ;;
 esac
 
-# Stop the Cloudflare tunnel container too.
+# Stop the Cloudflare tunnel container too — scoped to THIS instance only.
+# We bring down the project named after this bot AND force-remove the
+# container by name as a belt-and-braces (the container name is fixed by
+# the BOT_NAME env in docker-compose.yml regardless of compose project).
 if command -v docker &>/dev/null; then
-    docker compose -f "$SCRIPT_DIR/docker-compose.yml" down 2>/dev/null || true
+    _tunnel_name="$(echo "$_bot_name" | tr '[:upper:]' '[:lower:]' | tr ' _' '-' | sed 's/[^a-z0-9-]//g')"
+    docker compose -p "$_tunnel_name" -f "$SCRIPT_DIR/docker-compose.yml" down 2>/dev/null || true
+    docker rm -f "${_tunnel_name}-tunnel" 2>/dev/null || true
 fi
