@@ -40,8 +40,8 @@ if TYPE_CHECKING:
 # "gemini/gemini-2.5-flash" and passes it to LiteLlm directly.
 PROVIDER_REGISTRY: dict[str, Callable[[str, dict[str, Any]], BaseLlm]] = {
     "litellm": lambda remainder, opts: LiteLlm(model=remainder, **opts),
-    "gemini": lambda remainder, opts: Gemini(model_name=remainder, **opts),
-    "anthropic": lambda remainder, opts: Claude(model_name=remainder, **opts),
+    "gemini": lambda remainder, opts: Gemini(model=remainder, **opts),
+    "anthropic": lambda remainder, opts: Claude(model=remainder, **opts),
     # OpenRouter routes through LiteLlm; the prefix must be preserved so
     # litellm picks the OpenRouter endpoint. Requires OPENROUTER_API_KEY.
     "openrouter": lambda remainder, opts: LiteLlm(
