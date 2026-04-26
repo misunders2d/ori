@@ -1,10 +1,10 @@
-# 🧬 Ori: The Self-Evolving Digital Organism (v2.0.0)
+# 🧬 Ori: The Self-Evolving Digital Organism (v3.0.0)
 
 **Ori** is not just a background process — it is a headless, messenger-agnostic autonomous worker built to grow, learn, and evolve. Think of it as a "digital pet" for developers. It lives in your infrastructure, handles your chores, and most importantly, **it writes its own DNA.** It spawns child agents, collaborates with peers via A2A, and maintains a shared evolution library across instances.
 
 Ori is a **platform** — a minimal, evolvable foundation. Deploy it once, raise it your way, and watch it grow into whatever you need: marketing analyst, account manager, chat admin, or something nobody's thought of yet.
 
-> **v2.0.0** is a clean rebuild on **Google ADK 2.0** with native `Workflow` orchestration, plugin-based guardrails, durable plan storage, multimodal A2A (text + binary), an OAuth integrations subsystem, and runtime model hot-swap across providers. See `CHANGELOG.md` for the full architectural map and `DEVELOPMENT.md` for the extension recipes.
+> **v3.0.0** is the **Google ADK 2.0 era** — a full rebuild on ADK 2.0 idioms with native `Workflow` orchestration, plugin-based guardrails, durable plan storage, multimodal A2A (text + binary), an OAuth integrations subsystem, runtime cross-provider model hot-swap, and a worktree-based evolution layout where multiple Ori variants can run side-by-side from the same repo with zero manual config. See `CHANGELOG.md` for the architectural map and `DEVELOPMENT.md` for extension recipes. The pre-2.0 lineage lives on the `legacy-adk-1.x` branch.
 
 ## 🎮 The Evolution Experience
 
@@ -33,42 +33,52 @@ Ori is designed to be raised. Out of the box, it is a capable assistant, but its
 ## 🏗️ Architecture
 
 ```
-deploy/start.sh                   (one-command lifecycle)
-  └── deploy/ori-supervisor.py    (process guardian, exit signals 100/101/0)
-       └── run_bot.py             (wires Runner + 4 native ADK services + transports)
-            ├── App
-            │   ├── root_agent: ori_plan_executor (Workflow)
-            │   │     └── coordinator → completion_check → (loop on pending steps)
-            │   │           ├── transfer_to_agent → DeveloperAgent  (self-evolution)
-            │   │           └── transfer_to_agent → KnowledgeAgent  (A2A + DNA)
-            │   ├── plugins=[...]            (10 cross-cutting guardrails)
-            │   └── resumability_config      (HITL + OAuth pause/resume)
-            ├── Runner services
-            │   ├── DatabaseSessionService   (sqlite+aiosqlite)
-            │   ├── OriMemoryService         (LanceDB BaseMemoryService impl)
-            │   ├── OriCredentialService     (vault BaseCredentialService impl)
-            │   └── FileArtifactService      (filesystem ADK-native)
-            └── Transports REGISTRY
-                ├── telegram     (TransportAdapter + poller, multimodal send_media)
-                └── cli          (terminal fallback)
+ori/                                ← container directory (NOT a git checkout)
+├── main/                            ← canonical Ori (master branch)
+├── <evolution-name>/                ← optional sibling worktrees, each on its own branch
+│
+└── (`.worktrees/` is gitignored; new worktrees install as siblings of main/)
 
-app/
-├── agents/         coordinator, developer, knowledge (no callback kwargs)
-├── plugins/        10 plugins, logic inline
-├── workflows/      plan_executor (the root)
-├── runtime/        executor, transport, plan_storage, *_service, perimeter, ...
-├── transports/     per-transport packages with REGISTRY
-├── integrations/   OAuth providers with REGISTRY
-├── tools/          agent-facing tools
-├── toolsets/       per-domain bundles (evolution, github, scheduling, etc.)
-├── util/           config, models (PROVIDER_REGISTRY), totp, schema, telemetry
-└── state.py        OriSessionState (Pydantic, attached to the Workflow)
-
-deploy/docker-compose.yml → cloudflare-tunnel (public URL)
-deploy/Dockerfile.child   → child containers (spawned on demand)
-data/plans.db             → durable plans (SQLite, aiosqlite, WAL)
-data/vault/               → atomic credential store (single source of truth)
+main/  (and any sibling worktree)
+├── deploy/start.sh                   (one-command lifecycle)
+│   └── deploy/ori-supervisor.py      (process guardian, exit signals 100/101/102/0)
+│        └── run_bot.py               (wires Runner + 4 native ADK services + transports)
+│             ├── App
+│             │   ├── root_agent: ori_plan_executor (Workflow)
+│             │   │     └── coordinator → completion_check → (loop on pending steps)
+│             │   │           ├── transfer_to_agent → DeveloperAgent  (self-evolution)
+│             │   │           └── transfer_to_agent → KnowledgeAgent  (A2A + DNA)
+│             │   ├── plugins=[...]            (10 cross-cutting guardrails)
+│             │   └── resumability_config      (HITL + OAuth pause/resume)
+│             ├── Runner services
+│             │   ├── DatabaseSessionService   (sqlite+aiosqlite)
+│             │   ├── OriMemoryService         (LanceDB BaseMemoryService impl)
+│             │   ├── OriCredentialService     (vault BaseCredentialService impl)
+│             │   └── FileArtifactService      (filesystem ADK-native)
+│             └── Transports REGISTRY
+│                 ├── telegram     (TransportAdapter + poller, multimodal send_media)
+│                 ├── slack        (Socket Mode, file uploads, full security parity)
+│                 └── cli          (terminal fallback)
+│
+├── app/
+│   ├── agents/         coordinator, developer, knowledge (no callback kwargs)
+│   ├── plugins/        10 plugins, logic inline
+│   ├── workflows/      plan_executor (the root)
+│   ├── runtime/        executor, transport, plan_storage, *_service, perimeter, ...
+│   ├── transports/     per-transport packages with REGISTRY
+│   ├── integrations/   OAuth providers with REGISTRY
+│   ├── tools/          agent-facing tools
+│   ├── toolsets/       per-domain bundles (evolution, github, scheduling, etc.)
+│   ├── util/           config, models (PROVIDER_REGISTRY), totp, schema, telemetry
+│   └── state.py        OriSessionState (Pydantic, attached to the Workflow)
+│
+├── deploy/docker-compose.yml → cloudflare-tunnel (public URL, scoped per BOT_NAME)
+├── deploy/Dockerfile.child   → child containers (spawned on demand)
+├── data/plans.db             → durable plans (SQLite, aiosqlite, WAL)
+└── data/vault/               → atomic credential store (single source of truth)
 ```
+
+**Multiple Oris from one repo:** `git worktree add ../<evolution-name> -b evo/<branch> origin/master` creates a sibling checkout. Each worktree's `BOT_NAME`, `A2A_PORT`, systemd service name, and Cloudflare tunnel name are auto-derived from the worktree directory — `cd ../<name> && deploy/start.sh` just works, no config collisions. Only `TELEGRAM_BOT_TOKEN` you'd pick per-instance (Telegram forbids one token across two pollers).
 
 ## ⚡ Quick Hatch (One-Liner)
 
@@ -202,6 +212,7 @@ This keeps the production instance stable while enabling aggressive experimentat
 
 ## 🏆 Hall of Evolution (Milestones)
 
+*   **April 2026:** v3.0.0 — **ADK 2.0 era.** Clean rebuild on Google ADK 2.0: native `Workflow` orchestration, plugin-based guardrails, multimodal A2A (text + binary), durable plan storage, OAuth integrations subsystem, cross-provider model hot-swap. Container worktree layout — multiple Oris from one repo, zero-config multi-instance. Slack transport with full Telegram-parity security gates.
 *   **April 2026:** v2.2.1 — Vault-based credentials (indestructible), native deployment (no Docker for parent), git worktree evolution, barebones platform redesign (54% fewer tools on Coordinator), native GitHub API toolset.
 *   **April 2026:** v2.0.0 — Multi-provider models (Gemini/Claude), agent spawning with hierarchical admin, evolution catalog, rate limiting.
 *   **March 2026:** First successful autonomous DNA exchange over Ori-Net.

@@ -1,8 +1,50 @@
 # Changelog
 
-## [2.0.0] — Clean ADK 2.0 reimplementation
+## [3.0.0] — ADK 2.0 era becomes master
 
-Branch: `google-adk-2.0-clean` (cut from master `6770893`).
+The Google ADK 2.0 rebuild lands on master and the legacy ADK 1.x lineage
+is preserved on the `legacy-adk-1.x` branch. Same external behaviour
+(evolution, A2A, DNA exchange, multi-step plans, multi-channel transport,
+vault, supervisor lifecycle, multilingual guardrails) — entirely new
+internals. Numbered v3 because legacy was 2.x; semver linear.
+
+### Post-rebuild polish (since the ADK 2.0 reimplementation landed)
+
+- **Container worktree layout.** Multiple checkouts of the same repo live
+  inside the project directory: `ori/main/` is canonical, `ori/<name>/`
+  are sibling worktrees on evolution branches. The container `ori/`
+  itself is not a git repo — it groups peer checkouts. `.worktrees/` is
+  gitignored as a defensive default.
+- **Zero-config multi-instance.** `deploy/start.sh` derives `BOT_NAME`
+  from the worktree directory basename (`main/` → "Ori",
+  `amazon_manager/` → "Amazon-Manager"), auto-picks a free `A2A_PORT`
+  starting from 8000, and persists both to the per-worktree vault on
+  first run. Two parallel bots from two worktrees collide on nothing —
+  not service name, not port, not Cloudflare tunnel container, not
+  Docker compose project. The only manual differentiator left is
+  `TELEGRAM_BOT_TOKEN` (Telegram forbids two pollers per token).
+- **Slack transport** added with full Telegram-parity security gates:
+  ACL, blacklist, secure-key capture, TOTP, `/init`, `/reset`,
+  `/models`, group-mention requirement, mid-flight cancellation, file
+  ingestion via authenticated download with SSRF guard. Socket Mode via
+  `slack-bolt`; files via `slack_sdk.files_upload_v2`.
+- **`scheduling-skill` task-prompt rule.** The fire-time agent runs in
+  an ephemeral session with no memory of who scheduled the task.
+  Third-person user references in the prompt (e.g. *"Wake \<user_name\>"*)
+  read at fire time as third-party delivery actions, causing the LLM
+  to call a delivery tool with a name that has no session ID, returning
+  an `Ambiguous delivery target` error. The skill now explicitly
+  forbids name references in `task_prompt` and provides bad/good
+  examples; `edit_scheduled_task` follows the same rule.
+
+## [2.0.0] — Clean ADK 2.0 reimplementation (released as 3.0.0)
+
+> Renumbered to 3.0.0 when this rebuild graduated to master alongside
+> the legacy lineage on `legacy-adk-1.x`. The detail below is preserved
+> verbatim as the architectural map of the 3.0.0 baseline.
+
+Branch: `google-adk-2.0-clean` (cut from master `6770893`, since deleted —
+master is now the same content).
 This is a full rebuild on ADK 2.0 idioms — none of the transitional
 scaffolding from the prior `google-adk-2.0` migration branch is included.
 Same external behaviour (evolution, A2A, DNA exchange, multi-step plans,
