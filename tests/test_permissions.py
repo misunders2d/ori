@@ -1,8 +1,10 @@
-import os
-import subprocess
-import pwd
 import grp
+import os
+import pwd
+import subprocess
+
 import pytest
+
 
 @pytest.mark.infra
 def test_check_permissions():
@@ -46,10 +48,10 @@ def test_check_permissions():
         content += subprocess.check_output(["git", "status"], text=True)
     except Exception as e:
         content += f"Error checking git status: {e}\n"
-    
+
     log_path = os.path.join("data", "debug_perms.log")
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     with open(log_path, "w") as f:
         f.write(content)
-    
+
     assert True

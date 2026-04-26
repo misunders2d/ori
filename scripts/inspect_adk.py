@@ -1,5 +1,5 @@
-from google.adk.events.event import Event
 from google.genai import types
+
 
 def inspect():
     # Create a mock function call

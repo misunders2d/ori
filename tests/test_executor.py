@@ -1,7 +1,9 @@
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
 from google.genai import types
-from app.runtime.executor import extract_agent_response, AgentResponse
+
+from app.runtime.executor import extract_agent_response
 
 
 @pytest.mark.asyncio
@@ -94,7 +96,7 @@ async def test_extract_agent_response_string_message():
 
     runner.run_async = mock_run_async
 
-    response = await extract_agent_response(runner, "tg_123", "tg_chat_123", "test message")
+    await extract_agent_response(runner, "tg_123", "tg_chat_123", "test message")
 
     new_message = captured_args.get("new_message")
     assert new_message is not None

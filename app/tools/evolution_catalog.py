@@ -8,12 +8,10 @@ Evolutions are cataloged after successful verification, searchable locally,
 and shareable with A2A friends.
 """
 
-import json
 import logging
 import os
 import shutil
 from datetime import datetime, timezone
-from typing import Optional
 
 from google.adk.tools.tool_context import ToolContext
 
@@ -86,7 +84,7 @@ def evolution_catalog(
         f"description: {description}",
         f"author: {bot_name}",
         f"created: {now}",
-        f"verified: true",
+        "verified: true",
         f"tags: [{', '.join(tag_list)}]",
         "files:",
     ]

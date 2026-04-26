@@ -28,7 +28,9 @@ from google.adk.workflow import Workflow, node
 
 from app.agents.coordinator import root_agent as coordinator_agent
 from app.runtime.plan_storage import has_pending_steps
-from app.state import OriSessionState  # noqa: F401  # referenced in the state_schema comment below
+from app.state import (
+    OriSessionState,  # noqa: F401  # referenced in the state_schema comment below
+)
 
 logger = logging.getLogger(__name__)
 

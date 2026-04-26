@@ -23,7 +23,7 @@ def test_classify_rate_limit():
 def test_classify_auth_error():
     class AuthenticationError(Exception):
         pass
-    label, hint = _classify(AuthenticationError("invalid api key"))
+    label, _hint = _classify(AuthenticationError("invalid api key"))
     assert "auth" in label.lower()
 
 

@@ -7,11 +7,11 @@ class PlannerToolset(BaseToolset):
 
     async def get_tools(self, readonly_context=None):
         from app.tools.planner import (
+            abandon_plan,
+            complete_step,
             create_plan,
             get_next_step,
-            complete_step,
             get_plan_status,
-            abandon_plan,
         )
 
         return [

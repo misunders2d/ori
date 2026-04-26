@@ -20,12 +20,12 @@ import logging
 import os
 import uuid
 import warnings
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any
 
 import lancedb
 from fastembed import TextEmbedding
-
 from google.adk.events.event import Event
 from google.adk.memory import BaseMemoryService
 from google.adk.memory.base_memory_service import SearchMemoryResponse
@@ -70,7 +70,7 @@ class OriMemoryService(BaseMemoryService):
     def _embed(self, text: str) -> list[float]:
         self._ensure()
         assert self._embedding_model is not None
-        return list(self._embedding_model.embed([text]))[0].tolist()
+        return next(iter(self._embedding_model.embed([text]))).tolist()
 
     def _table(self, category: str, *, sample_record: dict | None = None):
         """Open or create a table for `category`. If the table doesn't exist
@@ -113,7 +113,7 @@ class OriMemoryService(BaseMemoryService):
         app_name: str,
         user_id: str,
         memories: Sequence[MemoryEntry],
-        custom_metadata: Optional[Mapping[str, Any]] = None,
+        custom_metadata: Mapping[str, Any] | None = None,
     ) -> None:
         """Add a sequence of MemoryEntry items to the user's memory."""
         self._ensure()
@@ -179,7 +179,7 @@ class OriMemoryService(BaseMemoryService):
         user_id: str,
         events: Sequence[Event],
         session_id: str | None = None,
-        custom_metadata: Optional[Mapping[str, Any]] = None,
+        custom_metadata: Mapping[str, Any] | None = None,
     ) -> None:
         """Persist a sequence of events as MemoryEntry items."""
         memories: list[MemoryEntry] = []

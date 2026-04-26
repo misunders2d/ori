@@ -2,7 +2,6 @@
 from unittest.mock import MagicMock
 
 import pytest
-
 from google.adk.auth.auth_credential import (
     AuthCredential,
     AuthCredentialTypes,
@@ -10,7 +9,11 @@ from google.adk.auth.auth_credential import (
 )
 from google.adk.auth.auth_tool import AuthConfig
 
-from app.runtime.credential_service import OriCredentialService, _scheme_name, _vault_key
+from app.runtime.credential_service import (
+    OriCredentialService,
+    _scheme_name,
+    _vault_key,
+)
 
 
 def _make_auth_config(scheme_name: str = "google"):

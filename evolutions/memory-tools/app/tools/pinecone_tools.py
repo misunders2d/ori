@@ -248,8 +248,8 @@ async def create_record(
     short_description: str,
     category: str,
     tags: list[str],
-    related_people: list[str] = None,
-    related_memories: list[str] = None,
+    related_people: list[str] | None = None,
+    related_memories: list[str] | None = None,
     author: str = "",
     tool_context: ToolContext = None,
 ) -> dict:

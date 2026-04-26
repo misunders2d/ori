@@ -16,8 +16,8 @@ class EvolutionToolset(BaseToolset):
 
     async def get_tools(self, readonly_context=None):
         from app.tools.evolution import (
-            evolution_read_file,
             evolution_list_directory,
+            evolution_read_file,
             evolution_stage_change,
             evolution_verify_sandbox,
         )
@@ -35,9 +35,9 @@ class EvolutionToolset(BaseToolset):
         # Catalog tools available everywhere (local file I/O only, no git)
         from app.tools.evolution_catalog import (
             evolution_catalog,
+            evolution_import,
             evolution_search,
             evolution_share,
-            evolution_import,
         )
         tools.extend([
             FunctionTool(func=evolution_catalog),
@@ -50,14 +50,14 @@ class EvolutionToolset(BaseToolset):
             # Parent-only: git ops (require .git repo)
             from app.tools.evolution import (
                 evolution_commit_and_push,
+                evolution_git_branches,
+                evolution_git_diff_file,
+                evolution_git_diff_summary,
+                evolution_git_fetch,
+                evolution_git_log,
                 evolution_git_pull,
                 evolution_git_reset,
                 evolution_sync_local_to_upstream,
-                evolution_git_fetch,
-                evolution_git_log,
-                evolution_git_diff_summary,
-                evolution_git_diff_file,
-                evolution_git_branches,
             )
             tools.extend([
                 FunctionTool(func=evolution_commit_and_push),

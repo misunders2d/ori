@@ -228,7 +228,7 @@ def _stamp_ownership(notify: dict, user_id: str, deliver_to: str, origin_session
 def schedule_one_off_task(
     task_prompt: str, run_at_iso_datetime: str, timezone: str, tool_context: ToolContext,
     deliver_to: str = "",
-    steps: list[str] = None,
+    steps: list[str] | None = None,
 ) -> dict:
     """Schedules the agent to execute a specific task once at a specific date and time.
 
@@ -324,7 +324,7 @@ def schedule_one_off_task(
 def schedule_recurring_task(
     task_prompt: str, cron_expression: str, timezone: str, tool_context: ToolContext,
     deliver_to: str = "",
-    steps: list[str] = None,
+    steps: list[str] | None = None,
 ) -> dict:
     """Schedules the agent to execute a task automatically on a recurring schedule.
 
@@ -487,7 +487,7 @@ def get_scheduled_task_logs(
         return {"status": "success", "events": [], "message": "No scheduler log yet — no jobs have fired."}
 
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             lines = f.readlines()
     except Exception as e:
         return {"status": "error", "message": f"Failed to read log: {e}"}
@@ -546,7 +546,7 @@ def edit_scheduled_task(
     new_run_at_iso_datetime: str = "",
     new_cron_expression: str = "",
     timezone: str = "",
-    new_steps: list[str] = None,
+    new_steps: list[str] | None = None,
     clear_steps: bool = False,
 ) -> dict:
     """Edits an existing scheduled task — all fields are optional, pass only what you want to change.
@@ -688,7 +688,7 @@ def edit_scheduled_task(
 def schedule_system_task(
     task_prompt: str, run_at_iso_datetime: str, timezone: str, tool_context: ToolContext,
     silent: bool = False, deliver_to: str = "",
-    steps: list[str] = None,
+    steps: list[str] | None = None,
 ) -> dict:
     """Schedules a one-off system maintenance task that runs with admin privileges.
 
@@ -769,7 +769,7 @@ def schedule_system_task(
 
 def run_system_task_now(
     task_prompt: str, tool_context: ToolContext, silent: bool = False, deliver_to: str = "",
-    steps: list[str] = None,
+    steps: list[str] | None = None,
 ) -> dict:
     """Immediately launches a system maintenance task in the background with admin privileges.
 
@@ -835,7 +835,7 @@ def run_system_task_now(
 def schedule_recurring_system_task(
     task_prompt: str, cron_expression: str, timezone: str, tool_context: ToolContext,
     silent: bool = False, deliver_to: str = "",
-    steps: list[str] = None,
+    steps: list[str] | None = None,
 ) -> dict:
     """Schedules a recurring system maintenance task that runs with admin privileges on a cron schedule.
 

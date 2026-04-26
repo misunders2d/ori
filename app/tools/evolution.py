@@ -3,11 +3,8 @@ import shutil
 import subprocess
 import sys
 import uuid
-from datetime import datetime
-from typing import List, Optional
 
 from google.adk.tools.tool_context import ToolContext
-
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -78,27 +75,27 @@ def evolution_list_directory(dir_path: str, tool_context: ToolContext) -> dict:
     resolved = _safe_resolve_path(dir_path, PROJECT_ROOT)
     if resolved is None:
         return {"status": "error", "message": "Path traversal denied. Use relative paths within the project."}
-    
+
     try:
         if not os.path.isdir(resolved):
             return {"status": "error", "message": f"Path is not a directory: {dir_path}"}
-            
+
         items = os.listdir(resolved)
         # Sort for deterministic output: folders first, then files
         items.sort(key=lambda x: (not os.path.isdir(os.path.join(resolved, x)), x.lower()))
-        
+
         output = []
         for item in items:
             # Skip noise
             if item in {".git", "__pycache__", ".pytest_cache"}:
                 continue
-                
+
             item_path = os.path.join(resolved, item)
             if os.path.isdir(item_path):
                 output.append(f"📁 {item}/")
             else:
                 output.append(f"📄 {item}")
-                
+
         return {
             "status": "success",
             "directory": dir_path,
@@ -319,7 +316,7 @@ def evolution_verify_sandbox(
                     continue
                 src = os.path.join(PROJECT_ROOT, item)
                 dst = os.path.join(sandbox_dir, item)
-                
+
                 # IMPROVED BOOTSTRAP: If directory exists (due to staging), symlink contents individually
                 if os.path.isdir(src):
                     os.makedirs(dst, exist_ok=True)
@@ -607,7 +604,7 @@ def _apply_to_live(staged_files, delete_files):
 
 
 def evolution_commit_and_push(
-    commit_message: str, tool_context: ToolContext, delete_files: Optional[List[str]] = None, skip_local_update: bool = False
+    commit_message: str, tool_context: ToolContext, delete_files: list[str] | None = None, skip_local_update: bool = False
 ) -> dict:
     """Commits verified changes. Uses GitHub if configured, otherwise commits locally.
 
@@ -721,7 +718,7 @@ def evolution_commit_and_push(
     # the evolution cycle. The commit approval covers the reboot; no second
     # approval is needed. The transport layer will pick up the signal after
     # delivering this response and do a clean sys.exit(0).
-    from app.tools.system import _write_exit_signal, EXIT_CODE_UPDATE
+    from app.tools.system import EXIT_CODE_UPDATE, _write_exit_signal
     _write_exit_signal(EXIT_CODE_UPDATE)
     msg += " Reboot signal dispatched — the system will shut down cleanly after this response."
 
@@ -733,9 +730,9 @@ def evolution_commit_and_push(
 
 def evolution_git_pull(tool_context: ToolContext) -> dict:
     """Pulls the latest code from the GitHub remote repository into the current container and restarts.
-    
+
     Use this when you want to fetch fresh code pushed by human administrators or other agents.
-    
+
     Returns:
         dict: Status of the pull operation.
     """
@@ -756,7 +753,7 @@ def evolution_git_pull(tool_context: ToolContext) -> dict:
         if result.returncode != 0:
             err_msg = (result.stderr or result.stdout)[-500:].replace(github_token, "***")
             return {"status": "error", "message": f"Git pull failed: {err_msg}"}
-            
+
         return {"status": "success", "message": f"Successfully pulled latest code:\n{result.stdout}\nRun system update (exit 100) to apply."}
     except Exception as e:
         err_msg = str(e).replace(github_token, "***")
@@ -765,10 +762,10 @@ def evolution_git_pull(tool_context: ToolContext) -> dict:
 
 def evolution_git_reset(tool_context: ToolContext) -> dict:
     """Resets the local workspace to match the last commit, deleting untracked 'dangling' files.
-    
-    Use this to clean up your workspace if you got stuck with leftover artifacts, 
+
+    Use this to clean up your workspace if you got stuck with leftover artifacts,
     merge conflicts, or uncommitted files that prevent you from working.
-    
+
     Returns:
         dict: Status of the reset operation.
     """
@@ -777,9 +774,9 @@ def evolution_git_reset(tool_context: ToolContext) -> dict:
         clean_res = subprocess.run(["git", "clean", "-fd"], cwd=PROJECT_ROOT, capture_output=True, text=True, check=True)
         # Then reset tracked files
         reset_res = subprocess.run(["git", "reset", "--hard", "HEAD"], cwd=PROJECT_ROOT, capture_output=True, text=True, check=True)
-        
+
         return {
-            "status": "success", 
+            "status": "success",
             "message": f"Workspace reset successfully.\nClean output: {clean_res.stdout.strip()}\nReset output: {reset_res.stdout.strip()}"
         }
     except Exception as e:
@@ -788,10 +785,10 @@ def evolution_git_reset(tool_context: ToolContext) -> dict:
 
 def evolution_sync_local_to_upstream(tool_context: ToolContext) -> dict:
     """Connects a detached local workspace to a remote GitHub repository and populates it.
-    
+
     Use this on a first-time start when the agent lives in a fresh/empty repository
     or was cloned without its .git history.
-    
+
     Returns:
         dict: Status of the synchronization.
     """
@@ -806,7 +803,7 @@ def evolution_sync_local_to_upstream(tool_context: ToolContext) -> dict:
         # 1. Initialize git if not already present
         if not os.path.exists(os.path.join(PROJECT_ROOT, ".git")):
             subprocess.run(["git", "init"], cwd=PROJECT_ROOT, check=True)
-        
+
         # 2. Configure remote 'origin'
         # Check if origin already exists
         remotes = subprocess.run(["git", "remote"], cwd=PROJECT_ROOT, capture_output=True, text=True).stdout
@@ -827,15 +824,15 @@ def evolution_sync_local_to_upstream(tool_context: ToolContext) -> dict:
             subprocess.run(["git", "commit", "-m", f"Initial synchronization by {bot_name}"], cwd=PROJECT_ROOT, check=True)
         except subprocess.CalledProcessError:
             pass # No changes to commit
-        
+
         # 5. Push to master
         result = subprocess.run(["git", "push", "-u", "origin", "master"], cwd=PROJECT_ROOT, capture_output=True, text=True)
-        
+
         if result.returncode != 0:
              return {"status": "error", "message": f"Git push failed: {result.stderr.replace(github_token, '***')}"}
 
         return {"status": "success", "message": f"Workspace successfully connected and pushed to {github_repo}."}
-        
+
     except Exception as e:
         return {"status": "error", "message": f"Synchronization failed: {str(e).replace(github_token, '***')}"}
 

@@ -17,7 +17,6 @@ from app.integrations.github import GitHubProvider
 from app.integrations.google import GoogleProvider
 from app.integrations.slack import SlackProvider
 
-
 REGISTRY: dict[str, IntegrationProvider] = {}
 
 
@@ -44,13 +43,13 @@ register_provider(SlackProvider())
 
 
 __all__ = [
-    "IntegrationProvider",
     "REGISTRY",
-    "register_provider",
+    "ClickUpProvider",
+    "GitHubProvider",
+    "GoogleProvider",
+    "IntegrationProvider",
+    "SlackProvider",
     "get_provider",
     "list_providers",
-    "GoogleProvider",
-    "GitHubProvider",
-    "ClickUpProvider",
-    "SlackProvider",
+    "register_provider",
 ]

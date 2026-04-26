@@ -19,7 +19,6 @@ Usage from the repo root:
 """
 
 import sys
-from pathlib import Path
 
 # Hydrate vault first — matches how the bot itself boots, so the SQLAlchemy
 # URL resolves the same way.
@@ -28,7 +27,6 @@ from deploy.vault import load_vault
 load_vault()
 
 from app.scheduler_instance import scheduler  # noqa: E402
-
 
 # Any job whose id starts with one of these is a user-scheduled task under the
 # old ownership model. Everything else (notably sys_*) is left alone.

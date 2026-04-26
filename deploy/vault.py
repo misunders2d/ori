@@ -34,13 +34,13 @@ def _read_vault() -> dict:
     if not os.path.exists(VAULT_FILE):
         return {}
     try:
-        with open(VAULT_FILE, "r") as f:
+        with open(VAULT_FILE) as f:
             return json.load(f)
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Vault file corrupt: %s — trying backup", e)
         if os.path.exists(VAULT_BACKUP):
             try:
-                with open(VAULT_BACKUP, "r") as f:
+                with open(VAULT_BACKUP) as f:
                     data = json.load(f)
                 # Restore from backup
                 _atomic_write(data)

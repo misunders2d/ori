@@ -4,10 +4,11 @@
 # the transport layer (Telegram/Slack poller) checks for it after each
 # message cycle and does a clean sys.exit(0). This eliminates the race
 # condition where os._exit() could interrupt file writes (e.g. .env).
+import inspect
+import logging
 import os
 import sys
-import logging
-import inspect
+
 from google.adk.tools.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ def consume_exit_signal() -> bool:
     if not os.path.exists(SIGNAL_FILE):
         return False
     try:
-        with open(SIGNAL_FILE, 'r') as f:
+        with open(SIGNAL_FILE) as f:
             code = f.read().strip()
         logger.info(f'CORE: Clean shutdown requested (signal: {code})...')
     except Exception:
@@ -92,8 +93,8 @@ async def set_planner_mode(enabled: bool, tool_context: ToolContext) -> dict:
     return {"status": "success", "message": f"Thinker mode {'enabled' if enabled else 'disabled'}."}
 
 async def execute_approved_action(token: str, totp_code: str = "", tool_context: ToolContext = None) -> dict:
-    from app.runtime.pending_actions import get_and_delete_action
     import app.tools as tools_module
+    from app.runtime.pending_actions import get_and_delete_action
 
     totp_secret = os.environ.get("ADMIN_TOTP_SECRET")
     require_2fa = os.environ.get("REQUIRE_2FA", "true").lower() == "true"
@@ -104,13 +105,16 @@ async def execute_approved_action(token: str, totp_code: str = "", tool_context:
             return {"status": "error", "message": "Invalid 2FA code."}
 
     action = get_and_delete_action(token)
-    if not action: return {"status": "error", "message": "Invalid token."}
+    if not action:
+        return {"status": "error", "message": "Invalid token."}
 
     tool_func = getattr(tools_module, action["tool_name"], None)
-    if not tool_func: return {"status": "error", "message": "Tool missing."}
+    if not tool_func:
+        return {"status": "error", "message": "Tool missing."}
 
     try:
         if inspect.iscoroutinefunction(tool_func):
             return await tool_func(**action["args"], tool_context=tool_context)
         return tool_func(**action["args"], tool_context=tool_context)
-    except Exception as e: return {"status": "error", "message": f"Execution failed: {e}"}
+    except Exception as e:
+        return {"status": "error", "message": f"Execution failed: {e}"}

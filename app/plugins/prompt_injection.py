@@ -111,13 +111,13 @@ def _load_vectors() -> list[list[float]]:
     if not path.exists():
         _VECTORS_CACHE = []
         return _VECTORS_CACHE
-    with open(path, "r") as f:
+    with open(path) as f:
         _VECTORS_CACHE = json.load(f)
     return _VECTORS_CACHE
 
 
 def _cosine(v1: list[float], v2: list[float]) -> float:
-    dot = sum(a * b for a, b in zip(v1, v2))
+    dot = sum(a * b for a, b in zip(v1, v2, strict=False))
     m1 = math.sqrt(sum(a * a for a in v1))
     m2 = math.sqrt(sum(b * b for b in v2))
     if m1 * m2 == 0:

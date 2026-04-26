@@ -14,7 +14,6 @@ class via the same Accept header.
 from __future__ import annotations
 
 from fastapi.openapi.models import OAuth2, OAuthFlowAuthorizationCode, OAuthFlows
-
 from google.adk.auth.auth_schemes import AuthScheme
 
 from app.integrations.base import IntegrationProvider

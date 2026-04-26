@@ -7,4 +7,4 @@ from app.agents.coordinator import root_agent
 from app.agents.developer import developer_agent
 from app.agents.knowledge import knowledge_agent
 
-__all__ = ["root_agent", "developer_agent", "knowledge_agent"]
+__all__ = ["developer_agent", "knowledge_agent", "root_agent"]

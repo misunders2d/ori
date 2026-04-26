@@ -1,9 +1,9 @@
 import logging
 import os
 import re
-import httpx
-from typing import Optional, Tuple
 from urllib.parse import urlparse
+
+import httpx
 
 from app.core.transport import TransportAdapter
 
@@ -145,7 +145,7 @@ class SlackAdapter(TransportAdapter):
         except Exception:
             logger.exception("Failed to upload media to Slack channel %s", target_id)
 
-    async def download_file(self, file_url: str) -> Optional[Tuple[bytes, str, str]]:
+    async def download_file(self, file_url: str) -> tuple[bytes, str, str] | None:
         # Validate URL is from Slack servers to prevent SSRF
         parsed = urlparse(file_url)
         if parsed.hostname and not parsed.hostname.endswith(".slack.com"):

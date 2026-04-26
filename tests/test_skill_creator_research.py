@@ -1,12 +1,14 @@
 import os
+
 import pytest
+
 
 def test_skill_creator_contains_research_step():
     skill_path = "skills/skill-creator-skill/SKILL.md"
     if not os.path.exists(skill_path):
         pytest.skip("Skills directory not available in sandbox")
 
-    with open(skill_path, "r") as f:
+    with open(skill_path) as f:
         content = f.read()
 
     # Check that research is a mandatory step before drafting

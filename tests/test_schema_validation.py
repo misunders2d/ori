@@ -1,7 +1,10 @@
 import inspect
+from typing import get_type_hints
+
 import pytest
-from typing import get_type_hints, List, Any
+
 from app.agents.coordinator import root_agent
+
 
 def validate_tool_schema(func: callable) -> None:
     """Checks for common pitfalls in Gemini tool declarations."""
@@ -11,17 +14,17 @@ def validate_tool_schema(func: callable) -> None:
     except Exception:
         return
 
-    for param_name, param in sig.parameters.items():
+    for param_name, _param in sig.parameters.items():
         if param_name in ["tool_context", "context"]:
             continue
-            
+
         hint = hints.get(param_name)
         if hint is list:
              raise TypeError(
                 f"Tool '{func.__name__}' parameter '{param_name}' is typed as plain 'list'. "
                 f"Gemini requires a subtype (e.g. list[str]) to generate the mandatory 'items' field."
             )
-        if hasattr(hint, "__origin__") and (hint.__origin__ is list or hint.__origin__ is List):
+        if hasattr(hint, "__origin__") and (hint.__origin__ is list or hint.__origin__ is list):
             if not hasattr(hint, "__args__") or not hint.__args__:
                  raise TypeError(
                     f"Tool '{func.__name__}' parameter '{param_name}' is missing a subtype for List. "
@@ -40,7 +43,7 @@ def test_all_agent_tools_gemini_schema_validity():
         if id(a) in seen_agents:
             return
         seen_agents.add(id(a))
-        
+
         # Some agents (like SequentialAgent) may not have tools directly
         if hasattr(a, "tools"):
             for tool in a.tools:
@@ -51,11 +54,11 @@ def test_all_agent_tools_gemini_schema_validity():
                     func = tool.function
                 elif hasattr(tool, "_function"):
                     func = tool._function
-                
+
                 if func and id(func) not in seen_tools:
                     seen_tools.add(id(func))
                     validate_tool_schema(func)
-        
+
         for sub in getattr(a, "sub_agents", []):
             _walk(sub)
 

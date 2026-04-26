@@ -1,6 +1,6 @@
-import sqlite3
-import os
 import logging
+import os
+import sqlite3
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
@@ -52,16 +52,16 @@ def get_logs(chat_id: str, limit: int = 100, hours: int = 24) -> list[dict]:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        
+
         since = datetime.utcnow() - timedelta(hours=hours)
         cursor.execute("""
-            SELECT user_id, display_name, text, timestamp 
-            FROM channel_logs 
+            SELECT user_id, display_name, text, timestamp
+            FROM channel_logs
             WHERE chat_id = ? AND timestamp >= ?
             ORDER BY timestamp DESC
             LIMIT ?
         """, (chat_id, since.strftime('%Y-%m-%d %H:%M:%S'), limit))
-        
+
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]

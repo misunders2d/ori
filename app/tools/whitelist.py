@@ -4,9 +4,15 @@ from typing import Annotated
 
 from app.runtime.perimeter import (
     blacklist_chat as _bl,
+)
+from app.runtime.perimeter import (
     get_blacklist,
     get_whitelist,
+)
+from app.runtime.perimeter import (
     unwhitelist_chat as _uw,
+)
+from app.runtime.perimeter import (
     whitelist_chat as _wl,
 )
 
@@ -38,7 +44,7 @@ async def list_access_control() -> dict:
     # Also log the environment for debugging
     logger.info("DEBUG: list_access_control called. Env ALLOWED_USER_IDS: %s", os.environ.get("ALLOWED_USER_IDS"))
     logger.info("DEBUG: list_access_control called. Env ADMIN_USER_IDS: %s", os.environ.get("ADMIN_USER_IDS"))
-    
+
     return {
         "whitelisted": get_whitelist(),
         "blacklisted": get_blacklist(),

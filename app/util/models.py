@@ -24,7 +24,8 @@ single line — `litellm` already routes everywhere via the litellm library.
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from google.adk.models import BaseLlm, Claude, Gemini, LiteLlm
 
@@ -85,7 +86,7 @@ PINNED_COMPONENTS: frozenset[str] = frozenset({"google_search", "embedding"})
 
 def resolve_model(
     component: str,
-    state: "OriSessionState | None" = None,
+    state: OriSessionState | None = None,
     **opts: Any,
 ) -> BaseLlm:
     """Resolve a BaseLlm instance for `component`, honoring runtime overrides.

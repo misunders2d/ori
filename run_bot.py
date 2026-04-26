@@ -70,7 +70,6 @@ from app.runtime.credential_service import OriCredentialService
 from app.runtime.memory_service import OriMemoryService
 from app.scheduler_instance import scheduler
 
-
 _global_runner: Runner | None = None
 
 
@@ -254,7 +253,7 @@ async def detect_and_broadcast() -> None:
 async def main() -> None:
     logger.info("Initializing autonomous worker daemon...")
     ensure_db_concurrency()
-    runner = get_runner()
+    get_runner()
     scheduler.start()
 
     tasks: list[asyncio.Task] = []
@@ -263,6 +262,7 @@ async def main() -> None:
     #    in CLI mode the bot has no public URL anyway).
     try:
         import uvicorn
+
         from app.a2a_server import a2a_app
         is_cli = not any(k in os.environ for k in ("TELEGRAM_BOT_TOKEN", "SLACK_BOT_TOKEN"))
         if a2a_app and not is_cli:
@@ -328,7 +328,7 @@ async def main() -> None:
         from app.tools.system import check_exit_signal
         remaining = set(tasks)
         while remaining:
-            done, remaining = await asyncio.wait(remaining, return_when=asyncio.FIRST_COMPLETED)
+            _done, remaining = await asyncio.wait(remaining, return_when=asyncio.FIRST_COMPLETED)
             if check_exit_signal():
                 for t in remaining:
                     t.cancel()

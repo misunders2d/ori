@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Optional
 
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.auth.auth_credential import AuthCredential
@@ -69,7 +68,7 @@ class OriCredentialService(BaseCredentialService):
         self,
         auth_config: AuthConfig,
         callback_context: CallbackContext,
-    ) -> Optional[AuthCredential]:
+    ) -> AuthCredential | None:
         user_id = _user_id_from(callback_context)
         key = _vault_key(auth_config, user_id)
         raw = vault.get(key, "")

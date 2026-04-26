@@ -17,7 +17,6 @@ import mimetypes
 import os
 import re
 from datetime import datetime
-from typing import Optional
 
 import httpx
 
@@ -177,7 +176,7 @@ class TelegramAdapter(TransportAdapter):
         except Exception:
             logger.exception("Failed to send media to chat %s via %s", chat_id, method)
 
-    async def download_file(self, file_id: str) -> Optional[tuple[bytes, str, str]]:
+    async def download_file(self, file_id: str) -> tuple[bytes, str, str] | None:
         try:
             url = TELEGRAM_API.format(token=self._token, method="getFile")
             resp = await self._client.get(url, params={"file_id": file_id})

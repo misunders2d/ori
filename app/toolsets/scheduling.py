@@ -7,13 +7,13 @@ class SchedulingToolset(BaseToolset):
 
     async def get_tools(self, readonly_context=None):
         from app.tools.scheduling import (
+            delete_scheduled_task,
+            edit_scheduled_task,
             get_current_time,
+            get_scheduled_task_logs,
+            list_scheduled_tasks,
             schedule_one_off_task,
             schedule_recurring_task,
-            list_scheduled_tasks,
-            edit_scheduled_task,
-            delete_scheduled_task,
-            get_scheduled_task_logs,
         )
 
         return [

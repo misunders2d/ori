@@ -6,7 +6,6 @@ Run explicitly with `pytest -m infra` to exercise these.
 """
 
 import pytest
-
 from google.adk.memory.memory_entry import MemoryEntry
 from google.genai import types
 

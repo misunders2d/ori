@@ -1,5 +1,5 @@
 import os
-import pytest
+
 
 def test_dump_env():
     print(f"\nALLOWED_USER_IDS: {os.environ.get('ALLOWED_USER_IDS')}")

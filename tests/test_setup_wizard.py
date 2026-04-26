@@ -1,9 +1,12 @@
-import os
 import json
-import pytest
-from unittest.mock import patch, MagicMock
+import os
+from unittest.mock import MagicMock, patch
 
-from app.transports.setup_wizard import _decode_secret, _generate_code, verify_totp, main
+from app.transports.setup_wizard import (
+    _generate_code,
+    main,
+    verify_totp,
+)
 
 
 def test_setup_wizard_totp_functions():

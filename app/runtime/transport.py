@@ -8,7 +8,7 @@ knowing which platform is active.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, Any
+from typing import Any
 
 
 @dataclass
@@ -74,7 +74,7 @@ class TransportAdapter(ABC):
         """
 
     @abstractmethod
-    async def download_file(self, file_id: str) -> Optional[tuple[bytes, str, str]]:
+    async def download_file(self, file_id: str) -> tuple[bytes, str, str] | None:
         """Download a file attachment. Returns (bytes, mime_type, filename) or None."""
 
 

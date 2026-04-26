@@ -2,15 +2,16 @@
 
 import asyncio
 import logging
-from typing import Dict, Any
+from typing import Any
 
 from google.adk.tools.tool_context import ToolContext
+
 from app.runtime.auth import auth_service
 
 logger = logging.getLogger(__name__)
 
 
-def list_platforms(tool_context: ToolContext) -> Dict[str, Any]:
+def list_platforms(tool_context: ToolContext) -> dict[str, Any]:
     """List all registered OAuth2 platforms and their connection status."""
     platforms = auth_service.list_platforms()
     if not platforms:
@@ -33,7 +34,7 @@ async def register_platform(
     device_code_endpoint: str,
     default_scopes: list[str],
     tool_context: ToolContext,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Register a new OAuth2 platform for authentication. Supports any OAuth2-compliant provider.
 
@@ -49,7 +50,7 @@ async def register_platform(
         default_scopes: Default permission scopes to request during authentication.
     """
     try:
-        config: Dict[str, Any] = {
+        config: dict[str, Any] = {
             "name": name,
             "flow": flow,
             "token_endpoint": token_endpoint,
@@ -78,7 +79,7 @@ async def connect_to_platform(
     platform_id: str,
     scopes: list[str],
     tool_context: ToolContext,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Start OAuth2 authentication for a registered platform.
     The user will receive instructions to authorize in their browser.
@@ -96,12 +97,12 @@ async def connect_to_platform(
         }
 
     flow = platform["flow"]
-    
+
     session_id = ""
     session = getattr(tool_context, "session", None)
     if session:
         session_id = getattr(session, "session_id", None) or getattr(session, "id", None) or ""
-        
+
     effective_scopes = scopes if scopes else None
 
     try:
@@ -118,7 +119,7 @@ async def connect_to_platform(
 
 async def _start_device_code_flow(
     platform_id: str, platform: dict, scopes: list[str] | None, session_id: str
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Handle Device Code Flow: get codes, return instructions, poll in background."""
     auth_data = await auth_service.start_device_flow(platform_id, scopes)
 
@@ -131,7 +132,7 @@ async def _start_device_code_flow(
     async def _poll():
         try:
             await auth_service.poll_for_token(platform_id, device_code, interval, expires_in)
-            from app.runtime.transport import parse_notify_from_session_id, get_adapter
+            from app.runtime.transport import get_adapter, parse_notify_from_session_id
             info = parse_notify_from_session_id(session_id)
             if info:
                 adapter = get_adapter(info["type"])
@@ -158,7 +159,7 @@ async def _start_device_code_flow(
 
 def _start_auth_code_flow(
     platform_id: str, platform: dict, scopes: list[str] | None
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Handle Auth Code + PKCE Flow: generate URL, return instructions."""
     auth_url = auth_service.start_auth_code_flow(platform_id, scopes)
 
@@ -178,7 +179,7 @@ async def complete_auth_code(
     platform_id: str,
     code: str,
     tool_context: ToolContext,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Complete an Authorization Code + PKCE flow by exchanging the code for tokens.
     Call this after the user has authorized and returned the code.
@@ -197,7 +198,7 @@ async def complete_auth_code(
         return {"status": "error", "message": f"Authorization failed: {e}"}
 
 
-async def check_connection(platform_id: str, tool_context: ToolContext) -> Dict[str, Any]:
+async def check_connection(platform_id: str, tool_context: ToolContext) -> dict[str, Any]:
     """
     Check if a platform is connected and has a valid (non-expired) token.
 
@@ -222,7 +223,7 @@ async def check_connection(platform_id: str, tool_context: ToolContext) -> Dict[
     }
 
 
-async def disconnect_platform(platform_id: str, tool_context: ToolContext) -> Dict[str, Any]:
+async def disconnect_platform(platform_id: str, tool_context: ToolContext) -> dict[str, Any]:
     """
     Disconnect from a platform by removing its stored tokens.
 
@@ -237,7 +238,7 @@ async def disconnect_platform(platform_id: str, tool_context: ToolContext) -> Di
     return {"status": "success", "message": f"Disconnected from {platform['name']}. Tokens removed."}
 
 
-async def remove_platform_registration(platform_id: str, tool_context: ToolContext) -> Dict[str, Any]:
+async def remove_platform_registration(platform_id: str, tool_context: ToolContext) -> dict[str, Any]:
     """
     Completely remove a platform registration and all its stored tokens and credentials.
 

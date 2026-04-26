@@ -1,8 +1,7 @@
 """Tests for the universal OAuth2 service (platform registry, tokens, PKCE)."""
 
-import json
-import os
 import time
+
 import pytest
 
 from app.runtime.auth import OAuthService
@@ -131,7 +130,6 @@ def test_list_platforms_with_entries(tmp_service):
 
 def test_platform_persistence(tmp_service):
     """Platforms should survive a service restart (reload from file)."""
-    import app.runtime.auth as auth_mod
     tmp_service.register_platform("persist", {
         "name": "Persistent",
         "flow": "auth_code_pkce",

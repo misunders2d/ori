@@ -51,7 +51,7 @@ async def github_list_issues(repo: str, state: str, tool_context: ToolContext) -
                     "title": i["title"],
                     "state": i["state"],
                     "is_pr": "pull_request" in i,
-                    "labels": [l["name"] for l in i.get("labels", [])],
+                    "labels": [label["name"] for label in i.get("labels", [])],
                     "created_at": i["created_at"],
                 }
                 for i in resp.json()

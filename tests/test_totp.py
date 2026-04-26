@@ -2,7 +2,7 @@
 
 import time
 
-from app.util.totp import verify_totp, _generate_code, _decode_secret
+from app.util.totp import _decode_secret, _generate_code, verify_totp
 
 
 def test_decode_secret_with_padding():

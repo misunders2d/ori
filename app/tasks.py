@@ -53,8 +53,8 @@ async def run_scheduled_task(
     task_prompt: str,
     notify: dict,
     owner_user_id: str,
-    task_id: str = None,
-    steps: list[str] = None,
+    task_id: str | None = None,
+    steps: list[str] | None = None,
 ):
     """
     Executed by APScheduler when a scheduled task fires.
@@ -71,9 +71,10 @@ async def run_scheduled_task(
     LLM cannot skip or paraphrase steps. If `steps` is None, the task runs
     under normal (LLM-decided) flow.
     """
+    import uuid
+
     from app.runtime.executor import extract_agent_response
     from run_bot import get_runner
-    import uuid
 
     if not task_id:
         task_id = f"sched_{uuid.uuid4().hex[:8]}"
@@ -216,8 +217,8 @@ async def run_system_task(
     notify: dict,
     admin_user_id: str,
     silent: bool = False,
-    task_id: str = None,
-    steps: list[str] = None,
+    task_id: str | None = None,
+    steps: list[str] | None = None,
 ):
     """
     Executed by APScheduler for admin-only system maintenance tasks.
@@ -429,10 +430,11 @@ async def _inject_into_session(notify: dict, message: str):
         return
 
     try:
+        import time as _time
+        import uuid as _uuid
+
         from google.adk.events.event import Event
         from google.genai import types as _types
-        import uuid as _uuid
-        import time as _time
 
         # In this codebase, ADK user_id and session_id are the same value for
         # chat sessions (see telegram_poller / slack_poller: session_user_id = session_id).

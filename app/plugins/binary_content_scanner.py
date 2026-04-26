@@ -17,7 +17,6 @@ This plugin sits on `on_user_message_callback`. Text-only messages no-op.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.plugins import BasePlugin

@@ -9,9 +9,9 @@ reaches the agent/LLM, saved to .env, and deleted from chat if possible.
 The key never touches the AI, session history, or logs.
 """
 
+import json
 import logging
 import os
-import json
 
 from app.util.config import ALLOWED_CONFIG_KEYS
 from deploy.vault import set as vault_set
@@ -91,15 +91,15 @@ def capture_friend_key(session_id: str, value: str) -> dict:
     try:
         keys = {}
         if os.path.exists(KEYS_FILE):
-            with open(KEYS_FILE, "r") as f:
+            with open(KEYS_FILE) as f:
                 keys = json.load(f)
-            
+
         keys[friend_name] = value
-        
+
         os.makedirs(os.path.dirname(KEYS_FILE), exist_ok=True)
         with open(KEYS_FILE, "w") as f:
             json.dump(keys, f, indent=4)
-            
+
         return {
             "status": "success",
             "friend_name": friend_name,

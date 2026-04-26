@@ -1,6 +1,8 @@
 import os
 import subprocess
+
 import pytest
+
 
 @pytest.mark.infra
 def test_github_token():

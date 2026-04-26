@@ -4,13 +4,12 @@ The poller modules import `app.runtime.executor` (Phase G); they're not
 loaded here. Adapter is fully testable.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app.transports import TRANSPORTS, list_transports, register_transport
-from app.transports.telegram import TelegramAdapter, _scrub_secrets, TELEGRAM_API
-
+from app.transports.telegram import TelegramAdapter, _scrub_secrets
 
 # ---------------------------------------------------------------------------
 # Registry
@@ -108,7 +107,7 @@ async def test_send_message_short(adapter):
     resp = MagicMock(status_code=200)
     adapter._client.post = AsyncMock(return_value=resp)
     await adapter.send_message(123, "hello")
-    args, kwargs = adapter._client.post.call_args
+    _args, kwargs = adapter._client.post.call_args
     assert kwargs["json"]["chat_id"] == 123
     assert kwargs["json"]["text"] == "hello"
     assert kwargs["json"]["parse_mode"] == "Markdown"
