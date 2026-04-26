@@ -156,6 +156,24 @@ If the user's request matches any of these patterns, copy the example shape — 
 - **System tasks (`sys_*`)** are admin-only and write a `background_tasks` memory entry; ordinary scheduled tasks do not.
 - **Owner scoping**: non-admin users only see/edit/delete their own jobs.
 
+## `task_prompt` style — CRITICAL
+
+The fire-time agent reads the prompt *cold*, with no memory of who scheduled it or what conversation produced it. Phrasing matters.
+
+**ALWAYS write the prompt in self-referential third person about the action, NEVER about the user by name.**
+
+| Bad (causes fire-time confusion) | Good |
+|---|---|
+| `"Wake Sergey Demchenko, notify 20 minutes passed"` | `"Notify the user 20 minutes have passed."` |
+| `"Send John the daily ASIN summary"` | `"Generate today's ASIN summary and post it."` |
+| `"Remind Anna about the meeting"` | `"Post a reminder about the team meeting."` |
+
+**Why:** the fire-time LLM has no session context. A prompt like *"Wake Sergey Demchenko"* reads as *"I have an action to perform on a third party named Sergey"* — it then calls a delivery/scheduling tool needing a session ID, can't resolve the name, and returns an `Ambiguous delivery target` error. That error gets delivered (correctly) to the original target, surfacing as visible bot confusion.
+
+The delivery target is already stamped on the job (`notify` dict) — the prompt doesn't need to specify a recipient. Just describe the **action and content**; the runtime handles the where.
+
+**This applies to `edit_scheduled_task` too.** When the user says *"add X to the wakeup message"*, edit the prompt by adding the new content while keeping the self-referential phrasing. Don't rewrite *"Notify the user…"* into *"Wake \<user_name\>…"*.
+
 ## Verifying a fire actually happened
 
 When the user asks "did it run?" or "what did it produce?", **do not infer from memory or `next_run_time`** — call `get_scheduled_task_logs()`. The log contains one JSON line per event (`fire_start`, `fire_end`, `error`) with timestamps, duration, status, and response preview. This is the only reliable source of truth for execution history.
