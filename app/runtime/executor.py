@@ -10,6 +10,8 @@ durable plan-store integration on session refresh.
 from __future__ import annotations
 
 import logging
+import mimetypes
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -282,6 +284,19 @@ async def extract_agent_response(
                                     latest_tool_results.append(str(res["message"]))
                                 elif "status" in res:
                                     latest_tool_results.append(f"Status: {res['status']}")
+                                # Tool returned a file path (image gen, chart
+                                # export, etc.) — read it and surface as a
+                                # media attachment so the transport delivers
+                                # the actual image/file rather than narrating
+                                # the path.
+                                fp = res.get("file_path")
+                                if fp and os.path.isfile(fp):
+                                    mime, _ = mimetypes.guess_type(fp)
+                                    with open(fp, "rb") as f:
+                                        media_items.append({
+                                            "data": f.read(),
+                                            "mime_type": mime or "application/octet-stream",
+                                        })
                         elif getattr(part, "inline_data", None):
                             media_items.append({
                                 "data": part.inline_data.data,
