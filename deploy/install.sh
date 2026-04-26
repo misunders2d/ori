@@ -140,12 +140,19 @@ case "$OS" in
         ;;
 esac
 
+# Per-instance derived names: tunnel container, compose project, ports.
+# These match the same derivations in start.sh / stop.sh so a worktree
+# manages ONLY its own tunnel — never touching another instance's.
+_a2a_port=$("$PYTHON" -c "import json; print(json.load(open('$VAULT_FILE')).get('A2A_PORT','8000'))" 2>/dev/null || echo "8000")
+_metrics_port=$("$PYTHON" -c "import json; v=json.load(open('$VAULT_FILE')); print(v.get('TUNNEL_METRICS_PORT', int(v.get('A2A_PORT','8000'))+1000))" 2>/dev/null || echo "9000")
+_tunnel_name="$(echo "$_bot_name" | tr '[:upper:]' '[:lower:]' | tr ' _' '-' | sed 's/[^a-z0-9-]//g')"
+
 # Start tunnel if Docker is available
 if command -v docker &>/dev/null; then
-    # Read A2A_PORT from vault so the tunnel points to the right port
-    _a2a_port=$("$PYTHON" -c "import json; print(json.load(open('$VAULT_FILE')).get('A2A_PORT','8000'))" 2>/dev/null || echo "8000")
-    echo ":: Starting Cloudflare tunnel (port $_a2a_port)..."
-    A2A_PORT="$_a2a_port" docker compose -f "$SCRIPT_DIR/docker-compose.yml" up -d 2>/dev/null || true
+    echo ":: Starting Cloudflare tunnel for $_tunnel_name (port $_a2a_port, metrics $_metrics_port)..."
+    docker rm -f "${_tunnel_name}-tunnel" 2>/dev/null || true
+    A2A_PORT="$_a2a_port" BOT_NAME="$_tunnel_name" TUNNEL_METRICS_PORT="$_metrics_port" \
+        docker compose -p "$_tunnel_name" -f "$SCRIPT_DIR/docker-compose.yml" up -d 2>/dev/null || true
 else
     echo ""
     echo "   Note: Docker not found. The Cloudflare tunnel (for A2A internet access)"
@@ -158,7 +165,7 @@ echo ":: Waiting for $SERVICE_NAME to start..."
 _healthy=false
 for i in $(seq 1 15); do
     sleep 2
-    if curl -sf http://localhost:8000/.well-known/agent-card.json &>/dev/null; then
+    if curl -sf "http://localhost:$_a2a_port/.well-known/agent-card.json" &>/dev/null; then
         _healthy=true
         break
     fi
