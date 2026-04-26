@@ -20,6 +20,7 @@ from google.adk.agents import Agent
 from google.adk.skills import load_skill_from_dir
 from google.adk.tools import skill_toolset
 
+from app.toolsets import ScratchpadToolset
 from app.tools.a2a import (
     add_friend,
     broadcast_address_update,
@@ -40,6 +41,7 @@ from app.util.models import get_model
 _skills_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 _google_adk_a2a_skill = load_skill_from_dir(_skills_dir / "google-adk-a2a-skill")
 _dna_exchange_skill = load_skill_from_dir(_skills_dir / "dna-exchange-skill")
+_scratchpad_skill = load_skill_from_dir(_skills_dir / "scratchpad-skill")
 
 
 # Constitutional only. Tool details, multimodal examples, address broadcast,
@@ -74,7 +76,8 @@ knowledge_agent = Agent(
     ),
     instruction=_INSTRUCTION,
     tools=[
-        skill_toolset.SkillToolset(skills=[_google_adk_a2a_skill, _dna_exchange_skill]),
+        skill_toolset.SkillToolset(skills=[_google_adk_a2a_skill, _dna_exchange_skill, _scratchpad_skill]),
+        ScratchpadToolset(),
         get_agent_identity,
         get_my_a2a_key,
         add_friend,
