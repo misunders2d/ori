@@ -15,6 +15,12 @@ class SystemToolset(BaseToolset):
     """Core system lifecycle tools."""
 
     async def get_tools(self, readonly_context=None):
+        from app.tools.diagnostics import (
+            check_active_tasks,
+            inspect_secure_env,
+            read_gate_logs,
+            report_health,
+        )
         from app.tools.system import (
             execute_approved_action,
             session_refresh,
@@ -27,6 +33,10 @@ class SystemToolset(BaseToolset):
             FunctionTool(func=session_refresh),
             FunctionTool(func=set_planner_mode),
             FunctionTool(func=execute_approved_action),
+            FunctionTool(func=check_active_tasks),
+            FunctionTool(func=report_health),
+            FunctionTool(func=inspect_secure_env),
+            FunctionTool(func=read_gate_logs),
         ]
 
         if not _is_child_container():
