@@ -71,3 +71,9 @@ class OriSessionState(BaseModel):
     use_planner: bool = False
     """When True, the agent prefers plan-and-execute over single-turn replies
     for non-trivial tasks. Toggled by the `set_use_planner` system tool."""
+
+    # ----- ClickUp ----------------------------------------------------------
+    clickup_workspace: dict[str, Any] = Field(default_factory=dict)
+    """Cached ClickUp workspace context (team_id, default_list_id, etc.)
+    populated by the clickup tools to avoid re-fetching the team metadata
+    on every tool call."""

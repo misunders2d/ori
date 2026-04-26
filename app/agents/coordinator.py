@@ -22,6 +22,8 @@ from google.adk.agents import Agent
 from google.adk.skills import load_skill_from_dir
 from google.adk.tools import skill_toolset
 
+from app.agents.amazon_head_agent import amazon_head_agent
+from app.agents.clickup_agent import clickup_agent
 from app.agents.developer import developer_agent
 from app.agents.knowledge import knowledge_agent
 from app.toolsets import (
@@ -70,6 +72,10 @@ _INSTRUCTION = (
     "- Model CHANGES (`set_agent_model`, `verify_model_reachable`) → "
     "DeveloperAgent. The probe-before-persist lives there and is admin-gated.\n"
     "- A2A communication, friend management, DNA exchange → KnowledgeAgent.\n"
+    "- Amazon business operations (ASINs, SKUs, Keepa, SP-API, Helium10, "
+    "BigQuery analytics, Google Workspace for the business, knowledge graph, "
+    "data analysis, charts, file exports) → AmazonHeadAgent.\n"
+    "- ClickUp tasks (when ClickUpAgent is present) → ClickUpAgent.\n"
     "- Everything else (research, scheduling, memory, perimeter, plans, "
     "API keys, spawning children, approvals) — handle DIRECTLY.\n\n"
 
@@ -132,6 +138,8 @@ root_agent = Agent(
     sub_agents=[
         developer_agent,
         knowledge_agent,
+        amazon_head_agent,
+        *([clickup_agent] if clickup_agent else []),
     ],
     tools=[
         skill_toolset.SkillToolset(skills=[
