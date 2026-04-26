@@ -16,11 +16,11 @@ class SystemToolset(BaseToolset):
 
     async def get_tools(self, readonly_context=None):
         from app.tools.system import (
-            update_self,
-            session_refresh,
-            trigger_rollback,
-            set_planner_mode,
             execute_approved_action,
+            session_refresh,
+            set_planner_mode,
+            trigger_rollback,
+            update_self,
         )
 
         tools = [
@@ -31,7 +31,11 @@ class SystemToolset(BaseToolset):
 
         if not _is_child_container():
             # Parent-only: spawn/manage children, reboot, rollback
-            from app.tools.spawn import spawn_agent, list_spawned_agents, stop_spawned_agent
+            from app.tools.spawn import (
+                list_spawned_agents,
+                spawn_agent,
+                stop_spawned_agent,
+            )
             tools.extend([
                 FunctionTool(func=update_self),
                 FunctionTool(func=trigger_rollback),

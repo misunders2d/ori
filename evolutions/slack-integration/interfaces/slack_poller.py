@@ -13,16 +13,22 @@ from app.core.agent_executor import (
     extract_agent_response,
     process_message_for_context,
 )
-from app.core.transport import register_adapter, get_adapter, parse_notify_from_session_id
+from app.core.channel_logger import log_message
+from app.core.transport import (
+    get_adapter,
+    parse_notify_from_session_id,
+    register_adapter,
+)
 from app.core.transport_slack import SlackAdapter
 from app.core.whitelist import (
     is_allowed,
     is_blacklisted,
     should_notify_admin,
     whitelist_chat,
+)
+from app.core.whitelist import (
     reload as reload_whitelist,
 )
-from app.core.channel_logger import log_message
 
 logger = logging.getLogger(__name__)
 
@@ -90,8 +96,8 @@ async def poll_slack(get_runner_fn, process_init_fn):
         return
 
     try:
-        from slack_bolt.async_app import AsyncApp
         from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
+        from slack_bolt.async_app import AsyncApp
     except ImportError:
         logger.error("Slack: slack-bolt not installed. Run: uv add slack-bolt")
         return
@@ -258,7 +264,12 @@ async def poll_slack(get_runner_fn, process_init_fn):
             return
 
         # SECURE KEY CAPTURE: intercept before anything reaches the agent
-        from app.secure_config import capture_key, check_pending, capture_friend_key, check_pending_friend
+        from app.secure_config import (
+            capture_friend_key,
+            capture_key,
+            check_pending,
+            check_pending_friend,
+        )
 
         if check_pending(session_id):
             if text:

@@ -1,5 +1,5 @@
 import subprocess
-import os
+
 
 def run(cmd):
     res = subprocess.run(cmd, capture_output=True, text=True, shell=True)

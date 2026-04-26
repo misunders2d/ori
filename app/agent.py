@@ -101,4 +101,4 @@ app = App(
 root_agent = app.root_agent
 
 
-__all__ = ["app", "app_name", "root_agent", "PLUGINS"]
+__all__ = ["PLUGINS", "app", "app_name", "root_agent"]

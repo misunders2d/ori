@@ -1,11 +1,10 @@
-import os
-import pytest
-from app.runtime.channel_logger import log_message, get_logs
+from app.runtime.channel_logger import get_logs, log_message
+
 
 def test_channel_logging():
     cid = "tg_-100channel"
     log_message(cid, "u123", "Tester", "Security alert")
-    
+
     logs = get_logs(cid, hours=1)
     assert len(logs) > 0
     assert logs[0]['text'] == "Security alert"

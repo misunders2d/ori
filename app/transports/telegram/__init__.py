@@ -14,11 +14,10 @@ from app.transports.telegram.adapter import (
     _update_heartbeat,
 )
 
-
 __all__ = [
-    "TelegramAdapter",
     "TELEGRAM_API",
     "TELEGRAM_FILE_API",
+    "TelegramAdapter",
     "_scrub_secrets",
     "_update_heartbeat",
 ]

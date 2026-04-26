@@ -12,12 +12,10 @@ import os
 import secrets
 import struct
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-
 
 # ---------------------------------------------------------------------------
 # TOTP helpers (no external deps)

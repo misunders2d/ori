@@ -3,7 +3,6 @@
 import os
 import shutil
 import sqlite3
-import sys
 
 DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
 OLD_DB = os.path.join(DATA_DIR, "ori.db")
@@ -44,7 +43,7 @@ def migrate():
     # Rename old DB as backup
     backup_path = OLD_DB + ".bak"
     os.rename(OLD_DB, backup_path)
-    print(f"  Renamed ori.db -> ori.db.bak")
+    print("  Renamed ori.db -> ori.db.bak")
     print("Migration complete.")
 
 

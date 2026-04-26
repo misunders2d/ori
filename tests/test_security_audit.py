@@ -1,11 +1,6 @@
 """Tests for the 'security' check in evolution_verify_sandbox."""
 import os
-import subprocess
-import tempfile
-from unittest.mock import MagicMock, patch, call
-
-import pytest
-
+from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # Helpers

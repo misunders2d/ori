@@ -81,7 +81,7 @@ async def start_cli_chat(get_runner_fn):
                 # stdin detachment or EOF loops.
                 if os.path.exists("/dev/tty"):
                     try:
-                        with open("/dev/tty", "r") as tty:
+                        with open("/dev/tty") as tty:
                             print("You: ", end="", flush=True)
                             return tty.readline()
                     except Exception:
@@ -117,9 +117,9 @@ async def start_cli_chat(get_runner_fn):
                 try:
                     from app.util.models import (  # type: ignore[attr-defined]
                         format_model_assignments,
+                        list_components,
                         reset_all_models,
                         reset_model,
-                        list_components,
                     )
                 except ImportError:
                     print("\n/models is not yet wired in this build.\n")

@@ -7,11 +7,11 @@ class GitHubToolset(BaseToolset):
 
     async def get_tools(self, readonly_context=None):
         from app.tools.github_api import (
-            github_list_issues,
-            github_view_file,
             github_create_pr,
+            github_list_issues,
             github_list_repos,
             github_search_code,
+            github_view_file,
         )
 
         return [

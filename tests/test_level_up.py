@@ -1,11 +1,13 @@
 import os
 import re
+
 import pytest
+
 
 def test_version_bump():
     if not os.path.exists('pyproject.toml'):
         pytest.skip("pyproject.toml not found")
-    with open('pyproject.toml', 'r') as f:
+    with open('pyproject.toml') as f:
         content = f.read()
     match = re.search(r'version\s*=\s*"(.*?)"', content)
     assert match is not None
@@ -15,7 +17,7 @@ def test_version_bump():
 def test_changelog_exists():
     if not os.path.exists('CHANGELOG.md'):
         pytest.skip("CHANGELOG.md not found")
-    with open('CHANGELOG.md', 'r') as f:
+    with open('CHANGELOG.md') as f:
         content = f.read()
     # At least some version should be present
     assert re.search(r'## \[\d+\.\d+\.\d+\]', content)
@@ -23,7 +25,7 @@ def test_changelog_exists():
 def test_readme_updates():
     if not os.path.exists('README.md'):
         pytest.skip("README.md not found")
-    with open('README.md', 'r') as f:
+    with open('README.md') as f:
         content = f.read()
     # Check for the updated header or content
     assert '## 🌐 The Ori-Net Bridge' in content

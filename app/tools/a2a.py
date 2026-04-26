@@ -8,7 +8,7 @@ import re
 import tarfile
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import httpx
 from google.adk.tools.tool_context import ToolContext
@@ -27,12 +27,12 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 # Key Management (Private Helpers)
 # ---------------------------------------------------------------------------
 
-def _load_friend_key(friend_name: str) -> Optional[str]:
+def _load_friend_key(friend_name: str) -> str | None:
     """Retrieves a stored API key for a friend from the secure keys file."""
     try:
         if not os.path.exists(KEYS_FILE):
             return None
-        with open(KEYS_FILE, "r") as f:
+        with open(KEYS_FILE) as f:
             keys = json.load(f)
         return keys.get(friend_name)
     except Exception as e:
@@ -44,7 +44,7 @@ def _load_friend_key(friend_name: str) -> Optional[str]:
 # Agent Card (read-only — built once at startup by a2a_server.py)
 # ---------------------------------------------------------------------------
 
-def get_agent_identity(tool_context: ToolContext) -> Dict[str, Any]:
+def get_agent_identity(tool_context: ToolContext) -> dict[str, Any]:
     """
     Returns this agent's public A2A v1.0 Agent Card.
     The card is generated at startup by the A2A server; this tool only reads it.
@@ -55,7 +55,7 @@ def get_agent_identity(tool_context: ToolContext) -> Dict[str, Any]:
                 "status": "error",
                 "message": "Agent Card not found at data/agent.json. The A2A server may not have started yet.",
             }
-        with open(AGENT_CARD_PATH, "r") as f:
+        with open(AGENT_CARD_PATH) as f:
             card = json.load(f)
         return {"status": "success", "identity": card}
     except Exception as e:
@@ -63,7 +63,7 @@ def get_agent_identity(tool_context: ToolContext) -> Dict[str, Any]:
         return {"status": "error", "message": f"Failed to read Agent Card: {e}"}
 
 
-def get_my_a2a_key(tool_context: ToolContext) -> Dict[str, Any]:
+def get_my_a2a_key(tool_context: ToolContext) -> dict[str, Any]:
     """Returns this agent's own A2A API key so the admin can share it with friends.
 
     The key is what remote agents must send in the x-a2a-api-key header to authenticate.
@@ -79,7 +79,7 @@ def get_my_a2a_key(tool_context: ToolContext) -> Dict[str, Any]:
 # Discovery & Friendship
 # ---------------------------------------------------------------------------
 
-async def _discover_agent_card(base_url: str) -> Optional[Dict[str, Any]]:
+async def _discover_agent_card(base_url: str) -> dict[str, Any] | None:
     """Fetch a remote agent's card via standard .well-known discovery paths."""
     base_url = base_url.rstrip("/")
     discovery_paths = ["/.well-known/agent-card.json", "/.well-known/agent.json"]
@@ -102,7 +102,7 @@ async def _discover_agent_card(base_url: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-async def add_friend(url: str, friend_name: str, tool_context: ToolContext) -> Dict[str, Any]:
+async def add_friend(url: str, friend_name: str, tool_context: ToolContext) -> dict[str, Any]:
     """
     Discovers and registers another A2A-compliant agent as a friend for ongoing collaboration.
     API keys are stored separately and preserved across updates.
@@ -132,7 +132,7 @@ async def add_friend(url: str, friend_name: str, tool_context: ToolContext) -> D
     try:
         friends = {}
         if os.path.exists(FRIENDS_FILE):
-            with open(FRIENDS_FILE, "r") as f:
+            with open(FRIENDS_FILE) as f:
                 friends = json.load(f)
 
         friends[friend_name] = {
@@ -173,10 +173,10 @@ async def add_friend(url: str, friend_name: str, tool_context: ToolContext) -> D
         return {"status": "error", "message": f"Discovery succeeded but save failed: {e}"}
 
 
-def update_friend_key(friend_name: str, tool_context: ToolContext) -> Dict[str, Any]:
+def update_friend_key(friend_name: str, tool_context: ToolContext) -> dict[str, Any]:
     """
     Initiates a secure capture flow to configure an API key for a registered A2A friend.
-    
+
     API keys are sensitive and stored in data/a2a_keys.json (git-ignored).
     This tool registers an interceptor. You must tell the user to provide the key in their NEXT message.
 
@@ -187,7 +187,7 @@ def update_friend_key(friend_name: str, tool_context: ToolContext) -> Dict[str, 
         if not os.path.exists(FRIENDS_FILE):
             return {"status": "error", "message": "No friends registered yet. Use add_friend first."}
 
-        with open(FRIENDS_FILE, "r") as f:
+        with open(FRIENDS_FILE) as f:
             friends = json.load(f)
 
         if friend_name not in friends:
@@ -212,12 +212,12 @@ def update_friend_key(friend_name: str, tool_context: ToolContext) -> Dict[str, 
         return {"status": "error", "message": f"Failed to arm secure capture: {e}"}
 
 
-def list_friends(tool_context: ToolContext) -> Dict[str, Any]:
+def list_friends(tool_context: ToolContext) -> dict[str, Any]:
     """Returns all registered friends in the network with their capabilities and key status."""
     try:
         if not os.path.exists(FRIENDS_FILE):
             return {"status": "success", "message": "No friends registered yet.", "friends": {}}
-        with open(FRIENDS_FILE, "r") as f:
+        with open(FRIENDS_FILE) as f:
             friends = json.load(f)
         summary = {}
         for nickname, data in friends.items():
@@ -245,14 +245,14 @@ def list_friends(tool_context: ToolContext) -> Dict[str, Any]:
 _TERMINAL_STATES = {"completed", "failed", "canceled", "rejected", "input_required"}
 
 
-def _a2a_headers(api_key: Optional[str] = None) -> Dict[str, str]:
+def _a2a_headers(api_key: str | None = None) -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["x-a2a-api-key"] = api_key
     return headers
 
 
-def _content_to_a2a_parts(message: Union[str, types.Content]) -> List[Dict[str, Any]]:
+def _content_to_a2a_parts(message: str | types.Content) -> list[dict[str, Any]]:
     """Translate a string OR a `types.Content` into A2A wire-format parts.
 
     Per the A2A spec, parts is a list of `{"text": "..."}` for text and
@@ -262,7 +262,7 @@ def _content_to_a2a_parts(message: Union[str, types.Content]) -> List[Dict[str, 
         return [{"text": message}]
     if not isinstance(message, types.Content):
         return [{"text": str(message)}]
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for part in message.parts or []:
         if getattr(part, "text", None):
             out.append({"text": part.text})
@@ -277,11 +277,11 @@ def _content_to_a2a_parts(message: Union[str, types.Content]) -> List[Dict[str, 
 
 async def _send_a2a_message(
     endpoint_url: str,
-    message: Union[str, types.Content],
-    task_id: Optional[str] = None,
-    api_key: Optional[str] = None,
+    message: str | types.Content,
+    task_id: str | None = None,
+    api_key: str | None = None,
     blocking: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Send a JSON-RPC message/send request to a remote A2A agent.
 
     `message` accepts a plain string (legacy text-only) or a `types.Content`
@@ -291,7 +291,7 @@ async def _send_a2a_message(
     When blocking=False, includes configuration.blocking=false so the server
     returns immediately with a task in 'working' state.
     """
-    message_obj: Dict[str, Any] = {
+    message_obj: dict[str, Any] = {
         "messageId": str(uuid.uuid4()),
         "role": "user",
         "parts": _content_to_a2a_parts(message),
@@ -300,7 +300,7 @@ async def _send_a2a_message(
     if task_id:
         message_obj["taskId"] = task_id
 
-    params: Dict[str, Any] = {"message": message_obj}
+    params: dict[str, Any] = {"message": message_obj}
     if not blocking:
         params["configuration"] = {"blocking": False}
 
@@ -321,8 +321,8 @@ async def _send_a2a_message(
 async def _get_task(
     endpoint_url: str,
     task_id: str,
-    api_key: Optional[str] = None,
-) -> Dict[str, Any]:
+    api_key: str | None = None,
+) -> dict[str, Any]:
     """Fetch task state via JSON-RPC tasks/get."""
     payload = {
         "jsonrpc": "2.0",
@@ -339,8 +339,8 @@ async def _get_task(
 async def _cancel_task_rpc(
     endpoint_url: str,
     task_id: str,
-    api_key: Optional[str] = None,
-) -> Dict[str, Any]:
+    api_key: str | None = None,
+) -> dict[str, Any]:
     """Cancel a running task via JSON-RPC tasks/cancel."""
     payload = {
         "jsonrpc": "2.0",
@@ -357,11 +357,11 @@ async def _cancel_task_rpc(
 async def _poll_until_terminal(
     endpoint_url: str,
     task_id: str,
-    api_key: Optional[str] = None,
+    api_key: str | None = None,
     max_polls: int = 60,
     initial_interval: float = 2.0,
     max_interval: float = 15.0,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Poll tasks/get until the task reaches a terminal state."""
     interval = initial_interval
     for _ in range(max_polls):
@@ -389,7 +389,7 @@ def _to_string(val: Any) -> str:
     return str(val)
 
 
-def _extract_response_text(task: Dict[str, Any]) -> str:
+def _extract_response_text(task: dict[str, Any]) -> str:
     """Extract human-readable text from an A2A Task response object."""
     texts = []
 
@@ -432,7 +432,7 @@ async def call_friend(
     friend_name: str,
     message: str,
     tool_context: ToolContext = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Sends a TEXT message to a registered friend via A2A and returns their response.
     Uses async task polling. For multimodal (text + binary) messages — DNA
@@ -448,7 +448,7 @@ async def call_friend(
         if not os.path.exists(FRIENDS_FILE):
             return {"status": "error", "message": "No friends registered yet."}
 
-        with open(FRIENDS_FILE, "r") as f:
+        with open(FRIENDS_FILE) as f:
             friends = json.load(f)
 
         if friend_name not in friends:
@@ -497,7 +497,7 @@ async def call_agent(
     message: str,
     tool_context: ToolContext,
     api_key: str = "",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Sends a one-off TEXT message to any A2A-compliant agent by URL.
     Use this for agents NOT in the friends list. For multimodal payloads,
@@ -521,7 +521,7 @@ async def call_agent(
 
         # If no key provided, check if we have a friend registered for this URL
         if not api_key and os.path.exists(FRIENDS_FILE):
-            with open(FRIENDS_FILE, "r") as f:
+            with open(FRIENDS_FILE) as f:
                 friends = json.load(f)
             for nick, data in friends.items():
                 if data.get("base_url") == url.rstrip("/") or data.get("endpoint_url") == endpoint_url:
@@ -582,7 +582,7 @@ async def call_friend_with_artifact(
     text: str,
     artifact_id: str,
     tool_context: ToolContext = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Sends a multimodal message (text + binary attachment) to a registered
     friend. The binary part is loaded from an artifact saved earlier in this
@@ -600,7 +600,7 @@ async def call_friend_with_artifact(
     try:
         if not os.path.exists(FRIENDS_FILE):
             return {"status": "error", "message": "No friends registered yet."}
-        with open(FRIENDS_FILE, "r") as f:
+        with open(FRIENDS_FILE) as f:
             friends = json.load(f)
         if friend_name not in friends:
             return {"status": "error", "message": f"Friend '{friend_name}' not found."}
@@ -631,7 +631,7 @@ async def call_friend_with_artifact(
         return {"status": "error", "message": f"A2A call failed: {e}"}
 
 
-async def cancel_friend_task(friend_name: str, task_id: str, tool_context: ToolContext) -> Dict[str, Any]:
+async def cancel_friend_task(friend_name: str, task_id: str, tool_context: ToolContext) -> dict[str, Any]:
     """
     Cancels a running task on a friend agent. Use this when a task is taking
     too long or is no longer needed.
@@ -643,7 +643,7 @@ async def cancel_friend_task(friend_name: str, task_id: str, tool_context: ToolC
     try:
         if not os.path.exists(FRIENDS_FILE):
             return {"status": "error", "message": "No friends registered."}
-        with open(FRIENDS_FILE, "r") as f:
+        with open(FRIENDS_FILE) as f:
             friends = json.load(f)
         if friend_name not in friends:
             return {"status": "error", "message": f"Friend '{friend_name}' not found."}
@@ -690,7 +690,7 @@ async def _broadcast_to_friend(
         return f"failed: {e}"
 
 
-async def perform_a2a_broadcast(force: bool = False, retries: int = 5, retry_delay: int = 15) -> Dict[str, Any]:
+async def perform_a2a_broadcast(force: bool = False, retries: int = 5, retry_delay: int = 15) -> dict[str, Any]:
     """
     Broadcast current A2A_BASE_URL to all friends, retrying failed deliveries.
 
@@ -708,7 +708,7 @@ async def perform_a2a_broadcast(force: bool = False, retries: int = 5, retry_del
     last_url = None
     if os.path.exists(A2A_STATE_FILE):
         try:
-            with open(A2A_STATE_FILE, "r") as f:
+            with open(A2A_STATE_FILE) as f:
                 last_url = json.load(f).get("last_broadcast_url")
         except Exception:
             pass
@@ -720,7 +720,7 @@ async def perform_a2a_broadcast(force: bool = False, retries: int = 5, retry_del
     if not os.path.exists(FRIENDS_FILE):
         return {"status": "success", "message": "No friends to notify."}
 
-    with open(FRIENDS_FILE, "r") as f:
+    with open(FRIENDS_FILE) as f:
         friends = json.load(f)
 
     if not friends:
@@ -778,7 +778,7 @@ async def perform_a2a_broadcast(force: bool = False, retries: int = 5, retry_del
     }
 
 
-async def broadcast_address_update(tool_context: ToolContext) -> Dict[str, Any]:
+async def broadcast_address_update(tool_context: ToolContext) -> dict[str, Any]:
     """
     Manually triggers a broadcast of this agent's current A2A_BASE_URL to all registered friends.
     Use this when Ori's public URL changes (e.g., tunnel restart).
@@ -786,9 +786,9 @@ async def broadcast_address_update(tool_context: ToolContext) -> Dict[str, Any]:
     return await perform_a2a_broadcast(force=True)
 
 
-def update_friend_address(friend_name: str, new_url: str, tool_context: ToolContext) -> Dict[str, Any]:
+def update_friend_address(friend_name: str, new_url: str, tool_context: ToolContext) -> dict[str, Any]:
     """
-    Updates the registered address for a friend. 
+    Updates the registered address for a friend.
     Use this when a friend notifies you that they have moved.
 
     Args:
@@ -799,7 +799,7 @@ def update_friend_address(friend_name: str, new_url: str, tool_context: ToolCont
         if not os.path.exists(FRIENDS_FILE):
             return {"status": "error", "message": "Registry not found."}
 
-        with open(FRIENDS_FILE, "r") as f:
+        with open(FRIENDS_FILE) as f:
             friends = json.load(f)
 
         if friend_name not in friends:
@@ -825,7 +825,7 @@ def update_friend_address(friend_name: str, new_url: str, tool_context: ToolCont
 # DNA Exchange (Ori-specific extension — not part of A2A v1.0 standard)
 # ---------------------------------------------------------------------------
 
-def _read_file_preferring_sandbox(rel_path: str) -> Optional[str]:
+def _read_file_preferring_sandbox(rel_path: str) -> str | None:
     """Read a file, preferring the sandbox version over the live version.
 
     This allows export_dna to package verified sandbox changes (from children)
@@ -833,11 +833,11 @@ def _read_file_preferring_sandbox(rel_path: str) -> Optional[str]:
     """
     sandbox_path = os.path.join(os.path.abspath("./data/sandbox"), rel_path)
     if os.path.isfile(sandbox_path) and not os.path.islink(sandbox_path):
-        with open(sandbox_path, "r") as f:
+        with open(sandbox_path) as f:
             return f.read()
     live_path = os.path.join(PROJECT_ROOT, rel_path)
     if os.path.isfile(live_path):
-        with open(live_path, "r") as f:
+        with open(live_path) as f:
             return f.read()
     return None
 
@@ -862,7 +862,7 @@ def _scan_for_secrets(file_path: str, rel_path: str) -> list:
     """Scan a file for hardcoded secret patterns. Returns list of (line_num, pattern_hint) tuples."""
     findings = []
     try:
-        with open(file_path, "r") as f:
+        with open(file_path) as f:
             for line_num, line in enumerate(f, 1):
                 for pattern in _SECRET_PATTERNS:
                     if pattern.search(line):
@@ -873,7 +873,7 @@ def _scan_for_secrets(file_path: str, rel_path: str) -> list:
 
     # Also check against live env var values (same as a2a_privacy_guardrail)
     try:
-        with open(file_path, "r") as f:
+        with open(file_path) as f:
             text = f.read()
         from app.util.config import ALLOWED_CONFIG_KEYS
         _SAFE_KEYS = {"BOT_NAME", "GITHUB_REPO", "APP_NAME"}
@@ -896,7 +896,7 @@ def _scan_for_secrets(file_path: str, rel_path: str) -> list:
 async def export_dna(
     source_paths: list[str],
     tool_context: ToolContext,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Pack project files into a .tar.gz, save as an artifact, return manifest + bytes.
 
     The clean ADK 2.0 flow: no public download URL. The bytes are returned
@@ -1025,7 +1025,7 @@ def _import_dna_legacy(dna_package: dict) -> list:
 async def import_dna(
     artifact_id: str,
     tool_context: ToolContext = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Import a DNA bundle (saved as an artifact) into the per-session sandbox.
 
     The DNA tarball must already exist as an artifact — typically because an

@@ -1,5 +1,6 @@
-import os
 import json
+import os
+
 from dotenv import load_dotenv
 from google.genai import Client
 
@@ -54,17 +55,17 @@ def main():
             contents=_INJECTION_ANCHORS,
         )
         embeddings = response.embeddings
-        
+
         vectors = [emb.values for emb in embeddings]
-        
+
         out_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "app", "callbacks", "guardrail_embeddings.json"))
-        
+
         # Ensure data dir exists
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        
+
         with open(out_path, "w") as f:
             json.dump(vectors, f)
-            
+
         print(f"Successfully saved {len(vectors)} multidimensional embeddings to {out_path}!")
     except Exception as e:
         print(f"Error generating embeddings: {e}")

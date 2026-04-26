@@ -1,5 +1,6 @@
-import os
 import json
+import os
+
 
 def test_capture_env():
     data = {

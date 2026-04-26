@@ -1,6 +1,7 @@
 import os
-import pytest
 import sqlite3
+
+import pytest
 
 
 @pytest.mark.infra

@@ -4,7 +4,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.openapi.models import OAuth2
-
 from google.adk.auth.auth_credential import AuthCredentialTypes
 
 from app.integrations import (
@@ -16,7 +15,6 @@ from app.integrations import (
     list_providers,
     register_provider,
 )
-
 
 # ---------------------------------------------------------------------------
 # Registry

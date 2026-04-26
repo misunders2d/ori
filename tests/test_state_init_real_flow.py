@@ -14,9 +14,7 @@ instruction template will KeyError downstream — so the assertion is on
 the state visible at the same hook ADK uses to read it.
 """
 
-import os
 import pytest
-
 from google.adk.plugins import BasePlugin
 from google.adk.runners import InMemoryRunner
 from google.genai import types
@@ -46,6 +44,7 @@ async def test_state_seeded_before_workflow_runs(monkeypatch):
 
     # Reload the app so PLUGINS list is rebuilt with the env in place.
     import importlib
+
     import app.agent as _agent_mod
     importlib.reload(_agent_mod)
 

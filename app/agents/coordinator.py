@@ -24,6 +24,11 @@ from google.adk.tools import skill_toolset
 
 from app.agents.developer import developer_agent
 from app.agents.knowledge import knowledge_agent
+from app.tools.a2a import get_agent_identity, get_my_a2a_key, list_friends
+from app.tools.google_search import google_search_agent_tool
+from app.tools.model_tools import list_available_models
+from app.tools.web import web_fetch
+from app.tools.whitelist import blacklist_chat, whitelist_chat
 from app.toolsets import (
     IntegrationToolset,
     MemoryToolset,
@@ -31,13 +36,7 @@ from app.toolsets import (
     SchedulingToolset,
     SystemToolset,
 )
-from app.tools.a2a import get_agent_identity, get_my_a2a_key, list_friends
-from app.tools.google_search import google_search_agent_tool
-from app.tools.model_tools import list_available_models
-from app.tools.web import web_fetch
-from app.tools.whitelist import blacklist_chat, whitelist_chat
 from app.util.models import get_model
-
 
 _skills_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 _scheduling_skill = load_skill_from_dir(_skills_dir / "scheduling-skill")

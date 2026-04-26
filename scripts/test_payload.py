@@ -1,11 +1,11 @@
 from dataclasses import dataclass
-from typing import Optional, List
+
 
 @dataclass
 class MockPayload:
     commit_message: str
-    summary: Optional[str] = None
-    delete_files: Optional[List[str]] = None
+    summary: str | None = None
+    delete_files: list[str] | None = None
 
 def extract(payload):
     clean_payload = {}

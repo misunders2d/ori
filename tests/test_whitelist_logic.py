@@ -1,6 +1,12 @@
-import os
-import pytest
-from app.runtime.perimeter import whitelist_chat, blacklist_chat, is_allowed, is_blacklisted, should_notify_admin, get_whitelist
+from app.runtime.perimeter import (
+    blacklist_chat,
+    get_whitelist,
+    is_allowed,
+    is_blacklisted,
+    should_notify_admin,
+    whitelist_chat,
+)
+
 
 def test_whitelist_basic():
     cid = "tg_test_123"
@@ -8,11 +14,11 @@ def test_whitelist_basic():
     if cid in get_whitelist():
         from app.runtime.perimeter import unwhitelist_chat
         unwhitelist_chat(cid)
-        
+
     assert is_allowed(cid) is False
     whitelist_chat(cid)
     assert is_allowed(cid) is True
-    
+
 def test_blacklist_logic():
     cid = "tg_spam_999"
     blacklist_chat(cid)

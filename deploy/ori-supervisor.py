@@ -31,11 +31,12 @@ os.chdir(PROJECT_ROOT)
 sys.path.insert(0, PROJECT_ROOT)
 
 from deploy.vault import (
-    VAULT_FILE,
-    load_vault,
     get,
-    set as vault_set,
     get_all,
+    load_vault,
+)
+from deploy.vault import (
+    set as vault_set,
 )
 
 # ---------------------------------------------------------------------------

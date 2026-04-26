@@ -18,7 +18,6 @@ package exposes `is_enabled` and `start_poller`. No surgery elsewhere.
 from __future__ import annotations
 
 from importlib import import_module
-from typing import Callable
 
 # Order: messenger transports first, CLI fallback last.
 TRANSPORTS: list[str] = ["telegram", "cli"]

@@ -21,10 +21,9 @@ import secrets
 from datetime import datetime
 from typing import Any
 
+from google.adk.a2a.utils.agent_to_a2a import to_a2a
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, Response
-
-from google.adk.a2a.utils.agent_to_a2a import to_a2a
 
 from app.agent import root_agent  # respects current App.root_agent (Workflow in F)
 
@@ -106,13 +105,13 @@ async def _handle_address_update(request) -> JSONResponse:
             )
         if not os.path.exists(FRIENDS_FILE):
             return JSONResponse({"status": "ignored", "message": "No friends registered"})
-        with open(FRIENDS_FILE, "r") as f:
+        with open(FRIENDS_FILE) as f:
             friends = json.load(f)
         sender_api_key = request.headers.get("x-a2a-api-key", "")
         stored_keys: dict[str, str] = {}
         if os.path.exists(KEYS_FILE):
             try:
-                with open(KEYS_FILE, "r") as f:
+                with open(KEYS_FILE) as f:
                     stored_keys = json.load(f)
             except Exception:
                 pass
@@ -210,11 +209,9 @@ async def _handle_oauth_callback(request) -> Response:
 # Pending OAuth state map lives in `app.runtime.oauth_state` so both this
 # module and `tools/integrations.py` can use it without triggering each
 # other's heavy imports.
-from app.runtime.oauth_state import (  # noqa: E402  (deliberate placement)
+from app.runtime.oauth_state import (  # deliberate placement; see comment above
     consume_pending_oauth as _consume_pending_oauth,
-    register_pending_oauth,
 )
-
 
 # ---------------------------------------------------------------------------
 # Agent card — multimodal modes

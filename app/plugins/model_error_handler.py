@@ -21,7 +21,6 @@ them swap models or retry on their own terms.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models import LlmRequest, LlmResponse
@@ -93,7 +92,7 @@ class ModelErrorHandlerPlugin(BasePlugin):
         callback_context: CallbackContext,
         llm_request: LlmRequest,
         error: Exception,
-    ) -> Optional[LlmResponse]:
+    ) -> LlmResponse | None:
         agent = getattr(callback_context, "agent_name", "?")
         model = getattr(llm_request, "model", "?")
         label, hint = _classify(error)

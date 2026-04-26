@@ -13,8 +13,8 @@ import logging
 import os
 import secrets
 import time
-from typing import Dict, Any, Optional
-from urllib.parse import urlencode, parse_qs
+from typing import Any
+from urllib.parse import parse_qs, urlencode
 
 import httpx
 
@@ -30,20 +30,20 @@ class OAuthService:
     def __init__(self):
         self._platforms = self._load_json(PLATFORMS_PATH)
         self._tokens = self._load_json(TOKENS_PATH)
-        self._pending_pkce: Dict[str, Dict[str, str]] = {}
+        self._pending_pkce: dict[str, dict[str, str]] = {}
 
     @staticmethod
-    def _load_json(path: str) -> Dict[str, Any]:
+    def _load_json(path: str) -> dict[str, Any]:
         if os.path.exists(path):
             try:
-                with open(path, "r") as f:
+                with open(path) as f:
                     return json.load(f)
             except Exception:
                 logger.error("Failed to load %s", path)
         return {}
 
     @staticmethod
-    def _save_json(path: str, data: Dict[str, Any]):
+    def _save_json(path: str, data: dict[str, Any]):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
@@ -52,7 +52,7 @@ class OAuthService:
     # Platform Registry
     # -----------------------------------------------------------------------
 
-    def register_platform(self, platform_id: str, config: Dict[str, Any]):
+    def register_platform(self, platform_id: str, config: dict[str, Any]):
         """Register or update a platform configuration."""
         required = {"name", "flow", "token_endpoint"}
         missing = required - set(config.keys())
@@ -78,10 +78,10 @@ class OAuthService:
         self._save_json(PLATFORMS_PATH, self._platforms)
         self._save_json(TOKENS_PATH, self._tokens)
 
-    def get_platform(self, platform_id: str) -> Optional[Dict[str, Any]]:
+    def get_platform(self, platform_id: str) -> dict[str, Any] | None:
         return self._platforms.get(platform_id)
 
-    def list_platforms(self) -> Dict[str, Any]:
+    def list_platforms(self) -> dict[str, Any]:
         result = {}
         for pid, cfg in self._platforms.items():
             token_info = self._tokens.get(pid, {})
@@ -101,7 +101,7 @@ class OAuthService:
     # Token Management
     # -----------------------------------------------------------------------
 
-    async def get_token(self, platform_id: str) -> Optional[str]:
+    async def get_token(self, platform_id: str) -> str | None:
         """Returns a valid access token, auto-refreshing if needed."""
         token_data = self._tokens.get(platform_id)
         if not token_data or not token_data.get("access_token"):
@@ -156,7 +156,7 @@ class OAuthService:
         self._save_json(TOKENS_PATH, self._tokens)
         logger.info("Token refreshed for %s", platform_id)
 
-    def _store_token(self, platform_id: str, data: Dict[str, Any]):
+    def _store_token(self, platform_id: str, data: dict[str, Any]):
         """Store token data from a successful auth response."""
         self._tokens[platform_id] = {
             "access_token": data["access_token"],
@@ -176,7 +176,7 @@ class OAuthService:
     # Device Code Flow
     # -----------------------------------------------------------------------
 
-    async def start_device_flow(self, platform_id: str, scopes: list[str] | None = None) -> Dict[str, Any]:
+    async def start_device_flow(self, platform_id: str, scopes: list[str] | None = None) -> dict[str, Any]:
         """Initiate Device Code Flow. Returns device code data with user instructions."""
         platform = self._platforms.get(platform_id)
         if not platform:
@@ -205,7 +205,7 @@ class OAuthService:
 
     async def poll_for_token(
         self, platform_id: str, device_code: str, interval: int, expires_in: int
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Poll token endpoint until the user authorizes or the request expires."""
         platform = self._platforms.get(platform_id)
         if not platform:
@@ -291,7 +291,7 @@ class OAuthService:
         """Check if a platform has an in-progress Auth Code + PKCE flow."""
         return platform_id in self._pending_pkce
 
-    async def exchange_auth_code(self, platform_id: str, code: str) -> Dict[str, Any]:
+    async def exchange_auth_code(self, platform_id: str, code: str) -> dict[str, Any]:
         """Exchange an authorization code for tokens, completing the PKCE flow."""
         platform = self._platforms.get(platform_id)
         if not platform:

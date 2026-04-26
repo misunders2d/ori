@@ -36,7 +36,7 @@ def _load_data():
     # This is the ONLY other source of truth. ALLOWED_USER_IDS is now ignored for safety.
     if os.path.exists(WHITELIST_PATH):
         try:
-            with open(WHITELIST_PATH, "r") as f:
+            with open(WHITELIST_PATH) as f:
                 data = json.load(f)
                 for uid in (data if isinstance(data, list) else data.keys() if isinstance(data, dict) else []):
                     clean_uid = str(uid).strip()
@@ -48,7 +48,7 @@ def _load_data():
     # 3. LOAD BLACKLIST FROM JSON
     if os.path.exists(BLACKLIST_PATH):
         try:
-            with open(BLACKLIST_PATH, "r") as f:
+            with open(BLACKLIST_PATH) as f:
                 data = json.load(f)
                 for uid in (data if isinstance(data, list) else data.keys() if isinstance(data, dict) else []):
                     clean_uid = str(uid).strip()
@@ -61,7 +61,7 @@ def _load_data():
     _whitelist.update(new_whitelist)
     _blacklist.clear()
     _blacklist.update(new_blacklist)
-    
+
     print(f"Gate Config: Perimeter Locked. {len(_whitelist)} total authorized IDs.")
 
 def reload():
@@ -72,14 +72,14 @@ def is_allowed(chat_id: str) -> bool:
     """The Gatekeeper. Strict Fail-Closed."""
     if not chat_id:
         return False
-    
+
     chat_id_str = str(chat_id).strip()
-    
+
     # Check whitelist cache (direct match)
     if chat_id_str in _whitelist:
         logger.info(f"Gate: Access GRANTED for {chat_id_str}")
         return True
-    
+
     # Robustness check: if we have the prefixed version in whitelist but checking the raw ID
     if chat_id_str.isdigit() and f"tg_{chat_id_str}" in _whitelist:
         logger.info(f"Gate: Access GRANTED for {chat_id_str} (via tg_ prefix)")
@@ -89,16 +89,18 @@ def is_allowed(chat_id: str) -> bool:
     if chat_id_str.startswith("tg_") and chat_id_str[3:].isdigit() and chat_id_str[3:] in _whitelist:
         logger.info(f"Gate: Access GRANTED for {chat_id_str} (via raw ID)")
         return True
-    
+
     logger.warning(f"Gate: Access DENIED for {chat_id_str} (Unauthorized)")
     return False
 
 def is_blacklisted(chat_id: str) -> bool:
-    if not chat_id: return False
+    if not chat_id:
+        return False
     return str(chat_id) in _blacklist
 
 def whitelist_chat(chat_id: str):
-    if not chat_id: return
+    if not chat_id:
+        return
     chat_id = str(chat_id).strip()
     _whitelist.add(chat_id)
     if chat_id in _blacklist:
@@ -108,7 +110,8 @@ def whitelist_chat(chat_id: str):
     print(f"Gate Action: Whitelisted {chat_id}")
 
 def blacklist_chat(chat_id: str):
-    if not chat_id: return
+    if not chat_id:
+        return
     chat_id = str(chat_id).strip()
     _blacklist.add(chat_id)
     if chat_id in _whitelist:
@@ -138,7 +141,8 @@ def get_whitelist(): return list(_whitelist)
 def get_blacklist(): return list(_blacklist)
 
 def should_notify_admin(chat_id: str, cooldown: int = 3600) -> bool:
-    if is_blacklisted(chat_id): return False
+    if is_blacklisted(chat_id):
+        return False
     now = time.time()
     last = _last_notified.get(chat_id, 0)
     if now - last > cooldown:

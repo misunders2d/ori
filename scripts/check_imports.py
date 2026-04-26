@@ -1,5 +1,5 @@
-import sys
 import os
+import sys
 
 print(f"PYTHONPATH: {sys.path}")
 print(f"CWD: {os.getcwd()}")
@@ -9,6 +9,6 @@ try:
     print(f"app.app_utils path: {app.app_utils.__path__}")
     import app.app_utils.schema_validator
     print("Imported schema_validator successfully!")
-except Exception as e:
+except Exception:
     import traceback
     traceback.print_exc()

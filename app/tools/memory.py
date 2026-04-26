@@ -11,7 +11,7 @@ LanceDB storage.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from google.adk.memory.memory_entry import MemoryEntry
 from google.adk.tools.tool_context import ToolContext
@@ -60,7 +60,7 @@ async def remember_info(
 
 async def search_memory(
     query: str,
-    category: Optional[str] = None,
+    category: str | None = None,
     limit: int = 3,
     tool_context: ToolContext = None,
 ) -> dict[str, Any]:

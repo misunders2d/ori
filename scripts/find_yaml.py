@@ -1,6 +1,8 @@
 import os
+
+
 def find_yaml(startpath):
-    for root, dirs, files in os.walk(startpath):
+    for root, _dirs, files in os.walk(startpath):
         for f in files:
             if f.endswith('.yaml') or f.endswith('.yml'):
                 print(os.path.join(root, f))

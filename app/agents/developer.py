@@ -32,7 +32,6 @@ from app.toolsets import EvolutionToolset, GitHubToolset, IntegrationToolset
 from app.toolsets.evolution import _is_child_container
 from app.util.models import get_model
 
-
 _skills_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 _google_adk_skill = load_skill_from_dir(_skills_dir / "google-adk-skill")
 _google_adk_a2a_skill = load_skill_from_dir(_skills_dir / "google-adk-a2a-skill")

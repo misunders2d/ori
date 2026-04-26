@@ -262,7 +262,7 @@ async def extract_agent_response(
 
     agent_text_parts: list[str] = []
     media_items: list[dict] = []
-    latest_tool_results: list[str] = []  # noqa: F841 — kept for future feedback shaping
+    latest_tool_results: list[str] = []
 
     for attempt in range(1 + _MAX_RETRIES):
         try:

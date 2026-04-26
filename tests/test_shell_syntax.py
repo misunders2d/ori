@@ -1,5 +1,6 @@
-import subprocess
 import os
+import subprocess
+
 
 def test_deploy_sh_syntax():
     # Check if deploy.sh exists in sandbox

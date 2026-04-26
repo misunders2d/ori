@@ -16,7 +16,6 @@ from pathlib import Path
 
 from app.state import OriSessionState
 
-
 # Keys ADK manages internally on the State object — not part of OriSessionState
 # but written by ADK or its plugins, not by our code.
 ADK_INTERNAL_KEYS: set[str] = set()

@@ -1,5 +1,5 @@
-import sqlite3
 import os
+import sqlite3
 import sys
 
 DB_PATH = os.path.abspath("./data/pending_actions.db")

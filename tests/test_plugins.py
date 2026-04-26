@@ -11,9 +11,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from google.genai import types
-
 
 # ---------------------------------------------------------------------------
 # Test helpers
@@ -218,8 +216,9 @@ def _invocation_ctx(state: dict | None = None, user_id: str = "tg_42"):
 
 @pytest.mark.asyncio
 async def test_state_init_writes_keys():
-    from app.plugins.state_initializer import StateInitializerPlugin
     from google.genai import types
+
+    from app.plugins.state_initializer import StateInitializerPlugin
     with patch.dict(os.environ, {"ADMIN_USER_IDS": "tg_1,tg_2", "BOT_NAME": "Scout"}):
         ic, backing = _invocation_ctx({}, user_id="tg_1")
         await StateInitializerPlugin().on_user_message_callback(
@@ -235,8 +234,9 @@ async def test_state_init_writes_keys():
 async def test_state_init_idempotent():
     """Existing keys are preserved, not overwritten (except bot_name, which
     re-reads env every turn to support renames across restarts)."""
-    from app.plugins.state_initializer import StateInitializerPlugin
     from google.genai import types
+
+    from app.plugins.state_initializer import StateInitializerPlugin
     with patch.dict(os.environ, {"ADMIN_USER_IDS": "tg_x"}):
         ic, backing = _invocation_ctx({"user_id": "preserved"}, user_id="tg_other")
         await StateInitializerPlugin().on_user_message_callback(

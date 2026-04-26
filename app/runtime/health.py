@@ -3,7 +3,7 @@ import os
 import shutil
 import subprocess
 from datetime import datetime
-from typing import Dict, Any
+from typing import Any
 
 from google import genai
 
@@ -12,7 +12,7 @@ from google import genai
 # checks read it for liveness.
 HEARTBEAT_FILE = os.path.abspath("./data/.tg_heartbeat")
 
-async def get_system_health() -> Dict[str, Any]:
+async def get_system_health() -> dict[str, Any]:
     """Compiles a comprehensive health report of the agent's vitals."""
     report = {
         "status": "healthy",
@@ -28,13 +28,13 @@ async def get_system_health() -> Dict[str, Any]:
         await client.aio.models.list(config={'page_size': 1})
         report["vitals"]["google_api"] = "online"
     except Exception as e:
-        report["vitals"]["google_api"] = f"error: {str(e)}"
+        report["vitals"]["google_api"] = f"error: {e!s}"
         report["status"] = "degraded"
 
     # 2. Telegram Poller Liveness
     if os.path.exists(HEARTBEAT_FILE):
         try:
-            with open(HEARTBEAT_FILE, "r") as f:
+            with open(HEARTBEAT_FILE) as f:
                 last_heartbeat = datetime.fromisoformat(f.read().strip())
                 diff = (datetime.now() - last_heartbeat).total_seconds()
                 if diff < 60:
@@ -50,7 +50,7 @@ async def get_system_health() -> Dict[str, Any]:
     # 3. Disk Usage
     data_dir = os.path.abspath("./data")
     if os.path.exists(data_dir):
-        total, used, free = shutil.disk_usage(data_dir)
+        total, used, _free = shutil.disk_usage(data_dir)
         percent_used = (used / total) * 100
         report["vitals"]["disk_usage"] = f"{percent_used:.1f}% used"
         if percent_used > 90:
@@ -64,14 +64,14 @@ async def get_system_health() -> Dict[str, Any]:
             capture_output=True, text=True, timeout=5
         )
         is_modified = diff_res.returncode != 0
-        
+
         # 4b. Identify branch and local hash
         branch_res = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             capture_output=True, text=True, timeout=5
         )
         branch = branch_res.stdout.strip() or "master"
-        
+
         head_res = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
             capture_output=True, text=True, timeout=5
@@ -85,7 +85,7 @@ async def get_system_health() -> Dict[str, Any]:
             ["git", "rev-parse", "--short", remote_ref],
             capture_output=True, text=True, timeout=5
         )
-        
+
         integrity = "unknown"
         if remote_res.returncode == 0:
             remote_hash = remote_res.stdout.strip()
@@ -115,9 +115,9 @@ async def get_system_health() -> Dict[str, Any]:
 
         if is_modified:
             integrity += " (modified)"
-            
+
         report["vitals"]["git_integrity"] = integrity
-            
+
     except Exception:
         report["vitals"]["git_integrity"] = "unknown"
 

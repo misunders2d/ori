@@ -5,7 +5,6 @@ import json
 import logging
 import os
 import secrets
-import uuid
 
 import httpx
 from google.adk.tools.tool_context import ToolContext
@@ -142,7 +141,6 @@ async def spawn_agent(
 
     # Pre-seed parent as a friend in the child's data directory
     # so the child recognizes and trusts the parent from first boot
-    import json
     from datetime import datetime
 
     # Parent runs natively on localhost. Children use --network host, so localhost works.
@@ -247,7 +245,7 @@ async def spawn_agent(
     # Child uses host networking, so it's on localhost:{child_port}
     child_url = f"http://localhost:{child_port}"
     child_ready = False
-    for attempt in range(15):
+    for _attempt in range(15):
         await asyncio.sleep(2)
         try:
             async with httpx.AsyncClient(timeout=5) as client:

@@ -8,11 +8,10 @@ from datetime import datetime, timezone
 
 from app.a2a_server import (
     _build_agent_card,
-    register_pending_oauth,
     _consume_pending_oauth,
 )
 from app.runtime.executor import AgentResponse, _inject_metadata_header
-
+from app.runtime.oauth_state import register_pending_oauth
 
 # ---------------------------------------------------------------------------
 # AgentResponse
@@ -109,8 +108,9 @@ def test_pending_oauth_unknown_token_returns_none():
 # OAuth flow stitch — configure_integration → callback round-trip
 # ---------------------------------------------------------------------------
 
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 
 
 @pytest.mark.asyncio

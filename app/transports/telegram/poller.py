@@ -21,8 +21,8 @@ import asyncio
 import logging
 import os
 import weakref
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable
 
 import httpx
 from google.genai import types
@@ -36,12 +36,13 @@ from app.runtime.executor import (
 from app.runtime.perimeter import (
     is_allowed,
     is_blacklisted,
-    reload as reload_perimeter,
     should_notify_admin,
     whitelist_chat,
 )
+from app.runtime.perimeter import (
+    reload as reload_perimeter,
+)
 from app.runtime.transport import register_adapter
-
 from app.transports.telegram.adapter import (
     TELEGRAM_API,
     TelegramAdapter,
@@ -362,9 +363,9 @@ async def poll_telegram(get_runner_fn, process_init_fn):
 
                     # Secure key capture — intercept BEFORE the agent sees the message.
                     from app.runtime.secure_capture import (
+                        capture_friend_key,
                         capture_key,
                         check_pending,
-                        capture_friend_key,
                         check_pending_friend,
                     )
                     if check_pending(session_id):
@@ -387,7 +388,7 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                             await adapter.delete_message(chat_id, message_id)
                             success, result_msg = verify_pending_totp(session_id, text.strip())
                             if success and "updated" in result_msg.lower():
-                                _runner = get_runner_fn()  # noqa: F841 — force runner reload
+                                _runner = get_runner_fn()
                                 reload_perimeter()
                             await adapter.send_message(chat_id, result_msg)
                         continue
@@ -406,9 +407,9 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                         try:
                             from app.util.models import (  # type: ignore[attr-defined]
                                 format_model_assignments,
+                                list_components,
                                 reset_all_models,
                                 reset_model,
-                                list_components,
                             )
                         except ImportError:
                             await adapter.send_message(

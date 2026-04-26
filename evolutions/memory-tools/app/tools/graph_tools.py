@@ -222,9 +222,9 @@ async def import_pinecone_record(
         return {"status": "error", "message": "Graph core dependency (app/core/graph.py) missing."}
 
     from evolutions.memory_tools.app.tools.pinecone_tools import (
-        get_records,
-        _sync_record_to_graph,
         _sync_person_to_graph,
+        _sync_record_to_graph,
+        get_records,
     )
 
     # Fetch from Pinecone

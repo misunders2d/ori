@@ -1,5 +1,6 @@
 from datetime import datetime
 
+
 def format_metadata_test(text, timestamp, platform):
     ts_str = timestamp.strftime("%Y-%m-%d %H:%M:%S UTC")
     header = f"[Metadata: {ts_str} | Platform: {platform}]"

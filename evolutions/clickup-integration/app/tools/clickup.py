@@ -7,7 +7,6 @@ plus team/space/folder discovery. All functions are async and use httpx.
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 import httpx
 from google.adk.tools.tool_context import ToolContext
@@ -128,11 +127,11 @@ async def clickup_list_folders_and_lists(space_id: str) -> dict:
 async def clickup_list_tasks(
     team_id: str,
     tool_context: ToolContext,
-    assignee_email: Optional[str] = None,
-    list_id: Optional[str] = None,
-    folder_id: Optional[str] = None,
-    status: Optional[str] = None,
-    due: Optional[str] = None,
+    assignee_email: str | None = None,
+    list_id: str | None = None,
+    folder_id: str | None = None,
+    status: str | None = None,
+    due: str | None = None,
 ) -> dict:
     """List tasks with flexible filters.
 
@@ -250,9 +249,9 @@ async def clickup_create_task(
     list_id: str,
     name: str,
     description: str = "",
-    due_date_ms: Optional[int] = None,
-    assignee_emails: Optional[list[str]] = None,
-    parent_task_id: Optional[str] = None,
+    due_date_ms: int | None = None,
+    assignee_emails: list[str] | None = None,
+    parent_task_id: str | None = None,
 ) -> dict:
     """Create a new task (or subtask) in a ClickUp list.
 
@@ -301,12 +300,12 @@ async def clickup_create_task(
 
 async def clickup_update_task(
     task_id: str,
-    name: Optional[str] = None,
-    description: Optional[str] = None,
-    status: Optional[str] = None,
-    due_date_ms: Optional[int] = None,
-    add_assignee_emails: Optional[list[str]] = None,
-    remove_assignee_emails: Optional[list[str]] = None,
+    name: str | None = None,
+    description: str | None = None,
+    status: str | None = None,
+    due_date_ms: int | None = None,
+    add_assignee_emails: list[str] | None = None,
+    remove_assignee_emails: list[str] | None = None,
 ) -> dict:
     """Update an existing task's fields.
 

@@ -8,8 +8,8 @@ class IntegrationToolset(BaseToolset):
     async def get_tools(self, readonly_context=None):
         from app.tools.integrations import (
             configure_integration,
-            remove_integration,
             list_integrations,
+            remove_integration,
         )
 
         return [

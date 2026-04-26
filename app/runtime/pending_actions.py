@@ -1,10 +1,10 @@
-import sqlite3
 import json
+import logging
+import os
 import secrets
+import sqlite3
 import string
 import time
-import os
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -30,23 +30,23 @@ def _init_db():
 
 def stage_action(tool_name: str, args: dict, user_id: str, session_id: str, ttl_minutes: int = 15) -> str:
     """Stages a tool call and returns a unique approval token.
-    
+
     Args:
         tool_name: The name of the tool to be executed.
         args: The arguments for the tool call.
         user_id: The ID of the user who initiated the call.
         session_id: The current session ID.
         ttl_minutes: Time-to-live in minutes.
-        
+
     Returns:
         str: A unique token (e.g., 'ACT-8A4F9X').
     """
     _init_db()
     suffix = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(6))
     token = f"ACT-{suffix}"
-    
+
     expires_at = time.time() + (ttl_minutes * 60)
-    
+
     try:
         with sqlite3.connect(DB_PATH) as conn:
             conn.execute(
@@ -71,14 +71,14 @@ def get_and_delete_action(token: str) -> dict | None:
             row = cursor.fetchone()
             if not row:
                 return None
-            
+
             tool_name, args_json, user_id, session_id, expires_at = row
             conn.execute("DELETE FROM pending_actions WHERE token = ?", (token,))
-            
+
             if time.time() > expires_at:
                 logger.warning(f"Action token {token} has expired.")
                 return None
-                
+
             return {
                 "tool_name": tool_name,
                 "args": json.loads(args_json),

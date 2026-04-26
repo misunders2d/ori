@@ -1,9 +1,8 @@
 import json
 import os
+
 import pytest
-
 from a2a.types import AgentCard
-
 
 # The agent card is written to data/agent.json in the daemon
 AGENT_JSON = os.path.join(os.path.dirname(__file__), os.pardir, "data", "agent.json")
@@ -13,7 +12,7 @@ def test_agent_card_validates():
     # If the file doesn't exist (e.g. fresh environment), skip this test
     if not os.path.exists(AGENT_JSON):
         pytest.skip(f"agent.json not found at {AGENT_JSON}")
-        
+
     with open(AGENT_JSON) as f:
         card = AgentCard(**json.load(f))
 

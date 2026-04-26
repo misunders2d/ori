@@ -1,9 +1,3 @@
-import os
-import shutil
-import subprocess
-import sys
-import uuid
-from datetime import datetime
 
 from google.adk.tools.tool_context import ToolContext
 
@@ -31,9 +25,9 @@ def web_fetch(url: str, tool_context: ToolContext) -> dict:
         with httpx.Client(follow_redirects=True, headers=headers, timeout=30.0) as client:
             response = client.get(url)
             response.raise_for_status()
-            
+
             soup = BeautifulSoup(response.content, "lxml")
-            
+
             # Remove script and style elements
             for script_or_style in soup(["script", "style"]):
                 script_or_style.decompose()
@@ -51,5 +45,5 @@ def web_fetch(url: str, tool_context: ToolContext) -> dict:
                 "length": len(clean_text)
             }
     except Exception as e:
-        return {"status": "error", "message": f"Failed to fetch {url}: {str(e)}"}
+        return {"status": "error", "message": f"Failed to fetch {url}: {e!s}"}
 

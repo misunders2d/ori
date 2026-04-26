@@ -12,7 +12,6 @@ heavy module init.
 
 from __future__ import annotations
 
-
 _PENDING: dict[str, dict[str, str]] = {}
 
 

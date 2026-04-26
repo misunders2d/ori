@@ -7,14 +7,14 @@ class MemoryToolset(BaseToolset):
 
     async def get_tools(self, readonly_context=None):
         from app.tools.memory import (
-            remember_info,
-            search_memory,
             recall_human_preferences,
             recall_technical_context,
+            remember_info,
+            search_memory,
         )
         from app.tools.preferences import (
-            save_user_preferences,
             get_user_preferences,
+            save_user_preferences,
         )
 
         # Note: modify_memory / delete_memory are intentionally not exposed.

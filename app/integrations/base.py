@@ -34,7 +34,6 @@ from typing import ClassVar
 from urllib.parse import urlencode
 
 import httpx
-
 from google.adk.auth.auth_credential import (
     AuthCredential,
     AuthCredentialTypes,
