@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 
+from google.adk.agents.context_cache_config import ContextCacheConfig
 from google.adk.apps import App
 from google.adk.apps.app import EventsCompactionConfig, ResumabilityConfig
 from google.adk.apps.llm_event_summarizer import LlmEventSummarizer
@@ -90,6 +91,17 @@ app = App(
         compaction_interval=10,
         overlap_size=3,
         summarizer=LlmEventSummarizer(llm=get_model("summarizer")),
+    ),
+    # Cache stable instruction prefixes across LLM calls. Per-agent
+    # selection isn't supported by ADK 2.0 (config is App-level), but
+    # the min_tokens floor naturally excludes small prompts — so only
+    # large instructions like the Developer agent's (~3K tokens) get
+    # cached. Smaller agents fall below the floor and skip caching.
+    # 30-minute TTL matches Gemini's max cache duration.
+    context_cache_config=ContextCacheConfig(
+        cache_intervals=10,
+        ttl_seconds=1800,
+        min_tokens=2048,
     ),
     resumability_config=ResumabilityConfig(is_resumable=True),
 )
