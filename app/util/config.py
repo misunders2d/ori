@@ -32,9 +32,12 @@ ALLOWED_CONFIG_KEYS = frozenset({
     "GITHUB_TOKEN",
     "GITHUB_REPO",
     # Google OAuth (per-user Drive/Gmail/Calendar token store) — legacy
-    # names that app/tools/google_oauth/web_flow.py reads directly.
+    # names that app/tools/google_oauth/web_flow.py reads directly. The
+    # NEW integrations subsystem (configure_integration) reads the same
+    # keys, so user provides one set of credentials, both paths use them.
     "GOOGLE_OAUTH_CLIENT_ID",
     "GOOGLE_OAUTH_CLIENT_SECRET",
+    "GOOGLE_OAUTH_REDIRECT_URI",
     "OAUTH_BASE_URL",
     # Amazon SP-API (LWA OAuth) — legacy names that
     # app/tools/sp_api_tools.py and sp_api_export.py read.
@@ -55,14 +58,12 @@ ALLOWED_CONFIG_KEYS = frozenset({
     "NEO4J_URI",
     "NEO4J_USERNAME",
     "NEO4J_PASSWORD",
-    # OAuth integrations subsystem (multi-tenant flows for ClickUp/Slack
-    # via configure_integration). Distinct from the per-user Google OAuth
-    # token store above. Provider-prefixed convention matches GOOGLE_OAUTH_*
-    # so the integrations subsystem and legacy per-user OAuth share keys.
+    # OAuth integrations subsystem (configure_integration). One key set
+    # per provider — `<PROVIDER>_OAUTH_CLIENT_ID` / `_CLIENT_SECRET` /
+    # `_REDIRECT_URI`. Provider-prefixed to match legacy convention.
     "GITHUB_OAUTH_CLIENT_ID",
     "GITHUB_OAUTH_CLIENT_SECRET",
     "GITHUB_OAUTH_REDIRECT_URI",
-    "GOOGLE_OAUTH_REDIRECT_URI",
     "CLICKUP_OAUTH_CLIENT_ID",
     "CLICKUP_OAUTH_CLIENT_SECRET",
     "CLICKUP_OAUTH_REDIRECT_URI",
@@ -95,9 +96,10 @@ AGENT_CONFIG_KEYS = frozenset({
     "SLACK_BOT_TOKEN",
     "SLACK_APP_TOKEN",
     "SLACK_SIGNING_SECRET",
-    # Google OAuth (per-user token store)
+    # Google OAuth (per-user token store; shared with integrations subsystem)
     "GOOGLE_OAUTH_CLIENT_ID",
     "GOOGLE_OAUTH_CLIENT_SECRET",
+    "GOOGLE_OAUTH_REDIRECT_URI",
     "OAUTH_BASE_URL",
     # Amazon SP-API
     "SP_API_CLIENT_ID",
