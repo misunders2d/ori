@@ -8,31 +8,44 @@ from deploy.vault import set as vault_set
 logger = logging.getLogger(__name__)
 
 ALLOWED_CONFIG_KEYS = frozenset({
+    # Core LLM providers
     "GOOGLE_API_KEY",
     "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
     "OPENROUTER_API_KEY",
+    # Google Cloud / Vertex AI
     "GOOGLE_CLOUD_PROJECT",
     "GOOGLE_CLOUD_LOCATION",
     "GOOGLE_GENAI_USE_VERTEXAI",
     "GOOGLE_APPLICATION_CREDENTIALS",
+    # Runtime / lifecycle
     "AGENT_RPM",
-    "TELEGRAM_BOT_TOKEN",
-    "TELEGRAM_WEBHOOK_SECRET",
-    "GITHUB_TOKEN",
-    "GITHUB_REPO",
     "ADMIN_USER_IDS",
     "BOT_NAME",
     "APP_NAME",
     "REQUIRE_2FA",
+    "COMPANY_DOMAIN",
+    # Telegram
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_WEBHOOK_SECRET",
+    # GitHub
+    "GITHUB_TOKEN",
+    "GITHUB_REPO",
+    # Google OAuth (per-user Drive/Gmail/Calendar token store) — legacy
+    # names that app/tools/google_oauth/web_flow.py reads directly.
+    "GOOGLE_OAUTH_CLIENT_ID",
+    "GOOGLE_OAUTH_CLIENT_SECRET",
+    "OAUTH_BASE_URL",
+    # Amazon SP-API (LWA OAuth) — legacy names that
+    # app/tools/sp_api_tools.py and sp_api_export.py read.
+    "SP_API_CLIENT_ID",
+    "SP_API_CLIENT_SECRET",
+    "SP_API_REFRESH_TOKEN",
+    "SP_API_SELLER_ID",
     # --- amazon_manager domain integrations (flat tokens) ---
     "KEEPA_API_KEY",
     "H10_API_KEY",
     "YOUTUBE_API_KEY",
-    "LWA_REFRESH_TOKEN",
-    "LWA_CLIENT_ID",
-    "LWA_CLIENT_SECRET",
-    "SP_API_REGION",
-    "SP_API_MARKETPLACE_ID",
     "BQ_GCP_SERVICE_ACCOUNT_INFO",
     "CLICKUP_API_TOKEN",
     "CLICKUP_TEAM_ID",
@@ -42,7 +55,9 @@ ALLOWED_CONFIG_KEYS = frozenset({
     "NEO4J_URI",
     "NEO4J_USERNAME",
     "NEO4J_PASSWORD",
-    # --- ClickUp / Slack OAuth (used by app/integrations/) ---
+    # OAuth integrations subsystem (multi-tenant flows for ClickUp/Slack
+    # via configure_integration). Distinct from the per-user Google OAuth
+    # token store above.
     "OAUTH_CLICKUP_CLIENT_ID",
     "OAUTH_CLICKUP_CLIENT_SECRET",
     "OAUTH_CLICKUP_REDIRECT_URI",
@@ -54,33 +69,44 @@ ALLOWED_CONFIG_KEYS = frozenset({
 # Keys the agent can set via configure_integration (conversational flow).
 # ADMIN_USER_IDS and REQUIRE_2FA are excluded — they must only be set via /init (requires passcode).
 AGENT_CONFIG_KEYS = frozenset({
+    # Core LLM providers
     "GOOGLE_API_KEY",
     "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
     "OPENROUTER_API_KEY",
+    # Google Cloud / Vertex AI
     "GOOGLE_CLOUD_PROJECT",
     "GOOGLE_CLOUD_LOCATION",
     "GOOGLE_GENAI_USE_VERTEXAI",
+    # Identity
+    "BOT_NAME",
+    "APP_NAME",
+    # Telegram / GitHub
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_WEBHOOK_SECRET",
     "GITHUB_TOKEN",
     "GITHUB_REPO",
-    "BOT_NAME",
-    "APP_NAME",
-    # amazon_manager domain integrations
-    "KEEPA_API_KEY",
-    "H10_API_KEY",
-    "YOUTUBE_API_KEY",
-    "LWA_REFRESH_TOKEN",
-    "LWA_CLIENT_ID",
-    "LWA_CLIENT_SECRET",
-    "SP_API_REGION",
-    "SP_API_MARKETPLACE_ID",
-    "BQ_GCP_SERVICE_ACCOUNT_INFO",
-    "CLICKUP_API_TOKEN",
-    "CLICKUP_TEAM_ID",
+    # Slack
     "SLACK_BOT_TOKEN",
     "SLACK_APP_TOKEN",
     "SLACK_SIGNING_SECRET",
+    # Google OAuth (per-user token store)
+    "GOOGLE_OAUTH_CLIENT_ID",
+    "GOOGLE_OAUTH_CLIENT_SECRET",
+    "OAUTH_BASE_URL",
+    # Amazon SP-API
+    "SP_API_CLIENT_ID",
+    "SP_API_CLIENT_SECRET",
+    "SP_API_REFRESH_TOKEN",
+    "SP_API_SELLER_ID",
+    # Amazon domain APIs
+    "KEEPA_API_KEY",
+    "H10_API_KEY",
+    "YOUTUBE_API_KEY",
+    # BigQuery / Neo4j / ClickUp
+    "BQ_GCP_SERVICE_ACCOUNT_INFO",
+    "CLICKUP_API_TOKEN",
+    "CLICKUP_TEAM_ID",
     "NEO4J_URI",
     "NEO4J_USERNAME",
     "NEO4J_PASSWORD",
