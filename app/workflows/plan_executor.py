@@ -43,7 +43,7 @@ _CONTINUATION_PROMPT = (
 _MAX_ITERATIONS = 25
 
 
-@node(name="plan_executor", rerun_on_resume=False)
+@node(name="plan_executor", rerun_on_resume=True)
 async def plan_executor_node(ctx: Context, node_input):
     """Run the coordinator once, then loop while a plan is pending.
 
