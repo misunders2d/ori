@@ -24,6 +24,31 @@ ALLOWED_CONFIG_KEYS = frozenset({
     "BOT_NAME",
     "APP_NAME",
     "REQUIRE_2FA",
+    # --- amazon_manager domain integrations (flat tokens) ---
+    "KEEPA_API_KEY",
+    "H10_API_KEY",
+    "YOUTUBE_API_KEY",
+    "LWA_REFRESH_TOKEN",
+    "LWA_CLIENT_ID",
+    "LWA_CLIENT_SECRET",
+    "SP_API_REGION",
+    "SP_API_MARKETPLACE_ID",
+    "BQ_GCP_SERVICE_ACCOUNT_INFO",
+    "CLICKUP_API_TOKEN",
+    "CLICKUP_TEAM_ID",
+    "SLACK_BOT_TOKEN",
+    "SLACK_APP_TOKEN",
+    "SLACK_SIGNING_SECRET",
+    "NEO4J_URI",
+    "NEO4J_USERNAME",
+    "NEO4J_PASSWORD",
+    # --- ClickUp / Slack OAuth (used by app/integrations/) ---
+    "OAUTH_CLICKUP_CLIENT_ID",
+    "OAUTH_CLICKUP_CLIENT_SECRET",
+    "OAUTH_CLICKUP_REDIRECT_URI",
+    "OAUTH_SLACK_CLIENT_ID",
+    "OAUTH_SLACK_CLIENT_SECRET",
+    "OAUTH_SLACK_REDIRECT_URI",
 })
 
 # Keys the agent can set via configure_integration (conversational flow).
@@ -41,6 +66,24 @@ AGENT_CONFIG_KEYS = frozenset({
     "GITHUB_REPO",
     "BOT_NAME",
     "APP_NAME",
+    # amazon_manager domain integrations
+    "KEEPA_API_KEY",
+    "H10_API_KEY",
+    "YOUTUBE_API_KEY",
+    "LWA_REFRESH_TOKEN",
+    "LWA_CLIENT_ID",
+    "LWA_CLIENT_SECRET",
+    "SP_API_REGION",
+    "SP_API_MARKETPLACE_ID",
+    "BQ_GCP_SERVICE_ACCOUNT_INFO",
+    "CLICKUP_API_TOKEN",
+    "CLICKUP_TEAM_ID",
+    "SLACK_BOT_TOKEN",
+    "SLACK_APP_TOKEN",
+    "SLACK_SIGNING_SECRET",
+    "NEO4J_URI",
+    "NEO4J_USERNAME",
+    "NEO4J_PASSWORD",
 })
 
 

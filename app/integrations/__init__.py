@@ -12,8 +12,10 @@ handler use `REGISTRY[name]` to dispatch flows.
 from __future__ import annotations
 
 from app.integrations.base import IntegrationProvider
+from app.integrations.clickup import ClickUpProvider
 from app.integrations.github import GitHubProvider
 from app.integrations.google import GoogleProvider
+from app.integrations.slack import SlackProvider
 
 
 REGISTRY: dict[str, IntegrationProvider] = {}
@@ -37,6 +39,8 @@ def list_providers() -> list[str]:
 # Self-register the bundled providers on package import.
 register_provider(GoogleProvider())
 register_provider(GitHubProvider())
+register_provider(ClickUpProvider())
+register_provider(SlackProvider())
 
 
 __all__ = [
@@ -47,4 +51,6 @@ __all__ = [
     "list_providers",
     "GoogleProvider",
     "GitHubProvider",
+    "ClickUpProvider",
+    "SlackProvider",
 ]
