@@ -60,6 +60,15 @@ if is_cli_mode:
     logging.getLogger("google.adk").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
+# LiteLLM has its own handler AND propagates to root → every completion call
+# logs twice ("LiteLLM:INFO: utils.py:4004 -" + "INFO: ...same..."). Stop the
+# propagation; LiteLLM's own handler is enough. Bump to WARNING so success
+# completions don't spam the log file at all (legacy used native Gemini class
+# which never went through litellm — no spam there).
+_litellm_logger = logging.getLogger("LiteLLM")
+_litellm_logger.propagate = False
+_litellm_logger.setLevel(logging.WARNING)
+
 
 from google.adk.artifacts import FileArtifactService
 from google.adk.runners import Runner
