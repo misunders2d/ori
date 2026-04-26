@@ -21,7 +21,7 @@ from importlib import import_module
 from typing import Callable
 
 # Order: messenger transports first, CLI fallback last.
-TRANSPORTS: list[str] = ["telegram", "cli"]
+TRANSPORTS: list[str] = ["telegram", "slack", "cli"]
 
 
 def get_poller_module(name: str):

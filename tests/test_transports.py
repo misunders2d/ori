@@ -25,14 +25,15 @@ def test_default_registry_order():
 def test_register_transport_inserts_before_cli():
     """New transports slot in BEFORE the CLI fallback."""
     initial = list_transports()
+    placeholder = "discord"  # not in defaults; safe to register/unregister
+    assert placeholder not in initial, "test placeholder collided with a real default"
     try:
-        register_transport("slack")
-        assert "slack" in TRANSPORTS
-        assert TRANSPORTS.index("slack") < TRANSPORTS.index("cli")
+        register_transport(placeholder)
+        assert placeholder in TRANSPORTS
+        assert TRANSPORTS.index(placeholder) < TRANSPORTS.index("cli")
     finally:
-        # Clean up
-        if "slack" in TRANSPORTS:
-            TRANSPORTS.remove("slack")
+        if placeholder in TRANSPORTS:
+            TRANSPORTS.remove(placeholder)
     assert list_transports() == initial
 
 
