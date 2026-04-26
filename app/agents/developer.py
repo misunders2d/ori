@@ -28,7 +28,7 @@ from app.tools.model_tools import (
     verify_model_reachable,
 )
 from app.tools.web import web_fetch
-from app.toolsets import EvolutionToolset, GitHubToolset, IntegrationToolset, ScratchpadToolset
+from app.toolsets import EvolutionToolset, GitHubToolset, IntegrationToolset
 from app.toolsets.evolution import _is_child_container
 from app.util.models import get_model
 
@@ -39,7 +39,6 @@ _skill_creator_skill = load_skill_from_dir(_skills_dir / "skill-creator-skill")
 _external_research_skill = load_skill_from_dir(_skills_dir / "external-research-skill")
 _evolution_workflow_skill = load_skill_from_dir(_skills_dir / "evolution-workflow-skill")
 _model_swap_skill = load_skill_from_dir(_skills_dir / "model-swap-skill")
-_scratchpad_skill = load_skill_from_dir(_skills_dir / "scratchpad-skill")
 
 
 _IS_CHILD = _is_child_container()
@@ -113,12 +112,10 @@ _tools = [
         _external_research_skill,
         _evolution_workflow_skill,
         _model_swap_skill,
-        _scratchpad_skill,
     ]),
     EvolutionToolset(),
     IntegrationToolset(),
     GitHubToolset(),
-    ScratchpadToolset(),
     *([google_search_agent_tool] if google_search_agent_tool else []),
     web_fetch,
     list_available_models,

@@ -4,7 +4,6 @@ from .integration import IntegrationToolset
 from .memory import MemoryToolset
 from .planner import PlannerToolset
 from .scheduling import SchedulingToolset
-from .scratchpad import ScratchpadToolset
 from .system import SystemToolset
 
 __all__ = [
@@ -14,6 +13,5 @@ __all__ = [
     "MemoryToolset",
     "PlannerToolset",
     "SchedulingToolset",
-    "ScratchpadToolset",
     "SystemToolset",
 ]
