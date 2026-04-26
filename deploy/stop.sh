@@ -13,12 +13,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-# Derive service name (matches install.sh / start.sh)
-_bot_name="ori"
+# Derive service name (matches install.sh / start.sh).
+# Same worktree-aware fallback so stop.sh hits the right service even
+# before the vault has been seeded.
+_bot_name=""
 VAULT_FILE="$PROJECT_ROOT/data/vault/credentials.json"
 if [ -f "$VAULT_FILE" ] && command -v python3 &>/dev/null; then
-    _env_name=$(python3 -c "import json; print(json.load(open('$VAULT_FILE')).get('BOT_NAME',''))" 2>/dev/null || true)
-    [ -n "$_env_name" ] && _bot_name="$_env_name"
+    _bot_name=$(python3 -c "import json; print(json.load(open('$VAULT_FILE')).get('BOT_NAME',''))" 2>/dev/null || true)
+fi
+if [ -z "$_bot_name" ]; then
+    _basename=$(basename "$PROJECT_ROOT")
+    case "$_basename" in
+        main|ori|Ori) _bot_name="Ori" ;;
+        *) _bot_name=$(echo "$_basename" | tr '_' '-' | awk -F- 'BEGIN{OFS="-"} {for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2))} 1') ;;
+    esac
 fi
 SERVICE_NAME="$(echo "$_bot_name" | tr '[:upper:]' '[:lower:]' | tr ' _' '-' | sed 's/[^a-z0-9-]//g')-agent"
 

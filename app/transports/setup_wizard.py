@@ -359,9 +359,19 @@ def main():
     # -----------------------------------------------------------------------
     bot_name = os.environ.get("BOT_NAME", "").strip()
     if not bot_name:
+        # Smart default: derive from the worktree directory name so multiple
+        # checkouts of the same repo each get a distinct default. `main/` →
+        # "Ori"; anything else uses the dir name title-cased
+        # (`amazon_manager/` → "Amazon-Manager").
+        _project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        _basename = os.path.basename(_project_root)
+        if _basename.lower() in ("main", "ori"):
+            _default = "Ori"
+        else:
+            _default = "-".join(p.capitalize() for p in _basename.replace("_", "-").split("-"))
         cprint("[1] Agent Name", "93")
         print("What would you like to call your autonomous agent?")
-        bot_name = prompt("Enter a name (default: Ori):") or "Ori"
+        bot_name = prompt(f"Enter a name (default: {_default}):") or _default
         set_key(ENV_FILE_PATH, "BOT_NAME", bot_name)
         cprint(f"  Hello, {bot_name}.\n", "92")
 
