@@ -1,21 +1,23 @@
-"""Plan-and-execute Workflow — coordinator agent + completion-check loop.
+"""Plan-and-execute workflow — dynamic-workflow pattern.
 
-ADK 2.0 native: a single Workflow graph with the coordinator as a node
-and a `plan_completion_check` function-node that loops back via a routed
-edge while the active plan has pending steps.
+ADK 2.0 idiom per the official docs (https://adk.dev/workflows/dynamic/):
+the workflow IS a single `@node`-decorated async function that runs the
+coordinator and re-runs it inside a `while` loop until the plan has no
+pending steps. All control flow lives in Python — cancellation
+propagates naturally through `asyncio.CancelledError` at await points,
+so a `task.cancel()` from the transport layer cleanly aborts a
+mid-flight loop without re-firing the coordinator.
 
-  START -> coordinator -> plan_completion_check
-    if pending steps:  Event(route="continue")  -> back to coordinator
-    if all done:       None                     -> workflow terminates
+This replaces the earlier graph-edge approach which had two failure
+modes:
+1. Graph edges re-routed back to the coordinator AFTER `task.cancel()`
+   killed the runner task, generating extra tool calls (live-reproduced
+   bug: "create one image" → 3 images, even after user said stop).
+2. The state-keyed iteration counter persisted across user turns,
+   making the cap behave unpredictably across long sessions.
 
-This is the production root agent. Single path — no env-flag fallback.
-For sessions without a plan, the check immediately returns None and the
-workflow terminates after one coordinator turn (single-turn chat works
-exactly like before).
-
-Crash mid-plan: state is durable in `data/plans.db` (Phase B). On restart,
-the coordinator's next get_next_step picks up the in-progress step
-without double-claiming.
+Single-turn chat passes through one coordinator call. Multi-step plans
+loop until `runtime.plan_storage.has_pending_steps` is False.
 """
 
 from __future__ import annotations
@@ -23,21 +25,14 @@ from __future__ import annotations
 import logging
 
 from google.adk.agents.context import Context
-from google.adk.events.event import Event
 from google.adk.workflow import Workflow, node
 
 from app.agents.coordinator import root_agent as coordinator_agent
 from app.runtime.plan_storage import has_pending_steps
-from app.state import (
-    OriSessionState,  # noqa: F401  # referenced in the state_schema comment below
-)
 
 logger = logging.getLogger(__name__)
 
 
-# Continuation prompt — fed as the coordinator's next input on each loop.
-# Multilingual-safe: uses no English-keyword triggers; just a system-level
-# instruction the LLM follows in any language.
 _CONTINUATION_PROMPT = (
     "Your enforced plan still has pending steps. Do NOT emit a user-facing "
     "summary yet. Call get_next_step immediately and continue executing. "
@@ -46,56 +41,51 @@ _CONTINUATION_PROMPT = (
 )
 
 _MAX_ITERATIONS = 25
-_ITER_KEY = "plan_workflow_iters"
 
 
-@node(name="plan_completion_check", rerun_on_resume=False)
-async def plan_completion_check(ctx: Context, node_input):
-    """Inspect plan state. Loop back to coordinator while steps remain.
+@node(name="plan_executor", rerun_on_resume=False)
+async def plan_executor_node(ctx: Context, node_input):
+    """Run the coordinator once, then loop while a plan is pending.
 
-    Returns None on terminate (no active plan or all done) — that emits no
-    downstream event so the workflow ends with the coordinator's last
-    response as the final output.
+    For single-turn chat (no plan, or no pending steps) the loop body is
+    never entered — equivalent to running the coordinator agent directly,
+    just wrapped in workflow context for resumability + checkpointing.
     """
-    sess = getattr(ctx, "session", None)
-    session_id = getattr(sess, "id", None) or getattr(sess, "session_id", None) if sess else None
-    if not session_id:
-        return None
+    response = await ctx.run_node(coordinator_agent, node_input)
 
-    iter_count = ctx.state.get(_ITER_KEY, 0) + 1
-    ctx.state[_ITER_KEY] = iter_count
-    if iter_count > _MAX_ITERATIONS:
+    session = getattr(ctx, "session", None)
+    session_id = (
+        getattr(session, "id", None) or getattr(session, "session_id", None)
+        if session
+        else None
+    )
+    if not session_id:
+        return response
+
+    iterations = 0
+    while await has_pending_steps(session_id) and iterations < _MAX_ITERATIONS:
+        iterations += 1
+        response = await ctx.run_node(coordinator_agent, _CONTINUATION_PROMPT)
+
+    if iterations >= _MAX_ITERATIONS and await has_pending_steps(session_id):
         logger.warning(
-            "plan_executor: iteration cap %d hit for session %s",
+            "plan_executor: hit iteration cap %d for session %s",
             _MAX_ITERATIONS, session_id,
         )
-        return None
 
-    if await has_pending_steps(session_id):
-        return Event(output=_CONTINUATION_PROMPT, route="continue")
-    return None
+    return response
 
 
 plan_executor_workflow = Workflow(
     name="ori_plan_executor",
     description=(
-        "Native ADK 2.0 plan-and-execute. Single-turn chat passes through "
-        "(check returns None, terminates). Multi-step plans loop the "
-        "coordinator until plan_storage.has_pending_steps is False."
+        "Native ADK 2.0 plan-and-execute via dynamic workflow. Single-turn "
+        "chat passes through one coordinator call. Multi-step plans loop "
+        "until plan_storage.has_pending_steps is False. Cancellation "
+        "propagates through Python await semantics — task.cancel() cleanly "
+        "aborts the loop without re-firing."
     ),
-    # NOTE: We can't pass `state_schema=OriSessionState` here.
-    # ADK 2.0's state validator (sessions/state.py:_validate_state_entry) is
-    # strict on declared keys, but ADK's own SkillToolset writes dynamic keys
-    # like `_adk_activated_skill_<AgentName>` (skill_toolset.py:166) that
-    # nothing in OUR schema can declare. Pydantic's `extra='allow'` is
-    # bypassed by ADK's own validator. So we use the schema as documentation
-    # and IDE help, but don't pass it to the Workflow — state stays an
-    # unrestricted dict at runtime.
     edges=[
-        ("START", coordinator_agent),
-        (coordinator_agent, plan_completion_check),
-        # Loop back when the check returns Event(route="continue").
-        # Cycles in ADK 2.0 require at least one routed edge — this satisfies it.
-        (plan_completion_check, {"continue": coordinator_agent}),
+        ("START", plan_executor_node),
     ],
 )

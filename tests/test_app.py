@@ -1,6 +1,6 @@
 """App smoke tests — verifies the App wiring composes."""
 
-from google.adk.agents import LlmAgent
+from google.adk.workflow import Workflow
 
 from app.agent import PLUGINS, app, app_name, root_agent
 
@@ -9,15 +9,16 @@ def test_app_name_default():
     assert app_name == "ori"
 
 
-def test_root_is_coordinator_agent():
-    """Root is the Coordinator LlmAgent directly, replicating the legacy
-    amazon_manager flow. Earlier the rebuild used a Workflow wrapper with a
-    plan-completion-loop edge — that produced re-firing bugs (cancelled
-    tasks generating extra tool calls). Single Agent root, single response
-    per user message, plan continuation handled by run_scheduled_task only.
+def test_root_is_workflow():
+    """Root is the plan_executor Workflow — uses ADK 2.0's dynamic-workflow
+    pattern (single @node async function with internal while loop). Single-
+    turn chat passes through; multi-step plans loop inside the node until
+    has_pending_steps returns False. Cancellation propagates through
+    asyncio await semantics, so task.cancel() aborts cleanly without
+    re-firing the coordinator.
     """
-    assert isinstance(root_agent, LlmAgent)
-    assert root_agent.name == "CoordinatorAgent"
+    assert isinstance(root_agent, Workflow)
+    assert root_agent.name == "ori_plan_executor"
 
 
 def test_app_root_agent_matches():

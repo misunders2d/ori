@@ -1,30 +1,17 @@
 """Ori App — the single-source App definition.
 
-Replicates the legacy amazon_manager flow: the Coordinator is the root
-agent directly (no Workflow wrapper). Plan-and-execute continuation, when
-needed for scheduled tasks, is driven by the legacy
-`_drive_plan_to_completion` re-prompt loop in `app/tasks.py`. Interactive
-chat returns one response per user message — the agent doesn't auto-loop.
-
-The Workflow wrapper experiment caused two production bugs:
-- The loop edge re-fired the coordinator after `task.cancel()` had killed
-  the runner task, leading to image-gen tools running multiple times for
-  one user request even after the user said "stop".
-- The plan_completion_check ran on every turn, occasionally re-routing
-  back to the coordinator even when no plan was active.
-
-Legacy used `App(root_agent=coordinator)` directly. We do the same.
+ADK 2.0 native: root_agent is a `Workflow` using the dynamic-workflow
+pattern (per https://adk.dev/workflows/dynamic/). Single `@node`-
+decorated async function runs the coordinator once, then loops with a
+continuation prompt while a plan has pending steps. All control flow is
+Python — cancellation propagates through asyncio await semantics
+(no re-firing after task.cancel()).
 
 Wires together:
-- Root agent: the Coordinator agent directly (replicates legacy).
-- Plugins: ten in registration order. AdminGate → PerimeterAcl runs
-  *first* so denied calls short-circuit before state init or the model.
-  ModelConfig runs before PromptInjection so hot-swapped models see the
-  injected system directive.
-- Events compaction: every 10 events, summarized via the configured
-  summarizer; last 3 kept raw.
-- Resumability: enabled so OAuth flows (RequestCredential / RequestInput)
-  can pause and resume cleanly.
+- Root agent: the plan_executor_workflow (Workflow with one @node).
+- Plugins: ten in registration order.
+- Events compaction: every 10 events.
+- Resumability: enabled so OAuth flows can pause/resume.
 
 Native ADK 2.0 services (memory_service, credential_service,
 artifact_service) are wired at the Runner level in `run_bot.py`.
@@ -38,7 +25,6 @@ from google.adk.apps import App
 from google.adk.apps.app import EventsCompactionConfig, ResumabilityConfig
 from google.adk.apps.llm_event_summarizer import LlmEventSummarizer
 
-from app.agents.coordinator import root_agent as coordinator_agent
 from app.plugins import (
     A2APrivacyPlugin,
     AdminGatePlugin,
@@ -53,6 +39,7 @@ from app.plugins import (
     VerifyRetryPlugin,
 )
 from app.util.models import get_model
+from app.workflows.plan_executor import plan_executor_workflow
 
 # state_schema is attached at the Workflow level (root_agent), not on App —
 # ADK 2.0's App doesn't carry a state_schema field directly.
@@ -97,7 +84,7 @@ PLUGINS = [
 
 app = App(
     name=app_name,
-    root_agent=coordinator_agent,
+    root_agent=plan_executor_workflow,
     plugins=PLUGINS,
     events_compaction_config=EventsCompactionConfig(
         compaction_interval=10,
