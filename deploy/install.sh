@@ -12,12 +12,20 @@ cd "$PROJECT_ROOT"
 PYTHON="$PROJECT_ROOT/.venv/bin/python"
 SUPERVISOR="$PROJECT_ROOT/deploy/ori-supervisor.py"
 
-# Derive service name
-_bot_name="ori"
+# Derive service name. Default falls through to the worktree dir name
+# so two checkouts can install side-by-side without manual config.
+# `main/` → "Ori"; anything else uses the dir name title-cased.
+_bot_name=""
 VAULT_FILE="$PROJECT_ROOT/data/vault/credentials.json"
 if [ -f "$VAULT_FILE" ]; then
-    _env_name=$("$PYTHON" -c "import json; print(json.load(open('$VAULT_FILE')).get('BOT_NAME',''))" 2>/dev/null || true)
-    [ -n "$_env_name" ] && _bot_name="$_env_name"
+    _bot_name=$("$PYTHON" -c "import json; print(json.load(open('$VAULT_FILE')).get('BOT_NAME',''))" 2>/dev/null || true)
+fi
+if [ -z "$_bot_name" ]; then
+    _basename=$(basename "$PROJECT_ROOT")
+    case "$_basename" in
+        main|ori|Ori) _bot_name="Ori" ;;
+        *) _bot_name=$(echo "$_basename" | tr '_' '-' | awk -F- 'BEGIN{OFS="-"} {for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2))} 1') ;;
+    esac
 fi
 SERVICE_NAME="$(echo "$_bot_name" | tr '[:upper:]' '[:lower:]' | tr ' _' '-' | sed 's/[^a-z0-9-]//g')-agent"
 

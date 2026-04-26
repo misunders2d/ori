@@ -86,13 +86,48 @@ if needs_setup; then
     fi
 fi
 
-# ---- Step 4: Derive service name ----
-_bot_name="ori"
+# ---- Step 4: Derive service name + auto-pick port ----
+#
+# Worktree-friendly defaults (so multiple checkouts of the same repo can
+# run in parallel without manual config). If vault has no BOT_NAME, derive
+# from the worktree directory: `main/` → "Ori" (canonical), anything else
+# uses the dir name capitalized — e.g. `amazon_manager/` → "Amazon-Manager".
+# Persist to vault on first run so the choice is stable.
+_bot_name=""
 if [ -f "$VAULT_FILE" ]; then
-    _env_name=$("$PYTHON" -c "import json; print(json.load(open('$VAULT_FILE')).get('BOT_NAME',''))" 2>/dev/null || true)
-    [ -n "$_env_name" ] && _bot_name="$_env_name"
+    _bot_name=$("$PYTHON" -c "import json; print(json.load(open('$VAULT_FILE')).get('BOT_NAME',''))" 2>/dev/null || true)
+fi
+if [ -z "$_bot_name" ]; then
+    _basename=$(basename "$PROJECT_ROOT")
+    case "$_basename" in
+        main|ori|Ori) _bot_name="Ori" ;;
+        *)
+            # Title-case dashes/underscores: amazon_manager → Amazon-Manager
+            _bot_name=$(echo "$_basename" | tr '_' '-' | awk -F- 'BEGIN{OFS="-"} {for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2))} 1')
+            ;;
+    esac
+    "$PYTHON" -c "from deploy.vault import set as _s; _s('BOT_NAME','$_bot_name')" 2>/dev/null || true
+    echo ":: Auto-assigned BOT_NAME=$_bot_name (derived from worktree)."
 fi
 SERVICE_NAME="$(echo "$_bot_name" | tr '[:upper:]' '[:lower:]' | tr ' _' '-' | sed 's/[^a-z0-9-]//g')-agent"
+
+# Auto-pick A2A_PORT if vault has none, so the tunnel starts on the right
+# port from t=0 (rather than waiting for supervisor to pick + refresh).
+_a2a_port_vault=$("$PYTHON" -c "import json; print(json.load(open('$VAULT_FILE')).get('A2A_PORT',''))" 2>/dev/null || true)
+if [ -z "$_a2a_port_vault" ]; then
+    _a2a_port=$("$PYTHON" -c "
+import socket
+p = 8000
+for _ in range(100):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        if s.connect_ex(('127.0.0.1', p)) != 0:
+            break
+    p += 1
+print(p)
+" 2>/dev/null || echo "8000")
+    "$PYTHON" -c "from deploy.vault import set as _s; _s('A2A_PORT','$_a2a_port')" 2>/dev/null || true
+    echo ":: Auto-assigned A2A_PORT=$_a2a_port (first free port from 8000)."
+fi
 
 # ---- Step 5: Start ----
 is_service_installed() {
