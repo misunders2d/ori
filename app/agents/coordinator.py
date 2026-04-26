@@ -32,6 +32,7 @@ from app.tools.model_tools import list_available_models
 from app.tools.web import web_fetch
 from app.tools.whitelist import blacklist_chat, whitelist_chat
 from app.toolsets import (
+    CreativesToolset,
     IntegrationToolset,
     MemoryToolset,
     PlannerToolset,
@@ -40,17 +41,6 @@ from app.toolsets import (
     SystemToolset,
 )
 from app.util.models import get_model
-
-# CreativesToolset (AI image generation) is optional — present on evolution
-# branches that ported genai_image.py from amazon_manager, absent on the
-# canonical master where image gen isn't a default capability. Conditional
-# import keeps Coordinator constructible on both branches.
-try:
-    from app.toolsets import CreativesToolset
-
-    _creatives_toolsets = [CreativesToolset()]
-except ImportError:
-    _creatives_toolsets = []
 
 _skills_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 _scheduling_skill = load_skill_from_dir(_skills_dir / "scheduling-skill")
@@ -168,7 +158,7 @@ root_agent = Agent(
         PlannerToolset(),
         IntegrationToolset(),
         ScratchpadToolset(),
-        *_creatives_toolsets,
+        CreativesToolset(),
         *([google_search_agent_tool] if google_search_agent_tool else []),
         web_fetch,
         whitelist_chat,
