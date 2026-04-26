@@ -34,6 +34,7 @@ from app.toolsets import (
     MemoryToolset,
     PlannerToolset,
     SchedulingToolset,
+    ScratchpadToolset,
     SystemToolset,
 )
 from app.util.models import get_model
@@ -53,6 +54,7 @@ _skills_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 _scheduling_skill = load_skill_from_dir(_skills_dir / "scheduling-skill")
 _configuration_skill = load_skill_from_dir(_skills_dir / "configuration-skill")
 _approval_skill = load_skill_from_dir(_skills_dir / "approval-skill")
+_scratchpad_skill = load_skill_from_dir(_skills_dir / "scratchpad-skill")
 _spawn_skill = load_skill_from_dir(_skills_dir / "spawn-skill")
 _model_swap_skill = load_skill_from_dir(_skills_dir / "model-swap-skill")
 
@@ -150,12 +152,14 @@ root_agent = Agent(
             _approval_skill,
             _spawn_skill,
             _model_swap_skill,
+            _scratchpad_skill,
         ]),
         SchedulingToolset(),
         MemoryToolset(),
         SystemToolset(),
         PlannerToolset(),
         IntegrationToolset(),
+        ScratchpadToolset(),
         *_creatives_toolsets,
         *([google_search_agent_tool] if google_search_agent_tool else []),
         web_fetch,
