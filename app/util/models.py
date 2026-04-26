@@ -132,6 +132,36 @@ def is_pinned(component: str) -> bool:
 VALID_COMPONENTS: frozenset[str] = frozenset(MODEL_DEFAULTS)
 
 
+def is_vertex_mode() -> bool:
+    """True when running against Vertex AI (ADC / service account)."""
+    return os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").upper() == "TRUE"
+
+
+def get_auth_mode() -> dict[str, Any]:
+    """Return the current authentication mode and status — used by
+    `get_llm_provider` and the wizard to inspect provider configuration.
+    """
+    vertex = is_vertex_mode()
+    mode: dict[str, Any] = {
+        "vertex_ai": vertex,
+        "google_cloud_project": os.environ.get("GOOGLE_CLOUD_PROJECT", ""),
+        "google_cloud_location": os.environ.get("GOOGLE_CLOUD_LOCATION", ""),
+    }
+    if vertex:
+        mode["auth_method"] = "Vertex AI (ADC / service account)"
+        mode["google_api_key"] = False
+        mode["anthropic_api_key"] = False
+        mode["service_account"] = bool(
+            os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+        )
+    else:
+        mode["auth_method"] = "Direct API keys"
+        mode["google_api_key"] = bool(os.environ.get("GOOGLE_API_KEY"))
+        mode["anthropic_api_key"] = bool(os.environ.get("ANTHROPIC_API_KEY"))
+        mode["openrouter_api_key"] = bool(os.environ.get("OPENROUTER_API_KEY"))
+    return mode
+
+
 def get_model(component: str, **opts: Any) -> BaseLlm:
     """Construction-time helper used in agent definitions. State-free —
     runtime hot-swap is handled by ModelConfigPlugin reading state.model[].
