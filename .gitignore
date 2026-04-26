@@ -16,3 +16,10 @@ __pycache__/
 .venv/
 node_modules/
 .DS_Store
+
+# Linked git worktrees live in .worktrees/<name>/ (each is its own checkout
+# of a different branch — managed via `git worktree add/move/remove`).
+# They MUST be ignored here so the canonical checkout doesn't treat them as
+# untracked files and so tools (pytest, ruff, find) don't traverse into
+# them. Use `git worktree list` to see all linked worktrees.
+.worktrees/
