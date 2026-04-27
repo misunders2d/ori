@@ -61,6 +61,14 @@ class A2AApiKeyMiddleware(BaseHTTPMiddleware):
         if path in _PUBLIC_PATHS:
             return await call_next(request)
 
+        # OAuth callback — browser redirect from the provider's consent page,
+        # cannot carry the API key header. CSRF is enforced via the `state`
+        # parameter (bound to user+session at issue-time in
+        # `app/integrations/base.py:authorize_url`). Short-circuit BEFORE
+        # the API-key check or the callback always 401s. Matches legacy.
+        if path.startswith("/oauth/") and path.endswith("/callback") and request.method == "GET":
+            return await _handle_oauth_callback(request)
+
         provided = request.headers.get("x-a2a-api-key", "")
         if provided != self.api_key:
             return JSONResponse(
@@ -78,8 +86,6 @@ class A2AApiKeyMiddleware(BaseHTTPMiddleware):
         # Out-of-band routes (not LLM-routed): handle here and short-circuit.
         if path == "/a2a/address-update" and request.method == "POST":
             return await _handle_address_update(request)
-        if path.startswith("/oauth/") and path.endswith("/callback") and request.method == "GET":
-            return await _handle_oauth_callback(request)
 
         return await call_next(request)
 
