@@ -161,55 +161,136 @@ async def _handle_address_update(request) -> JSONResponse:
 async def _handle_oauth_callback(request) -> Response:
     """Handle GET /oauth/<provider>/callback?code=...&state=...
 
-    Looks up the provider in `app.integrations.REGISTRY`, exchanges the
-    authorization code for tokens, and stores them via OriCredentialService.
+    Two flows can issue OAuth state tokens, and both come back to this
+    same callback URL. Try them in order:
+
+    1. **Per-user OAuth** (legacy `app/tools/google_oauth/web_flow.py`,
+       used for Drive/Gmail/Calendar token store). State stored in
+       `web_flow._PENDING`. This path is NOT admin-gated — any whitelisted
+       user can complete it. Matches legacy amazon_manager behavior.
+    2. **Integrations subsystem OAuth** (`app/integrations/REGISTRY`,
+       used by `configure_integration`). State stored via
+       `_consume_pending_oauth`. This path IS admin-gated at the tool
+       level (configure_integration) so only admins reach it.
+
+    For both paths we render an HTML success/failure page rather than
+    JSON, since the user lands here via a browser redirect.
     """
+    from starlette.responses import HTMLResponse
+
+    params = request.query_params
+    state = params.get("state", "")
+    code = params.get("code", "")
+    error = params.get("error", "")
+
+    if error:
+        return HTMLResponse(
+            _oauth_page("Authorization denied", f"Provider returned: {error}"),
+            status_code=400,
+        )
+    if not state or not code:
+        return HTMLResponse(
+            _oauth_page("Invalid callback", "Missing state or code parameter."),
+            status_code=400,
+        )
+
+    # ---- Path 1: per-user OAuth via web_flow (legacy, non-admin friendly) ----
+    try:
+        from app.tools.google_oauth import web_flow
+        from app.tools.google_oauth.token_store import save_token, save_user_mapping
+
+        # web_flow.exchange_code pops state from web_flow._PENDING — returns
+        # {"status": "error", ...} when the state isn't from this path.
+        result = await web_flow.exchange_code(state, code)
+    except Exception as e:
+        logger.exception("OAuth callback: web_flow.exchange_code raised")
+        result = {"status": "error", "message": str(e)}
+
+    if result.get("status") == "success":
+        try:
+            user_id = result["user_id"]
+            email = result["email"]
+            save_token(
+                email,
+                result["access_token"],
+                result.get("refresh_token", ""),
+                result.get("expires_in", 3600),
+                web_flow.SCOPES,
+            )
+            if user_id and user_id != email:
+                save_user_mapping(user_id, email)
+            logger.info("OAuth connect complete for %s (user_id=%s)", email, user_id)
+            return HTMLResponse(_oauth_page(
+                "Connected!",
+                f"Google account <strong>{email}</strong> is now connected. "
+                f"You can close this tab and return to the chat.",
+            ))
+        except Exception as e:
+            logger.exception("OAuth callback: failed to persist per-user token")
+            return HTMLResponse(
+                _oauth_page("Storage failed", str(e)),
+                status_code=500,
+            )
+
+    # ---- Path 2: integrations subsystem (admin-gated configure_integration) --
     try:
         path_parts = request.url.path.strip("/").split("/")
         if len(path_parts) < 3:
-            return JSONResponse({"status": "error", "message": "Malformed callback path"}, status_code=400)
-        provider_name = path_parts[1]
-        code = request.query_params.get("code", "")
-        state = request.query_params.get("state", "")
-        if not code:
-            err = request.query_params.get("error", "unknown")
-            return JSONResponse(
-                {"status": "error", "message": f"Authorization rejected: {err}"},
+            return HTMLResponse(
+                _oauth_page("Invalid callback", "Malformed callback path."),
                 status_code=400,
             )
+        provider_name = path_parts[1]
         from app.integrations import REGISTRY
         provider = REGISTRY.get(provider_name)
         if provider is None:
-            return JSONResponse(
-                {"status": "error", "message": f"Unknown OAuth provider: {provider_name}"},
+            return HTMLResponse(
+                _oauth_page(
+                    "Unknown provider",
+                    f"OAuth provider '{provider_name}' is not registered.",
+                ),
                 status_code=404,
             )
-        cred = await provider.exchange_code(code)
-        # Persist via OriCredentialService — the service uses
-        # callback_context to derive user_id, which we don't have here. For
-        # the MVP we store under a deterministic key: the caller's session
-        # state was tagged with the same `state_token` returned at flow
-        # start, so we look up the user/session that originated this
-        # request from a small in-memory pending map.
         binding = _consume_pending_oauth(state)
         if binding is None:
-            logger.warning("OAuth callback: no pending state token %s", state)
-            return JSONResponse(
-                {"status": "error", "message": "OAuth state token not recognized."},
+            logger.warning("OAuth callback: state token %s not in any pending map", state)
+            return HTMLResponse(
+                _oauth_page(
+                    "Authorization expired",
+                    "The OAuth state token was not recognized. Start the flow again.",
+                ),
                 status_code=400,
             )
+        cred = await provider.exchange_code(code)
         user_id = binding.get("user_id", "_global")
         from deploy import vault
         vault_key = f"OAUTH:{provider.name}:{user_id}"
         vault.set(vault_key, cred.model_dump_json(exclude_none=True))
         logger.info("OAuth callback: saved credential under %s", vault_key)
-        return JSONResponse({
-            "status": "success",
-            "message": f"{provider.name} connected. You can close this tab and return to the chat.",
-        })
+        return HTMLResponse(_oauth_page(
+            "Connected!",
+            f"{provider.name} is connected. You can close this tab and return "
+            f"to the chat.",
+        ))
     except Exception as e:
-        logger.exception("OAuth callback handler failed")
-        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+        logger.exception("OAuth callback handler failed (integrations path)")
+        return HTMLResponse(
+            _oauth_page("Authorization failed", str(e)),
+            status_code=500,
+        )
+
+
+def _oauth_page(title: str, body_html: str) -> str:
+    """Minimal HTML page for browser-rendered OAuth callbacks. Matches legacy."""
+    return (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        f"<title>{title}</title>"
+        "<style>body{font-family:system-ui,sans-serif;max-width:560px;"
+        "margin:80px auto;padding:0 20px;color:#222;}"
+        "h1{font-size:24px;margin-bottom:12px;}p{line-height:1.5;color:#444;}"
+        "</style></head><body>"
+        f"<h1>{title}</h1><p>{body_html}</p></body></html>"
+    )
 
 
 # Pending OAuth state map lives in `app.runtime.oauth_state` so both this
