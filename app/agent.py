@@ -34,7 +34,6 @@ from app.plugins import (
     ModelErrorHandlerPlugin,
     OutputSanitizerPlugin,
     PerimeterAclPlugin,
-    PlanEnforcerPlugin,
     PromptInjectionGuardPlugin,
     StateInitializerPlugin,
     VerifyRetryPlugin,
@@ -65,8 +64,9 @@ PLUGINS = [
     ModelConfigPlugin(),
     # Inject the system directive + run semantic injection check.
     PromptInjectionGuardPlugin(),
-    # Inject active-plan context. Root agent only (workflow's coord node).
-    PlanEnforcerPlugin(),
+    # Plan enforcement is now done in code by the workflow itself
+    # (app/workflows/plan_executor.py drives the step loop deterministically),
+    # so no PlanEnforcerPlugin nudge is needed.
     # Privacy check on outbound A2A tool calls + responses.
     A2APrivacyPlugin(),
     # Sanitize tool outputs from web_fetch / evolution_read_file.
