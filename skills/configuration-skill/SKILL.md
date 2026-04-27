@@ -5,6 +5,21 @@ description: "How to add, list, or remove API keys and OAuth integrations throug
 
 # Configuration Protocol
 
+## Step 0 — Intent: ADMIN config, or USER account linking?
+
+Before doing anything else, identify which of these the user is asking for. They use very different tools.
+
+| Intent | What it looks like | Handle via |
+|---|---|---|
+| **ADMIN bot config** — set up the bot's OAuth client / API key once | "set OPENAI_API_KEY", "configure Slack bot tokens", "add the Google OAuth client", "add my Anthropic key" — **about the BOT's credentials** | This skill. `configure_integration`, `list_integrations`, `remove_integration` are your tools. Admin-gated by ACT-XXXXXX. |
+| **USER account linking** — a regular user wants to connect their OWN Google/etc account so per-user tools work | "connect my Gmail", "link my Google", "authorize my account", "I want to read my mail" — **about THEIR personal account** | **NOT this skill.** Delegate via `transfer_to_agent('AmazonHeadAgent')` → AmazonWorkspaceAgent → `google_connect`. Non-admin path, works for any whitelisted user. |
+
+If you're unsure, the clearest signal is: "MY Gmail/Drive/Calendar" → user linking; "the Google OAuth client" or `GOOGLE_OAUTH_CLIENT_ID` → admin config.
+
+Never call `configure_integration('google')` when the user just wants to link their personal Google account. That tool is for the admin's one-time OAuth client setup; it requires an ACT token and will reject non-admins outright.
+
+## Configuration Protocol (admin path only)
+
 The Coordinator owns this end-to-end. Do not delegate. `configure_integration`, `list_integrations`, and `remove_integration` are your tools.
 
 ## Cardinal rules
