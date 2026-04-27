@@ -48,6 +48,7 @@ from app.transports.telegram.adapter import (
     TelegramAdapter,
     _update_heartbeat,
 )
+from app.util.file_convert import prepare_for_llm, save_upload
 
 logger = logging.getLogger(__name__)
 
@@ -319,12 +320,19 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                     if file_id:
                         file_data = await adapter.download_file(file_id)
                         if file_data:
-                            blob_bytes, mime_type, _ = file_data
-                            message_content.parts.append(
-                                types.Part(
-                                    inline_data=types.Blob(data=blob_bytes, mime_type=mime_type)
+                            blob_bytes, mime_type, filename = file_data
+                            saved_path = save_upload(blob_bytes, filename)
+                            prepared = prepare_for_llm(blob_bytes, mime_type, filename, saved_path)
+                            message_content.parts.append(types.Part.from_text(text=prepared.text))
+                            if prepared.inline_blob:
+                                _blob_bytes, _blob_mime = prepared.inline_blob
+                                message_content.parts.append(
+                                    types.Part(
+                                        inline_data=types.Blob(
+                                            data=_blob_bytes, mime_type=_blob_mime
+                                        )
+                                    )
                                 )
-                            )
 
                     # Whitelist/blacklist shortcuts (admin/owner UX).
                     if is_allowed(user_id):
