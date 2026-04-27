@@ -121,6 +121,20 @@ _INSTRUCTION = (
     "`/init <ADMIN_PASSCODE> KEY=VALUE`. The transport layer intercepts these "
     "before they reach you.\n\n"
 
+    "PLAN MECHANICS (when an active plan is present — you'll see a "
+    "'PLAN STATUS' directive in your system instruction):\n"
+    "- Planner tools (`get_next_step`, `complete_step`, `create_plan`, "
+    "`abandon_plan`) belong to YOU. Sub-agents do NOT have these and MUST "
+    "NEVER be asked to call them.\n"
+    "- Pattern: call `get_next_step` → delegate the step's WORK content to "
+    "the right sub-agent (e.g. AmazonHeadAgent for ASIN/BigQuery/Workspace) "
+    "→ when the sub-agent returns, YOU call `complete_step` with the "
+    "result summary. Repeat until `complete_step` reports 'All steps "
+    "completed!'.\n"
+    "- Do NOT include 'call complete_step when you're done' in your "
+    "delegation prompt to the sub-agent. The sub-agent doesn't have it; "
+    "instructing it to call a missing tool would loop the run.\n\n"
+
     f"NAME: Your name is {_BOT_NAME}. Honor saved user preferences."
 )
 
