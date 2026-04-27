@@ -21,7 +21,6 @@ _GATE_PLUGIN_PREFIXES = {
     "VerifyRetryPlugin": "verify_retry",
     "A2APrivacyPlugin": "a2a_privacy",
     "ModelErrorHandlerPlugin": "model_error",
-    "PlanEnforcerPlugin": "plan_enforcer",
 }
 
 # data/agent.log line: "LEVEL: <plugin>: <message>"  OR  "TIMESTAMP - module - LEVEL - <plugin>: ..."

@@ -68,9 +68,10 @@ async def run_scheduled_task(
     in production, run that script and have the creator reschedule.
 
     If `steps` is provided (enforced task), the plan is seeded into storage
-    before the agent runs — `plan_enforcer` injects it from turn one, so the
-    LLM cannot skip or paraphrase steps. If `steps` is None, the task runs
-    under normal (LLM-decided) flow.
+    before the agent runs — the plan_executor workflow then drives the
+    step loop in code (`get_next_step` / coordinator turn / `complete_step`),
+    so the LLM cannot skip, reorder, or paraphrase steps. If `steps` is
+    None, the task runs under normal LLM-decided flow.
     """
     import uuid
 
@@ -141,7 +142,8 @@ async def run_scheduled_task(
             )
 
             # Enforced task: seed the plan BEFORE the agent's first turn so
-            # PlanEnforcerPlugin injects context from turn one.
+            # the plan_executor workflow's step loop sees pending steps on
+            # iteration 0 and drives execution step-by-step from there.
             if steps:
                 from app.tools.planner import seed_plan_for_session
                 await seed_plan_for_session(session_id, task_prompt[:500], steps)
@@ -229,8 +231,9 @@ async def run_system_task(
     Runs the agent with full privileges in an isolated session, then cleans up.
 
     If `steps` is provided (enforced task), the plan is seeded into storage
-    before the agent runs — plan_enforcer injects it from turn one. LLM cannot
-    skip or paraphrase steps. If `steps` is None, normal LLM-decided flow.
+    before the agent runs — the plan_executor workflow drives execution
+    step-by-step (LLM cannot skip, reorder, or paraphrase). If `steps` is
+    None, normal LLM-decided flow.
     """
     import uuid
 

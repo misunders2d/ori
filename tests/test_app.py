@@ -33,7 +33,6 @@ def test_plugin_order_canonical():
         "state_initializer",
         "model_config",
         "prompt_injection",
-        "plan_enforcer",
         "a2a_privacy",
         "output_sanitizer",
         "verify_retry",

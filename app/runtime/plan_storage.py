@@ -256,9 +256,11 @@ async def abandon_plan(session_id: str) -> bool:
 
 
 async def get_active_plan_context(session_id: str) -> str | None:
-    """Returns a short text summary of the active plan for injection by
-    `PlanEnforcerPlugin` into the LLM prompt. Returns None when there's no
-    active plan.
+    """Returns a short text summary of the active plan. Used by the
+    `get_plan_status` agent tool and by ad-hoc inspection. Returns None
+    when there's no active plan. (Note: the plan_executor workflow does
+    not call this — it drives the loop via `has_pending_steps` +
+    `get_next_step` directly.)
     """
     conn = await _connect()
     try:
