@@ -70,7 +70,7 @@ Three modes, mutually exclusive:
 
 - **Direct API key:** `GOOGLE_API_KEY` from aistudio.google.com. One token, one approval. Set `GOOGLE_GENAI_USE_VERTEXAI` to `FALSE` (or leave unset).
 - **Vertex AI:** `GOOGLE_GENAI_USE_VERTEXAI=TRUE` + `GOOGLE_CLOUD_PROJECT` + `GOOGLE_CLOUD_LOCATION` + ADC (configured via `gcloud auth application-default login` outside the bot).
-- **OAuth (Drive/Gmail/Calendar):** `GOOGLE_OAUTH_CLIENT_ID` + `GOOGLE_OAUTH_CLIENT_SECRET`, then `configure_integration("google")`.
+- **Per-user OAuth (Drive/Gmail/Calendar/Sheets):** ADMIN sets `GOOGLE_OAUTH_CLIENT_ID` + `GOOGLE_OAUTH_CLIENT_SECRET` + `OAUTH_BASE_URL` once via `/init`. After that, INDIVIDUAL USERS connect their own accounts by saying "connect my Google" — delegate to `AmazonHeadAgent` → `AmazonWorkspaceAgent` which calls `google_connect`. Do NOT use `configure_integration("google")` — that's the multi-tenant admin path, not how regular users link their accounts.
 
 ### Anthropic / OpenAI / OpenRouter
 
