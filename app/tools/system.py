@@ -93,7 +93,13 @@ async def set_planner_mode(enabled: bool, tool_context: ToolContext) -> dict:
     return {"status": "success", "message": f"Thinker mode {'enabled' if enabled else 'disabled'}."}
 
 async def execute_approved_action(token: str, totp_code: str = "", tool_context: ToolContext = None) -> dict:
+    import time
+
     import app.tools as tools_module
+    from app.plugins.admin_gate import (
+        _DEV_TRANSFER_APPROVAL_WINDOW_S,
+        _DEV_TRANSFER_APPROVED_KEY,
+    )
     from app.runtime.pending_actions import get_and_delete_action
 
     totp_secret = os.environ.get("ADMIN_TOTP_SECRET")
@@ -107,6 +113,23 @@ async def execute_approved_action(token: str, totp_code: str = "", tool_context:
     action = get_and_delete_action(token)
     if not action:
         return {"status": "error", "message": "Invalid token."}
+
+    # Sentinel actions — not real tools; AdminGatePlugin staged a permission
+    # rather than a tool call. Handle inline so we don't have to invent a
+    # registered tool just to set a state flag.
+    if action["tool_name"] == "approve_dev_transfer":
+        if tool_context is None or tool_context.state is None:
+            return {"status": "error", "message": "Approval requires an active session."}
+        tool_context.state[_DEV_TRANSFER_APPROVED_KEY] = time.time() + _DEV_TRANSFER_APPROVAL_WINDOW_S
+        return {
+            "status": "success",
+            "message": (
+                f"Development access approved. The bot may transfer to "
+                f"DeveloperAgent once within the next "
+                f"{_DEV_TRANSFER_APPROVAL_WINDOW_S // 60} minutes — re-issue "
+                f"your original request."
+            ),
+        }
 
     tool_func = getattr(tools_module, action["tool_name"], None)
     if not tool_func:
