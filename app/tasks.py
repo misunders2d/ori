@@ -50,25 +50,10 @@ def _log_job_event(event: str, **fields) -> None:
 _MAX_PLAN_ITERATIONS = 25
 
 _PLAN_CONTINUATION_PROMPT = (
-    "Your enforced plan still has pending steps.\n\n"
-    "FIRST CHECK — are you the root coordinator, or a sub-agent? You can "
-    "tell by your tools: only the coordinator has `get_next_step`, "
-    "`complete_step`, and `abandon_plan` in its toolkit. If those tools "
-    "are NOT in your toolkit, you are a sub-agent (AmazonAgent, "
-    "BigQueryAgent, AmazonHeadAgent, etc.) and the previous step's "
-    "delegated work has just completed.\n\n"
-    "IF YOU ARE A SUB-AGENT: do not attempt to call the planner tools — "
-    "they only exist on the coordinator. Call "
-    "`transfer_to_agent(agent_name='CoordinatorAgent')` immediately to "
-    "return control. The coordinator will then advance the plan.\n\n"
-    "IF YOU ARE THE COORDINATOR: do NOT emit a user-facing summary yet. "
-    "Call `get_next_step` immediately and continue executing. After each "
-    "step's actual goal is achieved (with concrete tool-confirmed evidence "
-    "— row counts, IDs, sheet ranges, message ids, error messages), call "
-    "`complete_step(result=<concrete summary>)`. If a step cannot be "
-    "completed (tool error, blocked, missing data), call `abandon_plan()` "
-    "and report the failure verbatim. Only produce a final summary after "
-    "complete_step reports 'All steps completed!'."
+    "Plan still has pending steps. If `get_next_step` isn't in your "
+    "toolkit, call `transfer_to_agent(agent_name='CoordinatorAgent')`. "
+    "Otherwise call `get_next_step`, do the step, then `complete_step` "
+    "with concrete tool results. Use `abandon_plan` if the step fails."
 )
 
 
