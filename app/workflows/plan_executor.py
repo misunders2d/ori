@@ -41,7 +41,9 @@ from google.adk.agents.context import Context
 from google.adk.workflow import Workflow, node
 
 from app.agents.coordinator import root_agent as coordinator_agent
+from app.agents.step_executor import StepResult, step_executor
 from app.runtime.plan_storage import (
+    abandon_plan,
     complete_step,
     get_next_step,
     has_pending_steps,
@@ -78,21 +80,102 @@ def _extract_text(response) -> str:
 
 
 def _build_step_prompt(step: dict) -> str:
-    """The exact prompt the coordinator sees for one step.
+    """The prompt the step_executor sees for one step.
 
-    Hard rule embedded in the prompt: do NOT call planner mechanics
-    (`get_next_step`, `complete_step`, `abandon_plan`). The workflow
-    records completion in code; the coordinator's only job is to do
-    the step's work and return the result. Mentioning planner tools
-    in the prompt would invite the LLM to call them; not mentioning
-    them keeps focus on the step.
+    Behavior rules (don't improvise on failure, don't claim unconfirmed
+    success, return typed pass/fail) live in step_executor's instruction
+    — keeping them out of the per-step prompt avoids per-call cost.
     """
-    return (
-        f"PLAN STEP {step['step_index']}: {step['description']}\n\n"
-        "Execute this step now. Delegate to a sub-agent if appropriate. "
-        "Reply with the result/output of completing this step. "
-        "Do NOT discuss the next step; the workflow advances automatically."
+    return f"PLAN STEP {step['step_index']}: {step['description']}"
+
+
+def _coerce_step_result(step_response) -> StepResult:
+    """Pull a StepResult out of whatever the workflow handed back.
+
+    Per ADK 2.0, `output_schema=StepResult` causes the agent's final
+    answer to be validated against the schema; the workflow may surface
+    it as the StepResult instance, a dict, or wrapped on a content/event
+    object. We normalize all three so the caller can read `.status`
+    without guessing.
+    """
+    if isinstance(step_response, StepResult):
+        return step_response
+
+    raw = getattr(step_response, "output", step_response)
+    if isinstance(raw, StepResult):
+        return raw
+    if isinstance(raw, dict):
+        try:
+            return StepResult(**raw)
+        except Exception:
+            pass
+
+    # Last-resort fallback: the agent returned free text instead of a
+    # structured StepResult. Treat as a failure rather than silently
+    # advancing — better to abort the plan than to march through with
+    # an unrecognized response shape.
+    text = _extract_text(step_response) or "(no response)"
+    return StepResult(
+        status="failed",
+        summary="Unstructured response from step_executor.",
+        failure_reason=f"Expected StepResult, got: {text[:300]}",
     )
+
+
+async def _drive_plan_loop(ctx, response, session_id: str):
+    """Code-side step loop. Pulled out of the @node-decorated wrapper so
+    tests can drive it directly with a mock ctx (decorated nodes are
+    pydantic FunctionNode objects, not callables).
+
+    Each step is executed by `step_executor` (task-mode LlmAgent with
+    output_schema=StepResult). The workflow reads the typed status and:
+      - 'completed' → record summary, advance to next step
+      - 'failed'    → record reason, abandon the plan, return the
+                      failure response (caller surfaces it to the user
+                      via the scheduled-task delivery path)
+    No string parsing, no LLM judgment — the step result is structurally
+    typed via Pydantic.
+    """
+    iterations = 0
+    while (
+        await has_pending_steps(session_id)
+        and iterations < _MAX_ITERATIONS
+    ):
+        iterations += 1
+        step = await get_next_step(session_id)
+        if not step:
+            break
+
+        step_response = await ctx.run_node(
+            step_executor, _build_step_prompt(step),
+        )
+        result = _coerce_step_result(step_response)
+
+        if result.status == "failed":
+            logger.warning(
+                "plan_executor: step %d failed for session %s — aborting plan. Reason: %s",
+                step["step_index"], session_id,
+                (result.failure_reason or result.summary)[:200],
+            )
+            failure_record = (
+                f"FAILED: {result.failure_reason or result.summary}"
+            )[:_RESULT_RECORD_LIMIT]
+            await complete_step(session_id, failure_record)
+            await abandon_plan(session_id)
+            return step_response
+
+        await complete_step(
+            session_id, result.summary[:_RESULT_RECORD_LIMIT],
+        )
+        response = step_response
+
+    if iterations >= _MAX_ITERATIONS and await has_pending_steps(session_id):
+        logger.warning(
+            "plan_executor: hit iteration cap %d for session %s",
+            _MAX_ITERATIONS, session_id,
+        )
+
+    return response
 
 
 @node(name="plan_executor", rerun_on_resume=True)
@@ -113,39 +196,7 @@ async def plan_executor_node(ctx: Context, node_input):
     if not session_id:
         return response
 
-    iterations = 0
-    while (
-        await has_pending_steps(session_id)
-        and iterations < _MAX_ITERATIONS
-    ):
-        iterations += 1
-
-        # CODE-SIDE step claim. The LLM never sees the full plan, never
-        # picks which step is next, never reorders.
-        step = await get_next_step(session_id)
-        if not step:
-            break
-
-        # Build a clean per-step prompt and run the coordinator on it.
-        # transfer_to_agent inside this turn dispatches to sub-agents as
-        # the coordinator's instruction sees fit (Amazon, Knowledge, etc.).
-        step_response = await ctx.run_node(
-            coordinator_agent, _build_step_prompt(step),
-        )
-
-        # CODE-SIDE completion record. Whatever the coordinator returned
-        # becomes the step's result. The LLM cannot skip recording.
-        result_text = _extract_text(step_response)
-        await complete_step(session_id, result_text[:_RESULT_RECORD_LIMIT])
-        response = step_response
-
-    if iterations >= _MAX_ITERATIONS and await has_pending_steps(session_id):
-        logger.warning(
-            "plan_executor: hit iteration cap %d for session %s",
-            _MAX_ITERATIONS, session_id,
-        )
-
-    return response
+    return await _drive_plan_loop(ctx, response, session_id)
 
 
 plan_executor_workflow = Workflow(

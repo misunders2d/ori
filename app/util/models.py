@@ -59,6 +59,7 @@ MODEL_DEFAULTS: dict[str, str] = {
     # heavier models (gemini-3.1-pro-preview, claude-sonnet-4-6, etc.) per
     # task with `set_agent_model("<Component>", "litellm/<provider>/<model>")`.
     "CoordinatorAgent": "litellm/gemini/gemini-3.1-flash-lite-preview",
+    "StepExecutor": "litellm/gemini/gemini-3.1-flash-lite-preview",
     "DeveloperAgent": "litellm/gemini/gemini-3.1-flash-lite-preview",
     "KnowledgeAgent": "litellm/gemini/gemini-3.1-flash-lite-preview",
     # amazon_manager domain sub-agents
