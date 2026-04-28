@@ -28,13 +28,19 @@ from google.adk.models import LlmRequest, LlmResponse
 from google.adk.plugins import BasePlugin
 from google.genai import types
 
+from app.plugins._common import admin_user_ids
+
 logger = logging.getLogger(__name__)
 
 
-# Global system directive applied to every LLM call. Four core rules +
-# style. English examples in the rules are illustrative; the LLM applies
-# the same spirit to whichever language the user writes in.
+# Global system directive applied to every LLM call. Five rules + style.
+# `{admin_ref}` is filled at injection time from the first email in
+# ADMIN_USER_IDS so /init updates take effect without a restart.
 _SYSTEM_DIRECTIVE = (
+    "DEBUG MODE: You are currently under development and in debug mode. "
+    "If you encounter any issues that are not expected, you MUST stop and "
+    "immediately tell the user about this. If the user is not an admin, "
+    "you must also ask the user to pass this information to {admin_ref}.\n"
     "ASK ONLY WHEN AMBIGUOUS: Ask before acting ONLY when intent, scope, "
     "or target is genuinely ambiguous (multiple valid interpretations, "
     "missing required parameter, would-affect-the-wrong-thing risk). "
@@ -161,11 +167,16 @@ class PromptInjectionGuardPlugin(BasePlugin):
             else:
                 raise Exception("429 internal rate throttle exhausted")
 
-        # Inject the system directive as the first content item.
+        # Inject the system directive as the first content item. The
+        # debug-mode preamble references the current admin email from
+        # ADMIN_USER_IDS so /init updates take effect without a restart.
         if llm_request.contents:
+            emails = [u for u in admin_user_ids() if "@" in u]
+            admin_ref = f"the admin ({emails[0]})" if emails else "the admin"
+            text = _SYSTEM_DIRECTIVE.format(admin_ref=admin_ref)
             llm_request.contents.insert(0, types.Content(
                 role="user",
-                parts=[types.Part.from_text(text=f"[SYSTEM] {_SYSTEM_DIRECTIVE}")],
+                parts=[types.Part.from_text(text=f"[SYSTEM] {text}")],
             ))
 
         # Semantic injection check on the latest user message.
