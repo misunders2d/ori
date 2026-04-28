@@ -64,6 +64,28 @@ def test_extract_stats_decodes_real_probe_values(tmp_path, monkeypatch):
     assert result["rating"] == pytest.approx(4.4), "Rating must be raw/10 (44 → 4.4), not raw/1000"
 
 
+def test_extract_pricing_picks_lightning_deal_as_best_offer(tmp_path, monkeypatch):
+    """When a Lightning Deal is active and lower than all other channels,
+    extract_pricing must surface it in `prices.lightning_deal` AND select it
+    as `best_offer`. Previously LD wasn't in _CSV_MAP and would be missed."""
+    asin = "B01M16WBW1"
+    csv = [None] * 19
+    csv[1] = [0, 2499]                              # NEW $24.99
+    csv[8] = [0, 1899]                              # LIGHTNING_DEAL $18.99 (active)
+    csv[18] = [0, 2499, 0]                          # buy box $24.99 (3-tuple)
+    product = {"csv": csv, "_cached_at": 9_999_999_999}
+    _write_cache(tmp_path, asin, product)
+    monkeypatch.setattr(keepa_api, "_CACHE_DIR", str(tmp_path / "keepa_cache"))
+
+    result = keepa_api.keepa_extract_pricing(asin)
+
+    assert result["status"] == "success"
+    assert result["prices"]["lightning_deal"] == pytest.approx(18.99)
+    assert result["prices"]["new_3p"] == pytest.approx(24.99)
+    assert result["best_offer"] == pytest.approx(18.99)
+    assert result["best_offer_source"] == "lightning_deal"
+
+
 def test_extract_pricing_decodes_buy_box_from_shipping_csv(tmp_path, monkeypatch):
     """csv[18] is BUY_BOX_SHIPPING — a 3-tuple CSV [time, price, shipping].
 

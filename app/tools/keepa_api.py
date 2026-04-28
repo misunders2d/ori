@@ -360,10 +360,12 @@ def keepa_extract_pricing(asin: str, tool_context: ToolContext | None = None) ->
 
     prices = {}
     # buy_box (csv[18]) is the only shipping-CSV in this map (3 entries per row);
-    # all other indices store [time, price] pairs.
+    # all other indices store [time, price] pairs. lightning_deal (csv[8])
+    # surfaces an active Lightning Deal if one is running; -1 when inactive.
     _CSV_MAP = {
         "amazon": (0, 2), "new_3p": (1, 2), "used": (2, 2),
-        "list_price": (4, 2), "warehouse": (9, 2), "new_fba": (10, 2),
+        "list_price": (4, 2), "lightning_deal": (8, 2),
+        "warehouse": (9, 2), "new_fba": (10, 2),
         "buy_box": (18, 3), "prime_exclusive": (33, 2),
     }
     for name, (idx, row_size) in _CSV_MAP.items():
@@ -439,6 +441,7 @@ def keepa_extract_history(
     _METRIC_MAP = {
         "amazon": (0, 2), "new": (1, 2), "used": (2, 2),
         "sales_rank": (3, 2), "list_price": (4, 2),
+        "lightning_deal": (8, 2),
         "new_fba": (10, 2), "buy_box": (18, 3),
         "prime_exclusive": (33, 2),
         "rating": (16, 2), "review_count": (17, 2),

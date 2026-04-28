@@ -38,9 +38,9 @@ Hits `/product` with `offers=20`, caches the full response to `tmp/keepa_cache/{
 
 Detailed current prices across all channels + best-offer analysis.
 
-**Returns** `prices` with: `amazon, new_3p, used, list_price, warehouse, new_fba, buy_box, prime_exclusive, prime_exclusive_live`. Plus `coupon` (typed) and `best_offer` / `best_offer_source` (best price across channels, including buy-box-with-coupon).
+**Returns** `prices` with: `amazon, new_3p, used, list_price, lightning_deal, warehouse, new_fba, buy_box, prime_exclusive, prime_exclusive_live`. Plus `coupon` (typed) and `best_offer` / `best_offer_source` (best price across all channels — including lightning deals and buy-box-with-coupon).
 
-**Use it for:** "what's the current price?", "is there a coupon?", "what's the cheapest way to buy this right now?"
+**Use it for:** "what's the current price?", "is there a coupon?", "is there a lightning deal?", "what's the cheapest way to buy this right now?". Each price can be `null` — a `null` for `lightning_deal` or `prime_exclusive` means there's no active deal at this moment, not that the field is broken.
 
 ### `keepa_extract_sales_analysis(asin: str, days: int = 90) -> dict`
 
@@ -72,7 +72,7 @@ The **primary analysis tool**. Walks Keepa's change-only CSV data with time-weig
 
 Time series for one specific metric.
 
-**Valid metrics:** `amazon, new, used, sales_rank, buy_box, new_fba, prime_exclusive, rating, review_count, list_price`.
+**Valid metrics:** `amazon, new, used, sales_rank, list_price, lightning_deal, new_fba, buy_box, prime_exclusive, rating, review_count`.
 
 **Returns:** `{"metric": "buy_box", "data_points": 87, "history": [{"date": "2026-04-01", "price": 29.97}, ...]}`. For `metric="rating"`, the field is `"rating"` (already divided by 10 → 0–5 scale) instead of `"price"`.
 
