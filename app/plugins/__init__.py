@@ -14,18 +14,25 @@ and enforced in `app/agent.py`:
                                     coordinator's system_instruction so the
                                     LLM is reminded to call get_next_step /
                                     complete_step on every turn
-  7. ReflectAndRetryToolPlugin    — ADK 2.0 built-in: when a tool call
+  7. SubAgentPopperPlugin         — emit end_of_agent=True on every
+                                    sub-agent's after_agent_callback so
+                                    ADK's _find_agent_to_run resume walk
+                                    skips sub-agent events and pops back
+                                    to the coordinator (root). Fixes the
+                                    chat-mode "sub-agent stays active
+                                    after transfer_to_agent" bug.
+  8. ReflectAndRetryToolPlugin    — ADK 2.0 built-in: when a tool call
                                     raises (e.g. 'Tool X not found'),
                                     intercept the error and return a
                                     structured reflection as the
                                     function_response, so the LLM sees
                                     the failure in context and can
                                     self-correct without crashing the turn
-  8. A2APrivacyPlugin             — block credential leaks in outbound A2A
-  9. OutputSanitizerPlugin        — scan high-risk tool outputs (multilingual-safe)
- 10. VerifyRetryPlugin            — 3-strike cap on evolution_verify_sandbox
- 11. BinaryContentScannerPlugin   — validate inbound A2A binary parts
- 12. ModelErrorHandlerPlugin      — translate raw LLM errors into user-visible
+  9. A2APrivacyPlugin             — block credential leaks in outbound A2A
+ 10. OutputSanitizerPlugin        — scan high-risk tool outputs (multilingual-safe)
+ 11. VerifyRetryPlugin            — 3-strike cap on evolution_verify_sandbox
+ 12. BinaryContentScannerPlugin   — validate inbound A2A binary parts
+ 13. ModelErrorHandlerPlugin      — translate raw LLM errors into user-visible
                                     messages (rate limit, auth, model-not-found, …)
 """
 
@@ -41,6 +48,7 @@ from app.plugins.perimeter import PerimeterAclPlugin
 from app.plugins.plan_enforcer import PlanEnforcerPlugin
 from app.plugins.prompt_injection import PromptInjectionGuardPlugin
 from app.plugins.state_initializer import StateInitializerPlugin
+from app.plugins.sub_agent_popper import SubAgentPopperPlugin
 from app.plugins.verify_retry import VerifyRetryPlugin
 
 __all__ = [
@@ -55,5 +63,6 @@ __all__ = [
     "PromptInjectionGuardPlugin",
     "ReflectAndRetryToolPlugin",
     "StateInitializerPlugin",
+    "SubAgentPopperPlugin",
     "VerifyRetryPlugin",
 ]

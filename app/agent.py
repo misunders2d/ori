@@ -45,6 +45,7 @@ from app.plugins import (
     PromptInjectionGuardPlugin,
     ReflectAndRetryToolPlugin,
     StateInitializerPlugin,
+    SubAgentPopperPlugin,
     VerifyRetryPlugin,
 )
 from app.util.models import get_model
@@ -77,14 +78,17 @@ PLUGINS = [
     # continuation prompt while pending steps remain so the LLM can't
     # drop the plan even if it forgets to traverse mid-turn.
     PlanEnforcerPlugin(),
+    # Sub-agent lifecycle fix: emit end_of_agent=True on every sub-agent
+    # invocation's after_agent_callback so ADK's _find_agent_to_run
+    # resume walk pops past sub-agent events and lands on the coordinator
+    # for the next turn. Without this, chat-mode sub-agents stay active
+    # after transfer_to_agent and continuation prompts route to the
+    # wrong agent.
+    SubAgentPopperPlugin(),
     # ADK 2.0 built-in: intercept tool errors (e.g. "Tool 'X' not
-    # found" when a sub-agent hallucinates a coordinator-only tool, or
-    # any tool that raises) and return a structured reflection to the
-    # LLM as the function_response. Without this, ValueError propagates
-    # all the way out of runner.run_async, killing the whole turn;
-    # with it, the LLM sees the error in-context and can correct
-    # (e.g. call transfer_to_agent('CoordinatorAgent') instead, or
-    # pick a different tool from its actual toolkit).
+    # found" when an agent hallucinates a tool name) and return a
+    # structured reflection to the LLM as the function_response. Safety
+    # net for hallucinations the routing fix can't prevent.
     ReflectAndRetryToolPlugin(
         max_retries=3,
         throw_exception_if_retry_exceeded=False,
