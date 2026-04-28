@@ -868,13 +868,13 @@
     }
   },
   "sellercloud": {
-    "dataset_description": "A company's invnentory dataset, containing tables on the warehouse invnetory, bins, incoming PO's etc, coming from Sellercloud software",
+    "dataset_description": "A company's invnentory dataset, containing tables on the warehouse invnetory, bins, incoming PO's, shipments outbound TO Amazon FBA etc, coming from Sellercloud software",
     "tables": {
       "fba_shipments": {
-        "description": ""
+        "description": "Old warehouse-to-FBA shipments table, do not use. Use `fba_shipments_partitioned` instead."
       },
       "fba_shipments_partitioned": {
-        "description": ""
+        "description": "Use this table to get information about shipments TO Amazon FBA from our company's warehouse. Include shipment IDs"
       },
       "inventory": {
         "description": ""
