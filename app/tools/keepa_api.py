@@ -72,8 +72,31 @@ def _price_from_csv(csv: list | None, items_per_row: int) -> float | None:
     return last_price / 100.0 if last_price > 0 else None
 
 
-def _history_from_csv(csv: list | None, items_per_row: int, days: int = 90) -> list[dict]:
-    """Extract price history from CSV as [{date, price}] for the last N days."""
+def _int_from_csv(csv: list | None, items_per_row: int) -> int | None:
+    """Extract current raw integer (rank, count) from a Keepa CSV array.
+
+    Same shape as _price_from_csv but without the cents-to-dollars division —
+    use for rank, review count, offer counts, and any other field stored as
+    a plain integer in the CSV.
+    """
+    if not csv or len(csv) < items_per_row:
+        return None
+    last_value = csv[-items_per_row + 1]
+    return int(last_value) if last_value > 0 else None
+
+
+def _history_from_csv(
+    csv: list | None,
+    items_per_row: int,
+    days: int = 90,
+    divisor: float = 100.0,
+) -> list[dict]:
+    """Extract value history from CSV as [{date, price}] for the last N days.
+
+    `divisor` controls scaling of the raw stored value. Default 100.0 turns
+    Keepa's cents-as-int into dollars-as-float; pass divisor=1.0 for raw
+    integer fields like sales rank and review count that are not cents.
+    """
     if not csv or len(csv) < items_per_row:
         return []
     cutoff = time.time() - days * 86400
@@ -85,7 +108,7 @@ def _history_from_csv(csv: list | None, items_per_row: int, days: int = 90) -> l
         if unix_ts < cutoff:
             continue
         dt = datetime.fromtimestamp(unix_ts, tz=timezone.utc).strftime("%Y-%m-%d")
-        price = price_raw / 100.0 if price_raw > 0 else None
+        price = price_raw / divisor if price_raw > 0 else None
         result.append({"date": dt, "price": price})
     return result
 
@@ -424,15 +447,25 @@ def keepa_extract_history(
     if len(csv_data) <= idx or not csv_data[idx]:
         return {"status": "success", "asin": asin.upper(), "metric": metric, "history": [], "message": "No data available for this metric."}
 
-    history = _history_from_csv(csv_data[idx], row_size, days)
+    # sales_rank and review_count are raw integers, not cents — skip the /100 scaling.
+    int_metrics = {"sales_rank", "review_count"}
+    divisor = 1.0 if metric in int_metrics else 100.0
+    history = _history_from_csv(csv_data[idx], row_size, days, divisor=divisor)
 
-    # For rating, divide by 10 (Keepa stores as 0-50, meaning 0.0-5.0)
     if metric == "rating":
+        # Keepa stores rating with extra precision; the toolset divides by 10
+        # on top of the standard /100 to recover the 0-5 star scale.
         for h in history:
             if h["price"] is not None:
                 h["rating"] = h.pop("price") / 10.0
             else:
                 h["rating"] = h.pop("price")
+    elif metric in int_metrics:
+        # Cast to int and rename "price" key to a less misleading name.
+        new_key = "rank" if metric == "sales_rank" else "count"
+        for h in history:
+            v = h.pop("price")
+            h[new_key] = int(v) if v is not None else None
 
     return {"status": "success", "asin": asin.upper(), "metric": metric, "days": days, "data_points": len(history), "history": history}
 
@@ -452,11 +485,11 @@ def keepa_extract_offers(asin: str, tool_context: ToolContext | None = None) -> 
 
     csv_data = product.get("csv", [])
 
-    # Offer counts from CSV
-    count_new = _price_from_csv(csv_data[11], 2) if len(csv_data) > 11 else None
-    count_used = _price_from_csv(csv_data[12], 2) if len(csv_data) > 12 else None
-    count_new_fba = _price_from_csv(csv_data[34], 2) if len(csv_data) > 34 else None
-    count_new_fbm = _price_from_csv(csv_data[35], 2) if len(csv_data) > 35 else None
+    # Offer counts from CSV — raw integers, not cents.
+    count_new = _int_from_csv(csv_data[11], 2) if len(csv_data) > 11 else None
+    count_used = _int_from_csv(csv_data[12], 2) if len(csv_data) > 12 else None
+    count_new_fba = _int_from_csv(csv_data[34], 2) if len(csv_data) > 34 else None
+    count_new_fbm = _int_from_csv(csv_data[35], 2) if len(csv_data) > 35 else None
 
     # Buy box seller history (last entry)
     bb_history = product.get("buyBoxSellerIdHistory", [])
@@ -481,10 +514,10 @@ def keepa_extract_offers(asin: str, tool_context: ToolContext | None = None) -> 
         "status": "success",
         "asin": asin.upper(),
         "offer_counts": {
-            "new_total": int(count_new) if count_new else None,
-            "used_total": int(count_used) if count_used else None,
-            "new_fba": int(count_new_fba) if count_new_fba else None,
-            "new_fbm": int(count_new_fbm) if count_new_fbm else None,
+            "new_total": count_new,
+            "used_total": count_used,
+            "new_fba": count_new_fba,
+            "new_fbm": count_new_fbm,
         },
         "buy_box_seller": current_bb_seller,
         "live_offers": offer_summary,
@@ -506,10 +539,11 @@ def keepa_extract_stats(asin: str, tool_context: ToolContext | None = None) -> d
 
     csv_data = product.get("csv", [])
 
-    # Current values from CSV
-    sales_rank = _price_from_csv(csv_data[3], 2) if len(csv_data) > 3 else None
+    # Current values from CSV. Rank and review count are raw integers,
+    # not prices in cents — must use _int_from_csv, not _price_from_csv.
+    sales_rank = _int_from_csv(csv_data[3], 2) if len(csv_data) > 3 else None
     rating_raw = _price_from_csv(csv_data[16], 2) if len(csv_data) > 16 else None
-    review_count = _price_from_csv(csv_data[17], 2) if len(csv_data) > 17 else None
+    review_count = _int_from_csv(csv_data[17], 2) if len(csv_data) > 17 else None
 
     listed_since = product.get("listedSince")
     tracking_since = product.get("trackingSince")
@@ -517,11 +551,11 @@ def keepa_extract_stats(asin: str, tool_context: ToolContext | None = None) -> d
     return {
         "status": "success",
         "asin": asin.upper(),
-        "sales_rank": int(sales_rank) if sales_rank else None,
+        "sales_rank": sales_rank,
         "sales_rank_category": product.get("salesRankReference"),
         "monthly_sold": product.get("monthlySold"),
         "rating": rating_raw / 10.0 if rating_raw else None,
-        "review_count": int(review_count) if review_count else None,
+        "review_count": review_count,
         "availability_amazon": product.get("availabilityAmazon"),
         "is_sns": product.get("isSNS"),
         "listed_since": _keepa_time_to_datetime(listed_since) if listed_since and listed_since > 0 else None,
