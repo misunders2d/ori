@@ -77,3 +77,10 @@ class OriSessionState(BaseModel):
     """Cached ClickUp workspace context (team_id, default_list_id, etc.)
     populated by the clickup tools to avoid re-fetching the team metadata
     on every tool call."""
+
+    # ----- BigQuery ---------------------------------------------------------
+    bq_catalog_loaded: bool = False
+    """Set True by `get_table_data` once the agent has loaded the dataset/table
+    catalog this session. `before_bq_callback` rejects any BigQuery data tool
+    call (execute_sql, get_table_info, …) until this flag is set, forcing the
+    agent to read table descriptions before picking what to query."""

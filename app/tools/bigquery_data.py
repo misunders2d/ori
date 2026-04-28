@@ -34,4 +34,10 @@ def get_table_data(tool_context: ToolContext = None) -> dict:
     Returns:
         dict: Dataset and table metadata.
     """
+    # Mark the catalog as loaded for this session — `before_bq_callback`
+    # in `app/agents/bigquery_agent.py` rejects any data-tool call that
+    # comes before this flag is set, so the agent must always inspect
+    # descriptions before picking a table.
+    if tool_context is not None and tool_context.state is not None:
+        tool_context.state["bq_catalog_loaded"] = True
     return {"status": "success", "data": table_data}

@@ -136,6 +136,22 @@ def before_bq_callback(
                 )
             }
 
+    # Discovery gate: enforce that `get_table_data` was called at least
+    # once this session before any data-tool runs. The catalog is the
+    # only place that distinguishes obsolete tables from current ones,
+    # so the agent must read it before choosing a table to query. Flag
+    # is set inside `get_table_data` itself; persists for the session.
+    if tool_name in _DATA_TOOLS and not state.get("bq_catalog_loaded"):
+        return {
+            "error": (
+                "Call `get_table_data` first to load the dataset/table "
+                "catalog. The catalog has table descriptions (including "
+                "'do not use' / 'obsolete' flags) that you MUST read "
+                "before picking a table to query. Once loaded, you can "
+                "run queries freely for the rest of this session."
+            )
+        }
+
     project_id = args.get("project_id", "")
     tables_to_check = []
 
