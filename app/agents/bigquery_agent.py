@@ -70,12 +70,40 @@ def _extract_tables_from_sql(query: str, default_project: str = "") -> list[dict
     return tables
 
 
+_OBSOLETE_MARKERS = ("do not use", "obsolete", "deprecated")
+
+
+def _is_obsolete(description: str) -> bool:
+    """Return True if the catalog description signals the table shouldn't be used."""
+    desc = (description or "").lower()
+    return any(marker in desc for marker in _OBSOLETE_MARKERS)
+
+
 def _check_table_access(tables: list[dict], user_email: str) -> dict | None:
     for ref in tables:
         dataset_id = ref["dataset_id"]
         table_id = ref["table_id"]
         if dataset_id in table_data and table_id in table_data[dataset_id].get("tables", {}):
-            allowed_users = table_data[dataset_id]["tables"][table_id].get("authorized_users")
+            tbl = table_data[dataset_id]["tables"][table_id]
+
+            # Hard guard: refuse to query tables flagged as obsolete in the
+            # catalog (description contains "do not use" / "obsolete" /
+            # "deprecated"). The agent's instruction tells it to prefer the
+            # recommended replacement; this catches the case where the
+            # agent reads but ignores the description anyway.
+            description = tbl.get("description", "")
+            if _is_obsolete(description):
+                return {
+                    "error": (
+                        f"`{dataset_id}.{table_id}` is flagged as obsolete in "
+                        f"the catalog: \"{description}\". "
+                        f"Use the recommended replacement (call `get_table_data` "
+                        f"and read the description for sibling tables in "
+                        f"`{dataset_id}`)."
+                    )
+                }
+
+            allowed_users = tbl.get("authorized_users")
             if allowed_users and user_email not in allowed_users:
                 return {
                     "error": (
