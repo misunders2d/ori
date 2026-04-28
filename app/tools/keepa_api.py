@@ -1070,12 +1070,14 @@ async def _fetch_bulk_batch(
         "key": api_key,
         "asin": ",".join(asins_chunk),
         "domain": domain,
-        # rating=1 populates csv[16]/csv[17] (rating + review count). Without
-        # this flag many ASINs return empty rating CSVs even when Amazon has
-        # the data. No extra token cost.
-        "rating": 1,
+        # Optional-CSV flags — populate the corresponding CSV indices
+        # without paying for full offer history. Both no extra token cost.
+        "rating": 1,    # populates csv[16] (rating) + csv[17] (review count)
+        "buybox": 1,    # populates csv[18] (buy box price + shipping)
     }
     if with_offers:
+        # `offers` implies buybox (Keepa ignores the explicit buybox flag
+        # when offers is set), but no harm in leaving it for clarity.
         params["offers"] = 20
     try:
         resp = await client.get(f"{_API_BASE}/product", params=params, timeout=60)
