@@ -62,6 +62,8 @@ Top-level fields on the product object that the extract tools surface or that ar
 | `monthlySoldHistory` | `[time, tier, time, tier, ...]` — past values of `monthlySold` |
 | `coupon` | Active coupon. Positive int = absolute cents off; negative int = percent off |
 | `couponHistory` | `[time, oneTime, sns, time, oneTime, sns, ...]` — groups of 3 |
+| `deals` | Array of `{dealType, badge, accessType}`. Source of truth for **"Limited time deal"** / "Best Deal" / "Lightning Deal" badges currently shown on Amazon. `extract_pricing` exposes this as `active_deals`. |
+| `promotions` | Array of seller promotions. SnS entries (`type: "SNS"`) carry the SnS-eligible "typical price" that gets struck-through when a deal is active. `extract_pricing` exposes this as `promotions`. |
 | `buyBoxSellerIdHistory` | `[time, seller_id, time, seller_id, ...]` |
 | `offers` | Live offer details (only present when `offers` parameter was used). Each offer has `sellerId, isFBA, isPrime, isPrimeExcl, condition, offerCSV, primeExclCSV` |
 | `liveOffersOrder` | Indices into `offers` ranked by competitiveness |

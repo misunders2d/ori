@@ -117,6 +117,49 @@ def test_extract_pricing_decodes_buy_box_from_shipping_csv(tmp_path, monkeypatch
     )
 
 
+def test_extract_pricing_surfaces_limited_time_deal_and_promotions(tmp_path, monkeypatch):
+    """B0BHX9121W (PUPIBOO pee pads) had an active 'Limited time deal' badge
+    and a Subscribe & Save reference price. Keepa exposes both via the
+    `deals` and `promotions` non-CSV fields. extract_pricing must pass
+    them through so the agent can tell the customer the price is
+    discounted, not flat."""
+    asin = "B0BHX9121W"
+    csv = [None] * 19
+    csv[1] = [0, 2463]                              # NEW $24.63
+    csv[18] = [0, 2463, 0]                          # buy box $24.63 (3-tuple)
+    product = {
+        "csv": csv,
+        "_cached_at": 9_999_999_999,
+        "deals": [
+            {"accessType": "ALL", "badge": "Limited time deal", "dealType": "LIMITED_TIME_DEAL"},
+        ],
+        "promotions": [
+            {
+                "amount": 2999,
+                "discountPercent": 0,
+                "sellerId": "A2T4WIBJIHSJGX",
+                "snsBulkDiscountPercent": None,
+                "type": "SNS",
+            },
+        ],
+    }
+    _write_cache(tmp_path, asin, product)
+    monkeypatch.setattr(keepa_api, "_CACHE_DIR", str(tmp_path / "keepa_cache"))
+
+    result = keepa_api.keepa_extract_pricing(asin)
+
+    assert result["status"] == "success"
+    assert result["active_deals"] == [
+        {"type": "LIMITED_TIME_DEAL", "badge": "Limited time deal", "audience": "ALL"}
+    ], "extract_pricing must surface the Limited time deal badge"
+    assert len(result["promotions"]) == 1
+    promo = result["promotions"][0]
+    assert promo["type"] == "SNS"
+    assert promo["amount_dollars"] == pytest.approx(29.99), (
+        "SnS reference price ($29.99) is the 'typical price' Amazon strikes through during the deal"
+    )
+
+
 def test_extract_offers_returns_raw_offer_counts(tmp_path, monkeypatch):
     asin = "B0BTZ24S9W"
     csv = [None] * 36

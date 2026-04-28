@@ -317,6 +317,12 @@ def _build_summary(asin: str, product: dict, from_cache: bool = False, tokens_le
         elif coupon_raw and coupon_raw < 0:
             coupon = f"{abs(coupon_raw)}% off"
 
+    # Surface any active deal badge ("Limited time deal", "Lightning Deal",
+    # etc.) in the lightweight summary so the agent doesn't miss it without
+    # calling extract_pricing.
+    deals = product.get("deals") or []
+    active_deal = deals[0].get("badge") if deals and deals[0].get("badge") else None
+
     result = {
         "status": "success",
         "asin": asin,
@@ -330,6 +336,7 @@ def _build_summary(asin: str, product: dict, from_cache: bool = False, tokens_le
             "prime_exclusive": prime_excl,
         },
         "coupon": coupon,
+        "active_deal": active_deal,
         "monthly_sold": product.get("monthlySold"),
         "from_cache": from_cache,
         "hint": "Use keepa_extract_* tools for detailed pricing history, offers, competitors, and stats.",
@@ -410,11 +417,40 @@ def keepa_extract_pricing(asin: str, tool_context: ToolContext | None = None) ->
     best_source = min(valid, key=valid.get) if valid else None
     best_price = round(valid[best_source], 2) if best_source else None
 
+    # Deal badges (Limited time deal, Best Deal, Lightning Deal, Prime Early
+    # Access, etc.). Keepa surfaces these in the `deals` array even when the
+    # dealType doesn't have a dedicated CSV index.
+    active_deals = []
+    for d in product.get("deals") or []:
+        if d.get("dealType"):
+            active_deals.append({
+                "type": d.get("dealType"),
+                "badge": d.get("badge"),
+                "audience": d.get("accessType"),
+            })
+
+    # Seller promotions (Subscribe & Save reference price, bulk discounts).
+    # The SnS `amount` is the SnS-eligible price in cents and often acts as
+    # the "typical price" baseline that Amazon strikes through when a deal
+    # is active.
+    promotions = []
+    for p in product.get("promotions") or []:
+        amount = p.get("amount")
+        promotions.append({
+            "type": p.get("type"),
+            "amount_dollars": round(amount / 100.0, 2) if isinstance(amount, (int, float)) and amount > 0 else None,
+            "discount_percent": p.get("discountPercent"),
+            "sns_bulk_discount_percent": p.get("snsBulkDiscountPercent"),
+            "seller_id": p.get("sellerId"),
+        })
+
     return {
         "status": "success",
         "asin": asin.upper(),
         "prices": prices,
         "coupon": coupon,
+        "active_deals": active_deals,
+        "promotions": promotions,
         "best_offer": best_price,
         "best_offer_source": best_source,
     }

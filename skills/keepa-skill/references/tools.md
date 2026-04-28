@@ -38,9 +38,14 @@ Hits `/product` with `offers=20`, caches the full response to `tmp/keepa_cache/{
 
 Detailed current prices across all channels + best-offer analysis.
 
-**Returns** `prices` with: `amazon, new_3p, used, list_price, lightning_deal, warehouse, new_fba, buy_box, prime_exclusive, prime_exclusive_live`. Plus `coupon` (typed) and `best_offer` / `best_offer_source` (best price across all channels — including lightning deals and buy-box-with-coupon).
+**Returns** `prices` with: `amazon, new_3p, used, list_price, lightning_deal, warehouse, new_fba, buy_box, prime_exclusive, prime_exclusive_live`. Plus:
 
-**Use it for:** "what's the current price?", "is there a coupon?", "is there a lightning deal?", "what's the cheapest way to buy this right now?". Each price can be `null` — a `null` for `lightning_deal` or `prime_exclusive` means there's no active deal at this moment, not that the field is broken.
+- `coupon` (typed) — current coupon, `null` if none
+- `active_deals` — list of Amazon deal badges currently on the listing. Each entry has `{type, badge, audience}`. Common `type` values: `LIMITED_TIME_DEAL`, `LIGHTNING_DEAL`, `BEST_DEAL`, `PRIME_EARLY_ACCESS`. Empty list `[]` means no active badge. **This is how you detect "Limited time deal" / strike-through pricing — neither the price CSVs nor the coupon field carry that signal.**
+- `promotions` — list of seller-side promotions. Each entry has `{type, amount_dollars, discount_percent, sns_bulk_discount_percent, seller_id}`. The most common is `type: "SNS"` whose `amount_dollars` acts as the Subscribe & Save reference price (the "typical price" Amazon strikes through during a deal).
+- `best_offer` / `best_offer_source` — best price across all channels, including lightning deals and buy-box-with-coupon.
+
+**Use it for:** "what's the current price?", "is there a coupon?", "is there a deal running?", "what's the typical price?". A `null` price field or `[]` deals list means "no active value right now," not "broken."
 
 ### `keepa_extract_sales_analysis(asin: str, days: int = 90) -> dict`
 
