@@ -50,11 +50,49 @@ def _log_job_event(event: str, **fields) -> None:
 _MAX_PLAN_ITERATIONS = 25
 
 _PLAN_CONTINUATION_PROMPT = (
-    "Plan still has pending steps. If `get_next_step` isn't in your "
-    "toolkit, call `transfer_to_agent(agent_name='CoordinatorAgent')`. "
-    "Otherwise call `get_next_step`, do the step, then `complete_step` "
-    "with concrete tool results. Use `abandon_plan` if the step fails."
+    "Plan still has pending steps. Call `get_next_step`, do the step, "
+    "then `complete_step` with concrete tool results. Use "
+    "`abandon_plan` if the step fails."
 )
+
+
+async def _stamp_coordinator_active(runner, user_id: str, session_id: str) -> None:
+    """Append a no-op event authored by CoordinatorAgent so ADK 2.0's
+    `_find_agent_to_run` resume logic picks the coordinator (not the
+    last-active sub-agent) for the next `runner.run_async` call.
+
+    ADK 2.0.0b1 does not auto-pop sub-agents back to the parent after
+    `transfer_to_agent`; on the next invocation the runner walks
+    reversed session events and picks the most recent transferable
+    agent. Without this marker, plan-continuation prompts land on
+    whichever sub-agent handled the previous step (BigQueryAgent,
+    AmazonAgent, etc.) — none of which have planner tools, so they
+    error with `Tool 'complete_step' not found`.
+
+    The marker passes `_event_filter` (no end_of_agent, no agent_state,
+    not a user event) and matches `event.author == root_agent.name` in
+    the walk's first iteration, returning the coordinator immediately.
+    """
+    import uuid
+
+    from google.adk.events.event import Event, EventActions
+
+    from app.agents.coordinator import root_agent as coordinator_agent
+
+    try:
+        session = await runner.session_service.get_session(
+            app_name=runner.app_name, user_id=user_id, session_id=session_id,
+        )
+    except Exception:
+        session = None
+    if not session:
+        return
+    marker = Event(
+        author=coordinator_agent.name,
+        actions=EventActions(),
+        invocation_id=f"plan_continuation_marker_{uuid.uuid4().hex[:8]}",
+    )
+    await runner.session_service.append_event(session, marker)
 
 
 async def _drive_plan_to_completion(
@@ -73,6 +111,11 @@ async def _drive_plan_to_completion(
     completes. This helper pumps the agent back in with a continuation
     prompt until the plan is done (or the iteration cap is hit).
 
+    Before each continuation, stamps the coordinator as the active
+    agent (see `_stamp_coordinator_active`) so ADK routes the prompt
+    to the coordinator rather than to whichever sub-agent ran the
+    previous step.
+
     Returns the final agent_response.
     """
     from app.runtime.executor import extract_agent_response
@@ -86,6 +129,7 @@ async def _drive_plan_to_completion(
             "Task %s plan-continuation iter %d/%d (session=%s)",
             task_id, iterations, _MAX_PLAN_ITERATIONS, session_id,
         )
+        await _stamp_coordinator_active(runner, user_id, session_id)
         response = await extract_agent_response(
             runner, user_id, session_id, _PLAN_CONTINUATION_PROMPT,
             actual_caller_id=actual_caller_id,
