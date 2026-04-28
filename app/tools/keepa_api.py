@@ -5,6 +5,7 @@ Only lightweight summaries go to the LLM. Focused extraction tools
 pull specific slices from the cached data on demand.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -963,6 +964,244 @@ async def keepa_get_seller_info(
             return {"status": "success", "tokens_left": data.get("tokensLeft"), "data": data}
     except Exception as e:
         return {"status": "error", "message": f"Keepa API error: {e}"}
+
+
+# ---------------------------------------------------------------------------
+# BULK QUERY — flat-table extraction across many ASINs in one shot
+# ---------------------------------------------------------------------------
+
+# Maps a public field name to the function that extracts it from a raw
+# Keepa product dict. Keep names lowercase_underscored and stable —
+# downstream code (and the keepa-skill) leans on this list.
+def _f_title(p: dict) -> Any: return p.get("title")
+def _f_brand(p: dict) -> Any: return p.get("brand")
+def _f_category(p: dict) -> Any:
+    return " > ".join(c.get("name", "") for c in (p.get("categoryTree") or []))
+def _f_product_type(p: dict) -> Any: return p.get("productType")
+def _f_monthly_sold(p: dict) -> Any: return p.get("monthlySold")
+def _f_sales_rank_category(p: dict) -> Any: return p.get("salesRankReference")
+def _f_listed_since(p: dict) -> Any:
+    ls = p.get("listedSince")
+    return _keepa_time_to_datetime(ls) if ls and ls > 0 else None
+def _f_fba_pickpack_fee(p: dict) -> Any:
+    fees = p.get("fbaFees") or {}
+    cents = fees.get("pickAndPackFee")
+    return round(cents / 100.0, 2) if isinstance(cents, (int, float)) and cents > 0 else None
+def _f_active_deal(p: dict) -> Any:
+    deals = p.get("deals") or []
+    return deals[0].get("badge") if deals and deals[0].get("badge") else None
+def _f_coupon(p: dict) -> Any:
+    cr = p.get("coupon")
+    if isinstance(cr, list):
+        cr = cr[0] if cr else None
+    if cr and cr > 0:
+        return f"${cr/100:.2f} off"
+    if cr and cr < 0:
+        return f"{abs(cr)}% off"
+    return None
+
+def _csv_int(p: dict, idx: int) -> int | None:
+    csv = p.get("csv") or []
+    return _int_from_csv(csv[idx], 2) if len(csv) > idx and csv[idx] else None
+
+def _csv_price(p: dict, idx: int, row_size: int = 2) -> float | None:
+    csv = p.get("csv") or []
+    return _price_from_csv(csv[idx], row_size) if len(csv) > idx and csv[idx] else None
+
+_BULK_FIELD_HANDLERS: dict[str, Any] = {
+    # Identity / catalog
+    "title": _f_title,
+    "brand": _f_brand,
+    "category": _f_category,
+    "product_type": _f_product_type,
+    # Sales signals
+    "review_count": lambda p: _csv_int(p, 17),
+    "rating": lambda p: (_csv_int(p, 16) / 10.0) if _csv_int(p, 16) else None,
+    "sales_rank": lambda p: _csv_int(p, 3),
+    "sales_rank_category": _f_sales_rank_category,
+    "monthly_sold": _f_monthly_sold,
+    # Prices
+    "amazon_price": lambda p: _csv_price(p, 0),
+    "new_3p_price": lambda p: _csv_price(p, 1),
+    "buy_box": lambda p: _csv_price(p, 18, 3),  # shipping CSV → row_size 3
+    "prime_exclusive": lambda p: _csv_price(p, 33),
+    "list_price": lambda p: _csv_price(p, 4),
+    "lightning_deal": lambda p: _csv_price(p, 8),
+    # Promo state
+    "active_deal": _f_active_deal,
+    "coupon": _f_coupon,
+    # Listing metadata
+    "listed_since": _f_listed_since,
+    "fba_pickpack_fee": _f_fba_pickpack_fee,
+}
+
+_BULK_DEFAULT_FIELDS = (
+    "asin,title,review_count,rating,sales_rank,monthly_sold,buy_box,active_deal"
+)
+
+
+def _extract_row(product: dict, fields: list[str]) -> dict:
+    """Extract a flat dict of the requested fields from a raw Keepa product."""
+    row: dict = {"asin": (product.get("asin") or "").upper()}
+    for f in fields:
+        if f == "asin":
+            continue  # always present
+        handler = _BULK_FIELD_HANDLERS.get(f)
+        if handler is not None:
+            try:
+                row[f] = handler(product)
+            except Exception:
+                row[f] = None
+    return row
+
+
+async def _fetch_bulk_batch(
+    client: httpx.AsyncClient,
+    api_key: str,
+    asins_chunk: list[str],
+    domain: int,
+    with_offers: bool,
+) -> dict | None:
+    params: dict[str, Any] = {
+        "key": api_key,
+        "asin": ",".join(asins_chunk),
+        "domain": domain,
+    }
+    if with_offers:
+        params["offers"] = 20
+    try:
+        resp = await client.get(f"{_API_BASE}/product", params=params, timeout=60)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        logger.exception("Keepa bulk fetch error for chunk size %d", len(asins_chunk))
+        return {"_error": str(e), "products": []}
+
+
+async def keepa_bulk_query(
+    asins: str,
+    fields: str = _BULK_DEFAULT_FIELDS,
+    with_offers: bool = False,
+    domain: int = 1,
+    tool_context: ToolContext | None = None,
+) -> dict:
+    """Fetch many ASINs in one shot and return a flat table of selected fields.
+
+    Use this instead of looping `keepa_fetch_product` when you have more than
+    ~5 ASINs and only need a subset of fields per ASIN (e.g., review counts
+    across 100+ children of a parent). Each underlying Keepa product response
+    is also cached to disk, so individual `keepa_extract_*` follow-ups on any
+    of the ASINs work for free afterward.
+
+    Args:
+        asins: Comma-separated ASINs. Whitespace tolerated. No hard cap, but
+            costs 1 token/ASIN (3 if with_offers=True) so check the budget
+            for big lists. Chunked into batches of 100 (or 20 with offers).
+        fields: Comma-separated field names. ASIN is always included.
+            Valid: title, brand, category, product_type, review_count, rating,
+            sales_rank, sales_rank_category, monthly_sold, amazon_price,
+            new_3p_price, buy_box, prime_exclusive, list_price, lightning_deal,
+            active_deal, coupon, listed_since, fba_pickpack_fee.
+        with_offers: If True, fetches live offer data (3 tokens/ASIN, max 20
+            per batch). If False (default), 1 token/ASIN, max 100 per batch.
+            Set True only when you need offer-level data; for review counts,
+            ranks, and prices, leave it False.
+        domain: Amazon locale (1=US, 2=GB, 3=DE, ...).
+
+    Returns:
+        dict: {status, asins_requested, asins_returned, asins_missing,
+               tokens_left, rows: [{asin, ...selected fields}, ...]}
+        Missing ASINs (not found in Keepa) appear in `asins_missing` and
+        cost no tokens.
+    """
+    asin_list = [a.strip().upper() for a in asins.split(",") if a.strip()]
+    if not asin_list:
+        return {"status": "error", "message": "No ASINs provided."}
+    field_list = [f.strip() for f in fields.split(",") if f.strip()]
+    if "asin" not in field_list:
+        field_list = ["asin", *field_list]
+    unknown = [f for f in field_list if f != "asin" and f not in _BULK_FIELD_HANDLERS]
+    if unknown:
+        return {
+            "status": "error",
+            "message": f"Unknown field(s): {unknown}. Valid: {sorted(_BULK_FIELD_HANDLERS.keys())}",
+        }
+
+    api_key = _get_api_key()
+    if not api_key:
+        return {"status": "error", "message": "KEEPA_API_KEY not configured."}
+
+    chunk_size = 20 if with_offers else 100
+    chunks = [asin_list[i : i + chunk_size] for i in range(0, len(asin_list), chunk_size)]
+    cost_per_asin = 3 if with_offers else 1
+    estimated_cost = len(asin_list) * cost_per_asin
+
+    try:
+        async with httpx.AsyncClient(timeout=90) as client:
+            token_info = await _check_token_balance(client, api_key)
+            token_err = _check_tokens_or_error(token_info)
+            if token_err:
+                return token_err
+            tokens_left = token_info.get("tokensLeft", 0)
+            if tokens_left < estimated_cost + _MIN_TOKENS:
+                return {
+                    "status": "error",
+                    "message": (
+                        f"Insufficient Keepa tokens for bulk query: need ~{estimated_cost} "
+                        f"({len(asin_list)} ASINs x {cost_per_asin}), have {tokens_left}. "
+                        f"Refill in ~{token_info.get('refillIn', 0) // 1000}s."
+                    ),
+                }
+
+            sem = asyncio.Semaphore(3)
+
+            async def _go(chunk: list[str]) -> dict | None:
+                async with sem:
+                    return await _fetch_bulk_batch(client, api_key, chunk, domain, with_offers)
+
+            responses = await asyncio.gather(*[_go(c) for c in chunks])
+
+            final_token_info = await _check_token_balance(client, api_key)
+            final_tokens = final_token_info.get("tokensLeft")
+    except Exception as e:
+        logger.exception("Keepa bulk_query orchestration error")
+        return {"status": "error", "message": f"Keepa bulk query error: {e}"}
+
+    rows: list[dict] = []
+    found: set[str] = set()
+    batch_errors: list[str] = []
+    for resp in responses:
+        if not resp:
+            continue
+        if resp.get("_error"):
+            batch_errors.append(resp["_error"])
+            continue
+        tokens_left_resp = resp.get("tokensLeft")
+        for product in resp.get("products") or []:
+            asin = (product.get("asin") or "").upper()
+            if not asin:
+                continue
+            found.add(asin)
+            try:
+                _save_cache(asin, product, tokens_left_resp or 0)
+            except Exception:
+                logger.warning("Failed to cache bulk product %s", asin)
+            rows.append(_extract_row(product, field_list))
+
+    missing = [a for a in asin_list if a not in found]
+    result: dict = {
+        "status": "success",
+        "asins_requested": len(asin_list),
+        "asins_returned": len(rows),
+        "asins_missing": missing,
+        "tokens_left": final_tokens,
+        "fields": field_list,
+        "rows": rows,
+    }
+    if batch_errors:
+        result["batch_errors"] = batch_errors
+        result["status"] = "partial"
+    return result
 
 
 async def keepa_get_top_sellers(

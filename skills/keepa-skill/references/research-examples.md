@@ -123,6 +123,38 @@ User: "Have we been losing the buy box on B0CJ5G3GGN?"
    their offer windows. Consider checking your repricer's floor price."
 ```
 
+## Example 6: Bulk attribute check across many ASINs (parent's children, competitor list)
+
+```
+User: "Pull review count and rating for all 120 children of parent B0PARENT123"
+
+1. (you already have the children list — say from a previous query, your DB,
+   or sp_get_catalog_item)
+
+2. keepa_check_tokens()
+   → 1 token/ASIN × 120 = 120 tokens. Confirm headroom.
+
+3. keepa_bulk_query(
+      asins="B0CHILD001,B0CHILD002,...B0CHILD120",     # comma-separated
+      fields="asin,title,review_count,rating,monthly_sold,sales_rank,active_deal",
+      with_offers=False                                 # 1 token/ASIN, fastest
+   )
+   → Returns rows: [{asin, title, review_count, rating, monthly_sold, sales_rank, active_deal}, ...]
+   → Each ASIN's full data also cached on disk — so a follow-up
+     keepa_extract_pricing(asin) on any one of them is now 0 tokens.
+
+4. (optional) For a few ASINs that look interesting, run the deep-dive
+   workflow — keepa_extract_pricing, keepa_extract_sales_analysis — on
+   them individually. No additional API calls needed.
+```
+
+This is the right tool when:
+- ≥5 ASINs to check
+- Only need a flat table of a few fields per ASIN, not the full payload
+- Don't want to wait through one-by-one fetches
+
+Don't use it for single-ASIN deep dives — `keepa_fetch_product` + `keepa_extract_*` gives more detail at the same cost.
+
 ## Common gotchas (quick reference)
 
 - Always `keepa_fetch_product` before any `keepa_extract_*` call

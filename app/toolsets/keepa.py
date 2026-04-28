@@ -8,6 +8,7 @@ class KeepaToolset(BaseToolset):
     async def get_tools(self, readonly_context=None):
         from app.tools.keepa_api import (
             # Token management
+            keepa_bulk_query,
             keepa_check_tokens,
             keepa_extract_competitors,
             keepa_extract_history,
@@ -29,6 +30,7 @@ class KeepaToolset(BaseToolset):
         return [
             FunctionTool(func=keepa_check_tokens),
             FunctionTool(func=keepa_fetch_product),
+            FunctionTool(func=keepa_bulk_query),
             FunctionTool(func=keepa_extract_pricing),
             FunctionTool(func=keepa_extract_history),
             FunctionTool(func=keepa_extract_offers),

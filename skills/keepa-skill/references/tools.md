@@ -32,6 +32,50 @@ Hits `/product` with `offers=20`, caches the full response to `tmp/keepa_cache/{
 
 **Use it before:** any `keepa_extract_*` call. The summary is a teaser — call extract tools for real data.
 
+## Bulk (one API call, many ASINs)
+
+### `keepa_bulk_query(asins: str, fields: str = ..., with_offers: bool = False, domain: int = 1) -> dict`
+
+When you have more than ~5 ASINs and only need a subset of fields per ASIN — review counts across 100 children of a parent, BSR check across a competitor list, price audit of your catalog — this is the right tool. Single API call, chunked internally (100 ASINs per batch without offers, 20 with), parallel. Returns a flat table with one row per ASIN. Each product's full payload is also cached so any individual `keepa_extract_*` follow-up works for free.
+
+**`asins`** — comma-separated, no spaces required. e.g. `"B0...,B1...,B2..."`.
+
+**`fields`** — comma-separated field names. ASIN is always included. Valid:
+
+| Field | Source |
+|---|---|
+| `title`, `brand`, `category`, `product_type` | catalog metadata |
+| `review_count`, `rating`, `sales_rank`, `sales_rank_category`, `monthly_sold` | sales signals |
+| `amazon_price`, `new_3p_price`, `buy_box`, `prime_exclusive`, `list_price`, `lightning_deal` | prices (USD, `null` when inactive) |
+| `active_deal`, `coupon` | promo state |
+| `listed_since`, `fba_pickpack_fee` | listing metadata |
+
+Default field set covers the common bulk-research case: `asin, title, review_count, rating, sales_rank, monthly_sold, buy_box, active_deal`.
+
+**`with_offers`** — `False` (default) costs **1 token per ASIN**, max 100 ASINs/batch. `True` adds live offer data, costs **3 tokens per ASIN**, max 20/batch. Leave it `False` for review-count / rank / price questions; only flip it on when you need offer-level data.
+
+**Returns:**
+```python
+{
+  "status": "success" | "partial",
+  "asins_requested": 142,
+  "asins_returned": 140,
+  "asins_missing": ["B0X...", "B0Y..."],   # not found in Keepa
+  "tokens_left": 850,
+  "fields": ["asin", "title", "review_count", ...],
+  "rows": [
+    {"asin": "B0...", "title": "...", "review_count": 1740, "rating": 4.4, ...},
+    ...
+  ]
+}
+```
+
+`asins_missing` costs no tokens. `status: "partial"` means some chunks errored (look at `batch_errors` for details); successful chunks are still in `rows`.
+
+**Use it for:** "review count for all 120 children of B0X...", "BSR + monthly sold for these 40 competitor ASINs", "price + active_deal across our 200 SKUs".
+
+**Don't use it for:** single-ASIN deep dives (use `keepa_fetch_product` + `keepa_extract_*` instead — same cost, more detail).
+
 ## Extract (read from cache, no API cost)
 
 ### `keepa_extract_pricing(asin: str) -> dict`

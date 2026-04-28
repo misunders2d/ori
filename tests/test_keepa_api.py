@@ -7,6 +7,7 @@ integers in Keepa CSVs, not cents.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -158,6 +159,70 @@ def test_extract_pricing_surfaces_limited_time_deal_and_promotions(tmp_path, mon
     assert promo["amount_dollars"] == pytest.approx(29.99), (
         "SnS reference price ($29.99) is the 'typical price' Amazon strikes through during the deal"
     )
+
+
+def test_bulk_extract_row_pulls_only_requested_fields():
+    """The row extractor that backs keepa_bulk_query should:
+      - always include asin
+      - return None for fields the product is missing
+      - decode rank/review-count as raw integers (not /100)
+      - decode buy_box from the 3-tuple shipping CSV
+      - surface active deal badge from product.deals
+    """
+    csv = [None] * 19
+    csv[1] = [0, 2463]                              # NEW $24.63
+    csv[3] = [0, 18592]                             # BSR
+    csv[16] = [0, 44]                               # rating raw 44 → 4.4 stars
+    csv[17] = [0, 1740]                             # review count
+    csv[18] = [0, 2463, 0]                          # buy box $24.63 (3-tuple)
+    product = {
+        "asin": "B0TESTASIN",
+        "csv": csv,
+        "title": "Test product",
+        "monthlySold": 100,
+        "deals": [
+            {"accessType": "ALL", "badge": "Limited time deal", "dealType": "LIMITED_TIME_DEAL"},
+        ],
+    }
+
+    fields = [
+        "asin",
+        "title",
+        "review_count",
+        "rating",
+        "sales_rank",
+        "monthly_sold",
+        "buy_box",
+        "active_deal",
+        "prime_exclusive",       # missing from product → None
+    ]
+    row = keepa_api._extract_row(product, fields)
+
+    assert row["asin"] == "B0TESTASIN"
+    assert row["title"] == "Test product"
+    assert row["review_count"] == 1740
+    assert row["rating"] == pytest.approx(4.4)
+    assert row["sales_rank"] == 18592
+    assert row["monthly_sold"] == 100
+    assert row["buy_box"] == pytest.approx(24.63)
+    assert row["active_deal"] == "Limited time deal"
+    assert row["prime_exclusive"] is None
+
+
+def test_bulk_query_rejects_unknown_field_names(monkeypatch):
+    """keepa_bulk_query should refuse the call up-front when the caller
+    passes a field name the toolset doesn't know — better than silently
+    returning rows with missing columns."""
+    monkeypatch.setenv("KEEPA_API_KEY", "fake-key")
+
+    result = asyncio.run(keepa_api.keepa_bulk_query(
+        asins="B01,B02",
+        fields="asin,review_count,not_a_real_field,bogus",
+    ))
+
+    assert result["status"] == "error"
+    assert "not_a_real_field" in result["message"]
+    assert "bogus" in result["message"]
 
 
 def test_extract_offers_returns_raw_offer_counts(tmp_path, monkeypatch):

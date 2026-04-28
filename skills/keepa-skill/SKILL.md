@@ -24,6 +24,9 @@ SKILL.md is the routing doc. Each topic has its own reference file — read the 
 **Fetch** (calls API, caches raw data, returns lightweight summary):
 - `keepa_fetch_product(asin, domain=1)` — must be called before any extract tool
 
+**Bulk** (one API call, many ASINs, returns a flat table — never iterate `keepa_fetch_product` for >5 ASINs):
+- `keepa_bulk_query(asins, fields, with_offers=False, domain=1)` — comma-separated ASINs and field names; returns one row per ASIN. Each product is also cached so per-ASIN extract tools work afterward for free. Use this for "review count check on 100+ children of a parent" type questions.
+
 **Extract** (read from cache, return focused slices):
 - `keepa_extract_pricing(asin)` — current prices + best-offer analysis (with coupons)
 - `keepa_extract_sales_analysis(asin, days=90)` — **primary analysis tool** — daily real sales (min/max from tier mapping), effective prices, BSR, revenue
