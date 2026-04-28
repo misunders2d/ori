@@ -70,10 +70,14 @@ async def test_workflow_aborts_plan_when_judge_returns_failed(tmp_plan_db):
     status = await plan_storage.get_plan_status(session_id)
     assert status["status"] == "abandoned"
 
-    # On failure, the workflow returns the worker's response (which the
-    # delivery layer rendered to the user) — but our test fixture's
-    # last worker_response is in slot index 2.
-    assert response.text.startswith("worker b")
+    # On failure, the workflow returns a loud user-facing failure
+    # message (types.Content), NOT the hollow worker_response. The
+    # delivery layer extracts text from .parts; verify the message
+    # contains the abort marker and the failure reason.
+    parts = getattr(response, "parts", None) or []
+    text = " ".join(p.text for p in parts if getattr(p, "text", None))
+    assert "PLAN ABORTED" in text
+    assert "401" in text
 
 
 @pytest.mark.asyncio

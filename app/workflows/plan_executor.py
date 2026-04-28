@@ -42,11 +42,12 @@ from google.adk.agents.context import Context
 from google.adk.workflow import Workflow, node
 
 from app.agents.coordinator import root_agent as coordinator_agent
-from app.agents.step_executor import StepResult, step_judge
+from app.agents.step_executor import StepResult, step_judge, step_worker
 from app.runtime.plan_storage import (
     abandon_plan,
     complete_step,
     get_next_step,
+    get_plan_status,
     has_pending_steps,
 )
 
@@ -106,10 +107,10 @@ def _extract_text(response) -> str:
 
 
 def _build_worker_prompt(step: dict) -> str:
-    """The prompt the coordinator sees for one step (worker turn).
+    """The prompt step_worker sees for one step.
 
     Behavior rules (don't improvise on failure, quote tool results,
-    don't fabricate success) live in coordinator's instruction.
+    don't fabricate success) live in step_worker's instruction.
     """
     return f"PLAN STEP {step['step_index']}: {step['description']}"
 
@@ -121,6 +122,35 @@ def _build_judge_prompt(step: dict, worker_text: str) -> str:
         f"STEP: {step['description']}\n\n"
         f"WORKER_RESULT: {worker_text[:3000]}"
     )
+
+
+async def _build_failure_message(session_id: str, failed_step: dict, reason: str):
+    """Loud, unambiguous user-facing failure message for an aborted plan.
+
+    Returned as a types.Content so the scheduled-task delivery layer
+    extracts it via .parts. We do NOT return the worker's response on
+    failure — empty/hollow worker text was the original silent-fail
+    pattern; surfacing it amplifies the bug.
+    """
+    from google.genai import types as _types
+
+    plan = await get_plan_status(session_id)
+    total = len(plan.get("steps", [])) if plan else 0
+    failed_idx = failed_step.get("step_index", 0) + 1
+    desc = failed_step.get("description", "(unknown)")[:400]
+
+    text = (
+        f"⚠️ SCHEDULED PLAN ABORTED at step {failed_idx}"
+        + (f" of {total}" if total else "")
+        + "\n\n"
+        f"Failed step: {desc}\n\n"
+        f"Reason: {reason}\n\n"
+        "This step did not complete. Subsequent steps were NOT run. "
+        "Nothing was written to spreadsheets, sent to channels, or "
+        "persisted as a result of this fire. Investigate the failure "
+        "reason before re-running the task."
+    )
+    return _types.Content(role="model", parts=[_types.Part.from_text(text=text)])
 
 
 def _coerce_step_result(step_response) -> StepResult:
@@ -194,11 +224,12 @@ async def _drive_plan_loop(ctx, response, session_id: str):
             step["step_index"], session_id, step["description"][:120],
         )
 
-        # Worker phase: coordinator runs the step with its full toolkit
-        # (no output_schema constraint blocking tool calls). Returns
-        # free-text describing what tools it actually invoked.
+        # Worker phase: step_worker (task-mode, full coordinator
+        # toolkit via AgentTool wraps, NO output_schema constraint).
+        # Coordinator itself is mode='chat' which is incompatible with
+        # workflow-node invocation (returns None — observed in prod).
         worker_response = await ctx.run_node(
-            coordinator_agent, _build_worker_prompt(step),
+            step_worker, _build_worker_prompt(step),
         )
         worker_text = _extract_text(worker_response)
         # Diagnostic: we observed empty worker_text in production.
@@ -223,15 +254,17 @@ async def _drive_plan_loop(ctx, response, session_id: str):
                 "plan_executor: step %d WORKER returned empty text [session=%s] — failing step without judge",
                 step["step_index"], session_id,
             )
-            failure_record = (
-                "FAILED: Worker (coordinator) produced no usable text. "
-                "The step did not run, or its output was not captured by "
-                "the workflow. Inspect WORKER_SHAPE log for the response "
+            reason = (
+                "Worker (coordinator) produced no usable text. The step "
+                "did not run, or its output was not captured by the "
+                "workflow. Inspect WORKER_SHAPE log for the response "
                 "type and attributes."
             )
-            await complete_step(session_id, failure_record[:_RESULT_RECORD_LIMIT])
+            await complete_step(
+                session_id, f"FAILED: {reason}"[:_RESULT_RECORD_LIMIT],
+            )
             await abandon_plan(session_id)
-            return worker_response
+            return await _build_failure_message(session_id, step, reason)
 
         # Judge phase: typed StepResult, no tools. Reads the step
         # description + worker output, classifies as completed/failed.
@@ -255,12 +288,11 @@ async def _drive_plan_loop(ctx, response, session_id: str):
                 step["step_index"], session_id,
                 (result.failure_reason or result.summary)[:200],
             )
-            failure_record = (
-                f"FAILED: {result.failure_reason or result.summary}"
-            )[:_RESULT_RECORD_LIMIT]
+            reason = result.failure_reason or result.summary or "(no reason given)"
+            failure_record = f"FAILED: {reason}"[:_RESULT_RECORD_LIMIT]
             await complete_step(session_id, failure_record)
             await abandon_plan(session_id)
-            return step_response
+            return await _build_failure_message(session_id, step, reason)
 
         await complete_step(
             session_id, result.summary[:_RESULT_RECORD_LIMIT],
