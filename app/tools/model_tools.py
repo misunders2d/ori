@@ -59,8 +59,14 @@ async def _probe_model(model: str) -> tuple[bool, str]:
     except Exception as exc:
         return False, f"Could not construct model: {type(exc).__name__}: {exc}"
 
+    # Critical: use `llm.model` (the string the underlying client expects),
+    # NOT the outer Ori-prefixed `model` (e.g. "litellm/gemini/..."). The
+    # factory already stripped the prefix when constructing the LLM —
+    # passing the unstripped string into LlmRequest makes litellm see
+    # "litellm/" as a provider name and bail with "LLM Provider NOT
+    # provided", which broke probes for every litellm/openrouter swap.
     req = LlmRequest(
-        model=model,
+        model=llm.model,
         contents=[types.Content(role="user", parts=[types.Part.from_text(text="ping")])],
         config=types.GenerateContentConfig(max_output_tokens=4),
     )
