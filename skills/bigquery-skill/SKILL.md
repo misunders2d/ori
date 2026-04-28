@@ -9,8 +9,8 @@ You have read-only access to BigQuery via the ADK BigQueryToolset. Your job is t
 
 ## Procedure: Answering a Data Question
 
-- [ ] Step 1: **Discover** — call `get_table_data` to see available datasets and tables. Read descriptions.
-- [ ] Step 2: **Compare candidates** — if MULTIPLE tables match the user's intent (same name root, same domain, e.g. `fba_shipments` AND `fba_shipments_partitioned`), read the descriptions of ALL of them. NEVER pick a table whose description says "do not use", "obsolete", or "old"; pick the one explicitly recommended ("Use this table to ..."). When the catalog description for a candidate is empty, do NOT silently pick it — call `get_table_info` to fetch the live BigQuery description, OR ask the user which table they want.
+- [ ] Step 1: **Pick a dataset** — call `get_table_data()` (no argument). Returns dataset names with high-level descriptions only — tiny payload. Pick the dataset that matches the user's question.
+- [ ] Step 2: **Pick a table** — call `get_table_data(dataset='<name>')`. Returns the full table list for that dataset with per-table descriptions. If MULTIPLE tables match the user's intent (same name root, e.g. `fba_shipments` AND `fba_shipments_partitioned`), read the descriptions of ALL candidates. NEVER pick a table whose description says "do not use", "obsolete", or "old"; pick the one explicitly recommended ("Use this table to ..."). When a candidate's description is empty, do NOT silently pick it — call `get_table_info` for the live BigQuery description OR ask the user.
 - [ ] Step 3: **Schema check** — use `get_table_info` on every table you plan to query. Read column descriptions. Obey them.
 - [ ] Step 4: **Time awareness** — call `get_current_time` to know today's date before writing any date filter.
 - [ ] Step 5: **Write query** — follow the aggregation rules and precautions below. Use fully qualified table names (`project.dataset.table`).

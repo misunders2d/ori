@@ -25,19 +25,58 @@ except (FileNotFoundError, json.JSONDecodeError) as e:
     table_data = {}
 
 
-def get_table_data(tool_context: ToolContext = None) -> dict:
+def get_table_data(dataset: str = "", tool_context: ToolContext = None) -> dict:
     """Returns the catalog of available BigQuery datasets and tables.
 
-    Use this to discover what data is available before writing queries.
-    Some tables have descriptions explaining their content and usage.
+    Two-level usage to keep the response small:
+    - **`get_table_data()`** (no argument): lists ONLY dataset names and
+      their high-level descriptions. Use this first to find the dataset
+      that matches the user's question.
+    - **`get_table_data(dataset="<name>")`**: returns the full table list
+      with per-table descriptions for that dataset. Use this AFTER
+      picking the right dataset, to choose which table to query.
+
+    Both forms set the discovery flag, so either path satisfies the
+    `before_bq_callback` discovery gate.
+
+    Args:
+        dataset: Optional dataset name. Empty = dataset summary;
+            populated = tables in that dataset.
 
     Returns:
-        dict: Dataset and table metadata.
+        dict: `{status, data}` — shape depends on `dataset` argument.
     """
     # Mark the catalog as loaded for this session — `before_bq_callback`
     # in `app/agents/bigquery_agent.py` rejects any data-tool call that
-    # comes before this flag is set, so the agent must always inspect
-    # descriptions before picking a table.
+    # comes before this flag is set.
     if tool_context is not None and tool_context.state is not None:
         tool_context.state["bq_catalog_loaded"] = True
-    return {"status": "success", "data": table_data}
+
+    name = (dataset or "").strip()
+    if not name:
+        # Dataset summary only — small payload (~5KB vs 40KB for the full
+        # catalog). Avoids blowing the model's context on a discovery call.
+        summary = {
+            ds: {"dataset_description": meta.get("dataset_description", "")}
+            for ds, meta in table_data.items()
+        }
+        return {
+            "status": "success",
+            "data": summary,
+            "next_step": (
+                "Call `get_table_data(dataset='<name>')` for the dataset "
+                "you need, to see its tables and per-table descriptions."
+            ),
+        }
+
+    if name not in table_data:
+        return {
+            "status": "error",
+            "message": (
+                f"Unknown dataset '{name}'. Call `get_table_data()` "
+                f"with no argument to see all dataset names."
+            ),
+        }
+
+    # Full table listing for the requested dataset.
+    return {"status": "success", "data": {name: table_data[name]}}
