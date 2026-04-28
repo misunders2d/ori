@@ -29,7 +29,7 @@ Load `references/table_data.json` to see the full catalog with per-table descrip
 - Contains SKU, ASIN, Collection, and product parameters.
 - "Product" or "collection" in user requests → `Collection` column.
 - **ALWAYS** include this table when querying collection or product performance.
-- **WARNING**: ASINs have duplicates. Aggregate or deduplicate before joining.
+- **WARNING**: ASINs have duplicates (because there are multiple SKUs per ASIN). Aggregate or deduplicate before joining.
 - Country-specific variants: `dictionary_ca` (Canada), `dictionary_eu` (Europe), `dictionary_uk` (UK), `dictionary_wm` (Walmart), `dictionary_shp` (Shopify).
 
 ## Aggregation Rules
@@ -57,6 +57,7 @@ For multi-step queries (e.g., "compare sales across 5 ASINs", "build a P&L repor
 ## Gotchas
 
 - **Read-only**: WriteMode is BLOCKED. Never attempt INSERT, UPDATE, DELETE, CREATE, or DROP. The toolset will reject it.
+- **ASINs and SKUs**: If the user is asking for an ASIN-level data - that typically means they want ALL SKUS of that ASIN. Clarify the intent before running queries.
 - **Result limit**: max 10,000 rows per query. If you need more, use aggregation or pagination.
 - **SAFE_DIVIDE**: use `SAFE_DIVIDE(a, b)` instead of `a / b` to avoid division-by-zero errors.
 - **Date columns vary by table**: some use `date`, others `report_date`, `order_date`, etc. Always check schema first.
