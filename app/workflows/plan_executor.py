@@ -35,6 +35,7 @@ calling `ctx.run_node(coordinator_agent, ...)` per step.
 
 from __future__ import annotations
 
+import json
 import logging
 
 from google.adk.agents.context import Context
@@ -64,19 +65,44 @@ def _session_id_from_ctx(ctx: Context) -> str | None:
 
 
 def _extract_text(response) -> str:
-    """Pull a plain-text summary from whatever the coordinator emitted."""
+    """Pull a plain-text summary from whatever the coordinator emitted.
+
+    ADK 2.0 surfaces node output in several shapes depending on agent
+    mode and wrapping: types.Content directly (.parts), Event(output=X),
+    Event(content=Content), dict from output_schema, or a bare string.
+    """
     if response is None:
         return ""
-    # Common ADK shapes: Event with .output, types.Content, str.
+    # Direct types.Content — has .parts at the top level.
+    if hasattr(response, "parts") and not callable(response.parts):
+        try:
+            text = " ".join(
+                p.text for p in response.parts if getattr(p, "text", None)
+            )
+            if text:
+                return text
+        except Exception:
+            pass
+    # Event-like wrappers: .output / .text / .content
     for attr in ("output", "text", "content"):
         val = getattr(response, attr, None)
         if isinstance(val, str) and val:
             return val
         if val is not None and hasattr(val, "parts"):
-            return " ".join(
-                p.text for p in val.parts if getattr(p, "text", None)
-            )
-    return str(response)
+            try:
+                text = " ".join(
+                    p.text for p in val.parts if getattr(p, "text", None)
+                )
+                if text:
+                    return text
+            except Exception:
+                pass
+        if isinstance(val, dict):
+            # output_schema results land here
+            return json.dumps(val, default=str)
+    # Last resort
+    s = str(response)
+    return s if s and s != "None" else ""
 
 
 def _build_worker_prompt(step: dict) -> str:
@@ -175,10 +201,37 @@ async def _drive_plan_loop(ctx, response, session_id: str):
             coordinator_agent, _build_worker_prompt(step),
         )
         worker_text = _extract_text(worker_response)
+        # Diagnostic: we observed empty worker_text in production.
+        # Log the response shape so we can pin down the extraction gap.
+        logger.info(
+            "plan_executor: step %d WORKER_SHAPE [session=%s] type=%s public_attrs=%s",
+            step["step_index"], session_id,
+            type(worker_response).__name__,
+            [a for a in dir(worker_response) if not a.startswith("_")][:20],
+        )
         logger.info(
             "plan_executor: step %d WORKER [session=%s] text=%r",
             step["step_index"], session_id, worker_text[:200],
         )
+
+        # Empty-worker guard: if the coordinator's response came back
+        # with no usable text, the step did not produce evidence —
+        # bypass the judge (which would hallucinate a completion on
+        # blank input) and fail the step explicitly.
+        if not worker_text.strip():
+            logger.warning(
+                "plan_executor: step %d WORKER returned empty text [session=%s] — failing step without judge",
+                step["step_index"], session_id,
+            )
+            failure_record = (
+                "FAILED: Worker (coordinator) produced no usable text. "
+                "The step did not run, or its output was not captured by "
+                "the workflow. Inspect WORKER_SHAPE log for the response "
+                "type and attributes."
+            )
+            await complete_step(session_id, failure_record[:_RESULT_RECORD_LIMIT])
+            await abandon_plan(session_id)
+            return worker_response
 
         # Judge phase: typed StepResult, no tools. Reads the step
         # description + worker output, classifies as completed/failed.
