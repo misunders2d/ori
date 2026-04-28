@@ -41,7 +41,7 @@ from google.adk.agents.context import Context
 from google.adk.workflow import Workflow, node
 
 from app.agents.coordinator import root_agent as coordinator_agent
-from app.agents.step_executor import StepResult, step_executor
+from app.agents.step_executor import StepResult, step_judge
 from app.runtime.plan_storage import (
     abandon_plan,
     complete_step,
@@ -79,14 +79,22 @@ def _extract_text(response) -> str:
     return str(response)
 
 
-def _build_step_prompt(step: dict) -> str:
-    """The prompt the step_executor sees for one step.
+def _build_worker_prompt(step: dict) -> str:
+    """The prompt the coordinator sees for one step (worker turn).
 
-    Behavior rules (don't improvise on failure, don't claim unconfirmed
-    success, return typed pass/fail) live in step_executor's instruction
-    — keeping them out of the per-step prompt avoids per-call cost.
+    Behavior rules (don't improvise on failure, quote tool results,
+    don't fabricate success) live in coordinator's instruction.
     """
     return f"PLAN STEP {step['step_index']}: {step['description']}"
+
+
+def _build_judge_prompt(step: dict, worker_text: str) -> str:
+    """Hand step_judge the original step description plus the worker's
+    free-text report. The judge classifies into StepResult."""
+    return (
+        f"STEP: {step['description']}\n\n"
+        f"WORKER_RESULT: {worker_text[:3000]}"
+    )
 
 
 def _coerce_step_result(step_response) -> StepResult:
@@ -159,10 +167,29 @@ async def _drive_plan_loop(ctx, response, session_id: str):
             "plan_executor: step %d START [session=%s] desc=%r",
             step["step_index"], session_id, step["description"][:120],
         )
-        step_response = await ctx.run_node(
-            step_executor, _build_step_prompt(step),
+
+        # Worker phase: coordinator runs the step with its full toolkit
+        # (no output_schema constraint blocking tool calls). Returns
+        # free-text describing what tools it actually invoked.
+        worker_response = await ctx.run_node(
+            coordinator_agent, _build_worker_prompt(step),
         )
-        result = _coerce_step_result(step_response)
+        worker_text = _extract_text(worker_response)
+        logger.info(
+            "plan_executor: step %d WORKER [session=%s] text=%r",
+            step["step_index"], session_id, worker_text[:200],
+        )
+
+        # Judge phase: typed StepResult, no tools. Reads the step
+        # description + worker output, classifies as completed/failed.
+        judge_response = await ctx.run_node(
+            step_judge, _build_judge_prompt(step, worker_text),
+        )
+        result = _coerce_step_result(judge_response)
+        # Workflow returns the worker_response (richer text) on success
+        # so the user sees what the agent actually did, not a summary
+        # of a summary.
+        step_response = worker_response
         logger.info(
             "plan_executor: step %d RESULT [session=%s] status=%s summary=%r",
             step["step_index"], session_id,

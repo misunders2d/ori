@@ -36,21 +36,25 @@ def _ctx_with_session(session_id: str):
 
 
 @pytest.mark.asyncio
-async def test_workflow_aborts_plan_on_step_failed_typed_output(tmp_plan_db):
-    """Step b returns StepResult(status='failed'). The workflow must
-    abandon the plan and never request step c."""
+async def test_workflow_aborts_plan_when_judge_returns_failed(tmp_plan_db):
+    """Each step is now executed by worker+judge. Sequence per step:
+    ctx.run_node(worker) -> ctx.run_node(judge). The judge's typed
+    StepResult drives the abort decision."""
     session_id = "test-session-fail"
     await plan_storage.seed_plan(session_id, "task", ["step a", "step b", "step c"])
 
     ctx = _ctx_with_session(session_id)
+    # 4 calls expected: worker(a), judge(a-pass), worker(b), judge(b-fail)
+    # then abort — worker(c) and judge(c) must NOT fire.
     ctx.run_node = AsyncMock(side_effect=[
-        StepResult(status="completed", summary="did step a"),
+        SimpleNamespace(text="worker a: ran BigQuery, 50 rows returned"),
+        StepResult(status="completed", summary="BigQuery returned 50 rows"),
+        SimpleNamespace(text="worker b: sheet write returned 401"),
         StepResult(
             status="failed",
-            summary="tried sheet write",
+            summary="attempted sheet write",
             failure_reason="sheet write returned 401 Unauthorized",
         ),
-        # step c must never be requested.
     ])
     initial_resp = SimpleNamespace(text="initial coordinator response")
 
@@ -58,63 +62,62 @@ async def test_workflow_aborts_plan_on_step_failed_typed_output(tmp_plan_db):
         ctx, initial_resp, session_id,
     )
 
-    assert ctx.run_node.await_count == 2, (
-        "expected 2 step turns (a + b) — c must not run after b failed"
+    assert ctx.run_node.await_count == 4, (
+        f"expected 4 turns (worker+judge for steps a and b), "
+        f"got {ctx.run_node.await_count}"
     )
     assert not await plan_storage.has_pending_steps(session_id)
-
     status = await plan_storage.get_plan_status(session_id)
     assert status["status"] == "abandoned"
 
-    # The returned response is the failing step's result so the caller
-    # surfaces the actual failure to the user.
-    coerced = plan_executor._coerce_step_result(response)
-    assert coerced.status == "failed"
-    assert "401" in (coerced.failure_reason or "")
+    # On failure, the workflow returns the worker's response (which the
+    # delivery layer rendered to the user) — but our test fixture's
+    # last worker_response is in slot index 2.
+    assert response.text.startswith("worker b")
 
 
 @pytest.mark.asyncio
-async def test_workflow_runs_to_completion_when_all_steps_pass(tmp_plan_db):
+async def test_workflow_runs_all_steps_when_judge_says_completed(tmp_plan_db):
     session_id = "test-session-ok"
     await plan_storage.seed_plan(session_id, "task", ["a", "b"])
 
     ctx = _ctx_with_session(session_id)
     ctx.run_node = AsyncMock(side_effect=[
-        StepResult(status="completed", summary="did a"),
-        StepResult(status="completed", summary="did b"),
+        SimpleNamespace(text="worker a: did a thing"),
+        StepResult(status="completed", summary="a done"),
+        SimpleNamespace(text="worker b: did b thing"),
+        StepResult(status="completed", summary="b done"),
     ])
     initial_resp = SimpleNamespace(text="initial")
 
     await plan_executor._drive_plan_loop(ctx, initial_resp, session_id)
 
-    assert ctx.run_node.await_count == 2
+    assert ctx.run_node.await_count == 4  # 2 steps × (worker + judge)
     assert not await plan_storage.has_pending_steps(session_id)
     status = await plan_storage.get_plan_status(session_id)
     assert status["status"] == "completed"
 
 
 @pytest.mark.asyncio
-async def test_workflow_aborts_when_step_executor_returns_unstructured(tmp_plan_db):
-    """If step_executor returns plain text instead of a StepResult (e.g.
-    the model hallucinated free text past the schema), treat it as a
-    failure. Better to abort than march through with an unrecognized
-    response shape."""
+async def test_workflow_aborts_when_judge_returns_unstructured(tmp_plan_db):
+    """If step_judge returns garbage instead of a parseable StepResult,
+    the coercer falls back to status='failed' and the loop aborts."""
     session_id = "test-session-unstruct"
     await plan_storage.seed_plan(session_id, "task", ["a", "b"])
 
     ctx = _ctx_with_session(session_id)
-    # First step returns garbage. Second step would only fire if the
-    # workflow ignored the bad shape — it must NOT fire.
+    # worker(a) returns text; judge(a) returns garbage instead of typed
+    # StepResult — coercer treats as failed, loop aborts before step b.
     ctx.run_node = AsyncMock(side_effect=[
-        SimpleNamespace(text="oh sure I did the thing"),
-        StepResult(status="completed", summary="b"),
+        SimpleNamespace(text="worker a: did something"),
+        SimpleNamespace(text="not a valid StepResult, just prose"),
     ])
     initial_resp = SimpleNamespace(text="initial")
 
     await plan_executor._drive_plan_loop(ctx, initial_resp, session_id)
 
-    assert ctx.run_node.await_count == 1, (
-        "an unstructured response must abort — second step must not run"
+    assert ctx.run_node.await_count == 2, (
+        "expected just worker+judge for step a — step b must not run"
     )
     status = await plan_storage.get_plan_status(session_id)
     assert status["status"] == "abandoned"
