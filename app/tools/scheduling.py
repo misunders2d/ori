@@ -245,7 +245,7 @@ def schedule_one_off_task(
         timezone (str): IANA timezone for the scheduled time (e.g., 'Europe/Kyiv', 'UTC').
         deliver_to (str): Optional session ID to deliver results to instead of the current chat. Use this to post to a different platform or channel (e.g. 'sl_C01234ABC' for a Slack channel, 'tg_123456' for a Telegram chat). If empty, delivers to the current chat.
         steps (list[str]): Optional ordered checklist. If provided, the plan is seeded into
-            storage before the agent's first turn and `plan_enforcer` injects it every turn —
+            storage before the agent's first turn and the plan_executor workflow drives it step-by-step —
             the LLM cannot skip or paraphrase. Use for tasks that must follow an exact
             sequence on every fire. See scheduling-skill → Enforced step-by-step scheduling.
 
@@ -341,7 +341,7 @@ def schedule_recurring_task(
         timezone (str): IANA timezone for the cron schedule (e.g., 'Europe/Kyiv', 'UTC').
         deliver_to (str): Optional session ID to deliver results to instead of the current chat. Use this to post to a different platform or channel (e.g. 'sl_C01234ABC' for a Slack channel, 'tg_123456' for a Telegram chat). If empty, delivers to the current chat.
         steps (list[str]): Optional ordered checklist. If provided, the plan is seeded into
-            storage before the agent's first turn and `plan_enforcer` injects it every turn —
+            storage before the agent's first turn and the plan_executor workflow drives it step-by-step —
             the LLM cannot skip or paraphrase. Use for tasks that must follow an exact
             sequence on every fire. See scheduling-skill → Enforced step-by-step scheduling.
 
@@ -703,7 +703,7 @@ def schedule_system_task(
         silent (bool): If True, only notify the admin on failure/warnings. Successes are logged silently. Default: False.
         deliver_to (str): Optional session ID to deliver results to instead of the current chat (e.g. 'sl_C01234ABC' for a Slack channel). If empty, delivers to the current chat.
         steps (list[str]): Optional ordered checklist. If provided, plan is seeded before the
-            agent's first turn and `plan_enforcer` injects it every turn. See
+            agent's first turn and the plan_executor workflow drives it step-by-step. See
             scheduling-skill → Enforced step-by-step scheduling.
 
     Returns:
@@ -783,7 +783,7 @@ def run_system_task_now(
         silent (bool): If True, only notify the admin on failure/warnings. Successes are logged silently. Default: False.
         deliver_to (str): Optional session ID to deliver results to instead of the current chat (e.g. 'sl_C01234ABC' for a Slack channel). If empty, delivers to the current chat.
         steps (list[str]): Optional ordered checklist. If provided, plan is seeded before the
-            agent's first turn and `plan_enforcer` injects it every turn.
+            agent's first turn and the plan_executor workflow drives it step-by-step.
 
     Returns:
         dict: Confirmation that the task has been launched.
@@ -850,7 +850,7 @@ def schedule_recurring_system_task(
         silent (bool): If True, only notify the admin on failure/warnings. Successes are logged silently. Default: False.
         deliver_to (str): Optional session ID to deliver results to instead of the current chat (e.g. 'sl_C01234ABC' for a Slack channel). If empty, delivers to the current chat.
         steps (list[str]): Optional ordered checklist. If provided, plan is seeded before the
-            agent's first turn and `plan_enforcer` injects it every turn. See
+            agent's first turn and the plan_executor workflow drives it step-by-step. See
             scheduling-skill → Enforced step-by-step scheduling.
 
     Returns:
