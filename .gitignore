@@ -11,6 +11,16 @@ data/.*
 .pytest_cache/
 __pycache__/
 *.pyc
+tmp/
+
+# Local probe / diagnostic scripts and their outputs (Keepa cache, bulk
+# test results) — kept out of source control to avoid leaking ASIN
+# data, API token counts, and personal seller info.
+scripts/keepa_probe.py
+scripts/keepa_bulk_test.py
+scripts/keepa_probe_output_*.json
+scripts/keepa_probe_raw_*.json
+scripts/keepa_bulk_test_output.json
 
 # Environment
 .venv/
