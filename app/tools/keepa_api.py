@@ -299,10 +299,11 @@ def _build_summary(asin: str, product: dict, from_cache: bool = False, tokens_le
     """Build a lightweight summary from cached product data."""
     csv_data = product.get("csv", [])
 
-    # Current prices
+    # Current prices. Buy box (csv[18]) is a shipping-CSV — items_per_row=3
+    # ([time, price, shipping]) per Keepa's BUY_BOX_SHIPPING definition.
     amazon = _price_from_csv(csv_data[0], 2) if len(csv_data) > 0 else None
     new = _price_from_csv(csv_data[1], 2) if len(csv_data) > 1 else None
-    buy_box = _price_from_csv(csv_data[18], 2) if len(csv_data) > 18 else None
+    buy_box = _price_from_csv(csv_data[18], 3) if len(csv_data) > 18 else None
     prime_excl = _price_from_csv(csv_data[33], 2) if len(csv_data) > 33 else None
 
     # Coupon
@@ -358,10 +359,12 @@ def keepa_extract_pricing(asin: str, tool_context: ToolContext | None = None) ->
     csv_data = product.get("csv", [])
 
     prices = {}
+    # buy_box (csv[18]) is the only shipping-CSV in this map (3 entries per row);
+    # all other indices store [time, price] pairs.
     _CSV_MAP = {
         "amazon": (0, 2), "new_3p": (1, 2), "used": (2, 2),
         "list_price": (4, 2), "warehouse": (9, 2), "new_fba": (10, 2),
-        "buy_box": (18, 2), "prime_exclusive": (33, 2),
+        "buy_box": (18, 3), "prime_exclusive": (33, 2),
     }
     for name, (idx, row_size) in _CSV_MAP.items():
         prices[name] = _price_from_csv(csv_data[idx], row_size) if len(csv_data) > idx else None
@@ -432,10 +435,11 @@ def keepa_extract_history(
     if not product:
         return {"status": "error", "message": f"No cached data for {asin}. Call keepa_fetch_product first."}
 
+    # buy_box is a shipping-CSV (items_per_row=3); everything else is 2.
     _METRIC_MAP = {
         "amazon": (0, 2), "new": (1, 2), "used": (2, 2),
         "sales_rank": (3, 2), "list_price": (4, 2),
-        "new_fba": (10, 2), "buy_box": (18, 2),
+        "new_fba": (10, 2), "buy_box": (18, 3),
         "prime_exclusive": (33, 2),
         "rating": (16, 2), "review_count": (17, 2),
     }
@@ -447,14 +451,16 @@ def keepa_extract_history(
     if len(csv_data) <= idx or not csv_data[idx]:
         return {"status": "success", "asin": asin.upper(), "metric": metric, "history": [], "message": "No data available for this metric."}
 
-    # sales_rank and review_count are raw integers, not cents — skip the /100 scaling.
+    # sales_rank, review_count, and rating are raw integers stored in the CSV
+    # (per Keepa docs), not cents — skip the /100 scaling for all three.
     int_metrics = {"sales_rank", "review_count"}
-    divisor = 1.0 if metric in int_metrics else 100.0
+    raw_metrics = int_metrics | {"rating"}
+    divisor = 1.0 if metric in raw_metrics else 100.0
     history = _history_from_csv(csv_data[idx], row_size, days, divisor=divisor)
 
     if metric == "rating":
-        # Keepa stores rating with extra precision; the toolset divides by 10
-        # on top of the standard /100 to recover the 0-5 star scale.
+        # Rating is stored 0-50; divide by 10 to recover the 0-5 star scale
+        # (e.g., 44 → 4.4 stars).
         for h in history:
             if h["price"] is not None:
                 h["rating"] = h.pop("price") / 10.0
@@ -539,10 +545,11 @@ def keepa_extract_stats(asin: str, tool_context: ToolContext | None = None) -> d
 
     csv_data = product.get("csv", [])
 
-    # Current values from CSV. Rank and review count are raw integers,
-    # not prices in cents — must use _int_from_csv, not _price_from_csv.
+    # Current values from CSV. Rank, review count, and rating are all raw
+    # integers (rating is 0-50 per Keepa docs, e.g. 44 = 4.4 stars), not
+    # prices in cents — must use _int_from_csv, not _price_from_csv.
     sales_rank = _int_from_csv(csv_data[3], 2) if len(csv_data) > 3 else None
-    rating_raw = _price_from_csv(csv_data[16], 2) if len(csv_data) > 16 else None
+    rating_raw = _int_from_csv(csv_data[16], 2) if len(csv_data) > 16 else None
     review_count = _int_from_csv(csv_data[17], 2) if len(csv_data) > 17 else None
 
     listed_since = product.get("listedSince")
@@ -637,8 +644,8 @@ def keepa_extract_sales_analysis(
     price_segments = _segments_from_csv(csv_data[1] if len(csv_data) > 1 else None, 2)
     price_daily = _daily_accumulate(price_segments, days, mode="value")
 
-    # --- Buy box price (index 18) ---
-    bb_segments = _segments_from_csv(csv_data[18] if len(csv_data) > 18 else None, 2)
+    # --- Buy box price (index 18) — shipping CSV: 3 entries per row ---
+    bb_segments = _segments_from_csv(csv_data[18] if len(csv_data) > 18 else None, 3)
     bb_daily = _daily_accumulate(bb_segments, days, mode="value")
 
     # --- Lightning deal price (index 8) ---

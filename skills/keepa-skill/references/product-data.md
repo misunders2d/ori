@@ -26,7 +26,7 @@ Every `csv[i]` is a flat array of `[time, value, time, value, ...]` (or `[time, 
 | 15 | EXTRA_INFO_UPDATES | Offers/buybox refresh timestamps | Value sign = whether all offers fetched |
 | 16 | RATING | Star rating × 10 (e.g., 45 = 4.5★) | Divide by 10 |
 | 17 | COUNT_REVIEWS | Review count | |
-| 18 | BUY_BOX_SHIPPING | Buy box price + shipping | -1 if no qualifying offer |
+| 18 | BUY_BOX_SHIPPING | Buy box price + shipping | **3-tuple CSV** (`[time, price, shipping]`); -1 if no qualifying offer |
 | 19 | USED_NEW_SHIPPING | "Used – Like New" + shipping | |
 | 20 | USED_VERY_GOOD_SHIPPING | "Used – Very Good" + shipping | |
 | 21 | USED_GOOD_SHIPPING | "Used – Good" + shipping | |
