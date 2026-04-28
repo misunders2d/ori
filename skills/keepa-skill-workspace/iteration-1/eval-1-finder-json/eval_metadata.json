@@ -1,0 +1,17 @@
+{
+  "eval_id": 1,
+  "eval_name": "finder-json",
+  "prompt": "Compose a Keepa product_finder selection JSON that filters: products in category id 1063252, sales rank between 1 and 5000, at least 100 reviews, only standard products (no variation parents), buy box price between $15 and $50, sorted by sales rank ascending, return 25 results. Show me the exact JSON I'd pass as the `selection` argument. Also tell me one real-world gotcha with the price units in this filter.",
+  "assertions": [
+    {"name": "json_is_valid", "description": "Output contains a parseable JSON object"},
+    {"name": "filters_by_category_1063252", "description": "JSON includes categoryIds or rootCategory of 1063252"},
+    {"name": "filters_sales_rank_1_to_5000", "description": "JSON has current_SALES_gte:1 and current_SALES_lte:5000"},
+    {"name": "filters_reviews_gte_100", "description": "JSON has current_COUNT_REVIEWS_gte:100"},
+    {"name": "filters_productType_0", "description": "JSON has productType:[0] for standard products"},
+    {"name": "excludes_variation_parents", "description": "JSON has hasParentASIN:false"},
+    {"name": "buy_box_price_in_cents", "description": "Buy box price filter uses 1500 and 5000 (cents), not 15 and 50 (dollars)"},
+    {"name": "sort_by_current_SALES_asc", "description": "JSON has sort: [['current_SALES','asc']]"},
+    {"name": "perPage_is_25", "description": "JSON has perPage:25"},
+    {"name": "mentions_cents_gotcha", "description": "Response explicitly mentions prices are in integer cents, not dollars"}
+  ]
+}

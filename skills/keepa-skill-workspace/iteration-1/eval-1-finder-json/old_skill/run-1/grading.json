@@ -1,0 +1,60 @@
+{
+  "expectations": [
+    {
+      "text": "Output contains a parseable JSON object",
+      "passed": true,
+      "evidence": "Partial JSON shown (only documented filters), syntactically valid"
+    },
+    {
+      "text": "JSON includes categoryIds or rootCategory of 1063252",
+      "passed": true,
+      "evidence": "categoryIds: [1063252]"
+    },
+    {
+      "text": "JSON has current_SALES_gte:1 and current_SALES_lte:5000",
+      "passed": false,
+      "evidence": "Used salesRankRange:[1,5000] instead of the requested current_SALES_gte/_lte form (the only sales-rank syntax the snapshot skill documents)"
+    },
+    {
+      "text": "JSON has current_COUNT_REVIEWS_gte:100",
+      "passed": false,
+      "evidence": "Used current_COUNT_REVIEWS_min:100 instead of _gte (only _min form is documented in the snapshot skill)"
+    },
+    {
+      "text": "JSON has productType:[0] for standard products",
+      "passed": false,
+      "evidence": "Explicitly listed as TODO: 'Not in skill \u2014 skill only mentions productType=5 as a gotcha, not the product_finder filter form'"
+    },
+    {
+      "text": "JSON has hasParentASIN:false",
+      "passed": false,
+      "evidence": "Listed as not covered by snapshot skill"
+    },
+    {
+      "text": "Buy box price filter uses 1500 and 5000 (cents), not 15 and 50 (dollars)",
+      "passed": false,
+      "evidence": "No price filter included in JSON; explicitly listed as TODO needing live API docs"
+    },
+    {
+      "text": "JSON has sort by current_SALES asc",
+      "passed": false,
+      "evidence": "Listed as not documented in snapshot skill"
+    },
+    {
+      "text": "JSON has perPage:25",
+      "passed": false,
+      "evidence": "Listed as not documented in snapshot skill"
+    },
+    {
+      "text": "Response explicitly mentions prices are in integer cents, not dollars",
+      "passed": true,
+      "evidence": "Final section: 'Keepa expresses all prices in integer cents, not dollars' with $15-$50 \u2192 1500-5000 example"
+    }
+  ],
+  "summary": {
+    "passed": 3,
+    "failed": 7,
+    "total": 10,
+    "pass_rate": 0.3
+  }
+}

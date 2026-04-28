@@ -1,0 +1,45 @@
+{
+  "expectations": [
+    {
+      "text": "Plan starts with keepa_fetch_product call",
+      "passed": true,
+      "evidence": "Step 2: keepa_fetch_product(asin=\"B0CJ5G3GGN\")"
+    },
+    {
+      "text": "Uses keepa_extract_pricing for pricing question (a)",
+      "passed": true,
+      "evidence": "Step 3 (a): keepa_extract_pricing"
+    },
+    {
+      "text": "Uses keepa_extract_sales_analysis for monthly sales/revenue (b)",
+      "passed": true,
+      "evidence": "Step 4 (b): keepa_extract_sales_analysis(days=30)"
+    },
+    {
+      "text": "Uses keepa_extract_offers or keepa_extract_competitors for (c)",
+      "passed": true,
+      "evidence": "Step 5 (c): both keepa_extract_offers and keepa_extract_competitors"
+    },
+    {
+      "text": "Reports sales as range, not exact units",
+      "passed": true,
+      "evidence": "monthlySold is a tier... always read the result as a range (min-max), never as a single point estimate"
+    },
+    {
+      "text": "Provides specific token budget estimate",
+      "passed": true,
+      "evidence": "Token cost table totals ~3 tokens for the whole single-ASIN flow"
+    },
+    {
+      "text": "Notes extract tools cost 0 tokens (read from cache)",
+      "passed": true,
+      "evidence": "Each extract row marked '0 (reads cache)'"
+    }
+  ],
+  "summary": {
+    "passed": 7,
+    "failed": 0,
+    "total": 7,
+    "pass_rate": 1.0
+  }
+}

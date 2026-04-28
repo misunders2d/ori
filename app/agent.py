@@ -1,14 +1,20 @@
 """Ori App — the single-source App definition.
 
-ADK 2.0 native: root_agent is a `Workflow` using the dynamic-workflow
-pattern (per https://adk.dev/workflows/dynamic/). Single `@node`-
-decorated async function runs the coordinator once, then loops with a
-continuation prompt while a plan has pending steps. All control flow is
-Python — cancellation propagates through asyncio await semantics
-(no re-firing after task.cancel()).
+Plan execution uses the legacy nudge-based pattern: the coordinator is
+the root agent (no workflow wrapping), and `app/tasks.py`'s
+`_drive_plan_to_completion` re-invokes the runner with a continuation
+prompt while pending steps remain. The agent itself calls the planner
+tools (`get_next_step`, `complete_step`, `abandon_plan`) — exposed by
+`PlannerToolset` — to traverse the plan.
+
+Why no workflow: ADK 2.0's `ctx.run_node` boundary swallows output for
+chat-mode agents (returns None) and is unreliable for task-mode agents
+that delegate via `transfer_to_agent`. Iterating `runner.run_async()`
+events directly (legacy pattern) captures all sub-agent transfers and
+tool results cleanly.
 
 Wires together:
-- Root agent: the plan_executor_workflow (Workflow with one @node).
+- Root agent: the coordinator LlmAgent (mode='chat').
 - Plugins: ten in registration order.
 - Events compaction: every 10 events.
 - Resumability: enabled so OAuth flows can pause/resume.
@@ -26,6 +32,7 @@ from google.adk.apps import App
 from google.adk.apps.app import EventsCompactionConfig, ResumabilityConfig
 from google.adk.apps.llm_event_summarizer import LlmEventSummarizer
 
+from app.agents.coordinator import root_agent as coordinator_agent
 from app.plugins import (
     A2APrivacyPlugin,
     AdminGatePlugin,
@@ -34,16 +41,12 @@ from app.plugins import (
     ModelErrorHandlerPlugin,
     OutputSanitizerPlugin,
     PerimeterAclPlugin,
+    PlanEnforcerPlugin,
     PromptInjectionGuardPlugin,
     StateInitializerPlugin,
     VerifyRetryPlugin,
 )
 from app.util.models import get_model
-from app.workflows.plan_executor import plan_executor_workflow
-
-# state_schema is attached at the Workflow level (root_agent), not on App —
-# ADK 2.0's App doesn't carry a state_schema field directly.
-
 
 app_name = os.environ.get("APP_NAME", "ori")
 
@@ -64,9 +67,15 @@ PLUGINS = [
     ModelConfigPlugin(),
     # Inject the system directive + run semantic injection check.
     PromptInjectionGuardPlugin(),
-    # Plan enforcement is now done in code by the workflow itself
-    # (app/workflows/plan_executor.py drives the step loop deterministically),
-    # so no PlanEnforcerPlugin nudge is needed.
+    # Plan enforcement: when an active plan exists for the session,
+    # PlanEnforcerPlugin appends the plan-context directive to the
+    # coordinator's system_instruction (via LlmRequest.append_instructions)
+    # on every turn so the LLM is reminded to call get_next_step /
+    # complete_step. PlannerToolset exposes those tools. tasks.py's
+    # `_drive_plan_to_completion` re-invokes the runner with a
+    # continuation prompt while pending steps remain so the LLM can't
+    # drop the plan even if it forgets to traverse mid-turn.
+    PlanEnforcerPlugin(),
     # Privacy check on outbound A2A tool calls + responses.
     A2APrivacyPlugin(),
     # Sanitize tool outputs from web_fetch / evolution_read_file.
@@ -85,7 +94,7 @@ PLUGINS = [
 
 app = App(
     name=app_name,
-    root_agent=plan_executor_workflow,
+    root_agent=coordinator_agent,
     plugins=PLUGINS,
     events_compaction_config=EventsCompactionConfig(
         compaction_interval=10,

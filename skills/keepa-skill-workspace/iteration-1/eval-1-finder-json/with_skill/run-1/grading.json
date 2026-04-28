@@ -1,0 +1,60 @@
+{
+  "expectations": [
+    {
+      "text": "Output contains a parseable JSON object",
+      "passed": true,
+      "evidence": "Complete JSON block shown with all braces matched"
+    },
+    {
+      "text": "JSON includes categoryIds or rootCategory of 1063252",
+      "passed": true,
+      "evidence": "categoryIds: [1063252]"
+    },
+    {
+      "text": "JSON has current_SALES_gte:1 and current_SALES_lte:5000",
+      "passed": true,
+      "evidence": "current_SALES_gte: 1, current_SALES_lte: 5000"
+    },
+    {
+      "text": "JSON has current_COUNT_REVIEWS_gte:100",
+      "passed": true,
+      "evidence": "current_COUNT_REVIEWS_gte: 100"
+    },
+    {
+      "text": "JSON has productType:[0] for standard products",
+      "passed": true,
+      "evidence": "productType: [0]"
+    },
+    {
+      "text": "JSON has hasParentASIN:false",
+      "passed": true,
+      "evidence": "hasParentASIN: false (and notes it's added on top of productType:[0])"
+    },
+    {
+      "text": "Buy box price filter uses 1500 and 5000 (cents), not 15 and 50 (dollars)",
+      "passed": true,
+      "evidence": "current_BUY_BOX_SHIPPING_gte: 1500, current_BUY_BOX_SHIPPING_lte: 5000"
+    },
+    {
+      "text": "JSON has sort by current_SALES asc",
+      "passed": true,
+      "evidence": "sort: [[\"current_SALES\", \"asc\"]]"
+    },
+    {
+      "text": "JSON has perPage:25",
+      "passed": true,
+      "evidence": "perPage: 25"
+    },
+    {
+      "text": "Response explicitly mentions prices are in integer cents, not dollars",
+      "passed": true,
+      "evidence": "Dedicated section: 'Prices in the selection JSON are integer cents, not dollars' with concrete failure mode example"
+    }
+  ],
+  "summary": {
+    "passed": 10,
+    "failed": 0,
+    "total": 10,
+    "pass_rate": 1.0
+  }
+}

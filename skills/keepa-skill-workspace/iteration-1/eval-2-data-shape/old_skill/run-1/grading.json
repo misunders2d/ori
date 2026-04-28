@@ -1,0 +1,40 @@
+{
+  "expectations": [
+    {
+      "text": "(a) Identifies CSV index 18 as Buy Box price (with shipping) / BUY_BOX_SHIPPING",
+      "passed": false,
+      "evidence": "Explicitly: 'Not covered by the skill. The skill never enumerates Keepa CSV indices'"
+    },
+    {
+      "text": "(b) Explains -1 means no offer / out of stock / unavailable at that timestamp",
+      "passed": false,
+      "evidence": "'Not covered by the skill... I am not stating what -1 means here because the skill does not document it'"
+    },
+    {
+      "text": "(c) Says rating is stored 0-50 and to divide by 10 for stars",
+      "passed": false,
+      "evidence": "'Not covered by the skill. The skill does not say how the value is encoded'"
+    },
+    {
+      "text": "(d) Identifies productType=5 as a variation parent ASIN",
+      "passed": true,
+      "evidence": "Quotes the snapshot's gotcha: 'productType=5 means no prices, no rank, no offers'; calls it a 'variation parent (umbrella listing)'"
+    },
+    {
+      "text": "(d) Explains parent has no prices/rank/offers and child ASIN should be queried",
+      "passed": true,
+      "evidence": "Pricing, BSR, offers, and sales-tier data are all empty/null on the parent... You must enumerate the child ASINs"
+    },
+    {
+      "text": "(e) States BR is domain=12",
+      "passed": false,
+      "evidence": "'Not covered by the skill... I am not asserting a numeric domain ID for BR because the skill does not document it'"
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 4,
+    "total": 6,
+    "pass_rate": 0.3333
+  }
+}

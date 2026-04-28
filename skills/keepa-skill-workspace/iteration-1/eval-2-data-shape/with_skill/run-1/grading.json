@@ -1,0 +1,40 @@
+{
+  "expectations": [
+    {
+      "text": "(a) Identifies CSV index 18 as Buy Box price (with shipping) / BUY_BOX_SHIPPING",
+      "passed": true,
+      "evidence": "BUY_BOX_SHIPPING \u2014 the buy box price including shipping"
+    },
+    {
+      "text": "(b) Explains -1 means no offer / out of stock / unavailable at that timestamp",
+      "passed": true,
+      "evidence": "'No offer / unavailable at that timestamp' \u2014 Keepa's sentinel for there was no listing/offer of that type"
+    },
+    {
+      "text": "(c) Says rating is stored 0-50 and to divide by 10 for stars",
+      "passed": true,
+      "evidence": "stored as stars \u00d7 10 as integer; Divide by 10; 45 means 4.5 stars"
+    },
+    {
+      "text": "(d) Identifies productType=5 as a variation parent ASIN",
+      "passed": true,
+      "evidence": "marks a variation parent ASIN \u2014 a hub that aggregates child variations"
+    },
+    {
+      "text": "(d) Explains parent has no prices/rank/offers and child ASIN should be queried",
+      "passed": true,
+      "evidence": "no useful market data... no prices, no sales rank, no offers; ask the user for a child ASIN or use keepa_product_finder with hasParentASIN: false"
+    },
+    {
+      "text": "(e) States BR is domain=12",
+      "passed": true,
+      "evidence": "domain=12 for amazon.com.br (Brazil); also flags 'not verified in this toolset' caveat"
+    }
+  ],
+  "summary": {
+    "passed": 6,
+    "failed": 0,
+    "total": 6,
+    "pass_rate": 1.0
+  }
+}

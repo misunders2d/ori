@@ -1,0 +1,14 @@
+{
+  "eval_id": 0,
+  "eval_name": "deep-dive-plan",
+  "prompt": "I'm researching ASIN B0CJ5G3GGN (a private-label kitchen product I'm thinking about buying inventory for). Walk me through how you would gather: (a) current pricing across all channels and any active discounts, (b) estimated monthly sales and revenue, (c) who's been winning the buy box. Show me the exact tool calls in order, with the parameters you'd use. Then describe what each call returns in one line. I'm budget-conscious — also tell me roughly how many Keepa tokens this whole flow will cost.",
+  "assertions": [
+    {"name": "names_keepa_fetch_product_first", "description": "Plan starts with keepa_fetch_product call"},
+    {"name": "uses_extract_pricing_for_pricing_question", "description": "Uses keepa_extract_pricing for question (a)"},
+    {"name": "uses_extract_sales_analysis_for_revenue", "description": "Uses keepa_extract_sales_analysis for monthly sales/revenue in (b)"},
+    {"name": "uses_offers_or_competitors_for_buybox", "description": "Uses keepa_extract_offers or keepa_extract_competitors for (c)"},
+    {"name": "reports_sales_as_range", "description": "Explicitly says sales should be reported as a range/tier, not exact units"},
+    {"name": "provides_token_budget_estimate", "description": "Gives a specific numeric token estimate for the full flow"},
+    {"name": "extracts_acknowledged_free", "description": "Notes that extract tools cost 0 tokens (read from cache)"}
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "eval_id": 2,
+  "eval_name": "data-shape",
+  "prompt": "Quick reference questions about Keepa's data shape: (a) What does CSV index 18 contain? (b) What does it mean when a value in a price CSV is -1? (c) How is the rating field stored — what number do I divide by to get stars? (d) What is productType=5 and why does it matter? (e) For the BR (Brazil) marketplace, what domain ID would I pass to keepa_fetch_product?",
+  "assertions": [
+    {"name": "csv_18_is_buy_box_shipping", "description": "(a) Identifies CSV index 18 as Buy Box price (with shipping) / BUY_BOX_SHIPPING"},
+    {"name": "minus_one_means_unavailable", "description": "(b) Explains -1 means no offer / out of stock / unavailable at that timestamp"},
+    {"name": "rating_divided_by_10", "description": "(c) Says rating is stored 0-50 and to divide by 10 for stars"},
+    {"name": "productType_5_is_variation_parent", "description": "(d) Identifies productType=5 as a variation parent ASIN"},
+    {"name": "explains_why_productType_5_matters", "description": "(d) Explains parent has no prices/rank/offers and child ASIN should be queried"},
+    {"name": "br_domain_is_12", "description": "(e) States BR is domain=12"}
+  ]
+}

@@ -42,12 +42,64 @@ def _log_job_event(event: str, **fields) -> None:
         logger.warning("Failed to write scheduler job log: %s", e)
 
 
-# Plan-driven continuation is handled by the Workflow root —
-# `plan_executor_workflow` (app/workflows/plan_executor.py) wraps the
-# coordinator in a dynamic-workflow @node that loops while
-# plan_storage.has_pending_steps is True. Scheduled tasks invoke the
-# runner the same way interactive chat does and inherit the loop for
-# free. No external pumping needed here.
+# Plan-driven continuation: legacy nudge pattern. The agent is a plain
+# coordinator (no workflow wrapper); after the first runner invocation
+# returns, if the plan still has pending steps, we re-invoke the runner
+# with a continuation prompt so the LLM keeps calling get_next_step /
+# complete_step until the plan is fully traversed (or abandoned).
+_MAX_PLAN_ITERATIONS = 25
+
+_PLAN_CONTINUATION_PROMPT = (
+    "Your enforced plan still has pending steps. Do NOT emit a user-facing "
+    "summary yet. Call `get_next_step` immediately and continue executing. "
+    "After each step's actual goal is achieved (with concrete tool-confirmed "
+    "evidence — row counts, IDs, sheet ranges, message ids, error messages), "
+    "call `complete_step(result=<concrete summary>)`. If a step cannot be "
+    "completed (tool error, blocked, missing data), call `abandon_plan()` "
+    "and report the failure verbatim. Only produce a final summary after "
+    "complete_step reports 'All steps completed!'."
+)
+
+
+async def _drive_plan_to_completion(
+    runner,
+    user_id: str,
+    session_id: str,
+    first_response,
+    actual_caller_id: str | None,
+    task_id: str,
+):
+    """Re-invoke the runner while the plan still has pending steps.
+
+    The ADK runner ends an invocation when the agent emits text without a
+    trailing tool call. For enforced multi-step plans the LLM often
+    summarizes after each step, ending the turn before the plan
+    completes. This helper pumps the agent back in with a continuation
+    prompt until the plan is done (or the iteration cap is hit).
+
+    Returns the final agent_response.
+    """
+    from app.runtime.executor import extract_agent_response
+    from app.tools.planner import has_pending_steps_for
+
+    response = first_response
+    iterations = 0
+    while await has_pending_steps_for(session_id) and iterations < _MAX_PLAN_ITERATIONS:
+        iterations += 1
+        logger.info(
+            "Task %s plan-continuation iter %d/%d (session=%s)",
+            task_id, iterations, _MAX_PLAN_ITERATIONS, session_id,
+        )
+        response = await extract_agent_response(
+            runner, user_id, session_id, _PLAN_CONTINUATION_PROMPT,
+            actual_caller_id=actual_caller_id,
+        )
+    if iterations >= _MAX_PLAN_ITERATIONS and await has_pending_steps_for(session_id):
+        logger.warning(
+            "Task %s hit plan-iteration cap (%d); plan still has pending steps.",
+            task_id, _MAX_PLAN_ITERATIONS,
+        )
+    return response
 
 
 async def run_scheduled_task(
@@ -152,15 +204,22 @@ async def run_scheduled_task(
                     task_id, len(steps),
                 )
 
-            # Plan continuation (when steps were seeded) is handled inside
-            # the workflow root — see app/workflows/plan_executor.py. The
-            # @node loops while has_pending_steps is True, so a single
-            # extract_agent_response call drives the entire enforced plan
-            # to completion.
+            # First runner turn — coordinator processes the task_prompt,
+            # which may include calling `get_next_step` to claim step 0
+            # if a plan was seeded above.
             agent_response = await extract_agent_response(
                 runner, user_id, session_id, query,
                 actual_caller_id=owner_user_id or None,
             )
+            # If a plan was seeded and pending steps remain, drive the
+            # agent through them via continuation prompts (legacy nudge
+            # pattern — the agent traverses via planner tools).
+            if steps:
+                agent_response = await _drive_plan_to_completion(
+                    runner, user_id, session_id, agent_response,
+                    actual_caller_id=owner_user_id or None,
+                    task_id=task_id,
+                )
             response = agent_response.text if hasattr(agent_response, "text") else str(agent_response)
             if not response or not response.strip():
                 # Agent returned empty — treat as failure so user sees something.
@@ -303,10 +362,15 @@ async def run_system_task(
         # Pass admin identity via actual_caller_id so StateInitializerPlugin
         # picks it up.
         logger.info("System Task: Executing agent for %s", task_id)
-        # Plan continuation is handled by the Workflow root.
         agent_response = await extract_agent_response(
             runner, user_id, session_id, query, actual_caller_id=admin_user_id
         )
+        if steps:
+            agent_response = await _drive_plan_to_completion(
+                runner, user_id, session_id, agent_response,
+                actual_caller_id=admin_user_id,
+                task_id=task_id,
+            )
         response = agent_response.text if hasattr(agent_response, "text") else str(agent_response)
 
         is_failure = any(

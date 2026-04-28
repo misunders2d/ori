@@ -1,0 +1,8 @@
+Files read, in order:
+
+1. /media/misunderstood/DATA/projects/ori/amazon_manager/skills/keepa-skill-workspace/skill-snapshot/SKILL.md
+2. /media/misunderstood/DATA/projects/ori/amazon_manager/skills/keepa-skill-workspace/skill-snapshot/references/research-examples.md
+
+Notes:
+- references/ contained only research-examples.md (no data-shape reference file existed).
+- After reading both files I had enough information to answer (d) directly and confirm the skill does not cover (a), (b), (c), or (e).

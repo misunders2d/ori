@@ -1,0 +1,4 @@
+1. /media/misunderstood/DATA/projects/ori/amazon_manager/skills/keepa-skill/SKILL.md
+2. /media/misunderstood/DATA/projects/ori/amazon_manager/skills/keepa-skill/references/tools.md
+3. /media/misunderstood/DATA/projects/ori/amazon_manager/skills/keepa-skill/references/budget-and-limits.md
+4. /media/misunderstood/DATA/projects/ori/amazon_manager/skills/keepa-skill/references/research-examples.md

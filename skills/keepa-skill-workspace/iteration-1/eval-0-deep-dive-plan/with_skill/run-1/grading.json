@@ -1,0 +1,45 @@
+{
+  "expectations": [
+    {
+      "text": "Plan starts with keepa_fetch_product call",
+      "passed": true,
+      "evidence": "Step 1 explicitly: keepa_fetch_product(asin=\"B0CJ5G3GGN\", domain=1)"
+    },
+    {
+      "text": "Uses keepa_extract_pricing for pricing question (a)",
+      "passed": true,
+      "evidence": "Step 2 maps to (a) with keepa_extract_pricing"
+    },
+    {
+      "text": "Uses keepa_extract_sales_analysis for monthly sales/revenue (b)",
+      "passed": true,
+      "evidence": "Step 3 maps to (b) with keepa_extract_sales_analysis(days=30)"
+    },
+    {
+      "text": "Uses keepa_extract_offers or keepa_extract_competitors for (c)",
+      "passed": true,
+      "evidence": "Steps 4 + 5 use both, distinguishing current vs historical"
+    },
+    {
+      "text": "Reports sales as range, not exact units",
+      "passed": true,
+      "evidence": "Sales must be reported as a range, never a precise number \u2014 monthlySold is a tier indicator"
+    },
+    {
+      "text": "Provides specific token budget estimate",
+      "passed": true,
+      "evidence": "Total cost table: 3 tokens for full deep dive, 4-6 with seller lookups"
+    },
+    {
+      "text": "Notes extract tools cost 0 tokens (read from cache)",
+      "passed": true,
+      "evidence": "Cost: 0 (cache read) annotated on every extract step"
+    }
+  ],
+  "summary": {
+    "passed": 7,
+    "failed": 0,
+    "total": 7,
+    "pass_rate": 1.0
+  }
+}
