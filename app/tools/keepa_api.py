@@ -1018,6 +1018,18 @@ _BULK_FIELD_HANDLERS: dict[str, Any] = {
     "product_type": _f_product_type,
     "parent_asin": lambda p: p.get("parentAsin"),
     "parent_title": lambda p: p.get("parentTitle"),
+    # variation_asins is populated only when querying a PARENT ASIN —
+    # Keepa returns null on children. variationCSV (comma-string) is
+    # deprecated; `variations` is the structured field.
+    "variation_asins": lambda p: (
+        [v.get("asin") for v in (p.get("variations") or []) if v.get("asin")]
+        or ([a.strip() for a in (p.get("variationCSV") or "").split(",") if a.strip()] or None)
+    ),
+    "variation_count": lambda p: (
+        len(p.get("variations")) if p.get("variations")
+        else (len([a for a in (p.get("variationCSV") or "").split(",") if a.strip()])
+              or None)
+    ),
     # Sales signals
     "review_count": lambda p: _csv_int(p, 17),
     "rating": lambda p: (_csv_int(p, 16) / 10.0) if _csv_int(p, 16) else None,

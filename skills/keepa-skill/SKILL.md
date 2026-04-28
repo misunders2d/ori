@@ -78,6 +78,14 @@ A parent ASIN (Keepa `productType=5`) is a variation hub — it has no prices, n
 ### BSR is shared across variations
 All children of the same parent inherit the parent's sales rank. Use `monthlySold` (via `keepa_extract_sales_analysis`) — not BSR — to differentiate variation performance.
 
+### Enumerating variations from any ASIN in the family
+Keepa's `variations` field is generally populated on both parent ASINs and their children — querying any ASIN in the family returns the full sibling list. So to get all children of a listing, one bulk_query call suffices:
+
+1. `keepa_bulk_query("<any-asin-in-the-family>", "asin,parent_asin,variation_asins")`
+2. Then bulk-query the returned `variation_asins` list for whatever fields the user actually wants (review_count, rating, etc.).
+
+If `variation_asins` does come back null on a child (rare — observed historically but Keepa's behavior here has shifted), fall back to the two-hop pattern: read `parent_asin`, then re-query the parent.
+
 ### `monthlySold` is a tier indicator, not exact units
 Keepa's `monthlySold` field is sourced from Amazon's "bought past month" badge but bucketed into tiers (50, 100, 200, …, 3000, 4000, …). The sales-analysis tool maps each tier to a `(min, max)` range. **Always report sales as a range** (e.g., "3,000–4,000 units/month"), never as a precise number. Many ASINs have no `monthlySold` value at all — Amazon only shows the badge for some products.
 

@@ -209,6 +209,37 @@ def test_bulk_extract_row_pulls_only_requested_fields():
     assert row["prime_exclusive"] is None
 
 
+def test_bulk_extract_row_returns_variation_asins_for_parent():
+    """Querying a parent ASIN should expose the full child list via
+    `variation_asins`. Falls back to the deprecated `variationCSV` string
+    if the structured `variations` array is missing."""
+    parent = {
+        "asin": "B0DCP3LJHC",
+        "csv": [],
+        "title": "Mellanni Duvet Cover Set",
+        "variations": [
+            {"asin": "B07PSK5GG2", "attributes": []},
+            {"asin": "B07GQ38TP8", "attributes": []},
+            {"asin": "B07MS7QWTG", "attributes": []},
+        ],
+    }
+    row = keepa_api._extract_row(parent, ["asin", "variation_asins", "variation_count"])
+    assert row["variation_asins"] == ["B07PSK5GG2", "B07GQ38TP8", "B07MS7QWTG"]
+    assert row["variation_count"] == 3
+
+    # Fallback to variationCSV string when `variations` is not populated.
+    parent_legacy = {"asin": "B0LEGACY", "csv": [], "variationCSV": "B07A,B07B,B07C"}
+    row = keepa_api._extract_row(parent_legacy, ["asin", "variation_asins", "variation_count"])
+    assert row["variation_asins"] == ["B07A", "B07B", "B07C"]
+    assert row["variation_count"] == 3
+
+    # Children return null for both — not a parent.
+    child = {"asin": "B07CHILD", "csv": [], "parentAsin": "B0PARENT"}
+    row = keepa_api._extract_row(child, ["asin", "variation_asins", "variation_count"])
+    assert row["variation_asins"] is None
+    assert row["variation_count"] is None
+
+
 def test_bulk_extract_row_returns_parent_asin_for_variation_children():
     """Variation children carry a parentAsin pointer. Surfacing it in
     bulk_query lets the agent pivot to the parent for review/rating data
