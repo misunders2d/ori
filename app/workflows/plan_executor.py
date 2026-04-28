@@ -136,6 +136,11 @@ async def _drive_plan_loop(ctx, response, session_id: str):
     No string parsing, no LLM judgment — the step result is structurally
     typed via Pydantic.
     """
+    initial_pending = await has_pending_steps(session_id)
+    logger.info(
+        "plan_executor: entering step loop for session %s, has_pending_steps=%s",
+        session_id, initial_pending,
+    )
     iterations = 0
     while (
         await has_pending_steps(session_id)
@@ -144,16 +149,29 @@ async def _drive_plan_loop(ctx, response, session_id: str):
         iterations += 1
         step = await get_next_step(session_id)
         if not step:
+            logger.info(
+                "plan_executor: get_next_step returned None at iter %d — exiting loop",
+                iterations,
+            )
             break
 
+        logger.info(
+            "plan_executor: step %d START [session=%s] desc=%r",
+            step["step_index"], session_id, step["description"][:120],
+        )
         step_response = await ctx.run_node(
             step_executor, _build_step_prompt(step),
         )
         result = _coerce_step_result(step_response)
+        logger.info(
+            "plan_executor: step %d RESULT [session=%s] status=%s summary=%r",
+            step["step_index"], session_id,
+            result.status, (result.summary or "")[:200],
+        )
 
         if result.status == "failed":
             logger.warning(
-                "plan_executor: step %d failed for session %s — aborting plan. Reason: %s",
+                "plan_executor: step %d FAILED for session %s — aborting plan. Reason: %s",
                 step["step_index"], session_id,
                 (result.failure_reason or result.summary)[:200],
             )
@@ -169,11 +187,16 @@ async def _drive_plan_loop(ctx, response, session_id: str):
         )
         response = step_response
 
-    if iterations >= _MAX_ITERATIONS and await has_pending_steps(session_id):
+    final_pending = await has_pending_steps(session_id)
+    if iterations >= _MAX_ITERATIONS and final_pending:
         logger.warning(
             "plan_executor: hit iteration cap %d for session %s",
             _MAX_ITERATIONS, session_id,
         )
+    logger.info(
+        "plan_executor: exiting step loop for session %s after %d iteration(s), has_pending_steps=%s",
+        session_id, iterations, final_pending,
+    )
 
     return response
 
