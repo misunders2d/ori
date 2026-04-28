@@ -443,6 +443,7 @@ def list_scheduled_tasks(tool_context: ToolContext) -> dict:
         if not _can_access_job(job, user_id, is_admin):
             continue
         kwargs = job.kwargs or {}
+        steps = kwargs.get("steps") or []
         task_info = {
             "job_id": job.id,
             "task": kwargs.get("task_prompt", "Unknown"),
@@ -454,6 +455,12 @@ def list_scheduled_tasks(tool_context: ToolContext) -> dict:
                 else "one-off"
             ),
             "owner": _job_owner(job) or "legacy",
+            # Surface enforced-step state so the listing reflects reality.
+            # Without this, an agent reading the listing concludes "no steps
+            # stored" and asks the user to re-provide them — which would
+            # OVERWRITE the real stored steps via edit_scheduled_task.
+            "step_count": len(steps),
+            "steps": steps if steps else None,
         }
         tasks.append(task_info)
 
