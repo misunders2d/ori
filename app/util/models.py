@@ -230,9 +230,10 @@ def format_model_assignments(
     """
     state_overrides = state_overrides or {}
     lines: list[str] = []
-    header = "Component             Default                                              Effective                                            Source"
+    header = " * Component             Default                                              Effective                                            Source"
     lines.append(header)
     lines.append("-" * len(header))
+    any_overridden = False
     for component in sorted(MODEL_DEFAULTS):
         default = MODEL_DEFAULTS[component]
         state_override = state_overrides.get(component)
@@ -247,7 +248,16 @@ def format_model_assignments(
             source = "default"
         if is_pinned(component):
             source += " (pinned)"
-        lines.append(f"{component:<22}{default:<54}{effective:<54}{source}")
+        # Legacy parity: prefix overridden rows with ` *` so the user can
+        # spot at a glance which components are NOT on their default.
+        is_overridden = bool(state_override or env_override)
+        marker = " *" if is_overridden else "  "
+        if is_overridden:
+            any_overridden = True
+        lines.append(f"{marker} {component:<22}{default:<54}{effective:<54}{source}")
+    if any_overridden:
+        lines.append("")
+        lines.append("(* = overrides the default)")
     return "\n".join(lines)
 
 
