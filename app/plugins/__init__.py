@@ -14,13 +14,22 @@ and enforced in `app/agent.py`:
                                     coordinator's system_instruction so the
                                     LLM is reminded to call get_next_step /
                                     complete_step on every turn
-  7. A2APrivacyPlugin             — block credential leaks in outbound A2A
-  8. OutputSanitizerPlugin        — scan high-risk tool outputs (multilingual-safe)
-  9. VerifyRetryPlugin            — 3-strike cap on evolution_verify_sandbox
- 10. BinaryContentScannerPlugin   — validate inbound A2A binary parts
- 11. ModelErrorHandlerPlugin      — translate raw LLM errors into user-visible
+  7. ReflectAndRetryToolPlugin    — ADK 2.0 built-in: when a tool call
+                                    raises (e.g. 'Tool X not found'),
+                                    intercept the error and return a
+                                    structured reflection as the
+                                    function_response, so the LLM sees
+                                    the failure in context and can
+                                    self-correct without crashing the turn
+  8. A2APrivacyPlugin             — block credential leaks in outbound A2A
+  9. OutputSanitizerPlugin        — scan high-risk tool outputs (multilingual-safe)
+ 10. VerifyRetryPlugin            — 3-strike cap on evolution_verify_sandbox
+ 11. BinaryContentScannerPlugin   — validate inbound A2A binary parts
+ 12. ModelErrorHandlerPlugin      — translate raw LLM errors into user-visible
                                     messages (rate limit, auth, model-not-found, …)
 """
+
+from google.adk.plugins.reflect_retry_tool_plugin import ReflectAndRetryToolPlugin
 
 from app.plugins.a2a_privacy import A2APrivacyPlugin
 from app.plugins.admin_gate import AdminGatePlugin
@@ -44,6 +53,7 @@ __all__ = [
     "PerimeterAclPlugin",
     "PlanEnforcerPlugin",
     "PromptInjectionGuardPlugin",
+    "ReflectAndRetryToolPlugin",
     "StateInitializerPlugin",
     "VerifyRetryPlugin",
 ]

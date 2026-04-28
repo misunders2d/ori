@@ -43,6 +43,7 @@ from app.plugins import (
     PerimeterAclPlugin,
     PlanEnforcerPlugin,
     PromptInjectionGuardPlugin,
+    ReflectAndRetryToolPlugin,
     StateInitializerPlugin,
     VerifyRetryPlugin,
 )
@@ -76,6 +77,18 @@ PLUGINS = [
     # continuation prompt while pending steps remain so the LLM can't
     # drop the plan even if it forgets to traverse mid-turn.
     PlanEnforcerPlugin(),
+    # ADK 2.0 built-in: intercept tool errors (e.g. "Tool 'X' not
+    # found" when a sub-agent hallucinates a coordinator-only tool, or
+    # any tool that raises) and return a structured reflection to the
+    # LLM as the function_response. Without this, ValueError propagates
+    # all the way out of runner.run_async, killing the whole turn;
+    # with it, the LLM sees the error in-context and can correct
+    # (e.g. call transfer_to_agent('CoordinatorAgent') instead, or
+    # pick a different tool from its actual toolkit).
+    ReflectAndRetryToolPlugin(
+        max_retries=3,
+        throw_exception_if_retry_exceeded=False,
+    ),
     # Privacy check on outbound A2A tool calls + responses.
     A2APrivacyPlugin(),
     # Sanitize tool outputs from web_fetch / evolution_read_file.

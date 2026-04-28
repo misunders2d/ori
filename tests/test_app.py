@@ -36,6 +36,7 @@ def test_plugin_order_canonical():
         "model_config",
         "prompt_injection",
         "plan_enforcer",
+        "reflect_retry_tool_plugin",
         "a2a_privacy",
         "output_sanitizer",
         "verify_retry",
