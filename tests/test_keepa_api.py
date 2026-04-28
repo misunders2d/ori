@@ -209,6 +209,24 @@ def test_bulk_extract_row_pulls_only_requested_fields():
     assert row["prime_exclusive"] is None
 
 
+def test_bulk_extract_row_returns_parent_asin_for_variation_children():
+    """Variation children carry a parentAsin pointer. Surfacing it in
+    bulk_query lets the agent pivot to the parent for review/rating data
+    (which Amazon aggregates at the parent level, not per child)."""
+    product = {
+        "asin": "B07PSK5GG2",
+        "csv": [None] * 18,  # no review_count / rating data — typical for children
+        "title": "Mellanni Duvet Cover Set (King, Laced Sky Blue)",
+        "parentAsin": "B07PARENT1",
+        "parentTitle": "Mellanni Duvet Cover Set",
+    }
+    row = keepa_api._extract_row(product, ["asin", "parent_asin", "parent_title", "review_count"])
+    assert row["asin"] == "B07PSK5GG2"
+    assert row["parent_asin"] == "B07PARENT1"
+    assert row["parent_title"] == "Mellanni Duvet Cover Set"
+    assert row["review_count"] is None
+
+
 def test_bulk_query_rejects_unknown_field_names(monkeypatch):
     """keepa_bulk_query should refuse the call up-front when the caller
     passes a field name the toolset doesn't know — better than silently

@@ -58,6 +58,7 @@ Top-level fields on the product object that the extract tools surface or that ar
 | `salesRanks` | Map of `{categoryId: [time, rank, time, rank, ...]}` — per-category rank history |
 | `salesRankReference` | The category Keepa uses for the headline BSR |
 | `productType` | `0` = standard product (has data); `5` = variation parent (no prices/rank/offers); other values = special listings (downloadable, ebook, etc.). **Always check before trusting price/rank fields.** |
+| `parentAsin`, `parentTitle` | If the product is a variation child, this points to the rolled-up parent. BSR (`csv[3]`) is shared across variations (all children inherit the parent's rank). |
 | `monthlySold` | Tier indicator (not exact units). See sales-tier mapping in `keepa_extract_sales_analysis`. May be null. |
 | `monthlySoldHistory` | `[time, tier, time, tier, ...]` — past values of `monthlySold` |
 | `coupon` | Active coupon. Positive int = absolute cents off; negative int = percent off |

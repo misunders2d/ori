@@ -44,7 +44,7 @@ When you have more than ~5 ASINs and only need a subset of fields per ASIN — r
 
 | Field | Source |
 |---|---|
-| `title`, `brand`, `category`, `product_type` | catalog metadata |
+| `title`, `brand`, `category`, `product_type`, `parent_asin`, `parent_title` | catalog metadata |
 | `review_count`, `rating`, `sales_rank`, `sales_rank_category`, `monthly_sold` | sales signals |
 | `amazon_price`, `new_3p_price`, `buy_box`, `prime_exclusive`, `list_price`, `lightning_deal` | prices (USD, `null` when inactive) |
 | `active_deal`, `coupon` | promo state |

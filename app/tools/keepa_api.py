@@ -270,7 +270,9 @@ async def keepa_fetch_product(
     if not api_key:
         return {"status": "error", "message": "KEEPA_API_KEY not configured."}
 
-    params = {"key": api_key, "asin": asin, "domain": domain, "offers": 20}
+    # rating=1 populates csv[16]/csv[17] (rating + review count) — Keepa
+    # leaves them empty without this flag for many ASINs. No extra token cost.
+    params = {"key": api_key, "asin": asin, "domain": domain, "offers": 20, "rating": 1}
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -1014,6 +1016,8 @@ _BULK_FIELD_HANDLERS: dict[str, Any] = {
     "brand": _f_brand,
     "category": _f_category,
     "product_type": _f_product_type,
+    "parent_asin": lambda p: p.get("parentAsin"),
+    "parent_title": lambda p: p.get("parentTitle"),
     # Sales signals
     "review_count": lambda p: _csv_int(p, 17),
     "rating": lambda p: (_csv_int(p, 16) / 10.0) if _csv_int(p, 16) else None,
@@ -1066,6 +1070,10 @@ async def _fetch_bulk_batch(
         "key": api_key,
         "asin": ",".join(asins_chunk),
         "domain": domain,
+        # rating=1 populates csv[16]/csv[17] (rating + review count). Without
+        # this flag many ASINs return empty rating CSVs even when Amazon has
+        # the data. No extra token cost.
+        "rating": 1,
     }
     if with_offers:
         params["offers"] = 20

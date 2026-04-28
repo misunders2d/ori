@@ -98,8 +98,10 @@ _INSTRUCTION = (
     "non-admins) → `get_my_a2a_key`.\n"
     "- 'Who are your friends?' / 'list friends' → `list_friends`.\n"
     "If the tool returns an error or empty value, RELAY IT VERBATIM. "
-    "Hallucinating a value (or saying 'not available' when you didn't "
-    "even call the tool) is forbidden.\n\n"
+    "Hallucinating a value, fabricating system errors / 'tool re-sync' / "
+    "'reconfiguration' / 'missing skill' messages, or saying 'not "
+    "available' without calling the tool is forbidden. If you can't help, "
+    "say so in one sentence.\n\n"
 
     "SKILLS — load these on demand:\n"
     "- `scheduling-skill` for any reminder, schedule, automation, cron task.\n"

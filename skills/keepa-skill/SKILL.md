@@ -1,6 +1,6 @@
 ---
 name: keepa-skill
-description: "Keepa API workflow for Amazon product research — fetch-store-extract pattern with detailed pricing, real sales estimates (from Keepa's monthlySold tier mapping), historical price/rank trends, competitor analysis, bestseller discovery, and product-finder filtered search. Use this skill whenever the user asks about an ASIN's price history, BSR trend, sales volume, who's selling it, who the competitors are, what's in a category, or any product research question on Amazon — even if they don't say 'Keepa' explicitly."
+description: "Keepa API workflow for Amazon product research — single-ASIN fetch-store-extract pattern AND a bulk-query tool that returns a flat table for many ASINs in one call (review counts / BSR / monthly sold / prices across 100+ children of a parent, competitor lists, catalog audits). Detailed pricing, real sales estimates (from Keepa's monthlySold tier mapping), historical price/rank trends, competitor analysis, bestseller discovery, and product-finder filtered search. Use this skill whenever the user asks about an ASIN's price history, BSR trend, sales volume, who's selling it, who the competitors are, what's in a category, ANY multi-ASIN comparison or batch lookup ('check this for all 100 children', 'compare these 30 ASINs', 'pull review counts for the whole catalog'), or any product research question on Amazon — even if they don't say 'Keepa' explicitly."
 ---
 
 # Keepa Product Research
