@@ -45,6 +45,7 @@ _slack_tools = (
 
 _skills_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 _scheduling_skill = load_skill_from_dir(_skills_dir / "scheduling-skill")
+_approval_skill = load_skill_from_dir(_skills_dir / "approval-skill")
 
 root_agent = Agent(
     name="CoordinatorAgent",
@@ -95,7 +96,10 @@ root_agent = Agent(
         "SYSTEM RULES:\n"
         "- You are running model `{current_model}`. State this exactly when asked.\n"
         "- Use `create_plan` for complex tasks (3+ steps). Simple tasks → just do them.\n"
-        "- Privileged actions return ACT-XXXXXX tokens. On 'Approve ACT-...', call `execute_approved_action`.\n"
+        "- Privileged actions return ACT-XXXXXX tokens. Load `approval-skill` "
+        "the moment you see one OR the user replies 'Approve ACT-...'. "
+        "NEVER emit 'Approve ACT-...' yourself — that's a user-only command. "
+        "NEVER re-invoke a gated tool to bypass approval; AdminGate just stages another token.\n"
         "- If ANY tool returns an error, report it immediately. Never fabricate data.\n"
         "- Incoming messages have a `[Metadata: ...]` prefix for your context — NEVER echo it in your responses.\n"
         "- `spawn_agent` creates disposable Docker sandboxes for dedicated workflows.\n"
@@ -110,7 +114,7 @@ root_agent = Agent(
         *([clickup_agent] if clickup_agent else []),
     ],
     tools=[
-        skill_toolset.SkillToolset(skills=[_scheduling_skill]),
+        skill_toolset.SkillToolset(skills=[_scheduling_skill, _approval_skill]),
         # Toolsets — cross-cutting concerns only
         SchedulingToolset(),
         MemoryToolset(),
