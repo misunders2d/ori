@@ -8,27 +8,29 @@ class KeepaToolset(BaseToolset):
     async def get_tools(self, readonly_context=None):
         from app.tools.keepa_api import (
             # Token management
+            keepa_bulk_query,
             keepa_check_tokens,
-            # Fetch (API call → cache)
-            keepa_fetch_product,
-            # Extract (cache → focused data)
-            keepa_extract_pricing,
+            keepa_extract_competitors,
             keepa_extract_history,
             keepa_extract_offers,
-            keepa_extract_stats,
-            keepa_extract_competitors,
+            # Extract (cache → focused data)
+            keepa_extract_pricing,
             keepa_extract_sales_analysis,
-            # Other API endpoints
-            keepa_product_finder,
-            keepa_get_categories,
+            keepa_extract_stats,
+            # Fetch (API call → cache)
+            keepa_fetch_product,
             keepa_get_bestsellers,
+            keepa_get_categories,
             keepa_get_seller_info,
             keepa_get_top_sellers,
+            # Other API endpoints
+            keepa_product_finder,
         )
 
         return [
             FunctionTool(func=keepa_check_tokens),
             FunctionTool(func=keepa_fetch_product),
+            FunctionTool(func=keepa_bulk_query),
             FunctionTool(func=keepa_extract_pricing),
             FunctionTool(func=keepa_extract_history),
             FunctionTool(func=keepa_extract_offers),

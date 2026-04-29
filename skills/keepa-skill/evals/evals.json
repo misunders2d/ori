@@ -1,0 +1,23 @@
+{
+  "skill_name": "keepa-skill",
+  "evals": [
+    {
+      "id": 0,
+      "name": "deep-dive-plan",
+      "prompt": "I'm researching ASIN B0CJ5G3GGN (a private-label kitchen product I'm thinking about buying inventory for). Walk me through how you would gather: (a) current pricing across all channels and any active discounts, (b) estimated monthly sales and revenue, (c) who's been winning the buy box. Show me the exact tool calls in order, with the parameters you'd use. Then describe what each call returns in one line. I'm budget-conscious — also tell me roughly how many Keepa tokens this whole flow will cost.",
+      "expected_output": "Plan must follow fetch→extract pattern; correctly identify keepa_extract_pricing for (a), keepa_extract_sales_analysis for (b), keepa_extract_offers + keepa_extract_competitors for (c); provide a token budget estimate (~3 tokens for the single fetch, 0 for extracts); report sales as a range, not exact units."
+    },
+    {
+      "id": 1,
+      "name": "finder-json",
+      "prompt": "Compose a Keepa product_finder selection JSON that filters: products in category id 1063252, sales rank between 1 and 5000, at least 100 reviews, only standard products (no variation parents), buy box price between $15 and $50, sorted by sales rank ascending, return 25 results. Show me the exact JSON I'd pass as the `selection` argument. Also tell me one real-world gotcha with the price units in this filter.",
+      "expected_output": "Valid JSON with: categoryIds [1063252], current_SALES_gte 1, current_SALES_lte 5000, current_COUNT_REVIEWS_gte 100, productType [0], hasParentASIN false, current_BUY_BOX_SHIPPING_gte 1500, current_BUY_BOX_SHIPPING_lte 5000, sort by current_SALES asc, perPage 25. Gotcha must mention prices are integer cents (not dollars)."
+    },
+    {
+      "id": 2,
+      "name": "data-shape",
+      "prompt": "Quick reference questions about Keepa's data shape: (a) What does CSV index 18 contain? (b) What does it mean when a value in a price CSV is -1? (c) How is the rating field stored — what number do I divide by to get stars? (d) What is productType=5 and why does it matter? (e) For the BR (Brazil) marketplace, what domain ID would I pass to keepa_fetch_product?",
+      "expected_output": "(a) Buy box price + shipping (BUY_BOX_SHIPPING). (b) No offer at that timestamp / unavailable / out of stock. (c) Stored 0–50, divide by 10 for star scale. (d) Variation parent — has no prices, no rank, no offers; query a child ASIN instead. (e) domain=12 (and ideally a caveat that the toolset hasn't verified BR support)."
+    }
+  ]
+}

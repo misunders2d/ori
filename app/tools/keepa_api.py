@@ -5,12 +5,13 @@ Only lightweight summaries go to the LLM. Focused extraction tools
 pull specific slices from the cached data on demand.
 """
 
+import asyncio
 import json
 import logging
 import os
 import time
 from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any
+from typing import Any
 
 import httpx
 from google.adk.tools.tool_context import ToolContext
@@ -72,8 +73,31 @@ def _price_from_csv(csv: list | None, items_per_row: int) -> float | None:
     return last_price / 100.0 if last_price > 0 else None
 
 
-def _history_from_csv(csv: list | None, items_per_row: int, days: int = 90) -> list[dict]:
-    """Extract price history from CSV as [{date, price}] for the last N days."""
+def _int_from_csv(csv: list | None, items_per_row: int) -> int | None:
+    """Extract current raw integer (rank, count) from a Keepa CSV array.
+
+    Same shape as _price_from_csv but without the cents-to-dollars division —
+    use for rank, review count, offer counts, and any other field stored as
+    a plain integer in the CSV.
+    """
+    if not csv or len(csv) < items_per_row:
+        return None
+    last_value = csv[-items_per_row + 1]
+    return int(last_value) if last_value > 0 else None
+
+
+def _history_from_csv(
+    csv: list | None,
+    items_per_row: int,
+    days: int = 90,
+    divisor: float = 100.0,
+) -> list[dict]:
+    """Extract value history from CSV as [{date, price}] for the last N days.
+
+    `divisor` controls scaling of the raw stored value. Default 100.0 turns
+    Keepa's cents-as-int into dollars-as-float; pass divisor=1.0 for raw
+    integer fields like sales rank and review count that are not cents.
+    """
     if not csv or len(csv) < items_per_row:
         return []
     cutoff = time.time() - days * 86400
@@ -85,7 +109,7 @@ def _history_from_csv(csv: list | None, items_per_row: int, days: int = 90) -> l
         if unix_ts < cutoff:
             continue
         dt = datetime.fromtimestamp(unix_ts, tz=timezone.utc).strftime("%Y-%m-%d")
-        price = price_raw / 100.0 if price_raw > 0 else None
+        price = price_raw / divisor if price_raw > 0 else None
         result.append({"date": dt, "price": price})
     return result
 
@@ -131,7 +155,7 @@ def _daily_accumulate(segments: list[tuple], days: int, mode: str = "value") -> 
     """Accumulate segment data into daily buckets.
 
     mode="value": weighted average (for prices) — weight by duration
-    mode="sales": sum of (daily_rate × duration) using sales tiers
+    mode="sales": sum of (daily_rate x duration) using sales tiers
     mode="raw": last value per day (for BSR, counts)
     """
     now = time.time()
@@ -166,7 +190,7 @@ def _daily_accumulate(segments: list[tuple], days: int, mode: str = "value") -> 
             bucket = daily[day_str]
 
             if mode == "value":
-                # Weighted average: price × hours
+                # Weighted average: price x hours
                 bucket["value_sum"] += (raw_value / 100.0) * duration_hours
                 bucket["weight"] += duration_hours
             elif mode == "sales":
@@ -206,7 +230,7 @@ def _check_tokens_or_error(token_info: dict) -> dict | None:
 # FETCH tools — call Keepa API, store raw data, return lightweight summary
 # ---------------------------------------------------------------------------
 
-async def keepa_check_tokens(tool_context: Optional[ToolContext] = None) -> dict:
+async def keepa_check_tokens(tool_context: ToolContext | None = None) -> dict:
     """Check remaining Keepa API token balance. Costs 0 tokens."""
     api_key = _get_api_key()
     if not api_key:
@@ -221,7 +245,7 @@ async def keepa_check_tokens(tool_context: Optional[ToolContext] = None) -> dict
 async def keepa_fetch_product(
     asin: str,
     domain: int = 1,
-    tool_context: Optional[ToolContext] = None,
+    tool_context: ToolContext | None = None,
 ) -> dict:
     """Fetch product data from Keepa and cache it locally. Returns a lightweight summary only.
 
@@ -246,7 +270,9 @@ async def keepa_fetch_product(
     if not api_key:
         return {"status": "error", "message": "KEEPA_API_KEY not configured."}
 
-    params = {"key": api_key, "asin": asin, "domain": domain, "offers": 20}
+    # rating=1 populates csv[16]/csv[17] (rating + review count) — Keepa
+    # leaves them empty without this flag for many ASINs. No extra token cost.
+    params = {"key": api_key, "asin": asin, "domain": domain, "offers": 20, "rating": 1}
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -272,14 +298,15 @@ async def keepa_fetch_product(
         return {"status": "error", "message": f"Keepa API error: {e}"}
 
 
-def _build_summary(asin: str, product: dict, from_cache: bool = False, tokens_left: int = None) -> dict:
+def _build_summary(asin: str, product: dict, from_cache: bool = False, tokens_left: int | None = None) -> dict:
     """Build a lightweight summary from cached product data."""
     csv_data = product.get("csv", [])
 
-    # Current prices
+    # Current prices. Buy box (csv[18]) is a shipping-CSV — items_per_row=3
+    # ([time, price, shipping]) per Keepa's BUY_BOX_SHIPPING definition.
     amazon = _price_from_csv(csv_data[0], 2) if len(csv_data) > 0 else None
     new = _price_from_csv(csv_data[1], 2) if len(csv_data) > 1 else None
-    buy_box = _price_from_csv(csv_data[18], 2) if len(csv_data) > 18 else None
+    buy_box = _price_from_csv(csv_data[18], 3) if len(csv_data) > 18 else None
     prime_excl = _price_from_csv(csv_data[33], 2) if len(csv_data) > 33 else None
 
     # Coupon
@@ -292,6 +319,12 @@ def _build_summary(asin: str, product: dict, from_cache: bool = False, tokens_le
             coupon = f"${coupon_raw / 100:.2f} off"
         elif coupon_raw and coupon_raw < 0:
             coupon = f"{abs(coupon_raw)}% off"
+
+    # Surface any active deal badge ("Limited time deal", "Lightning Deal",
+    # etc.) in the lightweight summary so the agent doesn't miss it without
+    # calling extract_pricing.
+    deals = product.get("deals") or []
+    active_deal = deals[0].get("badge") if deals and deals[0].get("badge") else None
 
     result = {
         "status": "success",
@@ -306,6 +339,7 @@ def _build_summary(asin: str, product: dict, from_cache: bool = False, tokens_le
             "prime_exclusive": prime_excl,
         },
         "coupon": coupon,
+        "active_deal": active_deal,
         "monthly_sold": product.get("monthlySold"),
         "from_cache": from_cache,
         "hint": "Use keepa_extract_* tools for detailed pricing history, offers, competitors, and stats.",
@@ -319,7 +353,7 @@ def _build_summary(asin: str, product: dict, from_cache: bool = False, tokens_le
 # EXTRACT tools — read from cache, return focused slices
 # ---------------------------------------------------------------------------
 
-def keepa_extract_pricing(asin: str, tool_context: Optional[ToolContext] = None) -> dict:
+def keepa_extract_pricing(asin: str, tool_context: ToolContext | None = None) -> dict:
     """Extract detailed current pricing from cached Keepa data.
 
     Returns all price types, coupon details, and best current offer analysis.
@@ -335,10 +369,14 @@ def keepa_extract_pricing(asin: str, tool_context: Optional[ToolContext] = None)
     csv_data = product.get("csv", [])
 
     prices = {}
+    # buy_box (csv[18]) is the only shipping-CSV in this map (3 entries per row);
+    # all other indices store [time, price] pairs. lightning_deal (csv[8])
+    # surfaces an active Lightning Deal if one is running; -1 when inactive.
     _CSV_MAP = {
         "amazon": (0, 2), "new_3p": (1, 2), "used": (2, 2),
-        "list_price": (4, 2), "warehouse": (9, 2), "new_fba": (10, 2),
-        "buy_box": (18, 2), "prime_exclusive": (33, 2),
+        "list_price": (4, 2), "lightning_deal": (8, 2),
+        "warehouse": (9, 2), "new_fba": (10, 2),
+        "buy_box": (18, 3), "prime_exclusive": (33, 2),
     }
     for name, (idx, row_size) in _CSV_MAP.items():
         prices[name] = _price_from_csv(csv_data[idx], row_size) if len(csv_data) > idx else None
@@ -382,11 +420,40 @@ def keepa_extract_pricing(asin: str, tool_context: Optional[ToolContext] = None)
     best_source = min(valid, key=valid.get) if valid else None
     best_price = round(valid[best_source], 2) if best_source else None
 
+    # Deal badges (Limited time deal, Best Deal, Lightning Deal, Prime Early
+    # Access, etc.). Keepa surfaces these in the `deals` array even when the
+    # dealType doesn't have a dedicated CSV index.
+    active_deals = []
+    for d in product.get("deals") or []:
+        if d.get("dealType"):
+            active_deals.append({
+                "type": d.get("dealType"),
+                "badge": d.get("badge"),
+                "audience": d.get("accessType"),
+            })
+
+    # Seller promotions (Subscribe & Save reference price, bulk discounts).
+    # The SnS `amount` is the SnS-eligible price in cents and often acts as
+    # the "typical price" baseline that Amazon strikes through when a deal
+    # is active.
+    promotions = []
+    for p in product.get("promotions") or []:
+        amount = p.get("amount")
+        promotions.append({
+            "type": p.get("type"),
+            "amount_dollars": round(amount / 100.0, 2) if isinstance(amount, (int, float)) and amount > 0 else None,
+            "discount_percent": p.get("discountPercent"),
+            "sns_bulk_discount_percent": p.get("snsBulkDiscountPercent"),
+            "seller_id": p.get("sellerId"),
+        })
+
     return {
         "status": "success",
         "asin": asin.upper(),
         "prices": prices,
         "coupon": coupon,
+        "active_deals": active_deals,
+        "promotions": promotions,
         "best_offer": best_price,
         "best_offer_source": best_source,
     }
@@ -396,7 +463,7 @@ def keepa_extract_history(
     asin: str,
     metric: str = "buy_box",
     days: int = 90,
-    tool_context: Optional[ToolContext] = None,
+    tool_context: ToolContext | None = None,
 ) -> dict:
     """Extract price or rank history from cached Keepa data.
 
@@ -409,10 +476,12 @@ def keepa_extract_history(
     if not product:
         return {"status": "error", "message": f"No cached data for {asin}. Call keepa_fetch_product first."}
 
+    # buy_box is a shipping-CSV (items_per_row=3); everything else is 2.
     _METRIC_MAP = {
         "amazon": (0, 2), "new": (1, 2), "used": (2, 2),
         "sales_rank": (3, 2), "list_price": (4, 2),
-        "new_fba": (10, 2), "buy_box": (18, 2),
+        "lightning_deal": (8, 2),
+        "new_fba": (10, 2), "buy_box": (18, 3),
         "prime_exclusive": (33, 2),
         "rating": (16, 2), "review_count": (17, 2),
     }
@@ -424,20 +493,32 @@ def keepa_extract_history(
     if len(csv_data) <= idx or not csv_data[idx]:
         return {"status": "success", "asin": asin.upper(), "metric": metric, "history": [], "message": "No data available for this metric."}
 
-    history = _history_from_csv(csv_data[idx], row_size, days)
+    # sales_rank, review_count, and rating are raw integers stored in the CSV
+    # (per Keepa docs), not cents — skip the /100 scaling for all three.
+    int_metrics = {"sales_rank", "review_count"}
+    raw_metrics = int_metrics | {"rating"}
+    divisor = 1.0 if metric in raw_metrics else 100.0
+    history = _history_from_csv(csv_data[idx], row_size, days, divisor=divisor)
 
-    # For rating, divide by 10 (Keepa stores as 0-50, meaning 0.0-5.0)
     if metric == "rating":
+        # Rating is stored 0-50; divide by 10 to recover the 0-5 star scale
+        # (e.g., 44 → 4.4 stars).
         for h in history:
             if h["price"] is not None:
                 h["rating"] = h.pop("price") / 10.0
             else:
                 h["rating"] = h.pop("price")
+    elif metric in int_metrics:
+        # Cast to int and rename "price" key to a less misleading name.
+        new_key = "rank" if metric == "sales_rank" else "count"
+        for h in history:
+            v = h.pop("price")
+            h[new_key] = int(v) if v is not None else None
 
     return {"status": "success", "asin": asin.upper(), "metric": metric, "days": days, "data_points": len(history), "history": history}
 
 
-def keepa_extract_offers(asin: str, tool_context: Optional[ToolContext] = None) -> dict:
+def keepa_extract_offers(asin: str, tool_context: ToolContext | None = None) -> dict:
     """Extract current seller/offer information from cached Keepa data.
 
     Returns buy box holder, FBA vs FBM breakdown, seller count, and top offers.
@@ -452,11 +533,11 @@ def keepa_extract_offers(asin: str, tool_context: Optional[ToolContext] = None) 
 
     csv_data = product.get("csv", [])
 
-    # Offer counts from CSV
-    count_new = _price_from_csv(csv_data[11], 2) if len(csv_data) > 11 else None
-    count_used = _price_from_csv(csv_data[12], 2) if len(csv_data) > 12 else None
-    count_new_fba = _price_from_csv(csv_data[34], 2) if len(csv_data) > 34 else None
-    count_new_fbm = _price_from_csv(csv_data[35], 2) if len(csv_data) > 35 else None
+    # Offer counts from CSV — raw integers, not cents.
+    count_new = _int_from_csv(csv_data[11], 2) if len(csv_data) > 11 else None
+    count_used = _int_from_csv(csv_data[12], 2) if len(csv_data) > 12 else None
+    count_new_fba = _int_from_csv(csv_data[34], 2) if len(csv_data) > 34 else None
+    count_new_fbm = _int_from_csv(csv_data[35], 2) if len(csv_data) > 35 else None
 
     # Buy box seller history (last entry)
     bb_history = product.get("buyBoxSellerIdHistory", [])
@@ -481,17 +562,17 @@ def keepa_extract_offers(asin: str, tool_context: Optional[ToolContext] = None) 
         "status": "success",
         "asin": asin.upper(),
         "offer_counts": {
-            "new_total": int(count_new) if count_new else None,
-            "used_total": int(count_used) if count_used else None,
-            "new_fba": int(count_new_fba) if count_new_fba else None,
-            "new_fbm": int(count_new_fbm) if count_new_fbm else None,
+            "new_total": count_new,
+            "used_total": count_used,
+            "new_fba": count_new_fba,
+            "new_fbm": count_new_fbm,
         },
         "buy_box_seller": current_bb_seller,
         "live_offers": offer_summary,
     }
 
 
-def keepa_extract_stats(asin: str, tool_context: Optional[ToolContext] = None) -> dict:
+def keepa_extract_stats(asin: str, tool_context: ToolContext | None = None) -> dict:
     """Extract key product stats from cached Keepa data.
 
     Returns sales rank, monthly sold, rating, review count, availability, listing age.
@@ -506,10 +587,12 @@ def keepa_extract_stats(asin: str, tool_context: Optional[ToolContext] = None) -
 
     csv_data = product.get("csv", [])
 
-    # Current values from CSV
-    sales_rank = _price_from_csv(csv_data[3], 2) if len(csv_data) > 3 else None
-    rating_raw = _price_from_csv(csv_data[16], 2) if len(csv_data) > 16 else None
-    review_count = _price_from_csv(csv_data[17], 2) if len(csv_data) > 17 else None
+    # Current values from CSV. Rank, review count, and rating are all raw
+    # integers (rating is 0-50 per Keepa docs, e.g. 44 = 4.4 stars), not
+    # prices in cents — must use _int_from_csv, not _price_from_csv.
+    sales_rank = _int_from_csv(csv_data[3], 2) if len(csv_data) > 3 else None
+    rating_raw = _int_from_csv(csv_data[16], 2) if len(csv_data) > 16 else None
+    review_count = _int_from_csv(csv_data[17], 2) if len(csv_data) > 17 else None
 
     listed_since = product.get("listedSince")
     tracking_since = product.get("trackingSince")
@@ -517,11 +600,11 @@ def keepa_extract_stats(asin: str, tool_context: Optional[ToolContext] = None) -
     return {
         "status": "success",
         "asin": asin.upper(),
-        "sales_rank": int(sales_rank) if sales_rank else None,
+        "sales_rank": sales_rank,
         "sales_rank_category": product.get("salesRankReference"),
         "monthly_sold": product.get("monthlySold"),
         "rating": rating_raw / 10.0 if rating_raw else None,
-        "review_count": int(review_count) if review_count else None,
+        "review_count": review_count,
         "availability_amazon": product.get("availabilityAmazon"),
         "is_sns": product.get("isSNS"),
         "listed_since": _keepa_time_to_datetime(listed_since) if listed_since and listed_since > 0 else None,
@@ -530,7 +613,7 @@ def keepa_extract_stats(asin: str, tool_context: Optional[ToolContext] = None) -
     }
 
 
-def keepa_extract_competitors(asin: str, tool_context: Optional[ToolContext] = None) -> dict:
+def keepa_extract_competitors(asin: str, tool_context: ToolContext | None = None) -> dict:
     """Extract competitor/seller information from cached Keepa data.
 
     Returns unique seller IDs from buy box history and current offers.
@@ -575,7 +658,7 @@ def keepa_extract_competitors(asin: str, tool_context: Optional[ToolContext] = N
 def keepa_extract_sales_analysis(
     asin: str,
     days: int = 90,
-    tool_context: Optional[ToolContext] = None,
+    tool_context: ToolContext | None = None,
 ) -> dict:
     """Extract comprehensive sales analysis from cached Keepa data.
 
@@ -603,8 +686,8 @@ def keepa_extract_sales_analysis(
     price_segments = _segments_from_csv(csv_data[1] if len(csv_data) > 1 else None, 2)
     price_daily = _daily_accumulate(price_segments, days, mode="value")
 
-    # --- Buy box price (index 18) ---
-    bb_segments = _segments_from_csv(csv_data[18] if len(csv_data) > 18 else None, 2)
+    # --- Buy box price (index 18) — shipping CSV: 3 entries per row ---
+    bb_segments = _segments_from_csv(csv_data[18] if len(csv_data) > 18 else None, 3)
     bb_daily = _daily_accumulate(bb_segments, days, mode="value")
 
     # --- Lightning deal price (index 8) ---
@@ -753,7 +836,7 @@ def keepa_extract_sales_analysis(
 async def keepa_product_finder(
     selection: str,
     domain: int = 1,
-    tool_context: Optional[ToolContext] = None,
+    tool_context: ToolContext | None = None,
 ) -> dict:
     """Search for products using Keepa's Product Finder with filters.
 
@@ -785,7 +868,7 @@ async def keepa_product_finder(
 
 
 async def keepa_get_categories(
-    domain: int, category: Optional[int] = None, tool_context: Optional[ToolContext] = None,
+    domain: int, category: int | None = None, tool_context: ToolContext | None = None,
 ) -> dict:
     """Retrieve Keepa's category tree or details for a specific category.
 
@@ -814,7 +897,7 @@ async def keepa_get_categories(
 
 
 async def keepa_get_bestsellers(
-    domain: int, category: int, tool_context: Optional[ToolContext] = None,
+    domain: int, category: int, tool_context: ToolContext | None = None,
 ) -> dict:
     """Retrieve the bestseller list for a specific category.
 
@@ -859,7 +942,7 @@ async def keepa_get_bestsellers(
 
 
 async def keepa_get_seller_info(
-    domain: int, seller_id: str, tool_context: Optional[ToolContext] = None,
+    domain: int, seller_id: str, tool_context: ToolContext | None = None,
 ) -> dict:
     """Retrieve information about a specific Amazon seller.
 
@@ -885,8 +968,266 @@ async def keepa_get_seller_info(
         return {"status": "error", "message": f"Keepa API error: {e}"}
 
 
+# ---------------------------------------------------------------------------
+# BULK QUERY — flat-table extraction across many ASINs in one shot
+# ---------------------------------------------------------------------------
+
+# Maps a public field name to the function that extracts it from a raw
+# Keepa product dict. Keep names lowercase_underscored and stable —
+# downstream code (and the keepa-skill) leans on this list.
+def _f_title(p: dict) -> Any: return p.get("title")
+def _f_brand(p: dict) -> Any: return p.get("brand")
+def _f_category(p: dict) -> Any:
+    return " > ".join(c.get("name", "") for c in (p.get("categoryTree") or []))
+def _f_product_type(p: dict) -> Any: return p.get("productType")
+def _f_monthly_sold(p: dict) -> Any: return p.get("monthlySold")
+def _f_sales_rank_category(p: dict) -> Any: return p.get("salesRankReference")
+def _f_listed_since(p: dict) -> Any:
+    ls = p.get("listedSince")
+    return _keepa_time_to_datetime(ls) if ls and ls > 0 else None
+def _f_fba_pickpack_fee(p: dict) -> Any:
+    fees = p.get("fbaFees") or {}
+    cents = fees.get("pickAndPackFee")
+    return round(cents / 100.0, 2) if isinstance(cents, (int, float)) and cents > 0 else None
+def _f_active_deal(p: dict) -> Any:
+    deals = p.get("deals") or []
+    return deals[0].get("badge") if deals and deals[0].get("badge") else None
+def _f_coupon(p: dict) -> Any:
+    cr = p.get("coupon")
+    if isinstance(cr, list):
+        cr = cr[0] if cr else None
+    if cr and cr > 0:
+        return f"${cr/100:.2f} off"
+    if cr and cr < 0:
+        return f"{abs(cr)}% off"
+    return None
+
+def _csv_int(p: dict, idx: int) -> int | None:
+    csv = p.get("csv") or []
+    return _int_from_csv(csv[idx], 2) if len(csv) > idx and csv[idx] else None
+
+def _csv_price(p: dict, idx: int, row_size: int = 2) -> float | None:
+    csv = p.get("csv") or []
+    return _price_from_csv(csv[idx], row_size) if len(csv) > idx and csv[idx] else None
+
+_BULK_FIELD_HANDLERS: dict[str, Any] = {
+    # Identity / catalog
+    "title": _f_title,
+    "brand": _f_brand,
+    "category": _f_category,
+    "product_type": _f_product_type,
+    "parent_asin": lambda p: p.get("parentAsin"),
+    "parent_title": lambda p: p.get("parentTitle"),
+    # variation_asins is populated only when querying a PARENT ASIN —
+    # Keepa returns null on children. variationCSV (comma-string) is
+    # deprecated; `variations` is the structured field.
+    "variation_asins": lambda p: (
+        [v.get("asin") for v in (p.get("variations") or []) if v.get("asin")]
+        or ([a.strip() for a in (p.get("variationCSV") or "").split(",") if a.strip()] or None)
+    ),
+    "variation_count": lambda p: (
+        len(p.get("variations")) if p.get("variations")
+        else (len([a for a in (p.get("variationCSV") or "").split(",") if a.strip()])
+              or None)
+    ),
+    # Sales signals
+    "review_count": lambda p: _csv_int(p, 17),
+    "rating": lambda p: (_csv_int(p, 16) / 10.0) if _csv_int(p, 16) else None,
+    "sales_rank": lambda p: _csv_int(p, 3),
+    "sales_rank_category": _f_sales_rank_category,
+    "monthly_sold": _f_monthly_sold,
+    # Prices
+    "amazon_price": lambda p: _csv_price(p, 0),
+    "new_3p_price": lambda p: _csv_price(p, 1),
+    "buy_box": lambda p: _csv_price(p, 18, 3),  # shipping CSV → row_size 3
+    "prime_exclusive": lambda p: _csv_price(p, 33),
+    "list_price": lambda p: _csv_price(p, 4),
+    "lightning_deal": lambda p: _csv_price(p, 8),
+    # Promo state
+    "active_deal": _f_active_deal,
+    "coupon": _f_coupon,
+    # Listing metadata
+    "listed_since": _f_listed_since,
+    "fba_pickpack_fee": _f_fba_pickpack_fee,
+}
+
+_BULK_DEFAULT_FIELDS = (
+    "asin,title,review_count,rating,sales_rank,monthly_sold,buy_box,active_deal"
+)
+
+
+def _extract_row(product: dict, fields: list[str]) -> dict:
+    """Extract a flat dict of the requested fields from a raw Keepa product."""
+    row: dict = {"asin": (product.get("asin") or "").upper()}
+    for f in fields:
+        if f == "asin":
+            continue  # always present
+        handler = _BULK_FIELD_HANDLERS.get(f)
+        if handler is not None:
+            try:
+                row[f] = handler(product)
+            except Exception:
+                row[f] = None
+    return row
+
+
+async def _fetch_bulk_batch(
+    client: httpx.AsyncClient,
+    api_key: str,
+    asins_chunk: list[str],
+    domain: int,
+    with_offers: bool,
+) -> dict | None:
+    params: dict[str, Any] = {
+        "key": api_key,
+        "asin": ",".join(asins_chunk),
+        "domain": domain,
+        # Optional-CSV flags — populate the corresponding CSV indices
+        # without paying for full offer history. Both no extra token cost.
+        "rating": 1,    # populates csv[16] (rating) + csv[17] (review count)
+        "buybox": 1,    # populates csv[18] (buy box price + shipping)
+    }
+    if with_offers:
+        # `offers` implies buybox (Keepa ignores the explicit buybox flag
+        # when offers is set), but no harm in leaving it for clarity.
+        params["offers"] = 20
+    try:
+        resp = await client.get(f"{_API_BASE}/product", params=params, timeout=60)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        logger.exception("Keepa bulk fetch error for chunk size %d", len(asins_chunk))
+        return {"_error": str(e), "products": []}
+
+
+async def keepa_bulk_query(
+    asins: str,
+    fields: str = _BULK_DEFAULT_FIELDS,
+    with_offers: bool = False,
+    domain: int = 1,
+    tool_context: ToolContext | None = None,
+) -> dict:
+    """Fetch many ASINs in one shot and return a flat table of selected fields.
+
+    Use this instead of looping `keepa_fetch_product` when you have more than
+    ~5 ASINs and only need a subset of fields per ASIN (e.g., review counts
+    across 100+ children of a parent). Each underlying Keepa product response
+    is also cached to disk, so individual `keepa_extract_*` follow-ups on any
+    of the ASINs work for free afterward.
+
+    Args:
+        asins: Comma-separated ASINs. Whitespace tolerated. No hard cap, but
+            costs 1 token/ASIN (3 if with_offers=True) so check the budget
+            for big lists. Chunked into batches of 100 (or 20 with offers).
+        fields: Comma-separated field names. ASIN is always included.
+            Valid: title, brand, category, product_type, review_count, rating,
+            sales_rank, sales_rank_category, monthly_sold, amazon_price,
+            new_3p_price, buy_box, prime_exclusive, list_price, lightning_deal,
+            active_deal, coupon, listed_since, fba_pickpack_fee.
+        with_offers: If True, fetches live offer data (3 tokens/ASIN, max 20
+            per batch). If False (default), 1 token/ASIN, max 100 per batch.
+            Set True only when you need offer-level data; for review counts,
+            ranks, and prices, leave it False.
+        domain: Amazon locale (1=US, 2=GB, 3=DE, ...).
+
+    Returns:
+        dict: {status, asins_requested, asins_returned, asins_missing,
+               tokens_left, rows: [{asin, ...selected fields}, ...]}
+        Missing ASINs (not found in Keepa) appear in `asins_missing` and
+        cost no tokens.
+    """
+    asin_list = [a.strip().upper() for a in asins.split(",") if a.strip()]
+    if not asin_list:
+        return {"status": "error", "message": "No ASINs provided."}
+    field_list = [f.strip() for f in fields.split(",") if f.strip()]
+    if "asin" not in field_list:
+        field_list = ["asin", *field_list]
+    unknown = [f for f in field_list if f != "asin" and f not in _BULK_FIELD_HANDLERS]
+    if unknown:
+        return {
+            "status": "error",
+            "message": f"Unknown field(s): {unknown}. Valid: {sorted(_BULK_FIELD_HANDLERS.keys())}",
+        }
+
+    api_key = _get_api_key()
+    if not api_key:
+        return {"status": "error", "message": "KEEPA_API_KEY not configured."}
+
+    chunk_size = 20 if with_offers else 100
+    chunks = [asin_list[i : i + chunk_size] for i in range(0, len(asin_list), chunk_size)]
+    cost_per_asin = 3 if with_offers else 1
+    estimated_cost = len(asin_list) * cost_per_asin
+
+    try:
+        async with httpx.AsyncClient(timeout=90) as client:
+            token_info = await _check_token_balance(client, api_key)
+            token_err = _check_tokens_or_error(token_info)
+            if token_err:
+                return token_err
+            tokens_left = token_info.get("tokensLeft", 0)
+            if tokens_left < estimated_cost + _MIN_TOKENS:
+                return {
+                    "status": "error",
+                    "message": (
+                        f"Insufficient Keepa tokens for bulk query: need ~{estimated_cost} "
+                        f"({len(asin_list)} ASINs x {cost_per_asin}), have {tokens_left}. "
+                        f"Refill in ~{token_info.get('refillIn', 0) // 1000}s."
+                    ),
+                }
+
+            sem = asyncio.Semaphore(3)
+
+            async def _go(chunk: list[str]) -> dict | None:
+                async with sem:
+                    return await _fetch_bulk_batch(client, api_key, chunk, domain, with_offers)
+
+            responses = await asyncio.gather(*[_go(c) for c in chunks])
+
+            final_token_info = await _check_token_balance(client, api_key)
+            final_tokens = final_token_info.get("tokensLeft")
+    except Exception as e:
+        logger.exception("Keepa bulk_query orchestration error")
+        return {"status": "error", "message": f"Keepa bulk query error: {e}"}
+
+    rows: list[dict] = []
+    found: set[str] = set()
+    batch_errors: list[str] = []
+    for resp in responses:
+        if not resp:
+            continue
+        if resp.get("_error"):
+            batch_errors.append(resp["_error"])
+            continue
+        tokens_left_resp = resp.get("tokensLeft")
+        for product in resp.get("products") or []:
+            asin = (product.get("asin") or "").upper()
+            if not asin:
+                continue
+            found.add(asin)
+            try:
+                _save_cache(asin, product, tokens_left_resp or 0)
+            except Exception:
+                logger.warning("Failed to cache bulk product %s", asin)
+            rows.append(_extract_row(product, field_list))
+
+    missing = [a for a in asin_list if a not in found]
+    result: dict = {
+        "status": "success",
+        "asins_requested": len(asin_list),
+        "asins_returned": len(rows),
+        "asins_missing": missing,
+        "tokens_left": final_tokens,
+        "fields": field_list,
+        "rows": rows,
+    }
+    if batch_errors:
+        result["batch_errors"] = batch_errors
+        result["status"] = "partial"
+    return result
+
+
 async def keepa_get_top_sellers(
-    domain: int, tool_context: Optional[ToolContext] = None,
+    domain: int, tool_context: ToolContext | None = None,
 ) -> dict:
     """Retrieve the list of top sellers for a given Amazon locale.
 

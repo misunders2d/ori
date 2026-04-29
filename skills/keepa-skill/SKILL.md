@@ -1,67 +1,114 @@
 ---
 name: keepa-skill
-description: "Keepa API workflow — fetch-store-extract pattern for Amazon product research. Covers pricing, sales analysis, competitor research, and bestseller discovery."
+description: "Keepa API workflow for Amazon product research — single-ASIN fetch-store-extract pattern AND a bulk-query tool that returns a flat table for many ASINs in one call (review counts / BSR / monthly sold / prices across 100+ children of a parent, competitor lists, catalog audits). Detailed pricing, real sales estimates (from Keepa's monthlySold tier mapping), historical price/rank trends, competitor analysis, bestseller discovery, and product-finder filtered search. Use this skill whenever the user asks about an ASIN's price history, BSR trend, sales volume, who's selling it, who the competitors are, what's in a category, ANY multi-ASIN comparison or batch lookup ('check this for all 100 children', 'compare these 30 ASINs', 'pull review counts for the whole catalog'), or any product research question on Amazon — even if they don't say 'Keepa' explicitly."
 ---
 
-# Keepa Product Research Skill
+# Keepa Product Research
 
-You have access to Keepa tools for Amazon product intelligence. Keepa data is **massive** — never return raw API responses. Always use the fetch→extract pattern.
+You have access to Keepa for Amazon product intelligence: pricing, sales estimates, ranks, offers, sellers, categories, bestsellers, and filter-based discovery. Keepa product responses are **massive** (raw JSON can be hundreds of KB per ASIN), so this toolset uses a **fetch → extract** pattern: fetch caches the raw data on disk, then extract tools pull focused slices on demand. Never try to load or display raw Keepa data in the conversation.
 
-## Workflow: Fetch → Extract
+## How to navigate this skill
 
-- [ ] Step 1: **Fetch** — `keepa_fetch_product(asin)` to cache the raw data. Returns a lightweight summary only.
-- [ ] Step 2: **Extract** — call the specific extraction tool you need. Each reads from the cached file.
-- [ ] Step 3: **Record** — for multi-ASIN research, write findings to scratchpad between fetches.
+SKILL.md is the routing doc. Each topic has its own reference file — read the one that matches what the user is asking about rather than holding all of Keepa in your head.
 
-## Extraction Tools
+| User is asking about... | Read |
+|---|---|
+| What each tool does, parameters, example calls | [`references/tools.md`](references/tools.md) |
+| Which CSV index holds what, or which product fields exist | [`references/product-data.md`](references/product-data.md) |
+| Discovering ASINs with filters (rank, price, category, sales) | [`references/product-finder.md`](references/product-finder.md) |
+| Token costs, domain IDs, cache TTL, rate limits | [`references/budget-and-limits.md`](references/budget-and-limits.md) |
+| Worked end-to-end research workflows | [`references/research-examples.md`](references/research-examples.md) |
 
-| Tool | When to use |
-|------|-------------|
-| `keepa_extract_pricing(asin)` | Current prices across all channels (Amazon, 3P, Buy Box, Prime Exclusive), coupons, best offer |
-| `keepa_extract_sales_analysis(asin, days)` | **Primary analysis tool.** Real daily sales estimates (min/max from tier mapping), effective prices (with coupons/LDs), BSR, revenue. Use this for any "how much does it sell?" question |
-| `keepa_extract_history(asin, metric, days)` | Price/rank/rating trends over time. Metrics: amazon, new, buy_box, sales_rank, rating, review_count, etc. |
-| `keepa_extract_offers(asin)` | Who's selling: buy box holder, FBA vs FBM counts, top offer details |
-| `keepa_extract_competitors(asin)` | Historical buy box sellers, current offer sellers |
-| `keepa_extract_stats(asin)` | Quick stats: rank, monthlySold, rating, reviews, listing age, FBA fees |
+## Tool inventory
 
-## Discovery Tools
+**Fetch** (calls API, caches raw data, returns lightweight summary):
+- `keepa_fetch_product(asin, domain=1)` — must be called before any extract tool
 
-| Tool | When to use |
-|------|-------------|
-| `keepa_product_finder(selection, domain)` | Find ASINs by filters (title, rank, price, category). Returns ASIN list only. |
-| `keepa_get_bestsellers(domain, category)` | Top ASINs in a category. Need the category ID first. |
-| `keepa_get_categories(domain, category)` | Browse/search the category tree to find category IDs. |
-| `keepa_get_seller_info(domain, seller_id)` | Details about a specific 3P seller. |
-| `keepa_get_top_sellers(domain)` | Biggest 3P sellers on the marketplace. |
-| `keepa_check_tokens()` | Check remaining API token balance (0 cost). |
+**Bulk** (one API call, many ASINs, returns a flat table — never iterate `keepa_fetch_product` for >5 ASINs):
+- `keepa_bulk_query(asins, fields, with_offers=False, domain=1)` — comma-separated ASINs and field names; returns one row per ASIN. Each product is also cached so per-ASIN extract tools work afterward for free. Use this for "review count check on 100+ children of a parent" type questions.
 
-## Competitor Analysis Procedure
+**Extract** (read from cache, return focused slices):
+- `keepa_extract_pricing(asin)` — current prices + best-offer analysis (with coupons)
+- `keepa_extract_sales_analysis(asin, days=90)` — **primary analysis tool** — daily real sales (min/max from tier mapping), effective prices, BSR, revenue
+- `keepa_extract_history(asin, metric, days=90)` — time series for one metric (amazon, new, used, sales_rank, buy_box, new_fba, prime_exclusive, rating, review_count, list_price)
+- `keepa_extract_offers(asin)` — buy box holder, FBA/FBM counts, top live offers
+- `keepa_extract_competitors(asin)` — historical buy box sellers, current offer sellers
+- `keepa_extract_stats(asin)` — rank, monthly sold, rating, reviews, listing age, FBA fees
 
-- [ ] Step 1: `keepa_get_categories` to find the right subcategory ID
-- [ ] Step 2: `keepa_product_finder` with title/category/rank filters to get candidate ASINs
-- [ ] Step 3: `keepa_fetch_product` for each candidate
-- [ ] Step 4: `keepa_extract_sales_analysis` to get real sales numbers
-- [ ] Step 5: Compare, rank, and report — write to scratchpad between steps if >3 ASINs
+**Discovery** (no fetch needed; their own API calls):
+- `keepa_product_finder(selection, domain=1)` — filtered ASIN search; selection is a JSON string
+- `keepa_get_categories(domain, category=None)` — browse category tree to find IDs
+- `keepa_get_bestsellers(domain, category)` — top ASINs in a category
+- `keepa_get_seller_info(domain, seller_id)` — details on a 3P seller
+- `keepa_get_top_sellers(domain)` — biggest 3P sellers in marketplace (**expensive: 50 tokens**)
 
-## Understanding Sales Data
+**Utility:**
+- `keepa_check_tokens()` — current API token balance (0 cost)
 
-Keepa's `monthlySold` is a **tier indicator**, not exact units. The sales analysis tool maps tiers to min/max ranges:
-- 3000 → 3,000-4,000 units/month
-- 50 → 50-100 units/month
-- Always report sales as a range (min-max), never as exact numbers.
+See [`references/tools.md`](references/tools.md) for full signatures, return shapes, and when to use each.
 
-## Live References
+## Standard workflows
 
-- [Keepa API Documentation](https://keepa.com/#!discuss/t/keepa-api/150)
-- [Keepa API Endpoint Reference](https://keepa.com/api/)
-- [Amazon Product Advertising API (context)](https://webservices.amazon.com/paapi5/documentation/)
+### Single-ASIN deep dive
+1. `keepa_fetch_product(asin)` — caches raw data
+2. `keepa_extract_pricing(asin)` — current price landscape
+3. `keepa_extract_sales_analysis(asin, days=30)` — real sales + revenue estimate
+4. `keepa_extract_offers(asin)` — who's currently selling
+5. (optional) `keepa_extract_history(asin, "sales_rank", days=90)` — BSR trend
 
-## Gotchas
+### Multi-ASIN comparison
+1. `keepa_check_tokens()` first — each fetch costs ~3 tokens
+2. For each ASIN: `keepa_fetch_product` → `keepa_extract_sales_analysis(days=30)`
+3. Write per-ASIN findings to scratchpad between iterations (3+ ASINs)
+4. Read scratchpad and synthesize comparison at the end
 
-- **Always fetch before extracting.** Extract tools read from cache — they fail if the ASIN wasn't fetched first.
-- **Cache lasts 1 hour.** After that, `keepa_fetch_product` will re-fetch from the API.
-- **Parent ASINs have NO data.** `productType=5` means no prices, no rank, no offers. Always query child ASINs.
-- **BSR is shared across variations.** All children of the same parent have the same sales rank. Use `monthlySold` (via sales analysis) to differentiate variation performance.
-- **Never pass offers > 20.** Keepa requires offers=0 or offers≥20. The fetch tool handles this.
-- **Token costs add up.** Each product fetch = 1 token + 2 for offers. Check balance with `keepa_check_tokens` before bulk operations.
-- **Error handling**: follows system-level error mandate (report immediately, never fabricate).
+### Discovery (find ASINs to analyze)
+1. `keepa_get_categories(domain, query="…")` to find a category ID
+2. `keepa_product_finder(selection=…)` with rank/price/category filters → list of ASINs
+3. Then run the deep-dive workflow on each candidate
+
+## Cross-cutting rules
+
+### Fetch before extract
+Every `keepa_extract_*` tool reads from the local cache. If the ASIN has not been fetched (or the cache is stale, >1 hour old), the tool returns `{"status": "error", ...}`. Always call `keepa_fetch_product` first. The cache lives at `tmp/keepa_cache/{ASIN}.json`.
+
+### Parent ASINs have no useful data
+A parent ASIN (Keepa `productType=5`) is a variation hub — it has no prices, no rank, no offers. If `keepa_fetch_product` returns a summary with all-null prices and no `monthly_sold`, you're looking at a parent. Ask the user for a child ASIN, or use `keepa_product_finder` with `hasParentASIN: false` to get only buyable products.
+
+### BSR is shared across variations
+All children of the same parent inherit the parent's sales rank. Use `monthlySold` (via `keepa_extract_sales_analysis`) — not BSR — to differentiate variation performance.
+
+### Enumerating variations from any ASIN in the family
+Keepa's `variations` field is generally populated on both parent ASINs and their children — querying any ASIN in the family returns the full sibling list. So to get all children of a listing, one bulk_query call suffices:
+
+1. `keepa_bulk_query("<any-asin-in-the-family>", "asin,parent_asin,variation_asins")`
+2. Then bulk-query the returned `variation_asins` list for whatever fields the user actually wants (review_count, rating, etc.).
+
+If `variation_asins` does come back null on a child (rare — observed historically but Keepa's behavior here has shifted), fall back to the two-hop pattern: read `parent_asin`, then re-query the parent.
+
+### `monthlySold` is a tier indicator, not exact units
+Keepa's `monthlySold` field is sourced from Amazon's "bought past month" badge but bucketed into tiers (50, 100, 200, …, 3000, 4000, …). The sales-analysis tool maps each tier to a `(min, max)` range. **Always report sales as a range** (e.g., "3,000–4,000 units/month"), never as a precise number. Many ASINs have no `monthlySold` value at all — Amazon only shows the badge for some products.
+
+### `offers` parameter rules
+The fetch tool always requests `offers=20`. Keepa requires `offers` to be either omitted (no live offer data) or in the range 20–100. Offer queries cost +2 tokens on top of the base 1.
+
+### Error handling
+If a tool returns `{"status": "error", "message": "…"}`, relay the message verbatim and stop. Don't retry, don't fabricate, don't guess at data. Token-budget errors specifically include the refill ETA — pass that on so the user can decide whether to wait or proceed differently.
+
+### Token budgeting
+Run `keepa_check_tokens()` before any operation that will fetch >5 ASINs, or before discovery + bulk-fetch flows. See [`references/budget-and-limits.md`](references/budget-and-limits.md) for per-endpoint costs. The 50-token cost of `keepa_get_top_sellers` and the very-high cost of lightning-deal queries are easy to overlook.
+
+## What's NOT available
+
+- **Write operations.** No tracking-add, no price tracking, no notifications. Everything in this toolset is read-only.
+- **Lightning deals endpoint.** Not exposed (it's expensive — ~500 tokens per call).
+- **Generic Keepa "deals" search.** Not exposed. If the user wants discounted products, use `keepa_product_finder` with price-drop filters instead.
+- **A non-default `offers` value.** Tools always fetch `offers=20`. If you need 100 offers, that's not currently wired up.
+- **Brazil (`domain=12`).** The existing toolset documents domains 1–11; Keepa supports BR=12 but the tools haven't been verified against it. Check before using.
+
+## Live references
+
+- [Keepa API endpoints](https://keepa.com/api/)
+- [Keepa product object (Java struct, canonical)](https://github.com/keepacom/api_backend/blob/master/src/main/java/com/keepa/api/backend/structs/Product.java)
+- [Keepa Request struct (parameters)](https://github.com/keepacom/api_backend/blob/master/src/main/java/com/keepa/api/backend/structs/Request.java)
+- [Keepa community forum (gotchas, schema discussions)](https://keepa.com/#!discuss/t/keepa-api/150)
