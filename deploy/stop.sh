@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
-# Ori — Stop the agent.
+# Ori — Stop the agent AND disable auto-start on reboot.
 #
-# Does three things, in order:
-#   1. Stops the user-level systemd / launchd unit (if registered).
+# Symmetric with start.sh:
+#   start.sh = enable + start
+#   stop.sh  = stop + disable
+#
+# Does, in order:
+#   1. Stops AND disables the user-level systemd / launchd unit (if registered).
+#      "Disable" means the unit will NOT auto-start on next reboot/login.
 #   2. Sweeps any orphan `ori-supervisor.py` processes belonging to THIS project
 #      (matched on the absolute path so a multi-bot host stays safe).
 #   3. Stops the Cloudflare tunnel container if present.
@@ -11,6 +16,9 @@
 # stale manual run can leave a supervisor still holding the Telegram polling
 # slot — causing `409 Conflict: terminated by other getUpdates request` when
 # a new instance boots.
+#
+# Project files, vault, code, git history are NEVER touched here.
+# For the destructive "delete everything" path, use deploy/uninstall.sh.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,24 +34,52 @@ if [ -f "$VAULT_FILE" ] && command -v python3 &>/dev/null; then
 fi
 SERVICE_NAME="$(echo "$_bot_name" | tr '[:upper:]' '[:lower:]' | tr ' _' '-' | sed 's/[^a-z0-9-]//g')-agent"
 
-# --- 1. Stop the service ---
+# Pick up the originally-installed name in case BOT_NAME changed since install.
+ORIGINAL_SERVICE_NAME=""
+if [ -f "$PROJECT_ROOT/data/.service_name" ]; then
+    ORIGINAL_SERVICE_NAME=$(cat "$PROJECT_ROOT/data/.service_name" 2>/dev/null || true)
+fi
+
+# --- 1. Stop AND disable the service ---
 OS="$(uname -s)"
 case "$OS" in
     Linux)
-        if systemctl --user is-active "$SERVICE_NAME" &>/dev/null; then
-            systemctl --user stop "$SERVICE_NAME"
-            echo ":: $SERVICE_NAME service stopped."
-        else
-            echo ":: $SERVICE_NAME service not running."
+        _stop_and_disable() {
+            local svc="$1"
+            [ -z "$svc" ] && return
+            if ! systemctl --user cat "$svc" &>/dev/null; then
+                return  # unit doesn't exist on this machine
+            fi
+            if systemctl --user is-active "$svc" &>/dev/null; then
+                systemctl --user stop "$svc"
+                echo ":: $svc stopped."
+            else
+                echo ":: $svc was already stopped."
+            fi
+            if systemctl --user is-enabled "$svc" &>/dev/null; then
+                systemctl --user disable "$svc"
+                echo ":: $svc disabled — will NOT auto-start on reboot."
+            fi
+        }
+        _stop_and_disable "$SERVICE_NAME"
+        if [ -n "$ORIGINAL_SERVICE_NAME" ] && [ "$ORIGINAL_SERVICE_NAME" != "$SERVICE_NAME" ]; then
+            _stop_and_disable "$ORIGINAL_SERVICE_NAME"
         fi
         ;;
     Darwin)
-        plist="$HOME/Library/LaunchAgents/com.${SERVICE_NAME}.plist"
-        if [ -f "$plist" ]; then
-            launchctl unload "$plist" 2>/dev/null || true
-            echo ":: $SERVICE_NAME service stopped."
-        else
-            echo ":: $SERVICE_NAME service not running."
+        _unload_persistently() {
+            local svc="$1"
+            [ -z "$svc" ] && return
+            local plist="$HOME/Library/LaunchAgents/com.${svc}.plist"
+            [ ! -f "$plist" ] && return
+            # `unload -w` adds a persistent Disabled flag in the override DB
+            # so the agent does NOT load on next login. The plist itself stays.
+            launchctl unload -w "$plist" 2>/dev/null || launchctl unload "$plist" 2>/dev/null || true
+            echo ":: $svc unloaded and disabled."
+        }
+        _unload_persistently "$SERVICE_NAME"
+        if [ -n "$ORIGINAL_SERVICE_NAME" ] && [ "$ORIGINAL_SERVICE_NAME" != "$SERVICE_NAME" ]; then
+            _unload_persistently "$ORIGINAL_SERVICE_NAME"
         fi
         ;;
 esac
