@@ -48,7 +48,7 @@ async def list_available_models(
 
 
 async def set_agent_model(
-    component_name: Annotated[str, "Target component (e.g. 'DeveloperAgent', 'channel_summarizer')"],
+    component_name: Annotated[str, "Target component (e.g. 'DeveloperAgent', 'summarizer')"],
     model_name: Annotated[str, (
         "Model identifier. MUST call list_available_models first and pick from the returned list. "
         "Do NOT guess or invent model names. "

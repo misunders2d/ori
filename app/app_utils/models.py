@@ -35,7 +35,6 @@ MODEL_DEFAULTS: dict[str, str] = {
     "google_search":            "google/gemini-3-flash-preview",
     "summarizer":               "google/gemini-3.1-flash-lite-preview",
     "session_summarizer":       "google/gemini-3.1-flash-lite-preview",
-    "channel_summarizer":       "google/gemini-3.1-flash-lite-preview",
     "embedding":                "google/gemini-embedding-001",
     "youtube_summarizer":       "google/gemini-3-flash-preview",
 }
