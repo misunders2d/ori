@@ -1,0 +1,70 @@
+{
+  "eval_set_id": "telegram_dm",
+  "name": "Telegram DM routing",
+  "description": "Verifies that the coordinator correctly routes natural-language DM requests to telegram_send_dm with the right argument shape, and does not delegate to a sub-agent. Trajectory-only (IN_ORDER) so incidental tool calls (e.g. get_current_time) do not cause false failures.",
+  "eval_cases": [
+    {
+      "eval_id": "dm_by_first_name",
+      "conversation": [
+        {
+          "invocation_id": "inv_1",
+          "user_content": {
+            "role": "user",
+            "parts": [{"text": "Send Ruslan a Telegram DM saying 'hello, the report is ready'"}]
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "telegram_send_dm",
+                "args": {"person": "Ruslan"}
+              }
+            ]
+          }
+        }
+      ],
+      "session_input": {"app_name": "ori", "user_id": "evaluator", "state": {}}
+    },
+    {
+      "eval_id": "dm_with_at_handle",
+      "conversation": [
+        {
+          "invocation_id": "inv_1",
+          "user_content": {
+            "role": "user",
+            "parts": [{"text": "DM @hans on telegram and let him know the deploy finished"}]
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "telegram_send_dm",
+                "args": {"person": "hans"}
+              }
+            ]
+          }
+        }
+      ],
+      "session_input": {"app_name": "ori", "user_id": "evaluator", "state": {}}
+    },
+    {
+      "eval_id": "dm_message_phrasing",
+      "conversation": [
+        {
+          "invocation_id": "inv_1",
+          "user_content": {
+            "role": "user",
+            "parts": [{"text": "Message Sergey via telegram: 'lunch at 1pm'"}]
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "telegram_send_dm",
+                "args": {"person": "Sergey"}
+              }
+            ]
+          }
+        }
+      ],
+      "session_input": {"app_name": "ori", "user_id": "evaluator", "state": {}}
+    }
+  ]
+}
