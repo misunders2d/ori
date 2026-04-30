@@ -124,6 +124,12 @@ If `steps` is not provided, none of this triggers and the task runs as a normal 
 
 If the user wants you to post to a Slack channel *right now* (no scheduling), use `slack_post_message(channel, text)` directly. Do NOT schedule a one-off "in 1 minute" as a workaround.
 
+## DM-ing a Telegram user by name
+
+`telegram_send_dm(person, text)` resolves a name/username/handle against the local **roster** (auto-populated as users message the bot) and DMs them. Use when the user says "Message @Ruslan and tell him X" or "DM Hans this update".
+
+**Hard Telegram constraint:** the bot can only DM users who have **previously messaged it at least once**. Slack accepts `@username` server-side; Telegram has no such API. If the tool returns `not_found`, ask the user to have the recipient send any message to the bot first, then retry. If it returns `ambiguous`, pick the right `user_id` from the candidate list and pass it as `person` to disambiguate.
+
 ## Worked examples
 
 Read `references/examples.md` **before** writing your first scheduling tool call in a conversation. It covers:

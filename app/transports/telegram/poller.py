@@ -42,6 +42,7 @@ from app.runtime.perimeter import (
 from app.runtime.perimeter import (
     reload as reload_perimeter,
 )
+from app.runtime.roster import record_user
 from app.runtime.transport import register_adapter
 from app.transports.telegram.adapter import (
     TELEGRAM_API,
@@ -278,6 +279,19 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                                     )
                         continue
 
+                    # Roster: capture every authorized inbound sender so the agent
+                    # can later DM them by name (Telegram bots cannot initiate DMs;
+                    # the user must have messaged the bot at least once first).
+                    if not is_group:
+                        record_user(
+                            user_id=user_id,
+                            platform="telegram",
+                            chat_id=chat_id,
+                            first_name=from_user.get("first_name", "") or "",
+                            last_name=from_user.get("last_name", "") or "",
+                            username=from_user.get("username", "") or "",
+                        )
+
                     # File handling.
                     file_id = None
                     file_info_text = ""
@@ -301,8 +315,21 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                     elif "video_note" in msg:
                         file_id = msg["video_note"]["file_id"]
                         file_info_text = "[Video Message]"
+                    elif "contact" in msg:
+                        c = msg["contact"]
+                        cname = (f"{c.get('first_name', '')} {c.get('last_name', '')}").strip()
+                        bits = [b for b in (cname, c.get("phone_number"), f"tg_user_id={c.get('user_id')}" if c.get("user_id") else None) if b]
+                        file_info_text = f"[Contact: {', '.join(bits)}]"
+                        if c.get("vcard"):
+                            file_info_text += f"\nvCard:\n{c['vcard']}"
+                    elif "location" in msg:
+                        loc = msg["location"]
+                        file_info_text = f"[Location: lat={loc.get('latitude')}, lon={loc.get('longitude')}]"
+                    elif "venue" in msg:
+                        v = msg["venue"]
+                        file_info_text = f"[Venue: {v.get('title', '')} — {v.get('address', '')}]"
 
-                    if not text and not file_id:
+                    if not text and not file_id and not file_info_text:
                         continue
 
                     mg_id = msg.get("media_group_id")

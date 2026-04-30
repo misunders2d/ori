@@ -28,6 +28,7 @@ from .system import (
     trigger_rollback,
     update_self,
 )
+from .telegram import telegram_send_dm
 from .web import web_fetch
 from .whitelist import blacklist_chat, whitelist_chat
 
@@ -59,6 +60,7 @@ __all__ = [
     "session_refresh",
     "set_agent_model",
     "set_planner_mode",
+    "telegram_send_dm",
     "trigger_rollback",
     "update_self",
     "web_fetch",

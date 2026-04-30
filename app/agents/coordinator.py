@@ -31,6 +31,7 @@ from app.tools.model_tools import (
     list_available_models,
     switch_llm_provider,
 )
+from app.tools.telegram import telegram_send_dm
 from app.tools.web import web_fetch
 from app.tools.whitelist import blacklist_chat, whitelist_chat
 from app.toolsets import (
@@ -170,6 +171,7 @@ root_agent = Agent(
         web_fetch,
         whitelist_chat,
         blacklist_chat,
+        telegram_send_dm,
         # Read-only inspection tools. Answers questions like "which model
         # are you on?" / "what's your A2A URL?" / "who are your friends?"
         # without delegation. Mutating counterparts (set_agent_model,
