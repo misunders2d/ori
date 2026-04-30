@@ -37,6 +37,7 @@ from app.tools.slack import (
     slack_list_channels,
     slack_read_history,
 )
+from app.tools.telegram import telegram_send_dm
 
 _slack_enabled = bool(os.environ.get("SLACK_BOT_TOKEN", "").strip())
 _slack_tools = (
@@ -130,6 +131,7 @@ root_agent = Agent(
         get_my_a2a_key,
         whitelist_chat,
         blacklist_chat,
+        telegram_send_dm,
         *_slack_tools,
     ],
     before_agent_callback=[state_setter],

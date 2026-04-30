@@ -15,6 +15,7 @@ from .slack import (
     slack_read_replies,
     slack_get_user_info
 )
+from .telegram import telegram_send_dm
 
 __all__ = [
     "configure_integration", "remove_integration", "list_integrations",
@@ -36,4 +37,5 @@ __all__ = [
     "slack_read_history",
     "slack_read_replies",
     "slack_get_user_info",
+    "telegram_send_dm",
 ]
