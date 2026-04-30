@@ -50,8 +50,8 @@ def test_app_has_resumability_for_oauth():
 
 def test_app_has_events_compaction():
     assert app.events_compaction_config is not None
-    assert app.events_compaction_config.compaction_interval == 10
-    assert app.events_compaction_config.overlap_size == 3
+    assert app.events_compaction_config.compaction_interval == 30
+    assert app.events_compaction_config.overlap_size == 10
 
 
 def test_workflow_no_state_schema():
