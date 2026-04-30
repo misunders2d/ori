@@ -565,6 +565,18 @@ async def poll_telegram(get_runner_fn, process_init_fn):
 
                     # Handle /start command — welcome message
                     bot_name = os.environ.get("BOT_NAME", "Ori")
+
+                    # /chatid — print this chat's session_id (useful in groups/channels
+                    # where the chat_id is otherwise opaque). Cheap, no LLM round-trip.
+                    if text.strip() == "/chatid":
+                        await adapter.send_message(
+                            chat_id,
+                            f"Chat ID: `{session_id}`\n"
+                            f"Type: {chat_type}\n"
+                            f"Use this with `deliver_to=\"{session_id}\"` for scheduled tasks.",
+                        )
+                        continue
+
                     if text.strip() == "/start":
                         runner_check = get_runner_fn()
                         if runner_check:
