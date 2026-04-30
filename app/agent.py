@@ -17,6 +17,10 @@ app_name = os.environ.get("APP_NAME", "ori")
 _SUMMARIZER_PROMPT_TEMPLATE = (
     "Summarize the following conversation between a user and an AI agent. "
     "Capture key information, decisions, and unresolved tasks.\n\n"
+    "Begin your output with this exact marker on its own line:\n"
+    "[CONVERSATION SUMMARY — older turns were compacted; if the user references "
+    "specific text that is not preserved verbatim below, ASK them to repeat it "
+    "rather than guess]\n\n"
     "STRICT PRESERVATION RULES — you MUST copy these verbatim into the summary, "
     "never paraphrasing or omitting them:\n"
     "1. Code blocks — any text fenced with triple backticks (```), in any language.\n"
@@ -35,11 +39,14 @@ app = App(
     root_agent=root_agent,
     name=app_name,
     events_compaction_config=EventsCompactionConfig(
-        # Every 10 events (exchanges), the history is summarized.
-        # This provides a good balance between nuance and memory efficiency.
-        compaction_interval=10,
-        # Keep the last 3 events raw to preserve immediate conversational context.
-        overlap_size=3,
+        # Less aggressive than the previous 10/3. Gemini Flash has a 1M-token
+        # context — compacting every 10 events is wasteful and was the root
+        # cause of the FBA→MSRP scheduling contamination (overlap=3 left the
+        # agent with too few raw turns to ground on, forcing memory-recall
+        # reconstruction). 30/10 means most conversations never hit compaction;
+        # those that do still have 10 raw turns of anchor.
+        compaction_interval=30,
+        overlap_size=10,
         summarizer=LlmEventSummarizer(
             llm=get_model("summarizer"),
             prompt_template=_SUMMARIZER_PROMPT_TEMPLATE,
