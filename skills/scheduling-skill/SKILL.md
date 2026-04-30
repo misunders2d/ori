@@ -78,6 +78,21 @@ The Slack channel ID is the `<#CXXX\|name>` value (the `C…` part). For groups 
 
 You can run **multiple recurring tasks delivering to different channels** in parallel. Each fire gets its own ephemeral session, so plans, scratchpads, and conversation history don't leak between jobs.
 
+## MANDATORY review-and-approve before EVERY scheduling tool call
+
+Applies to **every** call of `schedule_one_off_task`, `schedule_recurring_task`, `schedule_system_task`, `schedule_recurring_system_task`, `run_system_task_now`, and `edit_scheduled_task`. No exceptions, regardless of whether `steps` is being used.
+
+Why this is mandatory: when a scheduling request comes in, the agent often has the relevant context only as a *summary* of earlier turns (events compaction collapses raw turns after a threshold). Reconstructing `task_prompt` from memory recall or session summary is exactly how unrelated old jobs leak in (e.g. a stale MSRP task ending up as the body of an FBA-discrepancy schedule). The fix is a forced echo before the tool call.
+
+**Required flow for every scheduling call:**
+
+1. **Draft the exact tool call.** Build the `task_prompt` string from the **current conversation only** — what the user asked you to do in their most recent messages. Never use a `task_prompt` you got from `recall_*_memory`, `search_memory`, scratchpad, or the session summary as the source of truth. Memory is for context, not for authorship.
+2. **Print the exact tool call for review** in a fenced code block, showing `task_prompt`, `cron_expression` / `run_at_iso_datetime`, `timezone`, `deliver_to`, and `steps` (if any) verbatim. No paraphrasing, no summarization, no "I will schedule a task that does X" prose substitute.
+3. **Require explicit approval.** Wait for the user to confirm (`APPROVE`, `yes`, `proceed`, `да`, `так`, etc.). Any edit request → apply, re-print the full call, wait again. Approving a *description* in prose is NOT the same as approving the tool call body — the user must see the literal string the tool will receive.
+4. **Call the tool unchanged.** Do not mutate the approved `task_prompt` between approval and tool call. If you find yourself reformatting, stop and re-confirm.
+
+The approval step is the catch-net for both LLM "tidying" AND for the contamination case where the task_prompt was reconstructed from a memory hit. If you skip it, you will eventually schedule the wrong thing — there's a documented incident where this exact failure scheduled an MSRP task in place of an FBA discrepancy task.
+
 ## Enforced step-by-step scheduling
 
 Use this pattern when the user says things like "must follow exactly", "precisely", "strict", "every step", "never skip", "daily checklist", or any framing that implies the task is a **playbook** — an ordered process that must execute the same way every fire, with no room for the agent to paraphrase, reorder, or skip.
@@ -86,19 +101,15 @@ Use this pattern when the user says things like "must follow exactly", "precisel
 
 All scheduling tools accept the optional `steps` argument: `schedule_one_off_task`, `schedule_recurring_task`, `schedule_system_task`, `schedule_recurring_system_task`, and `run_system_task_now`.
 
-### The review-and-approve workflow
+### Collecting `steps` for enforced tasks
 
-When a user asks for this kind of task, follow this flow:
+The general review-and-approve flow above already covers the approval gate. The only enforced-task-specific addition is the `steps` collection sources:
 
-1. **Collect the steps.** Sources:
-   - User dictates them in chat → copy verbatim, no summarizing.
-   - User points at a Google Sheet → call `sheets_read`, extract the step column. Keep the exact text.
-   - User points at a file → read it, extract the steps. Keep the exact text.
-2. **Show the exact tool call for review.** Print the full `schedule_*_task(...)` invocation in a code block, with `task_prompt` and the full `steps` list visible. No paraphrasing, no summarization.
-3. **Require explicit approval.** Wait for the user to respond with `APPROVE` (or similarly clear affirmation). Any edit request → apply, re-print the full call, wait for approval again.
-4. **Call the tool unchanged.** Do not mutate the approved text between approval and the tool call.
+- User dictates them in chat → copy verbatim, no summarizing.
+- User points at a Google Sheet → call `sheets_read`, extract the step column. Keep the exact text.
+- User points at a file → read it, extract the steps. Keep the exact text.
 
-The approval step exists precisely because LLMs tend to "tidy up" when translating between formats. This is the checkpoint that catches it.
+After collection, follow the same MANDATORY review-and-approve flow defined at the top of this skill — print the full tool call (now including `steps=[...]`) and wait for explicit approval before calling.
 
 ### Editing an enforced task
 
