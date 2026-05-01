@@ -79,12 +79,30 @@ async def _drive_plan_to_completion(
 
     response = first_response
     iterations = 0
+    # Short-circuit if the FIRST response already bailed (e.g. context limit
+    # before any plan iteration) — the session is poisoned, looping wastes quota.
+    if getattr(response, "error", None):
+        logger.warning(
+            "Task %s aborted before plan loop: %s", task_id, response.error,
+        )
+        return response
     while plan_has_pending_steps(session_id) and iterations < _MAX_PLAN_ITERATIONS:
         iterations += 1
         response = await extract_agent_response(
             runner, user_id, session_id, _PLAN_CONTINUATION_PROMPT,
             actual_caller_id=actual_caller_id,
         )
+        # Terminal error → bail. Without this, a poisoned session (e.g. over
+        # the 1M-token input cap) gets retried 25× against the same poisoned
+        # state, each iteration burning rate-limit quota until 429s start
+        # firing. Documented incident: 2026-04-30 FBA-discrepancy task hit
+        # context limit, looped 25× and exhausted the paid-tier-2 input quota.
+        if getattr(response, "error", None):
+            logger.warning(
+                "Task %s plan loop aborted at iteration %d: %s",
+                task_id, iterations, response.error,
+            )
+            return response
     if iterations >= _MAX_PLAN_ITERATIONS and plan_has_pending_steps(session_id):
         logger.warning(
             "Task %s hit plan-iteration cap (%d); plan still has pending steps.",

@@ -60,9 +60,17 @@ def _inject_metadata_header(
 
 @dataclass
 class AgentResponse:
-    """Structured response from the agent containing text and optional media."""
+    """Structured response from the agent containing text and optional media.
+
+    `error` is set when the agent bailed on a terminal condition (context
+    limit exceeded, rate-limit-after-retries, readonly-DB self-heal, etc).
+    Callers that loop on agent invocation MUST check this and break out
+    instead of retrying — the underlying session is poisoned and further
+    calls will fail the same way, burning quota.
+    """
     text: str = ""
     media_items: list[dict] = field(default_factory=list)
+    error: str | None = None
 
     def __str__(self) -> str:
         """Backward-compatible string representation for callers that just need text."""
@@ -316,7 +324,8 @@ async def extract_agent_response(
                 return AgentResponse(
                     text="⚠️ **Database Error**\n\n"
                     "I hit a database issue but have auto-repaired it. "
-                    "Please resend your message."
+                    "Please resend your message.",
+                    error="readonly_database",
                 )
 
             # Catch rate limit / quota errors — back off and retry via the loop
@@ -333,7 +342,8 @@ async def extract_agent_response(
                     return AgentResponse(
                         text="⚠️ **Rate Limit Exceeded**\n\n"
                         "I retried after backing off but the API quota is still exhausted. "
-                        "Please wait a few minutes and try again."
+                        "Please wait a few minutes and try again.",
+                        error="rate_limit_exhausted",
                     )
                 continue
 
@@ -352,7 +362,8 @@ async def extract_agent_response(
                 return AgentResponse(
                     text="⚠️ **Context Limit Reached**\n\n"
                     "The conversation has become too large for me to process. "
-                    "Send /reset to start a fresh session."
+                    "Send /reset to start a fresh session.",
+                    error="context_limit",
                 )
 
             if attempt < MAX_RETRIES:
@@ -371,7 +382,8 @@ async def extract_agent_response(
                 )
                 continue
             return AgentResponse(
-                text=f"Agent error after {1 + MAX_RETRIES} attempts. Last error: {error_msg}"
+                text=f"Agent error after {1 + MAX_RETRIES} attempts. Last error: {error_msg}",
+                error="max_retries_exceeded",
             )
 
     if not agent_text_parts:
