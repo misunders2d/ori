@@ -23,3 +23,7 @@ node_modules/
 .DS_Store
 
 .claude/
+
+# pytest-cov
+.coverage
+htmlcov/
