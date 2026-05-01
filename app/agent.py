@@ -36,7 +36,6 @@ from app.plugins import (
     PerimeterAclPlugin,
     PromptInjectionGuardPlugin,
     StateInitializerPlugin,
-    ToolOutputSpilloverPlugin,
     VerifyRetryPlugin,
 )
 from app.util.models import get_model
@@ -98,12 +97,6 @@ PLUGINS = [
     A2APrivacyPlugin(),
     # Sanitize tool outputs from web_fetch / evolution_read_file.
     OutputSanitizerPlugin(),
-    # Spill oversized tool outputs (>8000 chars by default) to scratchpad
-    # before they reach the LLM. Prevents context-bust → cascade-failure
-    # incidents like the 2026-04-30 FBA-discrepancy task. MUST run after
-    # OutputSanitizerPlugin so the sanitizer scans the original content,
-    # not the spilled summary.
-    ToolOutputSpilloverPlugin(),
     # 3-strike cap on evolution_verify_sandbox failures.
     VerifyRetryPlugin(),
     # Validate inbound A2A binary content (size, magic-bytes).

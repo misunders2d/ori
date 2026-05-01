@@ -35,7 +35,6 @@ def test_plugin_order_canonical():
         "prompt_injection",
         "a2a_privacy",
         "output_sanitizer",
-        "tool_output_spillover",
         "verify_retry",
         "binary_content_scanner",
         "model_error_handler",

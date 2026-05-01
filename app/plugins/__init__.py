@@ -12,12 +12,9 @@ and enforced in `app/agent.py`:
   5. PromptInjectionGuardPlugin   — semantic injection check + system directive
   6. A2APrivacyPlugin             — block credential leaks in outbound A2A
   7. OutputSanitizerPlugin        — scan high-risk tool outputs (multilingual-safe)
-  8. ToolOutputSpilloverPlugin    — spill oversized tool outputs to scratchpad
-                                    (must run AFTER OutputSanitizerPlugin so
-                                    sanitizer scans original content)
-  9. VerifyRetryPlugin            — 3-strike cap on evolution_verify_sandbox
- 10. BinaryContentScannerPlugin   — validate inbound A2A binary parts
- 11. ModelErrorHandlerPlugin      — translate raw LLM errors into user-visible
+  8. VerifyRetryPlugin            — 3-strike cap on evolution_verify_sandbox
+  9. BinaryContentScannerPlugin   — validate inbound A2A binary parts
+ 10. ModelErrorHandlerPlugin      — translate raw LLM errors into user-visible
                                     messages (rate limit, auth, model-not-found, …)
 
 Plan enforcement was previously a plugin (PlanEnforcerPlugin) that nudged
@@ -36,7 +33,6 @@ from app.plugins.output_sanitizer import OutputSanitizerPlugin
 from app.plugins.perimeter import PerimeterAclPlugin
 from app.plugins.prompt_injection import PromptInjectionGuardPlugin
 from app.plugins.state_initializer import StateInitializerPlugin
-from app.plugins.tool_output_spillover import ToolOutputSpilloverPlugin
 from app.plugins.verify_retry import VerifyRetryPlugin
 
 __all__ = [
@@ -49,6 +45,5 @@ __all__ = [
     "PerimeterAclPlugin",
     "PromptInjectionGuardPlugin",
     "StateInitializerPlugin",
-    "ToolOutputSpilloverPlugin",
     "VerifyRetryPlugin",
 ]
