@@ -16,7 +16,7 @@ from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.tool_context import ToolContext
 
 from app.app_utils.models import get_model
-from app.callbacks.guardrails import prompt_injection_guardrail
+from app.callbacks.guardrails import prompt_injection_guardrail, tool_output_spillover_guardrail
 from app.toolsets import ScratchpadToolset
 from app.toolsets.clickup import ClickUpToolset
 
@@ -101,6 +101,7 @@ if os.environ.get("CLICKUP_API_TOKEN", "").strip():
             ScratchpadToolset(),
         ],
         before_model_callback=prompt_injection_guardrail,
+        after_tool_callback=tool_output_spillover_guardrail,
         before_tool_callback=before_clickup_callback,
     )
 else:

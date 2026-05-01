@@ -10,6 +10,7 @@ from app.callbacks.guardrails import (
     admin_tool_guardrail,
     prompt_injection_guardrail,
     tool_output_injection_guardrail,
+    tool_output_spillover_guardrail,
     verify_retry_guardrail,
 )
 from app.tools.google_search import google_search_agent_tool
@@ -151,5 +152,5 @@ developer_agent = Agent(
     ],
     before_model_callback=prompt_injection_guardrail,
     before_tool_callback=admin_tool_guardrail,
-    after_tool_callback=[tool_output_injection_guardrail, verify_retry_guardrail],
+    after_tool_callback=[tool_output_injection_guardrail, tool_output_spillover_guardrail, verify_retry_guardrail],
 )

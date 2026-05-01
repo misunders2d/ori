@@ -10,7 +10,7 @@ from google.adk.skills import load_skill_from_dir
 from google.adk.tools import skill_toolset
 
 from app.app_utils.models import get_model
-from app.callbacks.guardrails import prompt_injection_guardrail
+from app.callbacks.guardrails import prompt_injection_guardrail, tool_output_spillover_guardrail
 from app.toolsets import KeepaToolset, ScratchpadToolset
 from app.toolsets.sp_api import SPApiToolset
 from app.toolsets.h10 import H10Toolset
@@ -47,4 +47,5 @@ amazon_agent = Agent(
         ScratchpadToolset(),
     ],
     before_model_callback=prompt_injection_guardrail,
+    after_tool_callback=tool_output_spillover_guardrail,
 )

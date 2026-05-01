@@ -17,7 +17,7 @@ from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.tool_context import ToolContext
 
 from app.app_utils.models import get_model
-from app.callbacks.guardrails import prompt_injection_guardrail
+from app.callbacks.guardrails import prompt_injection_guardrail, tool_output_spillover_guardrail
 from app.tools.bigquery_data import get_table_data, table_data
 from app.tools.bigquery_tools import create_bigquery_toolset
 from app.toolsets import ScratchpadToolset
@@ -218,6 +218,7 @@ if _bq_toolset:
             ScratchpadToolset(),
         ],
         before_model_callback=prompt_injection_guardrail,
+        after_tool_callback=tool_output_spillover_guardrail,
         before_tool_callback=before_bq_callback,
     )
 else:

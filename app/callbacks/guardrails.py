@@ -572,6 +572,106 @@ def verify_retry_guardrail(tool, args, tool_context, tool_response):
     return None
 
 
+# ---------------------------------------------------------------------------
+# After-tool guardrail: spill oversized tool outputs to scratchpad
+# ---------------------------------------------------------------------------
+# Prevents large tool outputs (BigQuery rowsets, Keepa product dumps, full
+# Drive files, etc.) from ballooning the session past the LLM's context
+# limit. When a tool returns more than the configured threshold, the full
+# output is written to a scratchpad and the LLM only sees a lightweight
+# reference + a short preview. The agent can call scratchpad_read(...) to
+# load the full content if it actually needs it.
+#
+# Documented incident this prevents: 2026-04-30 FBA-discrepancy scheduled
+# task — BigQuery output bloated session past 1M tokens, plan loop ran 25×
+# against the poisoned session, exhausted paid-tier-2 input quota.
+# ---------------------------------------------------------------------------
+
+# Tools whose output should never be spilled — typically because they're
+# already part of the spill machinery, or their output is structurally
+# small no matter what.
+_SPILL_EXEMPT_TOOLS = frozenset({
+    "scratchpad_write",
+    "scratchpad_read",
+    "scratchpad_replace",
+    "scratchpad_clear",
+    "scratchpad_list",
+})
+
+
+def _tool_response_size(tool_response) -> tuple[int, str]:
+    """Return (size_chars, text_repr) for a tool response. Empty/None → (0, '')."""
+    if tool_response is None:
+        return 0, ""
+    if isinstance(tool_response, str):
+        return len(tool_response), tool_response
+    if isinstance(tool_response, dict):
+        try:
+            text = json.dumps(tool_response, default=str, ensure_ascii=False)
+        except (TypeError, ValueError):
+            text = str(tool_response)
+        return len(text), text
+    text = str(tool_response)
+    return len(text), text
+
+
+def tool_output_spillover_guardrail(tool, args, tool_context, tool_response):
+    """After-tool callback: spill oversized outputs to scratchpad.
+
+    Threshold via env var TOOL_OUTPUT_SPILL_THRESHOLD (default 8000 chars).
+    Returns a lightweight reference dict in place of the original response;
+    the agent can scratchpad_read(...) to retrieve full content on demand.
+    """
+    tool_name = getattr(tool, "name", "") or (tool.__name__ if callable(tool) else "")
+    if tool_name in _SPILL_EXEMPT_TOOLS:
+        return None
+
+    threshold = int(os.environ.get("TOOL_OUTPUT_SPILL_THRESHOLD", "8000"))
+    size, text = _tool_response_size(tool_response)
+    if size <= threshold:
+        return None  # under budget — pass through
+
+    # Generate a unique scratchpad name. Short hex suffix avoids collisions
+    # if the same tool spills twice in one session.
+    import uuid as _uuid
+    scratchpad_name = f"_spill_{tool_name or 'tool'}_{_uuid.uuid4().hex[:6]}"
+
+    try:
+        from app.tools.scratchpad import scratchpad_write
+        scratchpad_write(scratchpad_name, text, tool_context=tool_context)
+    except Exception as e:
+        logger.warning(
+            "tool_output_spillover: failed to write scratchpad %s for tool %s: %s",
+            scratchpad_name, tool_name, e,
+        )
+        # Spillover failed — fall back to letting the original response through.
+        # Better to risk context blow-up than to silently drop the data.
+        return None
+
+    logger.info(
+        "tool_output_spillover: %s returned %d chars → spilled to %s",
+        tool_name, size, scratchpad_name,
+    )
+
+    preview = text[:500]
+    if len(text) > 500:
+        preview += "…"
+
+    return {
+        "status": "spilled",
+        "tool": tool_name,
+        "scratchpad_name": scratchpad_name,
+        "summary": (
+            f"Tool '{tool_name}' returned {size:,} chars (~{size // 4:,} tokens). "
+            f"Output written to scratchpad. Call scratchpad_read('{scratchpad_name}') "
+            f"to load the full content if you need it."
+        ),
+        "size_chars": size,
+        "size_tokens_estimate": size // 4,
+        "preview": preview,
+    }
+
+
 def plan_enforcer(
     callback_context: CallbackContext, llm_request: LlmRequest
 ) -> LlmResponse | None:

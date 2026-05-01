@@ -20,7 +20,7 @@ from app.tools.a2a import (
     broadcast_address_update,
     update_friend_address,
 )
-from app.callbacks.guardrails import a2a_privacy_guardrail, prompt_injection_guardrail
+from app.callbacks.guardrails import a2a_privacy_guardrail, prompt_injection_guardrail, tool_output_spillover_guardrail
 
 base_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 google_adk_a2a_skill = load_skill_from_dir(base_dir / "google-adk-a2a-skill")
@@ -109,6 +109,6 @@ knowledge_agent = Agent(
         update_friend_address,
     ],
     before_tool_callback=a2a_privacy_guardrail,
-    after_tool_callback=a2a_privacy_guardrail,
+    after_tool_callback=[tool_output_spillover_guardrail, a2a_privacy_guardrail],
     before_model_callback=prompt_injection_guardrail,
 )

@@ -255,6 +255,19 @@ async def run_scheduled_task(
                 )
             except Exception:
                 pass
+            # Clean up scratchpads created during this fire (including
+            # auto-spilled tool outputs from tool_output_spillover_guardrail).
+            # Without this, every scheduled fire leaks a tmp/scratchpads/<sched_id>/
+            # directory on disk, since session_id is unique per fire and never
+            # reused. Daily task = ~365 leaked dirs/year.
+            try:
+                from app.tools.scratchpad import cleanup_session_scratchpads
+                cleanup_session_scratchpads(session_id)
+            except Exception:
+                logger.warning(
+                    "Scratchpad cleanup failed for scheduled session %s",
+                    session_id, exc_info=True,
+                )
     else:
         # Runner unavailable — bot is starting up or shutting down. Report honestly.
         response = (

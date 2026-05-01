@@ -14,6 +14,7 @@ from app.callbacks.guardrails import (
     prompt_injection_guardrail,
     state_setter,
     tool_output_injection_guardrail,
+    tool_output_spillover_guardrail,
 )
 from app.sub_agents.amazon_head_agent import amazon_head_agent
 from app.sub_agents.clickup_agent import clickup_agent
@@ -137,5 +138,5 @@ root_agent = Agent(
     before_agent_callback=[state_setter],
     before_model_callback=[prompt_injection_guardrail, plan_enforcer],
     before_tool_callback=[admin_tool_guardrail, a2a_privacy_guardrail],
-    after_tool_callback=[tool_output_injection_guardrail, a2a_privacy_guardrail],
+    after_tool_callback=[tool_output_injection_guardrail, tool_output_spillover_guardrail, a2a_privacy_guardrail],
 )
