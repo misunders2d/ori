@@ -105,7 +105,7 @@ All scheduling tools accept the optional `steps` argument: `schedule_one_off_tas
 
 The general review-and-approve flow above already covers the approval gate. The only enforced-task-specific addition is the `steps` collection sources:
 
-- User dictates them in chat → copy verbatim, no summarizing.
+- User dictates them in chat → copy verbatim, NO SUMMARIZING!
 - User points at a Google Sheet → call `sheets_read`, extract the step column. Keep the exact text.
 - User points at a file → read it, extract the steps. Keep the exact text.
 
@@ -122,6 +122,7 @@ After collection, follow the same MANDATORY review-and-approve flow defined at t
 - **Do NOT embed `CRITICAL: You MUST use create_plan…` style instructions in `task_prompt`.** That was the old pattern. It relied on the LLM obeying. The new pattern bypasses the LLM entirely for plan seeding — just use `steps`.
 - **Do NOT call `create_plan` as the first action of an enforced task.** The plan already exists in storage. Go straight to `get_next_step` and execute.
 - **Do NOT paraphrase step text.** If you think a step is unclear, ask the user to revise it before scheduling. Don't rewrite on their behalf.
+- **DO NOT** rephrase, update, summarise or modify the task's steps or description without the user's EXPLICIT approval. Always present the suggested modifications before applyin.
 
 ### Where enforcement lives
 
