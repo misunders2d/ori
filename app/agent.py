@@ -43,9 +43,9 @@ app = App(
         # context — compacting every 10 events is wasteful and was the root
         # cause of the FBA→MSRP scheduling contamination (overlap=3 left the
         # agent with too few raw turns to ground on, forcing memory-recall
-        # reconstruction). 30/10 means most conversations never hit compaction;
+        # reconstruction). 60/10 means most conversations never hit compaction;
         # those that do still have 10 raw turns of anchor.
-        compaction_interval=30,
+        compaction_interval=60,
         overlap_size=10,
         summarizer=LlmEventSummarizer(
             llm=get_model("summarizer"),
