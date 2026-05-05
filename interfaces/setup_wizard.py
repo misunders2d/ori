@@ -177,6 +177,17 @@ def setup_anthropic_api_key(env_path, set_key_fn):
     return True
 
 
+def setup_openrouter_api_key(env_path, set_key_fn):
+    """Collect an OpenRouter API key."""
+    cprint("  Auth method: API Key (OpenRouter)", "96")
+    print("  Get a key at: https://openrouter.ai/keys")
+    print("  OpenRouter routes to many providers (DeepSeek, Llama, Anthropic, OpenAI, …)")
+    key = prompt("  Enter your OPENROUTER_API_KEY:", required=True)
+    set_key_fn(env_path, "OPENROUTER_API_KEY", key)
+    cprint("  Saved.\n", "92")
+    return True
+
+
 def select_default_model(env_path, set_key_fn, providers):
     """Let user pick the default model for agents."""
     # Build model menu based on selected providers
@@ -191,6 +202,14 @@ def select_default_model(env_path, set_key_fn, providers):
             ("anthropic/claude-sonnet-4-6", "Claude Sonnet 4.6 (balanced)"),
             ("anthropic/claude-opus-4-6", "Claude Opus 4.6 (most capable)"),
             ("anthropic/claude-haiku-4-5-20251001", "Claude Haiku 4.5 (fast, cheap)"),
+        ])
+    if "openrouter" in providers:
+        models.extend([
+            ("openrouter/deepseek/deepseek-chat", "DeepSeek V3 (extremely cheap, smart)"),
+            ("openrouter/deepseek/deepseek-reasoner", "DeepSeek R1 (reasoning model)"),
+            ("openrouter/anthropic/claude-3.5-sonnet", "Claude 3.5 Sonnet (via OpenRouter)"),
+            ("openrouter/meta-llama/llama-3.1-405b-instruct", "Llama 3.1 405B (powerhouse)"),
+            ("openrouter/google/gemini-2.0-flash-001", "Gemini 2.0 Flash (via OpenRouter)"),
         ])
 
     cprint("  Select default model for agents:", "96")
@@ -351,15 +370,16 @@ def main():
     has_google = bool(os.environ.get("GOOGLE_API_KEY", "").strip())
     has_vertex = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").upper() == "TRUE"
     has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
-    has_any_provider = has_google or has_vertex or has_anthropic
+    has_openrouter = bool(os.environ.get("OPENROUTER_API_KEY", "").strip())
+    has_any_provider = has_google or has_vertex or has_anthropic or has_openrouter
 
     if not has_any_provider:
         cprint("[2] LLM Provider Setup (Required)", "93")
         print("You must configure at least one AI provider for your agent to think.\n")
         cprint("  NOTE: A Google API key (option 1) is strongly recommended even if you", "93")
-        cprint("  choose Claude as your primary model. It powers the embedding-based", "93")
-        cprint("  security guardrails (prompt injection defense). Without it, security", "93")
-        cprint("  features will be reduced. Use option 4 to combine providers (e.g. 1,3).\n", "93")
+        cprint("  choose Claude or OpenRouter. It powers embedding-based security", "93")
+        cprint("  guardrails (prompt injection defense). Without it, security features", "93")
+        cprint("  will be reduced.\n", "93")
 
         has_gcloud = subprocess.run(["which", "gcloud"], capture_output=True).returncode == 0
 
@@ -369,16 +389,16 @@ def main():
             print("    2. Google Cloud login — sign in via browser (Gemini only)")
         else:
             cprint("    2. Google Cloud login — UNAVAILABLE (gcloud CLI not installed)", "90")
-            cprint("       Install: curl https://sdk.cloud.google.com | bash && gcloud init", "90")
         print("    3. Anthropic Claude — paste an API key")
+        print("    4. OpenRouter — access DeepSeek, Llama, GPT-4o with one key")
         print("")
-        cprint("  TIP: For both Gemini + Claude, combine options (e.g. 2,3 or 1,3).", "96")
-        cprint("  Anthropic does not support login — API key is the only option.\n", "96")
+        cprint("  TIP: Combine options with commas (e.g. 1,4 or 2,3,4).", "96")
+        cprint("  Anthropic and OpenRouter only support API keys.\n", "96")
 
         providers_configured = set()
 
         while not providers_configured:
-            choice = prompt("  Select option(s) — comma-separated (e.g. 1,3):", required=True)
+            choice = prompt("  Select option(s) — comma-separated (e.g. 1,4):", required=True)
             choices = [c.strip() for c in choice.split(",")]
 
             for c in choices:
@@ -387,13 +407,7 @@ def main():
                         providers_configured.add("google")
                 elif c == "2":
                     if not has_gcloud:
-                        cprint("  Option 2 requires gcloud CLI, which is not installed.\n", "91")
-                        print("  Quick setup:")
-                        print("    1. Install:  curl https://sdk.cloud.google.com | bash")
-                        print("    2. Restart shell or run:  source ~/.bashrc")
-                        print("    3. Initialize:  gcloud init")
-                        print("    4. Re-run this setup\n")
-                        cprint("  Or use option 1 (API key) to continue now.\n", "93")
+                        cprint("  Option 2 requires gcloud CLI.\n", "91")
                         continue
                     if setup_google_login(ENV_FILE_PATH, set_key):
                         providers_configured.add("google")
@@ -401,7 +415,8 @@ def main():
                     if setup_anthropic_api_key(ENV_FILE_PATH, set_key):
                         providers_configured.add("anthropic")
                 elif c == "4":
-                    cprint("  There's no option 4. Combine options with commas (e.g. 1,3 or 2,3).", "93")
+                    if setup_openrouter_api_key(ENV_FILE_PATH, set_key):
+                        providers_configured.add("openrouter")
                 else:
                     cprint(f"  Unknown option: {c}", "91")
 

@@ -63,12 +63,14 @@ def get_auth_mode() -> dict:
         mode["auth_method"] = "Vertex AI (ADC / service account)"
         mode["google_api_key"] = False
         mode["anthropic_api_key"] = False
+        mode["openrouter_api_key"] = False
         svc_acct = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
         mode["service_account"] = bool(svc_acct)
     else:
         mode["auth_method"] = "Direct API keys"
         mode["google_api_key"] = bool(os.environ.get("GOOGLE_API_KEY"))
         mode["anthropic_api_key"] = bool(os.environ.get("ANTHROPIC_API_KEY"))
+        mode["openrouter_api_key"] = bool(os.environ.get("OPENROUTER_API_KEY"))
     return mode
 
 
@@ -141,12 +143,20 @@ def _build_model(provider: str, model_name: str, **kwargs):
                 "Anthropic models require either ANTHROPIC_API_KEY or Vertex AI mode "
                 "with Claude enabled in the Model Garden."
             )
+    if provider == "openrouter":
+        has_openrouter_key = bool(os.environ.get("OPENROUTER_API_KEY", "").strip())
+        if not has_openrouter_key:
+            raise ValueError("OpenRouter models require OPENROUTER_API_KEY.")
+        from google.adk.models.lite_llm import LiteLlm
+        # LiteLLM routes correctly with "openrouter/" prefix
+        return LiteLlm(model=f"openrouter/{model_name}", **kwargs)
+
     raise ValueError(
-        f"Unsupported model provider: '{provider}'. Currently supported: google, anthropic"
+        f"Unsupported model provider: '{provider}'. Currently supported: google, anthropic, openrouter"
     )
 
 
-SUPPORTED_PROVIDERS = frozenset({"google", "anthropic"})
+SUPPORTED_PROVIDERS = frozenset({"google", "anthropic", "openrouter"})
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +309,7 @@ def format_model_assignments(markdown: bool = False) -> str:
     else:
         lines.append(f"  GOOGLE_API_KEY:    {'set' if auth.get('google_api_key') else 'missing'}")
         lines.append(f"  ANTHROPIC_API_KEY: {'set' if auth.get('anthropic_api_key') else 'missing'}")
+        lines.append(f"  OPENROUTER_API_KEY: {'set' if auth.get('openrouter_api_key') else 'missing'}")
 
     return "\n".join(lines)
 
@@ -358,6 +369,13 @@ async def validate_model(model_str: str) -> dict | None:
             except Exception as e:
                 logger.warning("Model validation failed for '%s': %s", model_str, e)
                 return None
+
+    if provider == "openrouter":
+        has_openrouter_key = bool(os.environ.get("OPENROUTER_API_KEY", "").strip())
+        if not has_openrouter_key:
+            return None
+        # Basic verification: key exists, assume model name is valid (too many to list)
+        return {"name": model_name, "display_name": model_name, "via": "openrouter"}
 
     logger.warning("Cannot validate model for unsupported provider: %s", provider)
     return None
