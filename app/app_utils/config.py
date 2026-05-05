@@ -7,60 +7,65 @@ from deploy.vault import set as vault_set
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_CONFIG_KEYS = frozenset({
-    "GOOGLE_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "OPENAI_API_KEY",
-    "GOOGLE_CLOUD_PROJECT",
-    "GOOGLE_CLOUD_LOCATION",
-    "GOOGLE_GENAI_USE_VERTEXAI",
-    "GOOGLE_APPLICATION_CREDENTIALS",
-    "AGENT_RPM",
-    "TELEGRAM_BOT_TOKEN",
-    "TELEGRAM_WEBHOOK_SECRET",
-    "GITHUB_TOKEN",
-    "GITHUB_REPO",
-    "ADMIN_USER_IDS",
-    "BOT_NAME",
-    "APP_NAME",
-    "REQUIRE_2FA",
-    "SLACK_BOT_TOKEN",
-    "SLACK_APP_TOKEN",
-    "KEEPA_API_KEY",
-    "BQ_GCP_SERVICE_ACCOUNT_INFO",
-    "GOOGLE_OAUTH_CLIENT_ID",
-    "GOOGLE_OAUTH_CLIENT_SECRET",
-    "OAUTH_BASE_URL",
-    "SP_API_CLIENT_ID",
-    "SP_API_CLIENT_SECRET",
-    "SP_API_REFRESH_TOKEN",
-    "SP_API_SELLER_ID",
-    "CLICKUP_API_TOKEN",
-    "NEO4J_URI",
-    "NEO4J_USERNAME",
-    "NEO4J_PASSWORD",
-    "COMPANY_DOMAIN",
-})
+ALLOWED_CONFIG_KEYS = frozenset(
+    {
+        "GOOGLE_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "AGENT_RPM",
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_WEBHOOK_SECRET",
+        "GITHUB_TOKEN",
+        "GITHUB_REPO",
+        "ADMIN_USER_IDS",
+        "BOT_NAME",
+        "APP_NAME",
+        "REQUIRE_2FA",
+        "SLACK_BOT_TOKEN",
+        "SLACK_APP_TOKEN",
+        "KEEPA_API_KEY",
+        "BQ_GCP_SERVICE_ACCOUNT_INFO",
+        "GOOGLE_OAUTH_CLIENT_ID",
+        "GOOGLE_OAUTH_CLIENT_SECRET",
+        "OAUTH_BASE_URL",
+        "SP_API_CLIENT_ID",
+        "SP_API_CLIENT_SECRET",
+        "SP_API_REFRESH_TOKEN",
+        "SP_API_SELLER_ID",
+        "CLICKUP_API_TOKEN",
+        "NEO4J_URI",
+        "NEO4J_USERNAME",
+        "NEO4J_PASSWORD",
+        "COMPANY_DOMAIN",
+        "OPENROUTER_API_KEY",
+    }
+)
 
 # Keys the agent can set via configure_integration (conversational flow).
 # ADMIN_USER_IDS and REQUIRE_2FA are excluded — they must only be set via /init (requires passcode).
-AGENT_CONFIG_KEYS = frozenset({
-    "GOOGLE_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "GOOGLE_CLOUD_PROJECT",
-    "GOOGLE_CLOUD_LOCATION",
-    "GOOGLE_GENAI_USE_VERTEXAI",
-    "TELEGRAM_BOT_TOKEN",
-    "TELEGRAM_WEBHOOK_SECRET",
-    "GITHUB_TOKEN",
-    "GITHUB_REPO",
-    "BOT_NAME",
-    "APP_NAME",
-    "SLACK_BOT_TOKEN",
-    "SLACK_APP_TOKEN",
-    "KEEPA_API_KEY",
-    "CLICKUP_API_TOKEN",
-})
+AGENT_CONFIG_KEYS = frozenset(
+    {
+        "GOOGLE_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_WEBHOOK_SECRET",
+        "GITHUB_TOKEN",
+        "GITHUB_REPO",
+        "BOT_NAME",
+        "APP_NAME",
+        "SLACK_BOT_TOKEN",
+        "SLACK_APP_TOKEN",
+        "KEEPA_API_KEY",
+        "CLICKUP_API_TOKEN",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -109,14 +114,26 @@ def verify_pending_totp(session_id: str, code: str) -> tuple[bool, str]:
         pending["attempts"] += 1
         if pending["attempts"] >= _MAX_TOTP_ATTEMPTS:
             _pending_totp.pop(session_id, None)
-            logger.warning("TOTP verification failed %d times for session %s — init cancelled.", _MAX_TOTP_ATTEMPTS, session_id)
-            return False, f"Verification failed {_MAX_TOTP_ATTEMPTS} times. /init cancelled for security. Try again."
+            logger.warning(
+                "TOTP verification failed %d times for session %s — init cancelled.",
+                _MAX_TOTP_ATTEMPTS,
+                session_id,
+            )
+            return (
+                False,
+                f"Verification failed {_MAX_TOTP_ATTEMPTS} times. /init cancelled for security. Try again.",
+            )
 
         remaining = _MAX_TOTP_ATTEMPTS - pending["attempts"]
-        return False, f"Invalid code. {remaining} attempt(s) remaining. Send your 6-digit authenticator code."
+        return (
+            False,
+            f"Invalid code. {remaining} attempt(s) remaining. Send your 6-digit authenticator code.",
+        )
 
 
-def update_config(command_text: str, admin_passcode: str | None = None, session_id: str = "") -> str:
+def update_config(
+    command_text: str, admin_passcode: str | None = None, session_id: str = ""
+) -> str:
     """
     Parses a string in the format '/init PASSCODE KEY=VALUE KEY2=VALUE'
     and updates the .env file and current environment.
