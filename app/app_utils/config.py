@@ -51,6 +51,7 @@ AGENT_CONFIG_KEYS = frozenset(
     {
         "GOOGLE_API_KEY",
         "ANTHROPIC_API_KEY",
+        "OPENROUTER_API_KEY",
         "GOOGLE_CLOUD_PROJECT",
         "GOOGLE_CLOUD_LOCATION",
         "GOOGLE_GENAI_USE_VERTEXAI",

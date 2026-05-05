@@ -22,9 +22,8 @@ def configure_integration(key_name: str, tool_context: ToolContext) -> dict:
     next message. Do NOT ask them to tell you the key — it will be captured securely.
 
     Args:
-        key_name (str): The configuration key name. Must be one of: GOOGLE_API_KEY,
-            TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET, 
-            GITHUB_TOKEN, GITHUB_REPO, KEEPA_API_KEY.
+        key_name (str): The configuration key name. Must be one of the
+            keys listed in app.app_utils.config.AGENT_CONFIG_KEYS.
 
     Returns:
         dict: Status and instructions to relay to the user.
@@ -112,6 +111,5 @@ def list_integrations(tool_context: ToolContext) -> dict:
         integrations[key] = "connected" if os.environ.get(key) else "not configured"
 
     return {"status": "success", "integrations": integrations}
-
 
 

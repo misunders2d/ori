@@ -41,6 +41,14 @@ MODEL_DEFAULTS: dict[str, str] = {
 
 VALID_COMPONENTS = frozenset(MODEL_DEFAULTS.keys())
 
+PROVIDER_API_KEYS = {
+    "google": "GOOGLE_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+}
+
+SUPPORTED_PROVIDERS = frozenset(PROVIDER_API_KEYS.keys())
+
 
 # ---------------------------------------------------------------------------
 # Parsing
@@ -154,9 +162,6 @@ def _build_model(provider: str, model_name: str, **kwargs):
     raise ValueError(
         f"Unsupported model provider: '{provider}'. Currently supported: google, anthropic, openrouter"
     )
-
-
-SUPPORTED_PROVIDERS = frozenset({"google", "anthropic", "openrouter"})
 
 
 # ---------------------------------------------------------------------------
