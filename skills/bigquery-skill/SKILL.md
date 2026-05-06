@@ -61,3 +61,4 @@ For multi-step queries (e.g., "compare sales across 5 ASINs", "build a P&L repor
 - **Date columns vary by table**: some use `date`, others `report_date`, `order_date`, etc. Always check schema first.
 - **Prime Day exclusions**: when calculating normal averages, consider excluding Prime Day event dates (check `sku_changelog` for event periods).
 - **Simulated data**: never output made-up numbers. If you can't find the data, say so.
+- **Today's Amazon sales**: do not answer real-time "today's sales" questions from BigQuery unless the user explicitly asks for BigQuery/SQL/warehouse data. Route back to AmazonAgent/SP-API because BigQuery may lag.

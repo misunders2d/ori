@@ -34,6 +34,7 @@ For tasks spanning multiple agents, use the scratchpad as shared state — one a
 - If unsure: AmazonMemoryAgent for knowledge queries, AmazonAgent for fresh product data.
 - Never paste a message intended for another agent into the user reply. If you need another agent, call it.
 - If a report-ready notification contains a CSV file path, route that existing path to AmazonDataAnalystAgent. Do not request the same report again.
+- "Today's sales", "sales today", "what sold today", and other current-day Amazon seller sales questions MUST route to AmazonAgent/SP-API, not BigQuery, unless the user explicitly asks for BigQuery, SQL, warehouse data, or historical BI tables. Use SP-API orders (`sp_list_orders(days=1)` and `sp_get_order_items` when line-item detail is needed) because BigQuery can lag behind real-time Seller Central data.
 
 ## Live References
 

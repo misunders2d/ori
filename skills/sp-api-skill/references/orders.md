@@ -24,6 +24,13 @@ sp_get_order_items(order_id="111-1234567-1234567")
 
 Use this flow for ad-hoc "what sold today" or "what's stuck unshipped" questions. For anything that needs thousands of orders or deep historical analysis, don't loop — request `GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL` instead (see `reports.md`). The API is rate-limited; reports are the efficient path for bulk work.
 
+## Today's Sales
+
+For "today's sales" or "what sold today", use SP-API orders first:
+1. `sp_list_orders(days=1)` for recent orders.
+2. `sp_get_order_items(order_id=...)` only when line-item detail is needed.
+3. Do not route to BigQuery unless the user explicitly asks for BigQuery/SQL/warehouse data.
+
 ## What's NOT in here
 
 - **Buyer names / shipping addresses / buyer email.** These are PII and require the Restricted Data Token (RDT) flow via the Tokens API. This tool intentionally doesn't expose them. If the user needs buyer info, tell them it requires elevated permissions we haven't wired up.
