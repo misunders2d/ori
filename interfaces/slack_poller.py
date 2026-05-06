@@ -30,6 +30,12 @@ logger = logging.getLogger(__name__)
 
 HEARTBEAT_FILE = os.path.abspath("./data/.slack_heartbeat")
 
+_SLACK_FORMATTING_NOTE = (
+    "[Transport note: Reply using Slack mrkdwn, not GitHub Markdown. "
+    "Use *bold*, _italics_, `code`, ```code blocks```, and Slack links "
+    "<https://example.com|label>. Do not use **bold** or Markdown tables.]"
+)
+
 # Keys whose env values are sensitive secrets
 _SECRET_ENV_KEYS = {
     "GOOGLE_API_KEY",
@@ -69,6 +75,11 @@ def _update_heartbeat():
             f.write(datetime.now().isoformat())
     except Exception:
         pass
+
+
+def _prepend_slack_formatting_note(text: str) -> str:
+    """Keep Slack-specific formatting rules close to each Slack LLM turn."""
+    return f"{_SLACK_FORMATTING_NOTE}\n{text}" if text else _SLACK_FORMATTING_NOTE
 
 
 async def poll_slack(get_runner_fn, process_init_fn):
@@ -563,7 +574,9 @@ async def poll_slack(get_runner_fn, process_init_fn):
 
         # --- BUILD MESSAGE CONTENT ---
         raw_text = f"Message from {display_name} ({user_id}): {text} {file_info_text}".strip()
-        enriched_text = _inject_metadata_header(raw_text, msg_timestamp, "slack")
+        enriched_text = _prepend_slack_formatting_note(
+            _inject_metadata_header(raw_text, msg_timestamp, "slack")
+        )
 
         message_content = types.Content(role="user", parts=[])
         if enriched_text:

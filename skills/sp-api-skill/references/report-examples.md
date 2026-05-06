@@ -99,3 +99,11 @@ When a report is too large to process in conversation:
 5. You read scratchpad and present to user
 
 This avoids hitting token limits on large reports (10K+ rows).
+
+## Market Basket / Co-Purchase Fallback
+
+For "bought with this ASIN", "market basket", or "purchased with our catalog" requests:
+1. Prefer `GET_BRAND_ANALYTICS_MARKET_BASKET_REPORT` when Brand Analytics access is available.
+2. If Amazon returns `FATAL` or `CANCELLED`, inspect the raw report metadata. Do not invent a reason if Amazon did not expose one.
+3. If an all-orders CSV was already exported, use that existing file path. Do not request the same all-orders report again.
+4. Hand the CSV to AmazonDataAnalystAgent and ask for internal co-order analysis for the target ASIN/SKU.

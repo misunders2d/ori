@@ -150,7 +150,59 @@ Sources:
 
 ---
 
-## 4. Multi-Variation Pricing Analysis
+## 4. Internal Market Basket / Co-Purchase Analysis
+
+Use this fallback when Brand Analytics Market Basket is unavailable but an
+all-orders export exists.
+
+### Method
+1. Inspect columns first. All-orders exports vary by account/report version.
+2. Identify order ID, ASIN/SKU/title, quantity, and order-date columns.
+3. Find orders containing the target ASIN/SKU.
+4. Exclude the target line item from companion rankings.
+5. Rank companions by co-order count and companion units.
+6. Report share as `co_orders / target_orders`.
+
+### Interpretation Rules
+- This measures *internal observed co-orders*, not Amazon-wide market basket behavior.
+- If the file does not identify catalog ownership, do not claim every companion is from our catalog.
+- If the target appears alone in most orders, report that explicitly.
+
+### Pandas Skeleton
+```python
+print("Shape:", df.shape)
+print("Columns:", df.columns.tolist())
+print(df.head())
+
+# After inspecting columns, replace these names:
+order_col = "amazon-order-id"
+asin_col = "asin"
+sku_col = "sku"
+title_col = "product-name"
+qty_col = "quantity"
+
+target = "B08D1145YS"
+target_orders = set(df.loc[df[asin_col].eq(target), order_col].dropna())
+target_order_count = len(target_orders)
+
+companions = df[
+    df[order_col].isin(target_orders) & ~df[asin_col].eq(target)
+].copy()
+
+summary = companions.groupby([asin_col, sku_col, title_col], dropna=False).agg(
+    co_orders=(order_col, "nunique"),
+    units=(qty_col, "sum"),
+).reset_index()
+summary["share_of_target_orders"] = summary["co_orders"] / target_order_count
+summary = summary.sort_values(["co_orders", "units"], ascending=False)
+
+print("Target orders:", target_order_count)
+print(summary.head(25).to_string(index=False))
+```
+
+---
+
+## 5. Multi-Variation Pricing Analysis
 
 ### Weighted Average Price
 When a parent ASIN has child variations at different prices:

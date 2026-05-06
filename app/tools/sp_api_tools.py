@@ -571,6 +571,10 @@ async def sp_check_report(
         "processing_status": payload.get("processingStatus"),
         "report_type": payload.get("reportType"),
         "created_time": payload.get("createdTime"),
+        "data_start_time": payload.get("dataStartTime"),
+        "data_end_time": payload.get("dataEndTime"),
+        "marketplace_ids": payload.get("marketplaceIds"),
+        "report_options": payload.get("reportOptions"),
     }
 
     if payload.get("processingStatus") == "DONE":
@@ -578,6 +582,13 @@ async def sp_check_report(
         response["message"] = f"Report ready. Use sp_download_report(report_document_id='{payload.get('reportDocumentId')}') to download."
     elif payload.get("processingStatus") in ("IN_PROGRESS", "IN_QUEUE"):
         response["message"] = "Report still processing. Check again in 30-60 seconds."
+    elif payload.get("processingStatus") in ("CANCELLED", "FATAL"):
+        response["raw_report"] = payload
+        response["message"] = (
+            f"Report ended with status {payload.get('processingStatus')}. "
+            "Raw report metadata is included in raw_report. If it contains no "
+            "error detail, Amazon did not expose a specific failure reason via get_report."
+        )
     else:
         response["message"] = f"Report status: {payload.get('processingStatus')}"
 

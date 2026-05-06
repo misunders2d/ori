@@ -428,7 +428,12 @@ async def run_system_task(
         )
 
 
-async def _deliver_message(notify: dict, message: str, task_id: str = "") -> bool:
+async def _deliver_message(
+    notify: dict,
+    message: str,
+    task_id: str = "",
+    session_message: str | None = None,
+) -> bool:
     """Send a message to the user's chat AND inject it into their session history.
 
     Returns True on successful send, False on any failure (no adapter, adapter raised,
@@ -464,7 +469,7 @@ async def _deliver_message(notify: dict, message: str, task_id: str = "") -> boo
 
     # Mirror the delivered message into the chat's session so the model has it
     # in conversation history when the user asks a follow-up.
-    await _inject_into_session(notify, message)
+    await _inject_into_session(notify, session_message if session_message is not None else message)
     return delivered
 
 

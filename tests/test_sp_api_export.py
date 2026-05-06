@@ -1,5 +1,6 @@
 """Tests for SP-API direct report-to-CSV pipeline."""
 
+import asyncio
 import json
 import os
 
@@ -185,21 +186,42 @@ class TestExportReportToCsv:
             {"processingStatus": "DONE", "reportDocumentId": "DOC-456"},  # get_report
             {"document": "sku\tqty\tprice\nABC\t10\t29.99\nDEF\t5\t49.99"},  # get_report_document
         ]
+        created_tasks = []
+        real_create_task = asyncio.create_task
+
+        def capture_task(coro):
+            task = real_create_task(coro)
+            created_tasks.append(task)
+            return task
+
+        notify_messages = []
+
+        async def fake_notify(notify, message, session_message=None):
+            notify_messages.append((message, session_message))
+
+        monkeypatch.setattr("app.tools.sp_api_export.asyncio.create_task", capture_task)
+        monkeypatch.setattr("app.tools.sp_api_export._notify", fake_notify)
 
         result = await export_report_to_csv("GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA", days=7)
 
-        assert result["status"] == "success"
-        assert result["rows"] == 2
-        assert result["columns"] == 3
-        assert os.path.isfile(result["file_path"])
+        assert result["status"] == "accepted"
+        await created_tasks[0]
+        assert notify_messages
+        message, session_message = notify_messages[0]
+        assert "*Report ready:*" in message
+        assert "**Report ready:**" not in message
+        assert "Agent-only context" in session_message
 
         # Verify CSV content
-        with open(result["file_path"]) as f:
+        generated = [p for p in os.listdir(_EXPORTS_DIR) if p.startswith("fba_myi_unsuppressed_inventory")]
+        assert generated
+        csv_path = os.path.join(_EXPORTS_DIR, generated[-1])
+        with open(csv_path) as f:
             lines = f.readlines()
         assert "sku" in lines[0]
         assert "ABC" in lines[1]
 
-        os.remove(result["file_path"])
+        os.remove(csv_path)
 
     @pytest.mark.asyncio
     @patch("app.tools.sp_api_export._POLL_INTERVAL", 0.01)
@@ -215,10 +237,30 @@ class TestExportReportToCsv:
             {"reportId": "RPT-123"},
             {"processingStatus": "FATAL"},
         ]
+        created_tasks = []
+        real_create_task = asyncio.create_task
+
+        def capture_task(coro):
+            task = real_create_task(coro)
+            created_tasks.append(task)
+            return task
+
+        notify_messages = []
+
+        async def fake_notify(notify, message, session_message=None):
+            notify_messages.append((message, session_message))
+
+        monkeypatch.setattr("app.tools.sp_api_export.asyncio.create_task", capture_task)
+        monkeypatch.setattr("app.tools.sp_api_export._notify", fake_notify)
 
         result = await export_report_to_csv("GET_BAD_REPORT")
-        assert result["status"] == "error"
-        assert "FATAL" in result["message"]
+        assert result["status"] == "accepted"
+        await created_tasks[0]
+        message, session_message = notify_messages[0]
+        assert "FATAL" in message
+        assert "Amazon response" in message
+        assert "**FATAL**" not in message
+        assert "Do not claim a specific root cause" in session_message
 
     @pytest.mark.asyncio
     @patch("app.tools.sp_api_export._POLL_INTERVAL", 0.01)
@@ -240,9 +282,23 @@ class TestExportReportToCsv:
             {"processingStatus": "DONE", "reportDocumentId": "DOC-012"},
             {"document": json_data},
         ]
+        created_tasks = []
+        real_create_task = asyncio.create_task
+
+        def capture_task(coro):
+            task = real_create_task(coro)
+            created_tasks.append(task)
+            return task
+
+        monkeypatch.setattr("app.tools.sp_api_export.asyncio.create_task", capture_task)
 
         result = await export_report_to_csv("GET_BRAND_ANALYTICS_SEARCH_CATALOG_PERFORMANCE_REPORT")
 
-        assert result["status"] == "success"
-        assert result["rows"] == 2
-        os.remove(result["file_path"])
+        assert result["status"] == "accepted"
+        await created_tasks[0]
+        generated = [
+            p for p in os.listdir(_EXPORTS_DIR)
+            if p.startswith("brand_analytics_search_catalog")
+        ]
+        assert generated
+        os.remove(os.path.join(_EXPORTS_DIR, generated[-1]))

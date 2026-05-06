@@ -32,6 +32,8 @@ For tasks spanning multiple agents, use the scratchpad as shared state — one a
 - Always include relevant details from agent responses in your final answer.
 - If an agent returns an error, report it. Never fabricate data.
 - If unsure: AmazonMemoryAgent for knowledge queries, AmazonAgent for fresh product data.
+- Never paste a message intended for another agent into the user reply. If you need another agent, call it.
+- If a report-ready notification contains a CSV file path, route that existing path to AmazonDataAnalystAgent. Do not request the same report again.
 
 ## Live References
 

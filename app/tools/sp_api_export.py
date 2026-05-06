@@ -129,7 +129,23 @@ async def _poll_download_and_deliver(
                 document_id = payload.get("reportDocumentId")
                 break
             elif status in ("CANCELLED", "FATAL"):
-                await _notify(notify, f"Report `{report_type}` failed with status: **{status}**.")
+                failure_message = (
+                    f"Report `{report_type}` failed with status: *{status}*.\n"
+                    f"Report ID: `{report_id}`\n"
+                    f"Amazon response: ```{json.dumps(payload, default=str)[:1500]}```\n"
+                    "If no detailed reason appears above, Amazon did not expose one "
+                    "through get_report."
+                )
+                await _notify(
+                    notify,
+                    failure_message,
+                    session_message=(
+                        f"{failure_message}\n\n"
+                        "[Agent-only context: This background SP-API report failed. "
+                        "If user asks why, use raw metadata above. Do not claim a "
+                        "specific root cause unless Amazon exposed it.]"
+                    ),
+                )
                 return
         except Exception as e:
             await _notify(notify, f"Failed to check report status: {e}")
@@ -178,19 +194,49 @@ async def _poll_download_and_deliver(
     path = _save_csv(records, filename)
     file_size = os.path.getsize(path)
 
+    ready_message = (
+        f"*Report ready:* `{report_type}`\n"
+        f"Exported *{len(records)} rows* to `{filename}` ({file_size:,} bytes).\n"
+        f"File: `{path}`"
+    )
     await _notify(
         notify,
-        f"**Report ready:** `{report_type}`\n"
-        f"Exported **{len(records)} rows** to `{filename}` ({file_size:,} bytes).\n"
-        f"File: `{path}`\n"
-        f"Use `analyze_data` to inspect the file.",
+        ready_message,
+        session_message=(
+            f"{ready_message}\n\n"
+            "[Agent-only context: This CSV already exists. If the user asks for "
+            "analysis of this report, use this file path with the data analysis "
+            "handoff. Do not request the same report again.]"
+        ),
     )
 
 
-async def _notify(notify: dict, message: str):
+async def _notify(notify: dict, message: str, session_message: str | None = None):
     """Send a notification to the user's channel."""
     from app.tasks import _deliver_message
-    await _deliver_message(notify, message)
+    await _deliver_message(notify, message, session_message=session_message)
+
+
+def _notify_from_tool_context(tool_context: ToolContext | None) -> dict:
+    """Build transport notification metadata for report-ready callbacks."""
+    if not tool_context:
+        return {}
+
+    session = getattr(tool_context, "session", None)
+    session_id = session.id if session else ""
+    if session_id.startswith("tg_"):
+        return {
+            "type": "telegram",
+            "chat_id": session_id.replace("tg_", ""),
+            "origin_session_id": session_id,
+        }
+    if session_id.startswith("sl_"):
+        return {
+            "type": "slack",
+            "chat_id": session_id.replace("sl_", ""),
+            "origin_session_id": session_id,
+        }
+    return {}
 
 
 async def export_report_to_csv(
@@ -263,14 +309,7 @@ async def export_report_to_csv(
         filename = f"{short_type}_{date_str}.csv"
 
     # Step 3: Determine delivery channel from session ID
-    notify = {}
-    if tool_context:
-        session_id = getattr(tool_context, "session", None)
-        session_id = session_id.id if session_id else ""
-        if session_id.startswith("tg_"):
-            notify = {"type": "telegram", "chat_id": session_id.replace("tg_", "")}
-        elif session_id.startswith("sl_"):
-            notify = {"type": "slack", "chat_id": session_id.replace("sl_", "")}
+    notify = _notify_from_tool_context(tool_context)
 
     # Step 4: Fire background poll + download + deliver
     asyncio.create_task(
@@ -281,7 +320,8 @@ async def export_report_to_csv(
         "status": "accepted",
         "report_id": report_id,
         "message": f"Report `{report_type}` requested (ID: `{report_id}`). "
-                   f"I'll notify you when the CSV is ready — you can keep chatting in the meantime.",
+                   f"I'll notify you when the CSV is ready. Do not request this report again; "
+                   f"when the file-ready message appears, analyze that existing file.",
     }
 
 
