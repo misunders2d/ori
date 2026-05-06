@@ -433,8 +433,12 @@ async def _deliver_message(
     message: str,
     task_id: str = "",
     session_message: str | None = None,
+    file_path: str | None = None,
 ) -> bool:
     """Send a message to the user's chat AND inject it into their session history.
+
+    If file_path is provided and exists, it is uploaded as media with the message
+    as a caption.
 
     Returns True on successful send, False on any failure (no adapter, adapter raised,
     channel not delivered). Failures are logged to the scheduler job log so the user
@@ -460,7 +464,17 @@ async def _deliver_message(
 
     logger.info("Delivering message to %s channel, target: %s", channel_type, target)
     try:
-        await adapter.send_message(target, message)
+        if file_path and os.path.isfile(file_path):
+            import mimetypes
+            mime, _ = mimetypes.guess_type(file_path)
+            with open(file_path, "rb") as f:
+                data = f.read()
+            # Most adapters (Slack, Telegram) support 'caption' on send_media.
+            await adapter.send_media(
+                target, data, mime or "application/octet-stream", caption=message
+            )
+        else:
+            await adapter.send_message(target, message)
         delivered = True
     except Exception as e:
         logger.error("Failed to deliver message via adapter: %s", e)
@@ -473,12 +487,12 @@ async def _deliver_message(
     return delivered
 
 
-async def _deliver_with_fallback(notify: dict, message: str, task_id: str) -> None:
+async def _deliver_with_fallback(notify: dict, message: str, task_id: str, file_path: str | None = None) -> None:
     """Deliver to notify's channel; if that fails and origin_session_id differs,
     try delivering the failure notice to origin so the user is never left in the
     dark. Never raises.
     """
-    delivered = await _deliver_message(notify, message, task_id=task_id)
+    delivered = await _deliver_message(notify, message, task_id=task_id, file_path=file_path)
     if delivered:
         return
 
@@ -499,7 +513,7 @@ async def _deliver_with_fallback(notify: dict, message: str, task_id: str) -> No
         f":warning: Could not deliver scheduled task `{task_id}` to its target channel. "
         f"Routing to the session that scheduled it.\n\n{message}"
     )
-    await _deliver_message(fallback_notify, fallback_msg, task_id=task_id)
+    await _deliver_message(fallback_notify, fallback_msg, task_id=task_id, file_path=file_path)
 
 
 async def _inject_into_session(notify: dict, message: str):

@@ -196,25 +196,26 @@ async def _poll_download_and_deliver(
 
     ready_message = (
         f"*Report ready:* `{report_type}`\n"
-        f"Exported *{len(records)} rows* to `{filename}` ({file_size:,} bytes).\n"
-        f"File: `{path}`"
+        f"Exported *{len(records)} rows* to `{filename}` ({file_size:,} bytes)."
     )
     await _notify(
         notify,
         ready_message,
         session_message=(
             f"{ready_message}\n\n"
+            f"File: `{path}`\n\n"
             "[Agent-only context: This CSV already exists. If the user asks for "
             "analysis of this report, use this file path with the data analysis "
             "handoff. Do not request the same report again.]"
         ),
+        file_path=path,
     )
 
 
-async def _notify(notify: dict, message: str, session_message: str | None = None):
+async def _notify(notify: dict, message: str, session_message: str | None = None, file_path: str | None = None):
     """Send a notification to the user's channel."""
     from app.tasks import _deliver_message
-    await _deliver_message(notify, message, session_message=session_message)
+    await _deliver_message(notify, message, session_message=session_message, file_path=file_path)
 
 
 def _notify_from_tool_context(tool_context: ToolContext | None) -> dict:
