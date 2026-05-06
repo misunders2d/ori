@@ -1,4 +1,5 @@
 import os
+
 from google.adk.apps import App
 from google.adk.apps.app import EventsCompactionConfig
 from google.adk.apps.llm_event_summarizer import LlmEventSummarizer
@@ -45,7 +46,7 @@ app = App(
         # agent with too few raw turns to ground on, forcing memory-recall
         # reconstruction). 60/10 means most conversations never hit compaction;
         # those that do still have 10 raw turns of anchor.
-        compaction_interval=60,
+        compaction_interval=80,
         overlap_size=10,
         summarizer=LlmEventSummarizer(
             llm=get_model("summarizer"),
