@@ -16,6 +16,32 @@ from app.app_utils.models import get_model_name
 logger = logging.getLogger(__name__)
 
 
+def _initialized_model_provider(callback_context: CallbackContext) -> str:
+    """Return provider for the BaseLlm instance currently attached to the agent."""
+    invocation_context = getattr(callback_context, "_invocation_context", None)
+    agent = getattr(invocation_context, "agent", None)
+    model = getattr(agent, "model", None)
+    if not model:
+        return ""
+
+    cls_name = model.__class__.__name__.lower()
+    module = model.__class__.__module__.lower()
+
+    if cls_name == "gemini" or module.endswith(".gemini_llm"):
+        return "google"
+    if cls_name == "claude" or module.endswith(".anthropic_llm"):
+        return "anthropic"
+
+    model_str = model if isinstance(model, str) else getattr(model, "model", "")
+    if isinstance(model_str, str) and model_str:
+        from app.app_utils.models import _parse_model_str
+
+        provider, _ = _parse_model_str(model_str)
+        return provider
+
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Per-container request throttle (token bucket)
 # ---------------------------------------------------------------------------
@@ -309,12 +335,10 @@ async def prompt_injection_guardrail(
     model_key = f"model:{callback_context.agent_name}"
     model_override = callback_context.state.to_dict().get(model_key)
     if model_override:
-        from app.app_utils.models import _parse_model_str, get_model_string
+        from app.app_utils.models import _parse_model_str
 
         override_provider, override_model_name = _parse_model_str(model_override)
-        # Determine the provider the agent was actually initialized with
-        running_str = get_model_string(callback_context.agent_name)
-        running_provider, _ = _parse_model_str(running_str)
+        running_provider = _initialized_model_provider(callback_context)
         if override_provider == running_provider:
             # Same provider: safe to hot-swap via request model string
             llm_request.model = override_model_name
