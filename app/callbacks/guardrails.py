@@ -42,6 +42,19 @@ def _initialized_model_provider(callback_context: CallbackContext) -> str:
     return ""
 
 
+def _initialized_model_is_litellm(callback_context: CallbackContext) -> bool:
+    """Return True when the agent is backed by ADK LiteLlm."""
+    invocation_context = getattr(callback_context, "_invocation_context", None)
+    agent = getattr(invocation_context, "agent", None)
+    model = getattr(agent, "model", None)
+    if not model:
+        return False
+
+    cls_name = model.__class__.__name__.lower()
+    module = model.__class__.__module__.lower()
+    return cls_name == "litellm" or module.endswith(".lite_llm")
+
+
 # ---------------------------------------------------------------------------
 # Per-container request throttle (token bucket)
 # ---------------------------------------------------------------------------
@@ -340,8 +353,14 @@ async def prompt_injection_guardrail(
         override_provider, override_model_name = _parse_model_str(model_override)
         running_provider = _initialized_model_provider(callback_context)
         if override_provider == running_provider:
-            # Same provider: safe to hot-swap via request model string
-            llm_request.model = override_model_name
+            # Gemini/Claude clients expect bare model names. LiteLLM needs the
+            # provider prefix kept so openrouter/deepseek/... does not become
+            # direct deepseek/... and hit the wrong backend.
+            llm_request.model = (
+                model_override.strip().strip("\"'")
+                if _initialized_model_is_litellm(callback_context)
+                else override_model_name
+            )
         else:
             # Cross-provider swap: BaseLlm instance is locked at agent init,
             # cannot change backend mid-session. Persisted to .env for restart.

@@ -50,3 +50,25 @@ async def test_same_provider_override_rewrites_request_model():
     await prompt_injection_guardrail(ctx, req)
 
     assert req.model == "gemini-3.1-flash-lite-preview"
+
+
+@pytest.mark.asyncio
+async def test_litellm_openrouter_override_keeps_provider_prefix():
+    LiteLlmModel = type(
+        "LiteLlm",
+        (),
+        {"__module__": "google.adk.models.lite_llm"},
+    )
+    ctx = _context(
+        "AmazonAgent",
+        LiteLlmModel(),
+    )
+    ctx._invocation_context.agent.model.model = (
+        "openrouter/deepseek/deepseek-chat"
+    )
+    ctx.state["model:AmazonAgent"] = "openrouter/deepseek/deepseek-v4-flash"
+    req = _request("openrouter/deepseek/deepseek-chat")
+
+    await prompt_injection_guardrail(ctx, req)
+
+    assert req.model == "openrouter/deepseek/deepseek-v4-flash"
