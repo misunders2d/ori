@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 import os
+from google.genai import types
 from app.app_utils.models import _build_model
 
 def test_openrouter_build_model_success():
@@ -15,6 +16,20 @@ def test_openrouter_build_model_success():
             assert kwargs["model"] == "openrouter/deepseek/deepseek-chat"
             assert "retry_options" not in kwargs
             assert MockLiteLlm.return_value == model
+
+def test_openrouter_drops_explicit_genai_retry_options():
+    """Verify explicit Gemini retry options do not leak into LiteLlm kwargs."""
+    with patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-or-test-key"}):
+        with patch("google.adk.models.lite_llm.LiteLlm") as MockLiteLlm:
+            _build_model(
+                "openrouter",
+                "deepseek/deepseek-chat",
+                retry_options=types.HttpRetryOptions(attempts=3),
+            )
+
+            args, kwargs = MockLiteLlm.call_args
+            assert kwargs["model"] == "openrouter/deepseek/deepseek-chat"
+            assert "retry_options" not in kwargs
 
 def test_openrouter_build_model_no_key():
     """Verify ValueError is raised when OpenRouter key is missing."""

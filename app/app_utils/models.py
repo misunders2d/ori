@@ -116,6 +116,13 @@ def _default_retry_options():
     )
 
 
+def _without_litellm_unsupported_kwargs(kwargs: dict) -> dict:
+    """Drop google-genai-only kwargs before constructing LiteLlm."""
+    filtered = dict(kwargs)
+    filtered.pop("retry_options", None)
+    return filtered
+
+
 def _build_model(provider: str, model_name: str, **kwargs):
     """Construct a provider-specific LLM model object.
 
@@ -140,7 +147,10 @@ def _build_model(provider: str, model_name: str, **kwargs):
         has_anthropic_key = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
         if has_anthropic_key:
             from google.adk.models.lite_llm import LiteLlm
-            return LiteLlm(model=f"anthropic/{model_name}", **kwargs)
+            return LiteLlm(
+                model=f"anthropic/{model_name}",
+                **_without_litellm_unsupported_kwargs(kwargs),
+            )
         elif _is_vertex_mode():
             if "retry_options" not in kwargs:
                 kwargs["retry_options"] = _default_retry_options()
@@ -158,7 +168,10 @@ def _build_model(provider: str, model_name: str, **kwargs):
             raise ValueError("OpenRouter models require OPENROUTER_API_KEY.")
         from google.adk.models.lite_llm import LiteLlm
         # LiteLLM routes correctly with "openrouter/" prefix
-        return LiteLlm(model=f"openrouter/{model_name}", **kwargs)
+        return LiteLlm(
+            model=f"openrouter/{model_name}",
+            **_without_litellm_unsupported_kwargs(kwargs),
+        )
 
     raise ValueError(
         f"Unsupported model provider: '{provider}'. Currently supported: google, anthropic, openrouter"
