@@ -21,7 +21,21 @@ def _context(agent_name: str, initialized_model):
 
 
 def _request(model: str):
-    return SimpleNamespace(model=model, contents=[], config=None)
+    req = SimpleNamespace(
+        model=model,
+        contents=[],
+        config=SimpleNamespace(system_instruction=None),
+    )
+
+    def append_instructions(instructions):
+        text = "\n\n".join(instructions)
+        if req.config.system_instruction:
+            req.config.system_instruction += "\n\n" + text
+        else:
+            req.config.system_instruction = text
+
+    req.append_instructions = append_instructions
+    return req
 
 
 @pytest.mark.asyncio
@@ -36,6 +50,7 @@ async def test_cross_provider_override_does_not_rewrite_gemini_request():
     await prompt_injection_guardrail(ctx, req)
 
     assert req.model == "gemini-3-flash-preview"
+    assert "TERSE STYLE" in req.config.system_instruction
 
 
 @pytest.mark.asyncio
