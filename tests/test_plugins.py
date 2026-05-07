@@ -318,12 +318,14 @@ async def test_prompt_injection_no_key_passes():
         req = MagicMock()
         req.contents = [types.Content(role="user", parts=[types.Part.from_text(text="hello")])]
         req.config = None
+        req.append_instructions = MagicMock()
         out = await PromptInjectionGuardPlugin().before_model_callback(
             callback_context=cb, llm_request=req,
         )
         assert out is None
-        # System directive still injected even in degraded mode
-        assert "[SYSTEM]" in req.contents[0].parts[0].text
+        # System directive still injected even in degraded mode.
+        req.append_instructions.assert_called_once()
+        assert "TERSE STYLE" in req.append_instructions.call_args.args[0][0]
 
 
 # ===========================================================================

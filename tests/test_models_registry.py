@@ -3,6 +3,7 @@ import os
 from unittest.mock import patch
 
 import pytest
+from google.genai import types
 
 from app.state import OriSessionState
 from app.util.models import (
@@ -31,6 +32,19 @@ def test_openrouter_prefix_preserved_for_litellm():
     llm = resolve_model("DeveloperAgent", state)
     assert isinstance(llm, LiteLlm)
     assert llm.model == "openrouter/anthropic/claude-3.5-sonnet"
+
+
+def test_openrouter_drops_explicit_genai_retry_options():
+    """LiteLlm must not receive google-genai-only retry_options."""
+    from google.adk.models import LiteLlm
+    state = OriSessionState(model={"DeveloperAgent": "openrouter/deepseek/deepseek-chat"})
+    llm = resolve_model(
+        "DeveloperAgent",
+        state,
+        retry_options=types.HttpRetryOptions(attempts=3),
+    )
+    assert isinstance(llm, LiteLlm)
+    assert llm.model == "openrouter/deepseek/deepseek-chat"
 
 
 def test_defaults_cover_all_components():

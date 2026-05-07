@@ -169,17 +169,13 @@ class PromptInjectionGuardPlugin(BasePlugin):
             else:
                 raise Exception("429 internal rate throttle exhausted")
 
-        # Inject the system directive as the first content item. The
-        # debug-mode preamble references the current admin email from
-        # ADMIN_USER_IDS so /init updates take effect without a restart.
-        if llm_request.contents:
-            emails = [u for u in admin_user_ids() if "@" in u]
-            admin_ref = f"the admin ({emails[0]})" if emails else "the admin"
-            text = _SYSTEM_DIRECTIVE.format(admin_ref=admin_ref)
-            llm_request.contents.insert(0, types.Content(
-                role="user",
-                parts=[types.Part.from_text(text=f"[SYSTEM] {text}")],
-            ))
+        # Inject as real system instruction. The debug-mode preamble references
+        # the current admin email from ADMIN_USER_IDS so /init updates take
+        # effect without a restart.
+        emails = [u for u in admin_user_ids() if "@" in u]
+        admin_ref = f"the admin ({emails[0]})" if emails else "the admin"
+        text = _SYSTEM_DIRECTIVE.format(admin_ref=admin_ref)
+        llm_request.append_instructions([text])
 
         # Semantic injection check on the latest user message.
         text = _last_user_text(llm_request)

@@ -33,19 +33,29 @@ if TYPE_CHECKING:
     from app.state import OriSessionState
 
 
+def _without_litellm_unsupported_opts(opts: dict[str, Any]) -> dict[str, Any]:
+    """Drop google-genai-only options before constructing LiteLlm."""
+    filtered = dict(opts)
+    filtered.pop("retry_options", None)
+    return filtered
+
+
 # Each factory takes (remainder, opts) and returns a BaseLlm instance.
 # `remainder` is the model string with the provider prefix stripped — so
 # "litellm/gemini/gemini-2.5-flash".partition("/") yields
 # ("litellm", "/", "gemini/gemini-2.5-flash"); the factory gets
 # "gemini/gemini-2.5-flash" and passes it to LiteLlm directly.
 PROVIDER_REGISTRY: dict[str, Callable[[str, dict[str, Any]], BaseLlm]] = {
-    "litellm": lambda remainder, opts: LiteLlm(model=remainder, **opts),
+    "litellm": lambda remainder, opts: LiteLlm(
+        model=remainder, **_without_litellm_unsupported_opts(opts)
+    ),
     "gemini": lambda remainder, opts: Gemini(model=remainder, **opts),
     "anthropic": lambda remainder, opts: Claude(model=remainder, **opts),
     # OpenRouter routes through LiteLlm; the prefix must be preserved so
     # litellm picks the OpenRouter endpoint. Requires OPENROUTER_API_KEY.
     "openrouter": lambda remainder, opts: LiteLlm(
-        model=f"openrouter/{remainder}", **opts
+        model=f"openrouter/{remainder}",
+        **_without_litellm_unsupported_opts(opts),
     ),
 }
 
