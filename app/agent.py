@@ -10,6 +10,13 @@ from app.sub_agents.coordinator_agent import root_agent
 # The internal application name used for session isolation
 app_name = os.environ.get("APP_NAME", "ori")
 
+# Prefer token-triggered compaction over event-count compaction. ADK 1.28 still
+# requires compaction_interval, so keep it effectively unreachable.
+_COMPACTION_INTERVAL = 10_000_000
+_COMPACTION_OVERLAP_SIZE = 20
+_COMPACTION_TOKEN_THRESHOLD = 800_000
+_COMPACTION_EVENT_RETENTION_SIZE = 40
+
 # Custom summarizer prompt — the default collapses code/SQL/task definitions
 # into prose, which has caused the agent to reconstruct missing details from
 # unrelated memory recalls (e.g. pulling a stale MSRP task into an FBA-task
@@ -40,14 +47,10 @@ app = App(
     root_agent=root_agent,
     name=app_name,
     events_compaction_config=EventsCompactionConfig(
-        # Less aggressive than the previous 10/3. Gemini Flash has a 1M-token
-        # context — compacting every 10 events is wasteful and was the root
-        # cause of the FBA→MSRP scheduling contamination (overlap=3 left the
-        # agent with too few raw turns to ground on, forcing memory-recall
-        # reconstruction). 60/10 means most conversations never hit compaction;
-        # those that do still have 10 raw turns of anchor.
-        compaction_interval=80,
-        overlap_size=10,
+        compaction_interval=_COMPACTION_INTERVAL,
+        overlap_size=_COMPACTION_OVERLAP_SIZE,
+        token_threshold=_COMPACTION_TOKEN_THRESHOLD,
+        event_retention_size=_COMPACTION_EVENT_RETENTION_SIZE,
         summarizer=LlmEventSummarizer(
             llm=get_model("summarizer"),
             prompt_template=_SUMMARIZER_PROMPT_TEMPLATE,
