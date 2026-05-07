@@ -13,6 +13,7 @@ def test_openrouter_build_model_success():
             MockLiteLlm.assert_called_once()
             args, kwargs = MockLiteLlm.call_args
             assert kwargs["model"] == "openrouter/deepseek/deepseek-chat"
+            assert "retry_options" not in kwargs
             assert MockLiteLlm.return_value == model
 
 def test_openrouter_build_model_no_key():

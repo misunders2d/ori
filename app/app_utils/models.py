@@ -122,17 +122,16 @@ def _build_model(provider: str, model_name: str, **kwargs):
     Returns a BaseLlm instance (e.g. Gemini, Claude, LiteLlm).
     Raises ValueError for unsupported providers.
 
-    All models get default retry options (4 attempts, exponential backoff)
-    unless explicitly overridden via kwargs.
+    Google/Vertex models get default retry options (4 attempts, exponential
+    backoff) unless explicitly overridden via kwargs. LiteLLM providers do not
+    accept google.genai HttpRetryOptions; passing one breaks JSON serialization.
 
     In Vertex AI mode, both Google and Anthropic models use ADC credentials.
     In API key mode, Google uses GOOGLE_API_KEY and Anthropic uses ANTHROPIC_API_KEY via LiteLlm.
     """
-    # Apply default retry options if not explicitly provided
-    if "retry_options" not in kwargs:
-        kwargs["retry_options"] = _default_retry_options()
-
     if provider == "google":
+        if "retry_options" not in kwargs:
+            kwargs["retry_options"] = _default_retry_options()
         from google.adk.models import Gemini
         return Gemini(model=model_name, **kwargs)
     if provider == "anthropic":
@@ -143,6 +142,8 @@ def _build_model(provider: str, model_name: str, **kwargs):
             from google.adk.models.lite_llm import LiteLlm
             return LiteLlm(model=f"anthropic/{model_name}", **kwargs)
         elif _is_vertex_mode():
+            if "retry_options" not in kwargs:
+                kwargs["retry_options"] = _default_retry_options()
             # Vertex AI Model Garden — requires Claude to be enabled in the project
             from google.adk.models.anthropic_llm import Claude
             return Claude(model=model_name, **kwargs)
