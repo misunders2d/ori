@@ -56,6 +56,29 @@ _PLAN_CONTINUATION_PROMPT = (
 )
 
 
+def _cleanup_ephemeral_task_state(session_id: str) -> None:
+    """Best-effort cleanup for scheduler-owned session sidecar state."""
+    try:
+        from app.tools.scratchpad import cleanup_session_scratchpads
+
+        cleanup_session_scratchpads(session_id)
+    except Exception:
+        logger.warning(
+            "Scratchpad cleanup failed for scheduled session %s",
+            session_id, exc_info=True,
+        )
+
+    try:
+        plan_path = os.path.join(os.path.abspath("./tmp/plans"), f"{session_id}.json")
+        if os.path.exists(plan_path):
+            os.remove(plan_path)
+    except Exception:
+        logger.warning(
+            "Plan cleanup failed for scheduled session %s",
+            session_id, exc_info=True,
+        )
+
+
 async def _drive_plan_to_completion(
     runner,
     user_id: str,
@@ -196,6 +219,14 @@ async def run_scheduled_task(
             return
 
         try:
+            try:
+                await runner.session_service.delete_session(
+                    app_name=runner.app_name, user_id=user_id, session_id=session_id
+                )
+            except Exception:
+                pass
+            _cleanup_ephemeral_task_state(session_id)
+
             await runner.session_service.create_session(
                 app_name=runner.app_name, user_id=user_id, session_id=session_id
             )
@@ -255,19 +286,10 @@ async def run_scheduled_task(
                 )
             except Exception:
                 pass
-            # Clean up scratchpads created during this fire (including
-            # auto-spilled tool outputs from tool_output_spillover_guardrail).
-            # Without this, every scheduled fire leaks a tmp/scratchpads/<sched_id>/
-            # directory on disk, since session_id is unique per fire and never
-            # reused. Daily task = ~365 leaked dirs/year.
-            try:
-                from app.tools.scratchpad import cleanup_session_scratchpads
-                cleanup_session_scratchpads(session_id)
-            except Exception:
-                logger.warning(
-                    "Scratchpad cleanup failed for scheduled session %s",
-                    session_id, exc_info=True,
-                )
+            # Clean up sidecar state created during this fire. Recurring jobs
+            # reuse task_id as session_id, so stale plans/scratchpads must not
+            # bleed into the next run if an earlier cleanup missed them.
+            _cleanup_ephemeral_task_state(session_id)
     else:
         # Runner unavailable — bot is starting up or shutting down. Report honestly.
         response = (
@@ -359,6 +381,14 @@ async def run_system_task(
 
     try:
         # Create the ephemeral session
+        try:
+            await runner.session_service.delete_session(
+                app_name=runner.app_name, user_id=user_id, session_id=session_id
+            )
+        except Exception:
+            pass
+        _cleanup_ephemeral_task_state(session_id)
+
         await runner.session_service.create_session(
             app_name=runner.app_name, user_id=user_id, session_id=session_id
         )
@@ -418,6 +448,7 @@ async def run_system_task(
             )
         except Exception:
             pass
+        _cleanup_ephemeral_task_state(session_id)
         duration_ms = int((datetime.now() - start_ts).total_seconds() * 1000)
         _log_job_event(
             "fire_end",

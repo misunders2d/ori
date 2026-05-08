@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.callbacks.guardrails import tool_output_spillover_guardrail
+from app.tools import scratchpad
 
 
 class _FakeTool:
@@ -124,3 +125,54 @@ def test_function_tool_name_resolution(small_threshold, fake_scratchpad):
     result = tool_output_spillover_guardrail(my_query, {}, MagicMock(), big_response)
     assert result is not None
     assert result["tool"] == "my_query"
+
+
+def test_file_payload_spill_does_not_invite_scratchpad_read(small_threshold, fake_scratchpad):
+    tool = _FakeTool(name="generate_chart")
+    result = tool_output_spillover_guardrail(
+        tool,
+        {},
+        MagicMock(),
+        {
+            "status": "success",
+            "filename": "plot.png",
+            "mime_type": "image/png",
+            "data_base64": "x" * 200,
+        },
+    )
+
+    assert result is not None
+    assert result["status"] == "spilled"
+    assert "scratchpad_read" not in result["summary"]
+    assert result["file_payloads"] == [
+        {
+            "filename": "plot.png",
+            "mime_type": "image/png",
+            "size_bytes": None,
+            "base64_chars": 200,
+        }
+    ]
+    assert "x" * 50 not in result["preview"]
+
+
+def test_scratchpad_read_redacts_inline_file_payload(tmp_path, monkeypatch):
+    monkeypatch.setattr(scratchpad, "_SCRATCHPAD_DIR", str(tmp_path / "scratchpads"))
+    tool_context = MagicMock()
+    tool_context.session.session_id = "sched_test"
+
+    scratchpad.scratchpad_write(
+        "_spill_generate_chart_123abc",
+        (
+            '{"status": "success", "filename": "plot.png", "mime_type": "image/png", '
+            '"data_base64": "' + ("x" * 200) + '"}'
+        ),
+        tool_context=tool_context,
+    )
+
+    result = scratchpad.scratchpad_read("_spill_generate_chart_123abc", tool_context=tool_context)
+
+    assert result["status"] == "success"
+    assert result["redacted_inline_files"] is True
+    assert "x" * 50 not in result["content"]
+    assert result["file_payloads"][0]["filename"] == "plot.png"
+    assert result["file_payloads"][0]["base64_chars"] == 200

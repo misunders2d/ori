@@ -6,6 +6,7 @@ explicitly when it needs to synthesize.
 """
 
 import logging
+import json
 import os
 import shutil
 
@@ -72,6 +73,28 @@ def scratchpad_read(name: str, tool_context: ToolContext = None) -> dict:
 
     with open(path) as f:
         content = f.read()
+
+    try:
+        parsed = json.loads(content.strip())
+        from app.core.tool_artifacts import inline_file_summaries, redact_inline_file_data
+
+        file_payloads = inline_file_summaries(parsed)
+        if file_payloads:
+            redacted = redact_inline_file_data(parsed)
+            return {
+                "status": "success",
+                "scratchpad": name,
+                "content": json.dumps(redacted, default=str, ensure_ascii=False),
+                "size_bytes": len(content),
+                "redacted_inline_files": True,
+                "file_payloads": file_payloads,
+                "message": (
+                    "Inline file bytes were redacted from the model-visible scratchpad_read "
+                    "response. Transport delivery can still use the stored payload."
+                ),
+            }
+    except Exception:
+        pass
 
     return {"status": "success", "scratchpad": name, "content": content, "size_bytes": len(content)}
 

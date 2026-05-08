@@ -685,10 +685,14 @@ def tool_output_spillover_guardrail(tool, args, tool_context, tool_response):
     if tool_name in _SPILL_EXEMPT_TOOLS:
         return None
 
+    from app.core.tool_artifacts import inline_file_summaries, redact_inline_file_data
+
     threshold = int(os.environ.get("TOOL_OUTPUT_SPILL_THRESHOLD", "8000"))
     size, text = _tool_response_size(tool_response)
     if size <= threshold:
         return None  # under budget — pass through
+
+    file_payloads = inline_file_summaries(tool_response)
 
     # Generate a unique scratchpad name. Short hex suffix avoids collisions
     # if the same tool spills twice in one session.
@@ -718,9 +722,25 @@ def tool_output_spillover_guardrail(tool, args, tool_context, tool_response):
         scratchpad_name,
     )
 
-    preview = text[:500]
-    if len(text) > 500:
-        preview += "…"
+    if file_payloads:
+        safe_response = redact_inline_file_data(tool_response)
+        try:
+            preview = json.dumps(safe_response, default=str, ensure_ascii=False)[:500]
+        except (TypeError, ValueError):
+            preview = "[tool response contained inline file bytes; preview redacted]"
+        read_instruction = (
+            "The full tool response includes inline file bytes and is stored only for "
+            "transport delivery. Do not load the stored inline bytes into context; use "
+            "the filename/file_path metadata and tell the user the file is attached."
+        )
+    else:
+        preview = text[:500]
+        if len(text) > 500:
+            preview += "…"
+        read_instruction = (
+            f"Output written to scratchpad. Call scratchpad_read('{scratchpad_name}') "
+            f"to load the full content if you need it."
+        )
 
     return {
         "status": "spilled",
@@ -728,12 +748,12 @@ def tool_output_spillover_guardrail(tool, args, tool_context, tool_response):
         "scratchpad_name": scratchpad_name,
         "summary": (
             f"Tool '{tool_name}' returned {size:,} chars (~{size // 4:,} tokens). "
-            f"Output written to scratchpad. Call scratchpad_read('{scratchpad_name}') "
-            f"to load the full content if you need it."
+            f"{read_instruction}"
         ),
         "size_chars": size,
         "size_tokens_estimate": size // 4,
         "preview": preview,
+        "file_payloads": file_payloads,
     }
 
 
