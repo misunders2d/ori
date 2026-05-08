@@ -332,6 +332,15 @@ async def prompt_injection_guardrail(
     )
     llm_request.append_instructions([_SYSTEM_DIRECTIVE])
 
+    sid = getattr(callback_context, "session", None)
+    if sid:
+        sid = getattr(sid, "session_id", None) or getattr(sid, "id", None)
+        if sid and sid.startswith("sl_"):
+            llm_request.append_instructions(
+                [
+                    "Reply using Slack mrkdwn (*bold*, _italics_, `code`, <url|label>), not GitHub Markdown."
+                ]
+            )
     use_planner = callback_context.state.to_dict().get("use_planner", False)
     if not use_planner and getattr(llm_request, "config", None):
         if hasattr(llm_request.config, "thinking_config"):
@@ -626,13 +635,15 @@ def verify_retry_guardrail(tool, args, tool_context, tool_response):
 # Tools whose output should never be spilled — typically because they're
 # already part of the spill machinery, or their output is structurally
 # small no matter what.
-_SPILL_EXEMPT_TOOLS = frozenset({
-    "scratchpad_write",
-    "scratchpad_read",
-    "scratchpad_replace",
-    "scratchpad_clear",
-    "scratchpad_list",
-})
+_SPILL_EXEMPT_TOOLS = frozenset(
+    {
+        "scratchpad_write",
+        "scratchpad_read",
+        "scratchpad_replace",
+        "scratchpad_clear",
+        "scratchpad_list",
+    }
+)
 
 
 def _tool_response_size(tool_response) -> tuple[int, str]:
@@ -670,15 +681,19 @@ def tool_output_spillover_guardrail(tool, args, tool_context, tool_response):
     # Generate a unique scratchpad name. Short hex suffix avoids collisions
     # if the same tool spills twice in one session.
     import uuid as _uuid
+
     scratchpad_name = f"_spill_{tool_name or 'tool'}_{_uuid.uuid4().hex[:6]}"
 
     try:
         from app.tools.scratchpad import scratchpad_write
+
         scratchpad_write(scratchpad_name, text, tool_context=tool_context)
     except Exception as e:
         logger.warning(
             "tool_output_spillover: failed to write scratchpad %s for tool %s: %s",
-            scratchpad_name, tool_name, e,
+            scratchpad_name,
+            tool_name,
+            e,
         )
         # Spillover failed — fall back to letting the original response through.
         # Better to risk context blow-up than to silently drop the data.
@@ -686,7 +701,9 @@ def tool_output_spillover_guardrail(tool, args, tool_context, tool_response):
 
     logger.info(
         "tool_output_spillover: %s returned %d chars → spilled to %s",
-        tool_name, size, scratchpad_name,
+        tool_name,
+        size,
+        scratchpad_name,
     )
 
     preview = text[:500]
