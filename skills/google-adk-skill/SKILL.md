@@ -20,6 +20,7 @@ Foundational knowledge for modifying or adding ADK functionality.
 
 - **Building a new agent, tool, or callback**: Read `references/adk-cheatsheet.md` — covers setup, tool definitions, state management, callbacks, workflow agents, and CLI commands.
 - **Adding OAuth2 integration on a headless server**: Read `references/headless-auth-patterns.md` — covers OOB flow, Device Code flow, and ephemeral tunnels.
+- **Changing Ori code through self-evolution**: Read `references/evolution-testing.md` — covers required verification tiers and safe apply rules.
 - **Adding protocol integrations (MCP/A2A/UCP)**: Use the `agent-protocol-skill` instead.
 
 ## Orchestration Patterns
@@ -31,20 +32,9 @@ Foundational knowledge for modifying or adding ADK functionality.
 
 ## Evolution Workflow for ADK Components
 
-```python
-# 1. Stage the new tool in sandbox
-evolution_stage_change(file_path="app/tools/my_tool.py", ...)
-
-# 2. Verify syntax and imports
-evolution_verify_sandbox(check="syntax", target="app/tools/my_tool.py")
-
-# 3. Run full test suite
-evolution_verify_sandbox(check="pytest")
-
-# 4. Commit, push, and reboot
-evolution_commit_and_push(commit_message="feat: added new ADK tool")
-# Then request update_self from CoordinatorAgent
-```
+Before committing, run syntax checks for touched Python files, focused tests
+for the changed behavior, and the full default suite. See
+`references/evolution-testing.md` for exact commands and infra/live test rules.
 
 For complex cross-module dependencies in the sandbox, refer to the **"Sandbox Dependency Resolution"** section in `system-management-skill`.
 

@@ -196,8 +196,8 @@ class TestExportReportToCsv:
 
         notify_messages = []
 
-        async def fake_notify(notify, message, session_message=None):
-            notify_messages.append((message, session_message))
+        async def fake_notify(notify, message, session_message=None, file_path=None):
+            notify_messages.append((message, session_message, file_path))
 
         monkeypatch.setattr("app.tools.sp_api_export.asyncio.create_task", capture_task)
         monkeypatch.setattr("app.tools.sp_api_export._notify", fake_notify)
@@ -207,10 +207,11 @@ class TestExportReportToCsv:
         assert result["status"] == "accepted"
         await created_tasks[0]
         assert notify_messages
-        message, session_message = notify_messages[0]
+        message, session_message, file_path = notify_messages[0]
         assert "*Report ready:*" in message
         assert "**Report ready:**" not in message
         assert "Agent-only context" in session_message
+        assert file_path
 
         # Verify CSV content
         generated = [p for p in os.listdir(_EXPORTS_DIR) if p.startswith("fba_myi_unsuppressed_inventory")]

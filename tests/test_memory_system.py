@@ -1,9 +1,6 @@
 import pytest
-import asyncio
-import os
-import shutil
 import importlib
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 # Mock class to simulate TextEmbedding without triggering huggingface_hub
 class MockEmbeddingResult:
@@ -20,33 +17,75 @@ class MockTextEmbedding:
         for _ in texts:
             yield MockEmbeddingResult([0.1] * 384)
 
+
+class FakeQuery:
+    def __init__(self, table):
+        self.table = table
+        self._limit = 5
+
+    def limit(self, limit):
+        self._limit = limit
+        return self
+
+    def to_list(self):
+        return [record.copy() for record in self.table.records[: self._limit]]
+
+
+class FakeTable:
+    def __init__(self, data=None):
+        self.records = [record.copy() for record in (data or [])]
+
+    def add(self, records):
+        self.records.extend(record.copy() for record in records)
+
+    def search(self, _query_vector):
+        return FakeQuery(self)
+
+    def update(self, where, values):
+        record_id = where.split("'", 2)[1]
+        for record in self.records:
+            if record.get("id") == record_id:
+                record.update(values)
+
+    def delete(self, where):
+        record_id = where.split("'", 2)[1]
+        self.records = [
+            record for record in self.records if record.get("id") != record_id
+        ]
+
+
+class FakeDB:
+    def __init__(self):
+        self.tables = {}
+
+    def table_names(self):
+        return list(self.tables)
+
+    def open_table(self, table_name):
+        return self.tables[table_name]
+
+    def create_table(self, table_name, data):
+        table = FakeTable(data)
+        self.tables[table_name] = table
+        return table
+
+
 @pytest.fixture(scope="module")
 def memory_system():
-    # Use a temporary directory for the test DB
-    test_db_path = os.path.abspath("./data/test_memory_db")
-    if os.path.exists(test_db_path):
-        shutil.rmtree(test_db_path)
-    
     # Reload the memory module to ensure we're testing the sandbox staged code
     import app.core.memory
     importlib.reload(app.core.memory)
-    
-    # Patch TextEmbedding BEFORE initializing LongTermMemory
-    with patch("app.core.memory.TextEmbedding", MockTextEmbedding):
-        # Also mock the DB_PATH
-        original_path = app.core.memory.DB_PATH
-        app.core.memory.DB_PATH = test_db_path
-        
+
+    # Patch external embedding and DB layers so default tests never download
+    # models or depend on LanceDB native runtime behavior.
+    with (
+        patch("app.core.memory.TextEmbedding", MockTextEmbedding),
+        patch("app.core.memory.lancedb.connect", return_value=FakeDB()),
+    ):
         # Instantiate
         from app.core.memory import LongTermMemory
         mem = LongTermMemory()
-        
         yield mem
-        
-        # Cleanup
-        if os.path.exists(test_db_path):
-            shutil.rmtree(test_db_path)
-        app.core.memory.DB_PATH = original_path
 
 @pytest.mark.asyncio
 async def test_memory_lifecycle(memory_system):
