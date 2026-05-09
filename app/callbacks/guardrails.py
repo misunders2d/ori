@@ -137,9 +137,21 @@ def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
         "update_self",
         "trigger_rollback",
         "evolution_commit_and_push",
+        "evolution_git_pull",
+        "evolution_git_reset",
+        "evolution_sync_local_to_upstream",
+        "get_my_a2a_key",
     ]:
         current_state = tool_context.state.to_dict()
         user_id = current_state.get("user_id", "")
+        session_id = current_state.get("session_id", "")
+        if not session_id:
+            session = getattr(tool_context, "session", None)
+            session_id = (
+                getattr(session, "session_id", None)
+                or getattr(session, "id", None)
+                or ""
+            )
 
         logger.info(
             f"DEBUG: admin_tool_guardrail(tool={tool.name}) - user_id='{user_id}'"
@@ -161,7 +173,7 @@ def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
         try:
             from app.core.pending_actions import stage_action
 
-            token = stage_action(tool.name, args, user_id, "")
+            token = stage_action(tool.name, args, user_id, session_id)
 
             logger.info(f"Admin Guardrail: Staged {tool.name} for {user_id} -> {token}")
 

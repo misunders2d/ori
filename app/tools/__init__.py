@@ -8,6 +8,7 @@ from .research import check_installed_package
 from .web import web_fetch
 from .whitelist import whitelist_chat, blacklist_chat
 from .youtube import youtube_summary
+from .a2a import get_my_a2a_key
 from .slack import (
     slack_post_message,
     slack_list_channels,
@@ -32,6 +33,7 @@ __all__ = [
     "check_installed_package", "web_fetch",
     "whitelist_chat", "blacklist_chat",
     "youtube_summary",
+    "get_my_a2a_key",
     "slack_post_message",
     "slack_list_channels",
     "slack_read_history",

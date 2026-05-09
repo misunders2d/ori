@@ -23,6 +23,14 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 EVOLUTIONS_DIR = os.path.join(PROJECT_ROOT, "evolutions")
 
 
+def _safe_resolve_path(file_path: str, base_dir: str) -> str | None:
+    base = os.path.abspath(base_dir)
+    resolved = os.path.abspath(os.path.join(base, file_path))
+    if resolved != base and not resolved.startswith(base + os.sep):
+        return None
+    return resolved
+
+
 def evolution_catalog(
     name: str,
     description: str,
@@ -222,23 +230,42 @@ def evolution_import(
 ) -> dict:
     """Import an evolution received from an A2A friend.
 
-    Saves it to the local evolutions library. Optionally applies it to the
-    live project (copies files to their project paths).
+    Saves it to the local evolutions library. Imported code is never applied
+    directly to the live project tree; it must go through sandbox verification.
 
     Args:
         name: Evolution name.
         manifest: The EVOLUTION.md content.
         files: Dict of {relative_path: file_content}.
-        apply: If True, also copy the files to the live project tree.
+        apply: Deprecated and blocked. Imported code must be staged and verified.
 
     Returns:
         dict: Status and what was imported.
     """
+    if apply:
+        return {
+            "status": "error",
+            "message": (
+                "Direct live apply is blocked. Import the evolution, inspect it, "
+                "stage selected files through evolution_stage_change, verify, then commit."
+            ),
+        }
+
     safe_name = name.strip().lower().replace(" ", "-")
     evo_dir = os.path.join(EVOLUTIONS_DIR, safe_name)
 
     if os.path.exists(evo_dir):
         return {"status": "error", "message": f"Evolution '{safe_name}' already exists locally. Remove it first to re-import."}
+
+    resolved_files = []
+    for rel_path, content in files.items():
+        dst = _safe_resolve_path(rel_path, evo_dir)
+        if dst is None:
+            return {
+                "status": "error",
+                "message": f"Path traversal denied for imported file: {rel_path}",
+            }
+        resolved_files.append((rel_path, content, dst))
 
     os.makedirs(evo_dir, exist_ok=True)
 
@@ -248,26 +275,14 @@ def evolution_import(
 
     # Write files
     written = []
-    for rel_path, content in files.items():
-        dst = os.path.join(evo_dir, rel_path)
+    for rel_path, content, dst in resolved_files:
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         with open(dst, "w") as f:
             f.write(content)
         written.append(rel_path)
 
-    # Optionally apply to live project
     applied = []
-    if apply:
-        for rel_path, content in files.items():
-            live_dst = os.path.join(PROJECT_ROOT, rel_path)
-            os.makedirs(os.path.dirname(live_dst), exist_ok=True)
-            with open(live_dst, "w") as f:
-                f.write(content)
-            applied.append(rel_path)
-
     msg = f"Evolution '{safe_name}' imported with {len(written)} file(s)."
-    if applied:
-        msg += f" Applied {len(applied)} file(s) to live project."
 
     return {
         "status": "success",

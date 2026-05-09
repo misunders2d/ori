@@ -1,3 +1,4 @@
+import hashlib
 import os
 import shutil
 import subprocess
@@ -38,6 +39,17 @@ def _safe_resolve_path(file_path: str, base_dir: str) -> str | None:
     if not resolved.startswith(base + os.sep) and resolved != base:
         return None
     return resolved
+
+
+def _sandbox_digest(sandbox_dir: str) -> str:
+    """Return a stable digest of real staged files in the sandbox."""
+    digest = hashlib.sha256()
+    for src, rel in sorted(_collect_staged_files(sandbox_dir), key=lambda item: item[1]):
+        digest.update(rel.encode("utf-8"))
+        with open(src, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
 
 
 
@@ -129,6 +141,8 @@ def evolution_stage_change(
     """
     if file_path.endswith(".env"):
         return {"status": "error", "message": "Security error: Writing to .env directly is blocked. Instruct human to configure integrations properly."}
+
+    tool_context.state["evolution_verified_digest"] = ""
 
     # Deployment and recovery logic lives under deploy/ and must remain
     # untouched by self-evolution to prevent bricking the instance.
@@ -345,6 +359,10 @@ def evolution_verify_sandbox(
             return {"status": "error", "message": f"Unknown check type: '{check}'. Use 'syntax', 'pytest', or 'import'."}
 
         if result.returncode == 0:
+            if check == "pytest":
+                tool_context.state["evolution_verified_digest"] = _sandbox_digest(
+                    sandbox_dir
+                )
             return {
                 "status": "success",
                 "message": f"Verification PASSED ({check}).",
@@ -640,6 +658,17 @@ def evolution_commit_and_push(
             return {"status": "error", "message": f"Auto-dependency install failed (uv sync). Cannot commit.\n{combined[-500:]}"}
 
     staged_files = _collect_staged_files(sandbox_dir)
+    staged_digest = _sandbox_digest(sandbox_dir)
+    verified_digest = tool_context.state.get("evolution_verified_digest", "")
+    if staged_files and verified_digest != staged_digest:
+        return {
+            "status": "error",
+            "message": (
+                "Commit blocked: staged files do not match a successful pytest "
+                "verification. Run evolution_verify_sandbox(check='pytest') after "
+                "the latest staged change, then commit."
+            ),
+        }
 
     github_token = os.environ.get("GITHUB_TOKEN", "")
     github_repo = os.environ.get("GITHUB_REPO", "")

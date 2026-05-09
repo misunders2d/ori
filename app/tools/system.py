@@ -127,6 +127,25 @@ async def execute_approved_action(token: str, totp_code: str = "", tool_context:
     from app.core.pending_actions import get_and_delete_action
     import app.tools as tools_module
 
+    current_user_id = ""
+    current_session_id = ""
+    if tool_context is not None:
+        state = getattr(tool_context, "state", None)
+        if state is not None:
+            try:
+                state_dict = state.to_dict()
+            except Exception:
+                state_dict = {}
+            current_user_id = state_dict.get("user_id", "")
+            current_session_id = state_dict.get("session_id", "")
+        if not current_session_id:
+            session = getattr(tool_context, "session", None)
+            current_session_id = (
+                getattr(session, "session_id", None)
+                or getattr(session, "id", None)
+                or ""
+            )
+
     totp_secret = os.environ.get("ADMIN_TOTP_SECRET")
     require_2fa = os.environ.get("REQUIRE_2FA", "true").lower() == "true"
 
@@ -137,6 +156,13 @@ async def execute_approved_action(token: str, totp_code: str = "", tool_context:
 
     action = get_and_delete_action(token)
     if not action: return {"status": "error", "message": "Invalid token."}
+
+    action_user_id = action.get("user_id", "")
+    action_session_id = action.get("session_id", "")
+    if action_user_id and current_user_id and action_user_id != current_user_id:
+        return {"status": "error", "message": "Approval token does not belong to this user."}
+    if action_session_id and current_session_id and action_session_id != current_session_id:
+        return {"status": "error", "message": "Approval token does not belong to this session."}
 
     tool_func = getattr(tools_module, action["tool_name"], None)
     if not tool_func: return {"status": "error", "message": "Tool missing."}
