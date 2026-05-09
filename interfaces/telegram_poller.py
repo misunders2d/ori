@@ -704,8 +704,19 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                         await adapter.send_message(chat_id, result)
                         continue
 
-                    # Handle /reset command — bypass the agent entirely
+                    # Handle /reset command — bypass the agent entirely.
+                    # Bare /reset is ambiguous: session reset, process restart,
+                    # rollback, and git workspace reset are all valid operations.
                     if text.strip() == "/reset":
+                        await adapter.send_message(
+                            chat_id,
+                            "Which reset do you mean? Reply with one: "
+                            "`/reset session`, `call update_self`, "
+                            "`rollback previous commit`, or `git workspace reset`.",
+                        )
+                        continue
+
+                    if text.strip() == "/reset session":
                         runner_check = get_runner_fn()
                         if runner_check:
                             from app.core.agent_executor import _perform_session_refresh

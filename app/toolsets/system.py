@@ -24,16 +24,16 @@ class SystemToolset(BaseToolset):
         )
 
         tools = [
+            FunctionTool(func=update_self),
             FunctionTool(func=session_refresh),
             FunctionTool(func=set_planner_mode),
             FunctionTool(func=execute_approved_action),
         ]
 
         if not _is_child_container():
-            # Parent-only: spawn/manage children, reboot, rollback
+            # Parent-only: spawn/manage children and rollback parent code.
             from app.tools.spawn import spawn_agent, list_spawned_agents, stop_spawned_agent
             tools.extend([
-                FunctionTool(func=update_self),
                 FunctionTool(func=trigger_rollback),
                 FunctionTool(func=spawn_agent),
                 FunctionTool(func=list_spawned_agents),

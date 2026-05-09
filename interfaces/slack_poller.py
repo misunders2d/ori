@@ -227,6 +227,15 @@ async def poll_slack(get_runner_fn, process_init_fn):
     @slack_app.command("/reset")
     async def handle_reset_command(ack, body, respond):
         await ack()
+        command_text = (body.get("text") or "").strip().lower()
+        if command_text != "session":
+            await respond(
+                "Which reset do you mean? Reply with one: "
+                "`/reset session`, `call update_self`, "
+                "`rollback previous commit`, or `git workspace reset`."
+            )
+            return
+
         channel_id = body.get("channel_id", "")
         session_id = adapter.make_session_id(channel_id)
         session_user_id = session_id
@@ -503,7 +512,15 @@ async def poll_slack(get_runner_fn, process_init_fn):
         _clean_text = text.strip()
         if _bot_user_id:
             _clean_text = _clean_text.replace(f"<@{_bot_user_id}>", "").strip()
-        if _clean_text.lower() in ("reset", "reset session"):
+        if _clean_text.lower() == "reset":
+            await say(
+                "Which reset do you mean? Reply with one: "
+                "`reset session`, `call update_self`, "
+                "`rollback previous commit`, or `git workspace reset`."
+            )
+            return
+
+        if _clean_text.lower() == "reset session":
             runner_check = get_runner_fn()
             if runner_check:
                 from app.core.agent_executor import _perform_session_refresh

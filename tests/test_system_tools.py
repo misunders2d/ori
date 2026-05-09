@@ -1,5 +1,6 @@
 import pytest
 import os
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 @pytest.mark.asyncio
@@ -49,7 +50,7 @@ def test_check_active_tasks():
     from app.tasks import ACTIVE_TASKS
     
     ACTIVE_TASKS.clear()
-    
+
     result = check_active_tasks(tool_context=MagicMock())
     assert result["status"] == "success"
     assert "No active tasks" in result["message"]
@@ -71,3 +72,53 @@ def test_check_active_tasks():
     assert result["active_tasks"][0]["task_id"] == "mock_id"
     
     ACTIVE_TASKS.clear()
+
+
+def test_lifecycle_tool_docstrings_disambiguate_reset_targets():
+    from app.tools.system import session_refresh, trigger_rollback, update_self
+
+    update_doc = update_self.__doc__ or ""
+    refresh_doc = session_refresh.__doc__ or ""
+    rollback_doc = trigger_rollback.__doc__ or ""
+
+    assert "Real process restart/reboot" in update_doc
+    assert "Do NOT use for conversation reset" in update_doc
+    assert "This does NOT restart the running process" in refresh_doc
+    assert "ask" in refresh_doc
+    assert "session refresh or process restart" in refresh_doc
+    assert "Rollback code to previous commit" in rollback_doc
+
+
+def test_coordinator_instruction_requires_reset_clarification():
+    source = Path("app/sub_agents/coordinator_agent.py").read_text()
+
+    assert "RESET / RESTART AMBIGUITY" in source
+    assert "ask which operation they mean" in source
+    assert "BEFORE calling any tool" in source
+    assert "Never infer this from context" in source
+    assert "EXACT LIFECYCLE TOOL REQUESTS" in source
+    assert "do not substitute" in source
+
+
+@pytest.mark.asyncio
+async def test_system_toolset_exposes_update_self_in_child_mode():
+    from app.toolsets.system import SystemToolset
+
+    with patch("app.toolsets.system._is_child_container", return_value=True):
+        tools = await SystemToolset().get_tools()
+
+    tool_names = {getattr(tool, "name", "") for tool in tools}
+    assert "update_self" in tool_names
+    assert "trigger_rollback" not in tool_names
+
+
+def test_transport_bare_reset_asks_for_target():
+    telegram_source = Path("interfaces/telegram_poller.py").read_text()
+    slack_source = Path("interfaces/slack_poller.py").read_text()
+
+    assert 'text.strip() == "/reset"' in telegram_source
+    assert "Which reset do you mean?" in telegram_source
+    assert 'text.strip() == "/reset session"' in telegram_source
+    assert 'command_text != "session"' in slack_source
+    assert "_clean_text.lower() == \"reset\"" in slack_source
+    assert "Which reset do you mean?" in slack_source

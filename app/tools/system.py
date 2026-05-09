@@ -56,8 +56,15 @@ def _is_child_container() -> bool:
 
 
 def update_self(tool_context: ToolContext) -> dict:
-    """Signals the system to restart. On the parent, the supervisor handles git pull + dep sync.
-    On children, Docker's restart policy restarts the container (proving the process survives reboot)."""
+    """Real process restart/reboot via supervisor exit signal.
+
+    Use only when the user clearly wants the running agent process/app to
+    restart so code, dependency, or cross-provider model changes take effect.
+    Do NOT use for conversation reset/history wipe; that is session_refresh.
+    If the user only says "reset", "restart", "refresh", or "reboot" without
+    naming the target, ask whether they mean process restart or session refresh
+    before calling any lifecycle tool.
+    """
     if _is_child_container():
         # Children reboot via direct exit — Docker restart: on-failure:3 brings them back.
         # No code changes on disk (children don't commit), just a clean restart to prove stability.
@@ -73,12 +80,24 @@ def update_self(tool_context: ToolContext) -> dict:
     return {"status": "success", "message": "Reboot signal dispatched. The system will shut down cleanly after this response is delivered."}
 
 def trigger_rollback(tool_context: ToolContext) -> dict:
-    """Signals the system to revert to the previous commit and rebuild."""
+    """Rollback code to previous commit and rebuild/restart.
+
+    Use only when the user clearly asks to roll back code or revert the last
+    deployed commit. Do NOT use for session refresh or normal process restart.
+    If "reset" is ambiguous, ask which reset target the user means first.
+    """
     _write_exit_signal(EXIT_CODE_ROLLBACK)
     return {"status": "success", "message": "Rollback signal dispatched. The system will shut down cleanly after this response is delivered."}
 
 def session_refresh(mode: str, tool_context: ToolContext) -> dict:
-    """Wipes conversation history.
+    """Conversation/session reset only; wipes or summarizes chat history.
+
+    This does NOT restart the running process and does NOT reload model objects.
+    Do NOT use when the user wants model assignments, code changes, or provider
+    changes to take effect; that requires update_self. If the user only says
+    "reset", "restart", "refresh", or "reboot" without naming the target, ask
+    whether they mean session refresh or process restart before calling any
+    lifecycle tool.
 
     Args:
         mode: 'fresh' for a clean wipe, 'summarize' to condense history first.
