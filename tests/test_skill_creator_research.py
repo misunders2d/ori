@@ -4,7 +4,7 @@ import pytest
 def test_skill_creator_contains_research_step():
     skill_path = "skills/skill-creator-skill/SKILL.md"
     if not os.path.exists(skill_path):
-        pytest.skip("Skills directory not available in sandbox")
+        pytest.fail(f"Required skill file missing: {skill_path}")
 
     with open(skill_path, "r") as f:
         content = f.read()

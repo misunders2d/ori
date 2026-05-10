@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import pytest
 
@@ -12,8 +13,17 @@ def test_github_token():
 
 @pytest.mark.infra
 def test_npx_available():
+    if not shutil.which("npx"):
+        print("npx is NOT available on PATH.")
+        return
     try:
-        result = subprocess.run(["npx", "--version"], capture_output=True, text=True, check=True)
+        result = subprocess.run(
+            ["npx", "--version"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
         print(f"npx is available: {result.stdout.strip()}")
     except Exception as e:
         print(f"npx is NOT available or failed: {e}")

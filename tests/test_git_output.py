@@ -5,7 +5,7 @@ import pytest
 @pytest.mark.infra
 def test_git_output():
     def run(cmd):
-        res = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+        res = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=10)
         return f"\nCMD: {cmd}\nSTDOUT: {res.stdout}\nSTDERR: {res.stderr}\n"
     
     out = run("git status")

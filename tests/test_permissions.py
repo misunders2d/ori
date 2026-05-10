@@ -37,13 +37,15 @@ def test_check_permissions():
 
     content += "\nGit Config:\n"
     try:
-        content += subprocess.check_output(["git", "config", "--list"], text=True)
+        content += subprocess.check_output(
+            ["git", "config", "--list"], text=True, timeout=10
+        )
     except Exception as e:
         content += f"Error checking git config: {e}\n"
 
     content += "\nGit Status:\n"
     try:
-        content += subprocess.check_output(["git", "status"], text=True)
+        content += subprocess.check_output(["git", "status"], text=True, timeout=10)
     except Exception as e:
         content += f"Error checking git status: {e}\n"
     

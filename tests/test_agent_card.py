@@ -10,10 +10,8 @@ AGENT_JSON = os.path.join(os.path.dirname(__file__), os.pardir, "data", "agent.j
 
 
 def test_agent_card_validates():
-    # If the file doesn't exist (e.g. fresh environment), skip this test
     if not os.path.exists(AGENT_JSON):
-        pytest.skip(f"agent.json not found at {AGENT_JSON}")
-        
+        pytest.fail(f"agent.json not found at {AGENT_JSON}")
     with open(AGENT_JSON) as f:
         card = AgentCard(**json.load(f))
 
