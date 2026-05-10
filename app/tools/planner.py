@@ -71,7 +71,7 @@ def seed_plan(session_id: str, task: str, steps: list[str]) -> None:
     if not steps:
         return
     plan = {
-        "task": task[:500],
+        "task": task[:5000],
         "status": "active",
         "created_at": time.time(),
         "current_step": 0,

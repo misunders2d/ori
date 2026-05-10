@@ -205,7 +205,7 @@ async def run_scheduled_task(
             # no opportunity to skip create_plan — the plan already exists.
             if steps:
                 from app.tools.planner import seed_plan
-                seed_plan(session_id, task_prompt[:500], steps)
+                seed_plan(session_id, task_prompt[:5000], steps)
                 logger.info(
                     "Scheduled task %s: seeded enforced plan with %d step(s)",
                     task_id, len(steps),
