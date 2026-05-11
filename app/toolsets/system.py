@@ -24,14 +24,14 @@ class SystemToolset(BaseToolset):
             update_self,
             session_refresh,
             trigger_rollback,
-            set_planner_mode,
+            set_thinking_mode,
             execute_approved_action,
         )
 
         tools = [
             FunctionTool(func=update_self),
             FunctionTool(func=session_refresh),
-            FunctionTool(func=set_planner_mode),
+            FunctionTool(func=set_thinking_mode),
             FunctionTool(func=execute_approved_action),
         ]
 

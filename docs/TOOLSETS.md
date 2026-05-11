@@ -80,7 +80,7 @@
 ## SystemToolset
 - File: `app/toolsets/system.py:19`
 - Core system lifecycle tools.
-- Bundled tools: `execute_approved_action`, `list_spawned_agents`, `session_refresh`, `set_planner_mode`, `spawn_agent`, `stop_spawned_agent`, `trigger_rollback`, `update_self`
+- Bundled tools: `execute_approved_action`, `list_spawned_agents`, `session_refresh`, `set_thinking_mode`, `spawn_agent`, `stop_spawned_agent`, `trigger_rollback`, `update_self`
 
 ## VisualizationToolset
 - File: `app/toolsets/visualization.py:5`

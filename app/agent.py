@@ -45,6 +45,22 @@ _SUMMARIZER_PROMPT_TEMPLATE = (
     "Conversation:\n{conversation_history}"
 )
 
+# Apply the persisted thinking flag to every LiteLlm-backed agent in the
+# tree before the App is constructed. This is the boot-time half of the
+# global switch — the runtime half lives in ``set_thinking_mode`` which
+# re-walks the tree after every toggle so the change takes effect without
+# a restart.
+try:
+    from app.app_utils import thinking as _thinking
+
+    _thinking.apply_to_agent_tree(root_agent)
+except Exception as _e:
+    import logging as _logging
+
+    _logging.getLogger(__name__).warning(
+        "Failed to apply thinking config at boot: %s", _e
+    )
+
 app = App(
     root_agent=root_agent,
     name=app_name,

@@ -342,8 +342,9 @@ Tool for spawning sibling agent containers.
 - `update_self` (line 63) — Real process restart/reboot via supervisor exit signal.
 - `trigger_rollback` (line 87) — Rollback code to previous commit and rebuild/restart.
 - `session_refresh` (line 103) — Conversation/session reset only; wipes or summarizes chat history.
-- `async set_planner_mode` (line 132) — Toggle deep thought.
-- `async execute_approved_action` (line 137)
+- `async set_thinking_mode` (line 132) — Toggle extended thinking globally across every sub-agent.
+- `async set_planner_mode` (line 191) — Deprecated alias for ``set_thinking_mode``. Use that instead.
+- `async execute_approved_action` (line 195)
 
 ## `app/tools/telegram.py`
 Telegram-specific agent tools.

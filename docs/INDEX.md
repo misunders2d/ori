@@ -39,7 +39,7 @@ Read this **before** adding new code — most things you'd build already exist.
 
 - **KnowledgeAgent** (Agent) — `app/sub_agents/knowledge_agent.py:30`
 
-## Tools (224 public functions across 39 files)
+## Tools (225 public functions across 39 files)
 
 
 ### `app/tools/a2a.py`
@@ -377,8 +377,9 @@ Tool for spawning sibling agent containers.
 - `update_self` (line 63) — Real process restart/reboot via supervisor exit signal.
 - `trigger_rollback` (line 87) — Rollback code to previous commit and rebuild/restart.
 - `session_refresh` (line 103) — Conversation/session reset only; wipes or summarizes chat history.
-- `async set_planner_mode` (line 132) — Toggle deep thought.
-- `async execute_approved_action` (line 137)
+- `async set_thinking_mode` (line 132) — Toggle extended thinking globally across every sub-agent.
+- `async set_planner_mode` (line 191) — Deprecated alias for ``set_thinking_mode``. Use that instead.
+- `async execute_approved_action` (line 195)
 
 ### `app/tools/telegram.py`
 Telegram-specific agent tools.
@@ -465,7 +466,7 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
 
 - **SystemToolset** — `app/toolsets/system.py:19`
   - Core system lifecycle tools.
-  - tools: `execute_approved_action`, `list_spawned_agents`, `session_refresh`, `set_planner_mode`, `spawn_agent`, `stop_spawned_agent`, `trigger_rollback`, `update_self`
+  - tools: `execute_approved_action`, `list_spawned_agents`, `session_refresh`, `set_thinking_mode`, `spawn_agent`, `stop_spawned_agent`, `trigger_rollback`, `update_self`
 
 - **VisualizationToolset** — `app/toolsets/visualization.py:5`
   - Data visualization and file export — charts, CSVs, Excel, PDFs.
@@ -480,14 +481,14 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
 
 - `admin_tool_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:93` — Runtime Guardrail: Intercepts highly privileged tool calls before execution.
 - `async prompt_injection_guardrail` (before_model | state) — `app/callbacks/guardrails.py:284` — Runtime Guardrail: Inspects the LLM request before hitting the model.
-- `admin_only_guardrail` (before_model | state) — `app/callbacks/guardrails.py:438` — Runtime Guardrail: Checks if the user is explicitly set in ADMIN_USER_IDS setup.
-- `tool_output_injection_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:501` — After-tool callback: scan high-risk tool outputs for prompt injection.
-- `verify_retry_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:583` — After-tool callback: counts evolution_verify_sandbox failures in session state.
-- `tool_output_spillover_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:684` — After-tool callback: spill oversized outputs to scratchpad.
-- `plan_enforcer` (before_model | state) — `app/callbacks/guardrails.py:767` — Injects active plan context into the model prompt to enforce step-by-step execution.
-- `plan_step_enforcer` (before_tool | after_tool) — `app/callbacks/guardrails.py:822` — before_tool guard: block tool calls outside the active step's allowed_tools.
-- `async state_setter` (before_model | state) — `app/callbacks/guardrails.py:885` — Sets initial fundamental session state keys to prevent KeyErrors during prompt evaluation.
-- `a2a_privacy_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:953` — Deterministic secret-matching guardrail for A2A tools.
+- `admin_only_guardrail` (before_model | state) — `app/callbacks/guardrails.py:455` — Runtime Guardrail: Checks if the user is explicitly set in ADMIN_USER_IDS setup.
+- `tool_output_injection_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:518` — After-tool callback: scan high-risk tool outputs for prompt injection.
+- `verify_retry_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:600` — After-tool callback: counts evolution_verify_sandbox failures in session state.
+- `tool_output_spillover_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:701` — After-tool callback: spill oversized outputs to scratchpad.
+- `plan_enforcer` (before_model | state) — `app/callbacks/guardrails.py:784` — Injects active plan context into the model prompt to enforce step-by-step execution.
+- `plan_step_enforcer` (before_tool | after_tool) — `app/callbacks/guardrails.py:839` — before_tool guard: block tool calls outside the active step's allowed_tools.
+- `async state_setter` (before_model | state) — `app/callbacks/guardrails.py:902` — Sets initial fundamental session state keys to prevent KeyErrors during prompt evaluation.
+- `a2a_privacy_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:970` — Deterministic secret-matching guardrail for A2A tools.
 
 ## Skills (18)
 

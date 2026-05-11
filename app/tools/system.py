@@ -129,10 +129,68 @@ def session_refresh(mode: str, tool_context: ToolContext) -> dict:
     request_refresh(session_id, mode)
     return {"status": "success", "message": f"Session refresh ({mode}) scheduled. It will take effect after this response."}
 
+async def set_thinking_mode(
+    enabled: bool,
+    tool_context: ToolContext,
+    budget_tokens: int = 4096,
+) -> dict:
+    """Toggle extended thinking globally across every sub-agent.
+
+    Provider-agnostic: applies to Gemini (per-turn ``thinking_config`` set
+    in the ``state_setter`` callback) and to LiteLlm-backed agents like
+    Anthropic Opus 4.7 via OpenRouter (``thinking={"type":"enabled",...}``
+    injected into each LiteLlm instance's completion kwargs).
+
+    Persisted to ``data/thinking_config.json`` so the setting survives
+    restart. The flag is process-global — one call, one effect, all
+    agents — there is no per-session override.
+
+    Thoughts themselves never reach Slack/Telegram/A2A. ``extract_agent_response``
+    filters ``Part(thought=True)`` regardless of this flag — turning
+    thinking on lets the model reason internally without polluting chat.
+
+    Args:
+        enabled: True to allow models to think before answering. False to
+            forbid it.
+        budget_tokens: How many thinking tokens Anthropic is allowed per
+            response when enabled. Ignored when disabled. Default 4096.
+
+    Returns:
+        dict with the new persisted config + a count of agents updated.
+    """
+    from app.app_utils import thinking
+
+    cfg = thinking.save(enabled, budget_tokens=budget_tokens)
+
+    # Apply to the live agent tree so the next turn already uses the new
+    # setting. Without this, LiteLlm-backed agents would only pick up the
+    # change on the next process restart.
+    counts = {"inspected": 0, "mutated": 0}
+    try:
+        from app.agent import root_agent
+
+        counts = thinking.apply_to_agent_tree(root_agent)
+    except Exception as e:
+        logger.warning("apply_to_agent_tree failed in set_thinking_mode: %s", e)
+
+    return {
+        "status": "success",
+        "message": (
+            f"Thinking {'enabled' if enabled else 'disabled'} globally "
+            f"(budget={budget_tokens} tokens). "
+            f"Applied to {counts['mutated']}/{counts['inspected']} LiteLlm agents; "
+            "Gemini agents pick up per-turn."
+        ),
+        "config": cfg,
+    }
+
+
+# Backward-compat alias: older sessions/skills may still call
+# ``set_planner_mode``. Delegates to the new global toggle so behaviour
+# converges on a single source of truth.
 async def set_planner_mode(enabled: bool, tool_context: ToolContext) -> dict:
-    """Toggle deep thought."""
-    tool_context.state["use_planner"] = enabled
-    return {"status": "success", "message": f"Thinker mode {'enabled' if enabled else 'disabled'}."}
+    """Deprecated alias for ``set_thinking_mode``. Use that instead."""
+    return await set_thinking_mode(enabled, tool_context)
 
 async def execute_approved_action(token: str, totp_code: str = "", tool_context: ToolContext = None) -> dict:
     from app.core.pending_actions import get_and_delete_action

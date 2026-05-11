@@ -360,10 +360,27 @@ async def prompt_injection_guardrail(
                     "Reply using Slack mrkdwn (*bold*, _italics_, `code`, <url|label>), not GitHub Markdown."
                 ]
             )
-    use_planner = callback_context.state.to_dict().get("use_planner", False)
-    if not use_planner and getattr(llm_request, "config", None):
-        if hasattr(llm_request.config, "thinking_config"):
+    # Global thinking switch — provider-agnostic. The on/off flag lives in
+    # data/thinking_config.json; ``app.app_utils.thinking`` caches it with
+    # mtime invalidation so this branch doesn't hit disk every turn.
+    # Gemini's thinking lives on the per-call request, so we toggle it
+    # here. LiteLlm-backed agents (Anthropic via OpenRouter etc.) are
+    # toggled when the flag flips (``apply_to_agent_tree`` mutates each
+    # model's ``_additional_args``), not per turn.
+    if getattr(llm_request, "config", None) and hasattr(
+        llm_request.config, "thinking_config"
+    ):
+        from app.app_utils import thinking as _thinking
+
+        cfg = _thinking.load()
+        if not cfg["enabled"]:
             llm_request.config.thinking_config = None
+        else:
+            # Leave thinking_config alone — Gemini will use whatever the
+            # model defaults to (or whatever the caller pre-set). We avoid
+            # constructing a ThinkingConfig here so the import stays out
+            # of the callback hot path; the default-on behaviour is fine.
+            pass
 
     # Hot-swap model override from session state
     model_key = f"model:{callback_context.agent_name}"
