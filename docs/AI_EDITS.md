@@ -91,7 +91,9 @@ uv run python -m py_compile app/tools/evolution.py
 
 ## 12. Trust the supervisor — don't issue manual `uv sync` / `git pull` / `docker build`
 
-`deploy/ori-supervisor.py` already does these for you. It hashes `pyproject.toml` + `uv.lock` into `data/.deps_hash` and runs `uv sync` on mismatch every boot. It pulls master and rebuilds the child Docker image on evolution exit (signal 100). It reverts one commit on rollback exit (101). Full contract in `docs/RUNBOOK.md` §2.
+`deploy/ori-supervisor.py` already does these for you. It hashes `pyproject.toml` + `uv.lock` into `data/.deps_hash` and runs `uv sync --frozen` on mismatch every boot. It pulls the current branch (worktree-aware — not hardcoded `master`) and rebuilds the child Docker image on evolution exit (signal 100). It reverts one commit on rollback exit (101). Full contract in `docs/RUNBOOK.md` §2.
+
+`--frozen` is load-bearing: it forbids `uv` from rewriting `uv.lock` on deploy hosts. A bare `uv sync` mutates the lockfile, which then blocks the next `git pull` with a merge conflict (2026-05-11 contabo incident). Lock updates happen only on a dev box, only as part of a commit. **Never** run `uv sync` (without `--frozen`) on a deploy host — and never tell the user to.
 
 When telling the user how to update production, the answer is almost always **`git pull && ./deploy/start.sh`** — never "and then run `uv sync` too." Pre-empting the supervisor is redundant noise and trains the user to bypass the safety mechanisms baked into the supervisor.
 

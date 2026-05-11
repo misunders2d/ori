@@ -13,6 +13,10 @@ This document is the foundational instruction set for all AI coding agents (both
 > - [docs/PLANS.md](docs/PLANS.md) — plan schema + enforcer behavior
 > - [docs/SCRATCHPAD.md](docs/SCRATCHPAD.md) — session-scoped working memory
 > - [docs/RUNBOOK.md](docs/RUNBOOK.md) — production deploy / rollback / disaster recovery
+>
+> **Google ADK is a moving target.** Ori runs on ADK 1.x (currently 1.28); releases inside 1.x ship breaking changes (import paths, callback signatures, schema converters). If something stops working with `AttributeError`, `ImportError`, or a Gemini 400 about an unknown field — do NOT rely on pre-training knowledge of ADK. Check the **official docs at `google.github.io/adk-docs/`** and the GitHub repo `google/adk-python` for the installed version (`uv pip show google-adk`). When docs lag, read `.venv/lib/python3.13/site-packages/google/adk/` directly. The same caveat applies to LiteLLM, OpenRouter routing, Anthropic and Gemini provider behavior — verify before assuming. See `skills/google-adk-skill/SKILL.md` for the canonical project patterns.
+>
+> **Do not run `uv sync` manually on deploy hosts.** Deploy paths use `uv sync --frozen` so `uv.lock` stays clean. A bare `uv sync` rewrites the lock and blocks the next `git pull` (2026-05-11 contabo incident). Lock updates only on a dev box, only as part of a commit.
 
 ---
 

@@ -54,6 +54,19 @@ The self-evolution pipeline does this automatically before pytest, but if you're
 
 This project is uv-managed. **Always** invoke Python through `uv run` — `uv run python -m pytest`, `uv run python scripts/<x>.py`, `uv run python run_bot.py`. Never `.venv/bin/python`, `python3`, or system `python` directly. See `docs/AI_EDITS.md` §11.
 
+**Do not run `uv sync` manually on deploy hosts** — deploy paths use `uv sync --frozen` so `uv.lock` never drifts. A bare `uv sync` rewrites the lock, blocks the next `git pull`, and is forbidden in production (2026-05-11 contabo incident). Lock updates happen on the dev box, in a commit, only.
+
+## Google ADK is a moving target — check the docs
+
+Ori runs on Google ADK 1.x (currently 1.28). ADK releases breaking changes inside 1.x (import paths, callback signatures, schema converters — we hit one on 2026-05-11 with `additional_properties` in nested `any_of`). When something stops working with an `AttributeError`, `ImportError`, or a Gemini 400 about an unknown field:
+
+1. Check the installed version: `uv pip show google-adk` — pin in `pyproject.toml`.
+2. Web-search the **official ADK docs** at `google.github.io/adk-docs/` and the GitHub repo (`google/adk-python`) for the matching version. **Do not trust pre-training knowledge of ADK** — releases since the cutoff may have moved things.
+3. Cross-check `skills/google-adk-skill/SKILL.md` for canonical patterns the project relies on (callback ordering, toolset conventions, model wrapper choices).
+4. Read `.venv/lib/python3.13/site-packages/google/adk/` directly when docs lag — it's the truth.
+
+The same applies to LiteLLM, OpenRouter routing, and Anthropic / Gemini provider quirks. The 2026-05-11 schema bug surfaced specifically because we assumed ADK's sanitizer covered every nested path; web-checking the upstream would have flagged the gap earlier.
+
 ## Branch + worktree note (lessons from 2026-05-11)
 
 This repo is often a **git worktree**. Always run `git worktree list` and `git status -sb` before any reset/pull/push. The May 2026 incident was caused by treating two sibling worktrees as the same checkout. Don't reproduce it.
