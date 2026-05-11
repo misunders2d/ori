@@ -119,3 +119,80 @@ def test_hydrate_handles_corrupt_config(isolated_config, caplog):
     count = hydrate_model_env()
 
     assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# set_model: refuse overrides whose provider key is missing
+# ---------------------------------------------------------------------------
+
+
+def test_set_model_refuses_when_provider_key_missing(isolated_config, monkeypatch):
+    """Persisting an override the runtime can't honour would feed the
+    auto-repair loop in get_model and leave the user wondering why
+    nothing changed. set_model must refuse with a clear error."""
+    from app.app_utils.models import set_model
+
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+
+    with pytest.raises(ValueError, match="no usable API key"):
+        set_model("CoordinatorAgent", "openrouter/anthropic/claude-opus-4.7")
+
+
+def test_set_model_accepts_when_provider_key_present(isolated_config, monkeypatch):
+    """With the key in env, the persist call goes through and the
+    assignment lands in model_config.json."""
+    from app.app_utils.model_config import get_assignment
+    from app.app_utils.models import set_model
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    set_model("CoordinatorAgent", "openrouter/anthropic/claude-opus-4.7")
+    assert get_assignment("CoordinatorAgent") == "openrouter/anthropic/claude-opus-4.7"
+
+
+# ---------------------------------------------------------------------------
+# get_model: auto-repair on fallback
+# ---------------------------------------------------------------------------
+
+
+def test_get_model_auto_repairs_unusable_override(isolated_config, monkeypatch, caplog):
+    """When the persisted override can't be built (e.g. key missing
+    after rotation), get_model falls back to default AND clears the
+    bad override. Otherwise state_setter would emit a permanent
+    cross-provider warning the user can't reconcile."""
+    import logging
+
+    from app.app_utils.model_config import get_assignment
+    from app.app_utils.models import get_model
+
+    # Seed a bad override directly via the config layer so we exercise
+    # the auto-repair path without tripping set_model's preflight.
+    from app.app_utils.model_config import set_assignment
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-temp")
+    set_assignment("CoordinatorAgent", "openrouter/anthropic/claude-opus-4.7")
+    # Then yank the key so the build fails.
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    # Provide GOOGLE_API_KEY so the default (google/gemini-3-flash-preview)
+    # can be built as the fallback.
+    monkeypatch.setenv("GOOGLE_API_KEY", "gk-test")
+
+    with caplog.at_level(logging.WARNING):
+        model = get_model("CoordinatorAgent")
+
+    # Fallback succeeded — model object exists.
+    assert model is not None
+    # Override cleared from model_config.json so the next call uses the
+    # default cleanly and state_setter has nothing to warn about.
+    # (model_config.get_assignment returns "" for missing keys, treat both
+    # as "no override".)
+    assert not get_assignment("CoordinatorAgent")
+    # Env var also cleared so a fresh process doesn't re-hydrate the
+    # bad override.
+    assert "MODEL_COORDINATORAGENT" not in os.environ
+    # Warning surfaced once for the operator.
+    assert any(
+        "auto-repair" in r.message.lower() or "clearing" in r.message.lower()
+        for r in caplog.records
+    )

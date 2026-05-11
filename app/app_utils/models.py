@@ -225,6 +225,16 @@ def get_model(component: str, **kwargs):
     after a key rotation or vault hiccup — the override silently steps
     aside instead of bricking import-time agent construction.
 
+    When falling back, the bad override is ALSO cleared from
+    ``model_config.json`` and ``os.environ``. Otherwise ``state_setter``
+    would compare the persisted override against the live (default-built)
+    model on every turn and emit a permanent "Cross-provider hot-swap
+    requested" warning that no restart can reconcile — the override
+    keeps re-hydrating from disk, the build keeps failing, and the
+    warning keeps firing. Auto-repair eliminates that loop (the user
+    sees the fallback warning ONCE in the boot log; subsequent runs
+    are clean).
+
     If the default ALSO fails to build, the error propagates (no key for
     *any* model means the agent can't run anyway).
     """
@@ -238,12 +248,51 @@ def get_model(component: str, **kwargs):
         default_str = MODEL_DEFAULTS.get(component, "")
         if default_str and default_str != model_str:
             logger.warning(
-                "get_model(%s): override %s unusable (%s) — falling back to default %s",
+                "get_model(%s): override %s unusable (%s) — falling back to default %s "
+                "and clearing the bad override (model_config.json + os.environ).",
                 component, model_str, e, default_str,
             )
+            # Auto-repair: drop the unusable override so state_setter and
+            # the next get_model() call both see the same default. Wrapped
+            # in best-effort try/except — repair failure must not block
+            # boot.
+            try:
+                from app.app_utils.model_config import unset_assignment
+
+                unset_assignment(component)
+            except Exception as repair_err:
+                logger.warning(
+                    "get_model(%s): auto-repair failed to clear override (%s) — "
+                    "the cross-provider warning will likely keep firing until "
+                    "the override is removed manually.",
+                    component,
+                    repair_err,
+                )
+            os.environ.pop(f"MODEL_{component.upper()}", None)
+
             default_provider, default_name = _parse_model_str(default_str)
             return _build_model(default_provider, default_name, **kwargs)
         raise
+
+
+def _provider_key_available(provider: str) -> bool:
+    """Return True if the env keys required to build a model on this
+    provider are currently present.
+
+    Guards ``set_model`` against persisting an override the runtime
+    can't honour. Without this check, a missed key turns into a
+    permanent "cross-provider hot-swap" warning loop (the override
+    keeps re-hydrating, the build keeps falling back to default,
+    state_setter keeps flagging the mismatch).
+    """
+    if provider == "google":
+        # Either direct API key OR Vertex AI ADC mode works.
+        return bool(os.environ.get("GOOGLE_API_KEY", "").strip()) or _is_vertex_mode()
+    if provider == "anthropic":
+        return bool(os.environ.get("ANTHROPIC_API_KEY", "").strip()) or _is_vertex_mode()
+    if provider == "openrouter":
+        return bool(os.environ.get("OPENROUTER_API_KEY", "").strip())
+    return False
 
 
 def set_model(component: str, model_str: str) -> None:
@@ -251,6 +300,11 @@ def set_model(component: str, model_str: str) -> None:
 
     Always stores the canonical `provider/model` form, even if the caller
     passed a legacy Google-API `models/X` string or a bare name.
+
+    Refuses to persist an override whose provider has no usable API key
+    in the current environment — silently writing a key-less override
+    would feed the auto-repair loop in ``get_model()`` and leave the
+    user wondering why nothing changed.
     """
     if component not in VALID_COMPONENTS:
         raise ValueError(f"Invalid component: '{component}'. Valid: {sorted(VALID_COMPONENTS)}")
@@ -259,6 +313,13 @@ def set_model(component: str, model_str: str) -> None:
     if provider not in SUPPORTED_PROVIDERS:
         raise ValueError(
             f"Unsupported provider '{provider}' in '{model_str}'. Supported: {sorted(SUPPORTED_PROVIDERS)}"
+        )
+    if not _provider_key_available(provider):
+        raise ValueError(
+            f"Cannot set {component!r} to {model_str!r}: provider {provider!r} "
+            f"has no usable API key in the environment. Configure the key first "
+            f"({provider}=GOOGLE_API_KEY / GOOGLE_GENAI_USE_VERTEXAI / "
+            f"ANTHROPIC_API_KEY / OPENROUTER_API_KEY as applicable), then retry."
         )
     normalized = f"{provider}/{model_name}"
 
