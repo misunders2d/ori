@@ -332,6 +332,22 @@ def evolution_verify_sandbox(
                             os.symlink(src, dst)
                             links_created.append(dst)
 
+                # Regenerate docs/INDEX.md before tests so any structural
+                # change in the sandbox shows up in the index — keeps the
+                # auto-generated docs in lockstep with the code being
+                # verified. Non-fatal: failures here log, tests still run.
+                gen_docs_path = os.path.join(PROJECT_ROOT, "scripts", "gen_docs.py")
+                if os.path.isfile(gen_docs_path):
+                    try:
+                        subprocess.run(
+                            [sys.executable, gen_docs_path],
+                            cwd=sandbox_dir,
+                            env={**os.environ, "GEN_DOCS_ROOT": sandbox_dir},
+                            capture_output=True, text=True, timeout=30,
+                        )
+                    except Exception as e:
+                        logger.warning("gen_docs pre-pytest hook skipped: %s", e)
+
                 pytest_script = (
                     "import pytest, sys, os; "
                     "os.environ['PYTHONPATH'] = os.getcwd(); "
