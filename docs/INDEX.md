@@ -35,7 +35,7 @@ Read this **before** adding new code — most things you'd build already exist.
 
 - **CoordinatorAgent** (Agent) — `app/sub_agents/coordinator_agent.py:57`
 
-- **DeveloperAgent** (Agent) — `app/sub_agents/developer_agent.py:124`
+- **DeveloperAgent** (Agent) — `app/sub_agents/developer_agent.py:133`
 
 - **KnowledgeAgent** (Agent) — `app/sub_agents/knowledge_agent.py:30`
 

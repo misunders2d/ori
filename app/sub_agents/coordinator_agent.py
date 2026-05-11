@@ -57,14 +57,23 @@ _knowledge_graph_skill = load_skill_from_dir(_skills_dir / "knowledge-graph-skil
 root_agent = Agent(
     name="CoordinatorAgent",
     model=get_model("CoordinatorAgent"),
-    description="The primary interface for the autonomous agent platform. Routes requests, manages scheduling, memory, and system operations.",
+    description=(
+        "The primary interface for the autonomous agent platform. Routes requests, manages "
+        "ad-hoc and recurring scheduling (cron + contract-driven), memory, and system operations. "
+        "Owns the contract pipeline (`contract_draft_validate`, `contract_dry_run`, "
+        "`contract_freeze`, `contract_schedule`, `contract_unschedule`, `contract_revise`, "
+        "`contract_list`, `contract_inspect`, `contract_from_existing`) — the preferred path for "
+        "recurring/scheduled tasks. Routes presentation (.pptx) requests through AmazonHeadAgent → "
+        "AmazonDataAnalystAgent."
+    ),
     instruction=(
         "You are {bot_name}, an autonomous self-evolving agent platform. "
         "Route requests to specialist agents; handle cross-cutting concerns directly.\n\n"
 
         "DELEGATION:\n"
         "1. **AmazonHeadAgent** — ALL Amazon business: product research, BigQuery analytics, "
-        "knowledge graph (Neo4j) for memories + people, Google Workspace, data analysis/charts.\n"
+        "knowledge graph (Neo4j) for memories + people, Google Workspace, data analysis/charts, "
+        "**PowerPoint presentations (.pptx)** via AmazonDataAnalystAgent.\n"
         "2. **DeveloperAgent** — Code changes, bug fixes, model switching. Only on explicit requests.\n"
         "3. **KnowledgeAgent** — A2A communication, friend management, DNA exchange.\n"
         + (
@@ -91,9 +100,12 @@ root_agent = Agent(
         "node; do not pass or fabricate author values.\n\n"
 
         "SCHEDULING / REMINDER ROUTING (STRICT):\n"
-        "- ANY 'remind me / every X / at <time> / in N minutes' request → handle DIRECTLY with the "
-        "scheduling tools. Load `scheduling-skill` for cron format, `deliver_to` channel routing "
-        "(`sl_<id>` Slack, `tg_<id>` Telegram), and plan-enforcement-in-task patterns.\n"
+        "- For ANY recurring/scheduled work — prefer the **contract pipeline** over raw scheduling. "
+        "Workflow: `contract_draft_validate` → `contract_dry_run` (with mock inputs) → `contract_freeze` → "
+        "`contract_schedule`. Inspect with `contract_list` / `contract_inspect`. Revise with "
+        "`contract_revise`; clone existing patterns with `contract_from_existing`. Load `scheduling-skill` "
+        "for the underlying cron format + `deliver_to` channel routing (`sl_<id>` Slack, `tg_<id>` Telegram).\n"
+        "- One-shot 'remind me in N minutes' style requests → SchedulingToolset directly (no contract).\n"
         "- NEVER delegate scheduling to ClickUpAgent or AmazonWorkspaceAgent.\n"
         "- ClickUp only on explicit 'create a ClickUp task / assign in ClickUp' wording.\n"
         "- Google Calendar (via AmazonHeadAgent → AmazonWorkspaceAgent) only on explicit "

@@ -49,7 +49,7 @@ Augment by hand for fields the AST cannot infer (parent_agent, when_to_use, etc)
 - Module variable: `root_agent`
 
 ## DeveloperAgent
-- File: `app/sub_agents/developer_agent.py:124` (Agent)
+- File: `app/sub_agents/developer_agent.py:133` (Agent)
 - Module variable: `developer_agent`
 
 ## KnowledgeAgent

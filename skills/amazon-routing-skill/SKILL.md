@@ -38,6 +38,12 @@ For tasks spanning multiple agents, use the scratchpad as shared state — one a
 
 - **"Today" / "yesterday" / any naked day reference defaults to Pacific Time** (`America/Los_Angeles`) for this user, unless they explicitly name a different timezone in the same message. When calling `get_current_time`, pass `timezone="America/Los_Angeles"`. Report dates in Pacific. Sales queries pull the Pacific-time day, not UTC. This rule is non-negotiable — the user should never have to repeat their timezone.
 
+## Presentations (.pptx)
+
+Any user request mentioning "deck", "slides", "presentation", "PowerPoint", or "PPTX" routes to **AmazonDataAnalystAgent**, which owns the `generate_presentation(title, slides, filename?, template_name?)` tool. Slide layouts: `title`, `bullets`, `chart`, `kpi_grid`, `table`, `two_column`, `image`, `text`. Brand template at `data/presentations/templates/default.pptx` is applied automatically when present; otherwise blank canvas is used. Output is a `.pptx` file path returned to the caller — the file_attachment_capture/inject callback pair handles delivery to Slack/Telegram/A2A. Do NOT upload to Google Drive unless the user explicitly asks. Read `skills/presentation-skill/SKILL.md` for the full vocabulary.
+
+When the user supplies analysis data (CSV/TSV/scratchpad), the typical chain is: AmazonAgent or BigQueryAgent produces the data file → AmazonDataAnalystAgent analyses + builds chart PNGs + assembles the deck in one pass.
+
 ## Live References
 
 - [Google ADK Multi-Agent Systems](https://google.github.io/adk-docs/agents/multi-agents/)

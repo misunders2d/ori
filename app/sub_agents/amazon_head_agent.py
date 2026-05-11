@@ -42,7 +42,8 @@ amazon_head_agent = Agent(
         "Amazon business operations manager. Handles ALL Amazon-related tasks: "
         "product research, pricing, Keepa data, SP-API, Helium10 keywords, "
         "BigQuery sales/inventory analytics, professional memory and knowledge graph, "
-        "Google Workspace (Drive, Sheets, Calendar), data visualization, charts, and file exports. "
+        "Google Workspace (Drive, Sheets, Calendar), data visualization, charts, CSV/Excel exports, "
+        "and PowerPoint presentation (.pptx) building via AmazonDataAnalystAgent. "
         "Delegate here for anything related to Amazon business. NOT for AI image generation."
     ),
     instruction=(
@@ -53,7 +54,14 @@ amazon_head_agent = Agent(
         "Your team: AmazonAgent (product research), AmazonMemoryAgent (knowledge/graph), "
         + ("BigQueryAgent (business analytics), " if bigquery_agent else "")
         + "AmazonWorkspaceAgent (Drive/Sheets/Calendar), "
-        "AmazonDataAnalystAgent (data analysis, statistics, charts — handles large files other agents can't read).\n\n"
+        "AmazonDataAnalystAgent (data analysis, statistics, charts, CSV/Excel exports, AND "
+        "PowerPoint presentation (.pptx) building via `generate_presentation` — also handles "
+        "large files other agents can't read).\n\n"
+        "ROUTING HINTS:\n"
+        "- Any 'deck / slides / presentation / PowerPoint / PPTX' request → AmazonDataAnalystAgent.\n"
+        "- Sales/orders/ads totals → AmazonAgent (uses SP-API report path, NEVER list_orders).\n"
+        "- 'Today' / 'yesterday' / any naked day reference means Pacific (America/Los_Angeles) "
+        "unless the user specifies otherwise.\n\n"
         "For simple tasks, delegate directly to the right agent. "
         "For multi-step tasks, use the scratchpad as shared state between agents."
     ),

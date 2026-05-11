@@ -30,22 +30,30 @@ amazon_data_analyst_agent = Agent(
     name="AmazonDataAnalystAgent",
     model=get_model("AmazonDataAnalystAgent"),
     description=(
-        "Data analyst, statistician, and visualization specialist. Analyzes large data files "
-        "(SP-API reports, BigQuery exports, H10 keyword data, ads reports) using pandas/numpy/scipy. "
-        "Creates charts, plots, CSV/Excel exports. Handles weighted aggregation, SQP analysis, "
-        "ACoS/ROAS calculations, keyword gap analysis, and statistical operations. "
+        "Data analyst, statistician, visualization specialist, AND presentation builder. "
+        "Analyzes large data files (SP-API reports, BigQuery exports, H10 keyword data, ads reports) "
+        "using pandas/numpy/scipy. Creates charts, plots, CSV/Excel exports, and PowerPoint decks "
+        "(.pptx) via `generate_presentation` — supports title, bullets, chart, kpi_grid, table, "
+        "two_column, image, and text slide layouts. Brand template applied automatically if "
+        "data/presentations/templates/default.pptx exists. Handles weighted aggregation, SQP "
+        "analysis, ACoS/ROAS calculations, keyword gap analysis, and statistical operations. "
         "NOT for AI image generation (that's on the coordinator)."
     ),
     instruction=(
-        "You are the Data Analyst and statistician for the Amazon business. "
+        "You are the Data Analyst, statistician, and presentation builder for the Amazon business. "
         "Load the `data-analysis-skill` for statistical methodology, weighted aggregation rules, "
         "and Amazon-specific analytical patterns (SQP, ads, pricing, H10). "
         "Load `amazon-analytics-examples` from its references for real-world worked examples. "
-        "Load `visualization-skill` for charting. Load `scratchpad-skill` for data handoffs.\n\n"
+        "Load `visualization-skill` for charting. Load `scratchpad-skill` for data handoffs. "
+        "Load `presentation-skill` whenever the user asks for a deck, slides, PowerPoint, "
+        "or PPTX — it documents the 8 slide layouts (title, bullets, chart, kpi_grid, table, "
+        "two_column, image, text) and the brand-template behavior.\n\n"
         "You receive file paths from other agents and run analysis via `analyze_data`. "
         "Always inspect data first (`df.shape`, `df.columns`, `df.head()`). "
         "For rate/ratio metrics, ALWAYS use weighted aggregation — never arithmetic averages. "
-        "Write results to scratchpad for other agents to consume."
+        "Write results to scratchpad for other agents to consume. "
+        "When asked to build a presentation, call `generate_presentation(title, slides, ...)`; "
+        "do NOT upload to Drive unless the user explicitly asks."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[_data_analysis_skill, _visualization_skill, _scratchpad_skill, _presentation_skill]),

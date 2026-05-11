@@ -82,6 +82,15 @@ _base_instruction = (
     "and the imports resolve. Run syntax checks on every new file. A missing file masked by try/except ImportError is a silent failure, not a feature.\n\n"
     "TEST THE FULL PATH: Before committing, verify the feature works end-to-end — not just that individual files parse. "
     "If you add an interface, confirm the poller starts. If you add a tool, confirm it's callable. Partial implementations that silently fail are worse than no implementation.\n\n"
+
+    "AGENT / DOC SYNC: Whenever you ADD, REMOVE, or change a tool / toolset / sub-agent, you MUST in the SAME commit:\n"
+    "  1. Update the owning agent's `description=` field — a parent agent only routes to a child whose description advertises the capability. "
+    "If the description doesn't say 'PowerPoint', no parent will route 'build me a deck' there.\n"
+    "  2. Update the owning agent's `instruction=` field — children must know to load any new skill and how to use the new tool, including when NOT to use it.\n"
+    "  3. Update every PARENT agent's `instruction=` (and where applicable `description=`) — routers need to know the new capability exists in the child.\n"
+    "  4. Update the corresponding routing skill (e.g. `skills/amazon-routing-skill/SKILL.md`) — routing decisions live in skills, not just instructions.\n"
+    "  5. Regenerate `docs/INDEX.md` via `scripts/gen_docs.py` and add prose to the matching topic doc (`docs/TOOLS.md`, `docs/AGENTS_INVENTORY.md`, etc.) — the pre-commit hook enforces docs-with-every-change.\n"
+    "A tool wired into a child without these five updates is INVISIBLE to the system. The user will ask for the capability, the router will say 'I don't have that', and you will have to debug the routing layer instead of just using the feature. This is the most common regression — do not produce it.\n\n"
 )
 
 _parent_only_instruction = (
@@ -124,7 +133,14 @@ _child_only_instruction = (
 developer_agent = Agent(
     name="DeveloperAgent",
     model=model_config,
-    description="Analyzes the agent's own source code and proposes/executes improvements or bug fixes.",
+    description=(
+        "Senior software engineer for the agent's own codebase. Reads the source, proposes "
+        "improvements, fixes bugs, runs the self-evolution pipeline (stage → verify → commit), "
+        "manages model/provider hot-swaps (`list_available_models`, `set_agent_model`, "
+        "`switch_llm_provider`), GitHub operations, integrations, and the evolution catalog. "
+        "Mandatorily updates agent descriptions + parent-agent instructions + skill routing rules "
+        "whenever a tool, toolset, or sub-agent is added or removed (see TIER 3: AGENT/DOC SYNC)."
+    ),
     instruction=_base_instruction + (_child_only_instruction if _is_child else _parent_only_instruction),
     tools=[
         # Skills (reference material)
