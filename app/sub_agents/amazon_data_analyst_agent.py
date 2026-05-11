@@ -12,7 +12,11 @@ from google.adk.tools import skill_toolset
 from google.adk.tools.function_tool import FunctionTool
 
 from app.app_utils.models import get_model
-from app.callbacks.guardrails import prompt_injection_guardrail, tool_output_spillover_guardrail
+from app.callbacks.guardrails import (
+    file_attachment_capture,
+    prompt_injection_guardrail,
+    tool_output_spillover_guardrail,
+)
 from app.toolsets import ScratchpadToolset, VisualizationToolset
 
 _base_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
@@ -47,5 +51,5 @@ amazon_data_analyst_agent = Agent(
         ScratchpadToolset(),
     ],
     before_model_callback=prompt_injection_guardrail,
-    after_tool_callback=tool_output_spillover_guardrail,
+    after_tool_callback=[tool_output_spillover_guardrail, file_attachment_capture],
 )

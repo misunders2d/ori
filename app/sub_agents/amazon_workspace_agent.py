@@ -11,7 +11,11 @@ from google.adk.skills import load_skill_from_dir
 from google.adk.tools import skill_toolset
 
 from app.app_utils.models import get_model
-from app.callbacks.guardrails import prompt_injection_guardrail, tool_output_spillover_guardrail
+from app.callbacks.guardrails import (
+    file_attachment_capture,
+    prompt_injection_guardrail,
+    tool_output_spillover_guardrail,
+)
 from app.toolsets import GoogleWorkspaceToolset, ScratchpadToolset
 
 _base_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
@@ -38,5 +42,5 @@ amazon_workspace_agent = Agent(
         ScratchpadToolset(),
     ],
     before_model_callback=prompt_injection_guardrail,
-    after_tool_callback=tool_output_spillover_guardrail,
+    after_tool_callback=[tool_output_spillover_guardrail, file_attachment_capture],
 )

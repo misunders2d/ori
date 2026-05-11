@@ -254,6 +254,13 @@ async def extract_agent_response(
 
     agent_text_parts = []
     media_items = []
+    # Dedupe attachments: the file_attachment_inject after_model callback
+    # appends inline_data Parts (with a display_name marker) so the A2A
+    # converter ships chart/image files as FileParts. The same files are
+    # also reachable via the function_response.file_path branch below.
+    # Without dedup, Slack/Telegram would receive each file twice.
+    _attached_file_paths: set[str] = set()
+    _FILE_ATTACHMENT_MARKER = "__contract_file:"
     
     # Track latest tool results to provide better feedback if the model is silent
     latest_tool_results = []
@@ -294,22 +301,41 @@ async def extract_agent_response(
                                 latest_tool_results.append(res["message"])
                             elif isinstance(res, dict) and "status" in res:
                                 latest_tool_results.append(f"Status: {res['status']}")
-                            # Detect file paths from tool responses (charts, exports)
+                            # Detect file paths from tool responses (charts, exports).
+                            # Skip if an inline_data Part with the same path
+                            # was already added by file_attachment_inject —
+                            # that path is the A2A-friendly route and dedupe
+                            # prevents Slack/Telegram from receiving the same
+                            # file twice.
                             if isinstance(res, dict) and res.get("file_path"):
                                 fp = res["file_path"]
-                                if os.path.isfile(fp):
+                                fp_abs = os.path.abspath(fp) if fp else fp
+                                if fp_abs in _attached_file_paths:
+                                    pass  # already attached via inline_data
+                                elif fp and os.path.isfile(fp):
                                     mime, _ = mimetypes.guess_type(fp)
                                     with open(fp, "rb") as f:
                                         media_items.append({
                                             "data": f.read(),
                                             "mime_type": mime or "application/octet-stream",
                                         })
+                                    _attached_file_paths.add(fp_abs)
                         # Capture inline binary data (images, audio, etc.)
                         elif hasattr(part, "inline_data") and part.inline_data:
+                            display_name = getattr(part.inline_data, "display_name", "") or ""
+                            marked_path = ""
+                            if display_name.startswith(_FILE_ATTACHMENT_MARKER):
+                                marked_path = os.path.abspath(
+                                    display_name[len(_FILE_ATTACHMENT_MARKER):]
+                                )
+                                if marked_path in _attached_file_paths:
+                                    continue  # already attached via function_response branch
                             media_items.append({
                                 "data": part.inline_data.data,
                                 "mime_type": part.inline_data.mime_type or "application/octet-stream",
                             })
+                            if marked_path:
+                                _attached_file_paths.add(marked_path)
 
             break  # success
         except Exception as exc:

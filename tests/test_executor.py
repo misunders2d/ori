@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from google.genai import types
@@ -110,6 +112,78 @@ async def test_extract_agent_response_filters_thought_parts():
         "extract_agent_response must filter Part(thought=True)"
     )
     assert response.text == "Here is the answer."
+
+
+@pytest.mark.asyncio
+async def test_extract_agent_response_dedupes_inline_data_against_function_response(
+    tmp_path,
+):
+    """The file_attachment_inject callback adds an inline_data Part with
+    a ``__contract_file:<path>`` display_name marker so the A2A converter
+    ships the file as a FilePart. The same file is ALSO reachable via the
+    function_response.file_path branch (Slack/Telegram's historical
+    route). Without dedup, the Slack/Telegram poller would attach the
+    file twice. This test pins the dedup logic.
+    """
+    chart = tmp_path / "chart.png"
+    chart.write_bytes(b"\x89PNG\r\n\x1a\nbytes")
+
+    runner = MagicMock()
+    runner.app_name = "ori"
+    runner.session_service = AsyncMock()
+    session = MagicMock()
+    session.id = "sl_test"
+    session.events = []
+    runner.session_service.get_session.return_value = session
+
+    async def mock_run_async(*args, **kwargs):
+        # 1) tool returned file_path (the legacy Slack/Telegram route)
+        fr_part = MagicMock()
+        fr_part.text = None
+        fr_part.inline_data = None
+        fr_part.function_response = MagicMock()
+        fr_part.function_response.response = {
+            "status": "success",
+            "file_path": str(chart),
+        }
+        fr_event = MagicMock()
+        fr_event.content = MagicMock()
+        fr_event.content.parts = [fr_part]
+        fr_event.actions = None
+        yield fr_event
+
+        # 2) model response WITH inline_data marker (the new A2A route)
+        text_part = MagicMock()
+        text_part.text = "Chart attached."
+        text_part.thought = False
+        text_part.inline_data = None
+        text_part.function_response = None
+
+        inline_part = MagicMock()
+        inline_part.text = None
+        inline_part.thought = False
+        inline_part.function_response = None
+        inline_part.inline_data = MagicMock()
+        inline_part.inline_data.data = b"\x89PNG\r\n\x1a\nbytes"
+        inline_part.inline_data.mime_type = "image/png"
+        inline_part.inline_data.display_name = f"__contract_file:{os.path.abspath(str(chart))}"
+
+        model_event = MagicMock()
+        model_event.content = MagicMock()
+        model_event.content.parts = [text_part, inline_part]
+        model_event.actions = None
+        yield model_event
+
+    runner.run_async = mock_run_async
+
+    response = await extract_agent_response(runner, "tg_123", "sl_test", "go")
+
+    # File present exactly once — neither leg double-attached.
+    assert len(response.media_items) == 1, (
+        f"expected one attachment, got {len(response.media_items)} — "
+        "inline_data + function_response should be deduped on path marker"
+    )
+    assert response.media_items[0]["mime_type"] == "image/png"
 
 
 @pytest.mark.asyncio

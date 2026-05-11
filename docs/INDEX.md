@@ -12,19 +12,19 @@ Read this **before** adding new code — most things you'd build already exist.
 ## Sub-agents (10)
 
 
-- **AmazonAgent** (Agent) — `app/sub_agents/amazon_agent.py:27`
+- **AmazonAgent** (Agent) — `app/sub_agents/amazon_agent.py:28`
   - Amazon Manager sub-agent — product research, pricing, competitors, listing management.
 
-- **AmazonDataAnalystAgent** (Agent) — `app/sub_agents/amazon_data_analyst_agent.py:23`
+- **AmazonDataAnalystAgent** (Agent) — `app/sub_agents/amazon_data_analyst_agent.py:27`
   - Amazon Data Analyst sub-agent — statistical analysis, visualization, and data processing.
 
-- **AmazonHeadAgent** (Agent) — `app/sub_agents/amazon_head_agent.py:38`
+- **AmazonHeadAgent** (Agent) — `app/sub_agents/amazon_head_agent.py:39`
   - Amazon Head Agent — domain router for all Amazon business operations.
 
 - **AmazonMemoryAgent** (Agent) — `app/sub_agents/amazon_memory_agent.py:24`
   - Amazon Memory sub-agent — Neo4j knowledge base with native vector search.
 
-- **AmazonWorkspaceAgent** (Agent) — `app/sub_agents/amazon_workspace_agent.py:20`
+- **AmazonWorkspaceAgent** (Agent) — `app/sub_agents/amazon_workspace_agent.py:24`
   - Amazon Workspace sub-agent — Google Drive, Sheets, and Calendar.
 
 - **BigQueryAgent** (Agent) — `app/sub_agents/bigquery_agent.py:206`
@@ -33,7 +33,7 @@ Read this **before** adding new code — most things you'd build already exist.
 - **ClickUpAgent** (Agent) — `app/sub_agents/clickup_agent.py:89`
   - ClickUp task management sub-agent.
 
-- **CoordinatorAgent** (Agent) — `app/sub_agents/coordinator_agent.py:56`
+- **CoordinatorAgent** (Agent) — `app/sub_agents/coordinator_agent.py:58`
 
 - **DeveloperAgent** (Agent) — `app/sub_agents/developer_agent.py:124`
 
@@ -493,7 +493,7 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
   - AI image generation and editing — text-to-image, image-to-image, prompt enhancement.
   - tools: `enhance_image_prompt`, `generate_image`
 
-## Callbacks (11)
+## Callbacks (13)
 
 
 - `admin_tool_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:93` — Runtime Guardrail: Intercepts highly privileged tool calls before execution.
@@ -507,6 +507,8 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
 - `async state_setter` (before_model | state) — `app/callbacks/guardrails.py:902` — Sets initial fundamental session state keys to prevent KeyErrors during prompt evaluation.
 - `a2a_privacy_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:970` — Deterministic secret-matching guardrail for A2A tools.
 - `pending_followup_guard` (before_tool | after_tool) — `app/callbacks/guardrails.py:1103` — After-tool callback: detect long-running submissions + force a
+- `file_attachment_capture` (before_tool | after_tool) — `app/callbacks/guardrails.py:1242` — After-tool callback: stash a tool's emitted file_path so the next
+- `file_attachment_inject` (before_model | state) — `app/callbacks/guardrails.py:1308` — After-model callback: drain ``__pending_file_parts__`` and append
 
 ## Skills (18)
 
