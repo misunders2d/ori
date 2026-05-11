@@ -30,6 +30,16 @@ try:
 except Exception:
     pass
 
+# Rehydrate persisted model overrides into os.environ BEFORE any agent
+# module is imported. Otherwise agents that capture their model at
+# top-level Agent(model=get_model("X")) see the default, not the user's
+# last /models set. See docs/HOT_SWAP.md §5.
+try:
+    from app.app_utils.models import hydrate_model_env
+    hydrate_model_env()
+except Exception:
+    pass
+
 from logging.handlers import RotatingFileHandler
 LOG_FILE_PATH = os.path.abspath("./data/agent.log")
 os.makedirs(os.path.dirname(LOG_FILE_PATH), exist_ok=True)

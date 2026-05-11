@@ -211,12 +211,32 @@ def get_model(component: str, **kwargs):
 
     Resolves env override -> default, parses provider, builds model.
     Extra kwargs (e.g. retry_options) are forwarded to the provider constructor.
+
+    Robustness: if the resolved model requires a provider API key that's
+    missing in the environment, fall back to the component's
+    MODEL_DEFAULTS value and log a warning. This keeps the bot bootable
+    after a key rotation or vault hiccup — the override silently steps
+    aside instead of bricking import-time agent construction.
+
+    If the default ALSO fails to build, the error propagates (no key for
+    *any* model means the agent can't run anyway).
     """
     model_str = get_model_string(component)
     if not model_str:
         raise ValueError(f"Unknown model component: '{component}'")
     provider, model_name = _parse_model_str(model_str)
-    return _build_model(provider, model_name, **kwargs)
+    try:
+        return _build_model(provider, model_name, **kwargs)
+    except ValueError as e:
+        default_str = MODEL_DEFAULTS.get(component, "")
+        if default_str and default_str != model_str:
+            logger.warning(
+                "get_model(%s): override %s unusable (%s) — falling back to default %s",
+                component, model_str, e, default_str,
+            )
+            default_provider, default_name = _parse_model_str(default_str)
+            return _build_model(default_provider, default_name, **kwargs)
+        raise
 
 
 def set_model(component: str, model_str: str) -> None:
@@ -258,6 +278,45 @@ def reset_all_models() -> dict[str, str]:
     """Clear every persisted model override at once. Returns the dict of what was cleared."""
     from app.app_utils.model_config import clear_all_assignments
     return clear_all_assignments()
+
+
+def hydrate_model_env() -> int:
+    """Seed os.environ[MODEL_*] from data/model_config.json before any agent imports.
+
+    `set_assignment` writes both to disk and to os.environ, so within a single
+    process the hot-swap is immediate. After a restart, however, os.environ
+    starts empty. Components that resolve their model **lazily** through
+    `get_model_string` re-read the file on every call and still see the
+    override — but components that capture the model at module-import time
+    (Agent(model=...) at top level) only ever see whatever os.environ
+    contains at the moment the module loaded.
+
+    This function rehydrates os.environ from the persisted assignments
+    before any agent module gets imported, so import-time captures match
+    the user's last `/models set`.
+
+    Call this once, very early in `run_bot.py`. Returns the count of
+    applied overrides (0 means no persisted assignments).
+    """
+    from app.app_utils.model_config import get_all_assignments as _persisted_assignments
+    try:
+        assignments = _persisted_assignments()
+    except Exception as e:
+        logger.warning("hydrate_model_env: read failed (%s) — using defaults", e)
+        return 0
+
+    count = 0
+    for component, model_str in assignments.items():
+        if component not in VALID_COMPONENTS:
+            continue
+        if not isinstance(model_str, str) or not model_str.strip():
+            continue
+        os.environ[f"MODEL_{component.upper()}"] = model_str.strip()
+        count += 1
+
+    if count:
+        logger.info("hydrate_model_env: applied %d persisted model assignments", count)
+    return count
 
 
 def get_all_assignments() -> dict[str, str]:

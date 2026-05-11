@@ -7,8 +7,14 @@ _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 
 
 def _is_child_container() -> bool:
-    """Detect if we're running as a spawned child (no .git, no Docker)."""
-    return not os.path.isdir(os.path.join(_PROJECT_ROOT, ".git"))
+    """Detect if we're running as a spawned child (no .git, no Docker).
+
+    `.git` in a worktree is a regular file (gitdir pointer), not a directory —
+    `os.path.exists` covers both. `os.path.isdir` misclassifies worktrees as
+    child containers and silently disables every git-side evolution tool.
+    See the May 2026 rescue retrospective.
+    """
+    return not os.path.exists(os.path.join(_PROJECT_ROOT, ".git"))
 
 
 class EvolutionToolset(BaseToolset):
@@ -16,8 +22,9 @@ class EvolutionToolset(BaseToolset):
 
     async def get_tools(self, readonly_context=None):
         from app.tools.evolution import (
-            evolution_read_file,
+            evolution_discard_sandbox,
             evolution_list_directory,
+            evolution_read_file,
             evolution_stage_change,
             evolution_verify_sandbox,
         )
@@ -29,6 +36,7 @@ class EvolutionToolset(BaseToolset):
             FunctionTool(func=evolution_list_directory),
             FunctionTool(func=evolution_stage_change),
             FunctionTool(func=evolution_verify_sandbox),
+            FunctionTool(func=evolution_discard_sandbox),
             FunctionTool(func=check_installed_package),
         ]
 

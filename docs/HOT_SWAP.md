@@ -150,6 +150,6 @@ Or programmatically: `get_all_model_strings()` returns `{component: model_str}` 
 
 1. Append to `MODEL_DEFAULTS` in `app/app_utils/models.py`.
 2. Either reference it from `get_model("MyNewComponent")` in code, or pass it to LLM-using callsites.
-3. Run `python scripts/gen_docs.py` so the docs reflect the new component.
+3. Run `uv run python scripts/gen_docs.py` so the docs reflect the new component.
 
 Don't bypass `MODEL_DEFAULTS` and hardcode the model string somewhere downstream — that breaks the hot-swap contract and the user won't be able to switch it later.

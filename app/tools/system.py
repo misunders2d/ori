@@ -51,8 +51,13 @@ def consume_exit_signal() -> bool:
 
 
 def _is_child_container() -> bool:
-    """Detect if we're running as a spawned child (no .git, no launcher)."""
-    return not os.path.isdir(os.path.join(os.path.dirname(__file__), '..', '..', '.git'))
+    """Detect if we're running as a spawned child (no .git, no launcher).
+
+    Worktree-safe: `.git` may be a regular file (gitdir pointer), not a
+    directory. `os.path.exists` covers both shapes. See May 2026
+    rescue retrospective.
+    """
+    return not os.path.exists(os.path.join(os.path.dirname(__file__), '..', '..', '.git'))
 
 
 def update_self(tool_context: ToolContext) -> dict:

@@ -1,21 +1,82 @@
 import hashlib
+import logging
 import os
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from datetime import datetime
 from typing import List, Optional
 
 from google.adk.tools.tool_context import ToolContext
 
+logger = logging.getLogger(__name__)
+
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
 def _is_child_container() -> bool:
-    """Detect if we're running as a spawned child (no .git, no launcher)."""
-    return not os.path.isdir(os.path.join(PROJECT_ROOT, ".git"))
+    """Detect if we're running as a spawned child (no .git, no launcher).
+
+    `.git` in a worktree is a file (pointer to the parent), not a directory.
+    `os.path.exists` covers both shapes; `os.path.isdir` would misidentify
+    a worktree as a child container and disable self-evolution. See the
+    May 2026 rescue retrospective.
+    """
+    return not os.path.exists(os.path.join(PROJECT_ROOT, ".git"))
+
+
+# ---------------------------------------------------------------------------
+# Sandbox cycle marker (disk-backed, survives /reset session + restarts).
+#
+# Replaces the older `tool_context.state["evolution_cycle_active"]` flag,
+# which was session-scoped and vanished on a session reset mid-cycle —
+# leaving the sandbox content orphaned and tripping spurious "stale
+# sandbox" wipes on the next stage.
+#
+# The marker is a tiny file at `<sandbox_dir>/.cycle_active`. Its mtime
+# is the cycle's start time. Cycles older than `_SANDBOX_CYCLE_TTL_SECONDS`
+# (24h default) are considered abandoned and auto-discarded by the next
+# `evolution_stage_change` via `_sandbox_cycle_begin`.
+# ---------------------------------------------------------------------------
+
+_SANDBOX_CYCLE_TTL_SECONDS = 24 * 3600
+
+
+def _sandbox_cycle_marker_path(sandbox_dir: str) -> str:
+    return os.path.join(sandbox_dir, ".cycle_active")
+
+
+def _sandbox_cycle_is_fresh(sandbox_dir: str) -> bool:
+    """True if a marker exists and is within TTL."""
+    marker = _sandbox_cycle_marker_path(sandbox_dir)
+    if not os.path.isfile(marker):
+        return False
+    try:
+        age = time.time() - os.path.getmtime(marker)
+    except OSError:
+        return False
+    return age < _SANDBOX_CYCLE_TTL_SECONDS
+
+
+def _sandbox_cycle_begin(sandbox_dir: str) -> None:
+    """Start a fresh cycle: wipe + recreate the dir, write the marker."""
+    if os.path.exists(sandbox_dir):
+        shutil.rmtree(sandbox_dir, ignore_errors=True)
+    os.makedirs(sandbox_dir, exist_ok=True)
+    try:
+        with open(_sandbox_cycle_marker_path(sandbox_dir), "w") as f:
+            f.write(str(int(time.time())))
+    except OSError as e:
+        logger.warning("sandbox cycle marker write failed: %s", e)
+
+
+def _sandbox_cycle_end(sandbox_dir: str) -> None:
+    """End the cycle: wipe the sandbox + remove the marker."""
+    if os.path.exists(sandbox_dir):
+        shutil.rmtree(sandbox_dir, ignore_errors=True)
 
 
 def _find_uv() -> str:
@@ -151,14 +212,11 @@ def evolution_stage_change(
 
     sandbox_dir = os.path.abspath("./data/sandbox")
 
-    # Clear stale sandbox from previous (possibly rejected) evolution cycles
-    if os.path.exists(sandbox_dir):
-        state = tool_context.state
-        if not state.get("evolution_cycle_active"):
-            shutil.rmtree(sandbox_dir, ignore_errors=True)
-            state["evolution_cycle_active"] = True
-
-    os.makedirs(sandbox_dir, exist_ok=True)
+    # Clear stale sandboxes from prior (abandoned, expired, or
+    # rejected) cycles. Disk-backed marker survives /reset session
+    # and process restarts — see helpers near the top of this module.
+    if not _sandbox_cycle_is_fresh(sandbox_dir):
+        _sandbox_cycle_begin(sandbox_dir)
 
     resolved = _safe_resolve_path(file_path, sandbox_dir)
     if resolved is None:
@@ -175,6 +233,35 @@ def evolution_stage_change(
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+
+def evolution_discard_sandbox(tool_context: ToolContext) -> dict:
+    """Abandons the current self-evolution cycle, wiping the sandbox.
+
+    Call this when:
+    - You staged a change you no longer want to commit.
+    - Verification keeps failing and you want to start clean.
+    - You want to free disk space from an old cycle.
+
+    Removes both the staged files and the cycle marker, so the next
+    `evolution_stage_change` will start a fresh cycle.
+
+    Returns:
+        dict: {"status": "success" | "noop", "message": ...}
+    """
+    sandbox_dir = os.path.abspath("./data/sandbox")
+    if not os.path.exists(sandbox_dir):
+        return {"status": "noop", "message": "No sandbox to discard."}
+
+    _sandbox_cycle_end(sandbox_dir)
+    # Clear the verification digest too — there's nothing left to commit.
+    try:
+        tool_context.state["evolution_verified_digest"] = ""
+    except Exception:
+        pass
+
+    return {"status": "success", "message": "Sandbox cycle discarded. Staged files and marker removed."}
 
 
 
@@ -698,11 +785,8 @@ def evolution_commit_and_push(
     if result["status"] != "success":
         return result
 
-    # Clean up sandbox
-    if os.path.exists(sandbox_dir):
-        shutil.rmtree(sandbox_dir, ignore_errors=True)
-
-    tool_context.state["evolution_cycle_active"] = False
+    # Clean up sandbox + cycle marker (disk-backed, see helpers at top of module)
+    _sandbox_cycle_end(sandbox_dir)
 
     summary = []
     if staged_files:

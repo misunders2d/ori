@@ -5,7 +5,7 @@ This document is the foundational instruction set for all AI coding agents (both
 > ### 📚 Living docs — read these before editing
 >
 > - **[docs/AI_EDITS.md](docs/AI_EDITS.md)** — the 10 hard rules for any AI editing this repo. Read first.
-> - **[docs/INDEX.md](docs/INDEX.md)** — auto-generated symbol map (every agent, tool, toolset, callback, skill). Regenerate via `python scripts/gen_docs.py`.
+> - **[docs/INDEX.md](docs/INDEX.md)** — auto-generated symbol map (every agent, tool, toolset, callback, skill). Regenerate via `uv run python scripts/gen_docs.py`.
 > - [docs/AGENTS_INVENTORY.md](docs/AGENTS_INVENTORY.md) · [docs/TOOLS.md](docs/TOOLS.md) · [docs/TOOLSETS.md](docs/TOOLSETS.md) · [docs/CALLBACKS.md](docs/CALLBACKS.md)
 > - [docs/A2A.md](docs/A2A.md) — protocol spec (current text-only + Phase 4 multimodal target)
 > - [docs/EVOLUTION.md](docs/EVOLUTION.md) — self-evolution pipeline (stage → verify → approve → commit → restart)

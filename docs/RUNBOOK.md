@@ -120,7 +120,7 @@ cp data/vault/credentials.json.bak data/vault/credentials.json
 ./deploy/start.sh
 ```
 
-If both copies are corrupt, the only recovery is hand-rebuilding from the setup wizard (`python interfaces/setup_wizard.py`) — secrets are not stored elsewhere by design.
+If both copies are corrupt, the only recovery is hand-rebuilding from the setup wizard (`uv run python interfaces/setup_wizard.py`) — secrets are not stored elsewhere by design.
 
 ### Local branch desynced (a la May 2026)
 
@@ -147,14 +147,14 @@ Order of operations:
 
 1. `journalctl --user -u ori -n 200` — read the actual error.
 2. Common failure: missing module after a partial update. `uv sync` reinstalls deps.
-3. Common failure: vault key missing. The wizard repairs it: `python interfaces/setup_wizard.py`.
+3. Common failure: vault key missing. The wizard repairs it: `uv run python interfaces/setup_wizard.py`.
 4. Common failure: an evolution committed a broken file. `git revert HEAD && ./deploy/start.sh`.
 
 ### Neo4j down
 
 The agent will still start; memory-related tools return `{"status": "error", "message": "Neo4j unavailable"}`. Restart Neo4j Aura → bot reconnects on the next memory call (driver is lazy).
 
-Health check: `python scripts/check_connectivity.py` pings every external dep and reports status.
+Health check: `uv run python scripts/check_connectivity.py` pings every external dep and reports status.
 
 ### Scheduler stuck
 
@@ -162,7 +162,7 @@ Health check: `python scripts/check_connectivity.py` pings every external dep an
 
 ```
 ./deploy/stop.sh
-python scripts/reset_scheduled_tasks.py    # marks all jobs as ready
+uv run python scripts/reset_scheduled_tasks.py    # marks all jobs as ready
 ./deploy/start.sh
 ```
 
@@ -188,7 +188,7 @@ This does **not** delete jobs — they re-fire on their next schedule.
 1. On old host: `./deploy/stop.sh`.
 2. `tar -czf ori-backup.tgz data/` — captures vault, scheduler, models, friends, knowledge-graph driver config.
 3. On new host: clone repo, extract tarball into project root, `./deploy/install.sh`.
-4. Verify `python scripts/check_connectivity.py` passes.
+4. Verify `uv run python scripts/check_connectivity.py` passes.
 5. Pre-flight: send `/identity` from Telegram to confirm the bot is alive.
 
 ### Restore from snapshot
@@ -203,10 +203,10 @@ Knowledge graph (Neo4j Aura) and embeddings (LanceDB) are external — they live
 
 ```
 # Show currently assigned models
-python -c "from app.app_utils.models import get_all_model_strings; import json; print(json.dumps(get_all_model_strings(), indent=2))"
+uv run python -c "from app.app_utils.models import get_all_model_strings; import json; print(json.dumps(get_all_model_strings(), indent=2))"
 
 # List active scheduled tasks
-python scripts/inspect_scheduled_task.py
+uv run python scripts/inspect_scheduled_task.py
 
 # Show pending admin approvals
 sqlite3 data/pending_actions.db 'SELECT token, tool_name, expires_at FROM actions;'

@@ -25,10 +25,14 @@ For the area you're touching, read the matching topic doc:
 After structural changes (new sub-agent, tool, toolset, callback, skill), regenerate the index:
 
 ```
-python scripts/gen_docs.py
+uv run python scripts/gen_docs.py
 ```
 
 The self-evolution pipeline does this automatically before pytest, but if you're editing outside that path (e.g. as Claude Code on the host), do it by hand so the index stays accurate.
+
+## Python runs
+
+This project is uv-managed. **Always** invoke Python through `uv run` — `uv run python -m pytest`, `uv run python scripts/<x>.py`, `uv run python run_bot.py`. Never `.venv/bin/python`, `python3`, or system `python` directly. See `docs/AI_EDITS.md` §11.
 
 ## Branch + worktree note (lessons from 2026-05-11)
 

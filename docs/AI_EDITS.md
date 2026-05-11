@@ -40,7 +40,7 @@ Catastrophic admin ops (e.g. `update_self`, `trigger_rollback`, `evolution_commi
 
 ## 7. Tests required for every new tool / callback / toolset
 
-`pytest tests/` must pass before any commit. The self-evolution path enforces this via `evolution_verify_sandbox(check="pytest")` — a stage that fails verification cannot proceed to commit.
+`uv run python -m pytest tests/` must pass before any commit. The self-evolution path enforces this via `evolution_verify_sandbox(check="pytest")` — a stage that fails verification cannot proceed to commit.
 
 If your change is to a tool, add at least:
 - A success-path test (happy case, expected return shape).
@@ -64,10 +64,23 @@ Adding a new model component? Register it in `VALID_COMPONENTS` (`app/app_utils/
 If you add a sub-agent, tool, toolset, callback, or skill, run:
 
 ```
-python scripts/gen_docs.py
+uv run python scripts/gen_docs.py
 ```
 
 This regenerates `docs/INDEX.md`, `docs/AGENTS_INVENTORY.md`, `docs/TOOLS.md`, `docs/TOOLSETS.md`, and `docs/CALLBACKS.md`. `evolution_verify_sandbox` runs this automatically before pytest (Phase 1 wiring), but if you're editing outside the evolution path, regenerate manually so the index stays accurate.
+
+## 11. Run Python via `uv`, never directly
+
+This project is uv-managed (lockfile in `uv.lock`, `pyproject.toml` is the source of truth). All Python invocation goes through `uv run`:
+
+```
+uv run python -m pytest tests/
+uv run python scripts/gen_docs.py
+uv run python run_bot.py
+uv run python -m py_compile app/tools/evolution.py
+```
+
+**Do not** call `.venv/bin/python`, `python3`, or system `python` directly. Bypassing uv can pick up a stale interpreter or wrong site-packages and produce results that don't match the locked environment. If you find an existing command in a doc or script that uses raw `python`, fix it to use `uv run python`.
 
 ---
 

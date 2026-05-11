@@ -7,8 +7,13 @@ _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 
 
 def _is_child_container() -> bool:
-    """Detect if we're running as a spawned child (no .git, no Docker)."""
-    return not os.path.isdir(os.path.join(_PROJECT_ROOT, ".git"))
+    """Detect if we're running as a spawned child (no .git, no Docker).
+
+    Worktree-safe: `.git` may be a regular file (gitdir pointer), not a
+    directory. `os.path.exists` covers both shapes. See May 2026
+    rescue retrospective.
+    """
+    return not os.path.exists(os.path.join(_PROJECT_ROOT, ".git"))
 
 
 class SystemToolset(BaseToolset):
