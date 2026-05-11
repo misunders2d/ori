@@ -86,8 +86,11 @@ if ! command -v uv &>/dev/null; then
 fi
 
 # --- Setup venv + deps ---
+# `--frozen`: install from the committed uv.lock without ever rewriting
+# it. Deploy hosts must not mutate tracked files (2026-05-11 contabo
+# incident — bare `uv sync` drifted uv.lock and blocked `git pull`).
 echo ":: Installing Python dependencies..."
-uv sync
+uv sync --frozen
 
 # --- Pre-seed BOT_NAME in vault ---
 mkdir -p data/vault

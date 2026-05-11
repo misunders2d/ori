@@ -37,15 +37,19 @@ if [ "$(python3 -c 'import sys; print(sys.version_info.major)')" -lt 3 ] || [ "$
 fi
 
 # ---- Step 2: Ensure venv exists ----
+# `--frozen` means uv installs from the committed uv.lock without ever
+# rewriting it. Deploy hosts must not mutate tracked files (2026-05-11
+# incident: a bare `uv sync` drifted contabo's uv.lock and blocked
+# `git pull`). Lock changes happen only on dev machines.
 if [ ! -f ".venv/bin/python" ]; then
     echo ":: Setting up Python environment..."
     if command -v uv &>/dev/null; then
-        uv sync
+        uv sync --frozen
     else
         echo ":: Installing uv package manager..."
         curl -LsSf https://astral.sh/uv/install.sh | sh
         export PATH="$HOME/.local/bin:$PATH"
-        uv sync
+        uv sync --frozen
     fi
     echo ":: Python environment ready."
 fi

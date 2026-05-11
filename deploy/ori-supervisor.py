@@ -137,11 +137,18 @@ def _find_uv() -> str:
 
 
 def sync_deps():
-    """Run uv sync to install dependencies."""
+    """Install dependencies from the committed uv.lock without mutating it.
+
+    ``--frozen`` is load-bearing: it forbids uv from rewriting uv.lock on
+    deploy hosts. Without it, ``uv sync`` will silently update the lock
+    when pyproject or transitive resolution shifts, producing tracked-file
+    drift that blocks the next ``git pull`` (the 2026-05-11 contabo
+    incident). Lock writes happen only on dev machines, never here.
+    """
     uv = _find_uv()
-    logger.info("Syncing dependencies (%s sync)...", uv)
+    logger.info("Syncing dependencies (%s sync --frozen)...", uv)
     result = subprocess.run(
-        [uv, "sync"], cwd=PROJECT_ROOT,
+        [uv, "sync", "--frozen"], cwd=PROJECT_ROOT,
         capture_output=True, text=True, timeout=300,
     )
     if result.returncode != 0:
