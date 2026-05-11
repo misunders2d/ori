@@ -26,7 +26,7 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from google.adk.tools.tool_context import ToolContext
 
@@ -157,6 +157,43 @@ def _forbidden(message: str) -> dict:
 
 def _error(message: str) -> dict:
     return {"status": "error", "message": message}
+
+
+# ---------------------------------------------------------------------------
+# Mutation audit log (Phase 6.3)
+# ---------------------------------------------------------------------------
+# Append-only JSONL at data/graph_audit.jsonl. Every record/person/entity
+# create, update, delete, or merge writes one line: {ts, op, author,
+# node_id, before, after}. JSONL keeps it greppable + replayable without
+# a schema migration. Failures here are non-fatal — we log and move on
+# rather than block the actual graph mutation.
+# ---------------------------------------------------------------------------
+
+_AUDIT_PATH = os.path.abspath("./data/graph_audit.jsonl")
+
+
+def _audit(op: str, author: str, node_id: str, before: dict | None, after: dict | None) -> None:
+    """Append a single mutation event to data/graph_audit.jsonl.
+
+    `before` / `after` are arbitrary dicts (or None for create/delete
+    half). They're serialized verbatim — caller is responsible for
+    redacting secrets if needed. Failures are swallowed with a warning so
+    audit-log issues never block a graph write.
+    """
+    event = {
+        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "op": op,
+        "author_user_id": author or "",
+        "node_id": node_id or "",
+        "before": before,
+        "after": after,
+    }
+    try:
+        os.makedirs(os.path.dirname(_AUDIT_PATH), exist_ok=True)
+        with open(_AUDIT_PATH, "a") as f:
+            f.write(json.dumps(event, default=str) + "\n")
+    except Exception as e:
+        logger.warning("graph_audit write failed (%s) — %s", op, e)
 
 
 # ---------------------------------------------------------------------------
@@ -839,6 +876,18 @@ async def create_record(
                 canonical_caller,
             )
 
+        _audit(
+            "create_record",
+            caller,
+            created_id,
+            None,
+            {
+                "namespace": namespace,
+                "short_description": short_description,
+                "category": category,
+                "tags": tags or [],
+            },
+        )
         return {
             "status": "success",
             "record_id": created_id,
@@ -1028,13 +1077,22 @@ async def update_any_record(
 async def delete_record(
     record_id: str,
     namespace: str,
+    confirmed: bool = False,
     tool_context: ToolContext = None,
 ) -> dict:
     """Delete a record. Only the creator (via `author_user_id`) or admins can delete.
 
+    Two-step confirmation: the first call (with `confirmed=False`) returns
+    `{"status": "needs_confirmation", "preview": ..., "impact": ...}` — the
+    caller MUST relay this to the user verbatim before calling again with
+    `confirmed=True`. This prevents the LLM from one-shot-deleting a
+    record on a typo.
+
     Args:
         record_id: ID of the record.
         namespace: One of: personal, professional, technical.
+        confirmed: Must be set to True to actually perform the delete.
+            Leave False (default) to preview impact first.
     """
     if namespace not in NAMESPACES:
         return _error(f"Invalid namespace. Must be one of: {', '.join(NAMESPACES)}")
@@ -1049,6 +1107,44 @@ async def delete_record(
         return _error("Neo4j not configured.")
 
     label = _NAMESPACE_TO_MEMORY_LABEL[namespace]
+
+    # Preview fetch — used for both the confirm prompt AND the audit "before".
+    preview_query = (
+        f"MATCH (m:{label} {{record_id: $record_id}}) "
+        "OPTIONAL MATCH (m)-[r]-() "
+        "RETURN m{.*} AS props, count(r) AS edge_count"
+    )
+    try:
+        async with driver.session() as session:
+            preview = await (await session.run(preview_query, record_id=record_id)).single()
+    except Exception as e:
+        logger.exception("delete_record preview failed")
+        return _error(str(e))
+
+    if not preview:
+        return _error(f"Record `{record_id}` not found in {namespace}.")
+
+    before_props = dict(preview["props"] or {})
+    edge_count = preview["edge_count"] or 0
+
+    if not confirmed:
+        return {
+            "status": "needs_confirmation",
+            "preview": {
+                "record_id": record_id,
+                "namespace": namespace,
+                "short_description": before_props.get("short_description") or "",
+                "text_preview": (before_props.get("text") or "")[:200],
+                "created_at": before_props.get("created_at"),
+                "author_user_id": before_props.get("author_user_id") or "",
+            },
+            "impact": {"relationships_to_delete": edge_count},
+            "message": (
+                f"This will permanently delete record `{record_id}` in `{namespace}` "
+                f"and {edge_count} edge(s). Confirm with the user, then retry with "
+                "`confirmed=True`."
+            ),
+        }
 
     # Admin bypass handled inline: if is_admin, match without the author
     # predicate; otherwise require it.
@@ -1081,6 +1177,7 @@ async def delete_record(
                     f"Record `{record_id}` was not authored by you. "
                     "Only the creator or admins can delete."
                 )
+        _audit("delete_record", caller, record_id, before_props, None)
         return {
             "status": "success",
             "message": f"Record `{record_id}` deleted from {namespace}.",
@@ -1246,6 +1343,18 @@ async def create_person(
         if relations_list:
             await _link_person_relations(driver, created_id, relations_list, canonical_caller)
 
+        _audit(
+            "create_person",
+            caller,
+            created_id,
+            None,
+            {
+                "full_name": full_name,
+                "role": role,
+                "user_ids": user_ids,
+                "scopes": sorted(set(scopes)),
+            },
+        )
         return {
             "status": "success",
             "person_id": created_id,
@@ -1536,14 +1645,20 @@ async def promote_person(
 
 async def delete_person(
     person_id: str,
+    confirmed: bool = False,
     tool_context: ToolContext = None,
 ) -> dict:
     """Delete a person. Only the creator (via `author_user_id`) or admins can delete.
+
+    Two-step confirmation: first call (`confirmed=False`) returns
+    `{"status": "needs_confirmation", "preview": ..., "impact": ...}` —
+    relay verbatim to the user before retrying with `confirmed=True`.
 
     Use `delete_any_person` for admin override on a person you did not create.
 
     Args:
         person_id: ID of the person to delete.
+        confirmed: Set True to actually delete. Default False = preview only.
     """
     caller = _get_caller(tool_context)
     if caller == "unknown":
@@ -1553,6 +1668,42 @@ async def delete_person(
     driver = await _ready_driver()
     if driver is None:
         return _error("Neo4j not configured.")
+
+    preview_query = (
+        "MATCH (p:Person {person_id: $person_id}) "
+        "OPTIONAL MATCH (p)-[r]-() "
+        "RETURN p{.*} AS props, count(r) AS edge_count"
+    )
+    try:
+        async with driver.session() as session:
+            preview = await (await session.run(preview_query, person_id=person_id)).single()
+    except Exception as e:
+        logger.exception("delete_person preview failed")
+        return _error(str(e))
+
+    if not preview:
+        return _error(f"Person `{person_id}` not found.")
+
+    before_props = dict(preview["props"] or {})
+    edge_count = preview["edge_count"] or 0
+
+    if not confirmed:
+        return {
+            "status": "needs_confirmation",
+            "preview": {
+                "person_id": person_id,
+                "full_name": f"{before_props.get('first_name', '')} {before_props.get('last_name', '')}".strip(),
+                "role": before_props.get("role") or "",
+                "user_ids": before_props.get("user_ids") or [],
+                "author_user_id": before_props.get("author_user_id") or "",
+            },
+            "impact": {"relationships_to_delete": edge_count},
+            "message": (
+                f"This will permanently delete person `{person_id}` "
+                f"({before_props.get('first_name','')} {before_props.get('last_name','')}) "
+                f"and {edge_count} edge(s). Confirm with the user, then retry with `confirmed=True`."
+            ),
+        }
 
     if is_admin:
         query = (
@@ -1583,6 +1734,7 @@ async def delete_person(
                     f"Person `{person_id}` was not authored by you. "
                     "Only the creator or admins can delete."
                 )
+        _audit("delete_person", caller, person_id, before_props, None)
         return {
             "status": "success",
             "message": f"Person `{person_id}` deleted.",
@@ -1630,6 +1782,7 @@ async def delete_any_person(
 async def merge_persons(
     canonical_id: str,
     alias_id: str,
+    confirmed: bool = False,
     tool_context: ToolContext = None,
 ) -> dict:
     """Admin-only: merge a duplicate :Person node into a canonical one.
@@ -1639,7 +1792,7 @@ async def merge_persons(
     whose Telegram ID was stored in two different formats ("Telegram: 123"
     and "tg_123") before alias-aware resolution was in place.
 
-    What it does:
+    What it does (only when `confirmed=True`):
     1. Rewrites `author_user_id` on every memory/person the alias authored so
        that it points at the canonical's `primary_user_id` instead.
     2. Reassigns every incoming `:INVOLVES` edge (memories that referenced the
@@ -1651,9 +1804,15 @@ async def merge_persons(
        person-to-person `:RELATED_TO`) are dropped in this step; reassign
        those manually in Neo4j Browser before merging if you need them.
 
+    Two-step confirmation: first call (`confirmed=False`) returns a preview
+    showing both nodes side-by-side and the impact (records that would be
+    re-attributed). Relay verbatim to the user before retrying with
+    `confirmed=True`. Merges are destructive and not easily reversible.
+
     Args:
         canonical_id: person_id of the record to KEEP.
         alias_id: person_id of the record to MERGE IN (deleted afterwards).
+        confirmed: Set True to actually merge. Default False = preview only.
     """
     caller = _get_caller(tool_context)
     is_admin, _ = _get_acl_flags(caller)
@@ -1668,6 +1827,62 @@ async def merge_persons(
     driver = await _ready_driver()
     if driver is None:
         return _error("Neo4j not configured.")
+
+    # Preview pass — fetch both, count records that would move.
+    preview_query = (
+        "MATCH (canon:Person {person_id: $canonical_id}) "
+        "MATCH (alias:Person {person_id: $alias_id}) "
+        "OPTIONAL MATCH (n) WHERE (n:Memory OR n:Person) AND n.author_user_id = alias.primary_user_id AND n <> alias "
+        "WITH canon, alias, count(DISTINCT n) AS authored_to_move "
+        "OPTIONAL MATCH (m:Memory)-[:INVOLVES]->(alias) "
+        "RETURN canon{.*} AS canonical, alias{.*} AS alias, authored_to_move, count(DISTINCT m) AS involves_to_move"
+    )
+    try:
+        async with driver.session() as session:
+            preview = await (await session.run(
+                preview_query, canonical_id=canonical_id, alias_id=alias_id
+            )).single()
+    except Exception as e:
+        logger.exception("merge_persons preview failed")
+        return _error(str(e))
+
+    if not preview:
+        return _error(f"Canonical `{canonical_id}` or alias `{alias_id}` not found.")
+
+    canonical_props = dict(preview["canonical"] or {})
+    alias_props = dict(preview["alias"] or {})
+    authored_to_move = preview["authored_to_move"] or 0
+    involves_to_move = preview["involves_to_move"] or 0
+
+    if not confirmed:
+        return {
+            "status": "needs_confirmation",
+            "preview": {
+                "canonical": {
+                    "person_id": canonical_id,
+                    "full_name": f"{canonical_props.get('first_name', '')} {canonical_props.get('last_name', '')}".strip(),
+                    "primary_user_id": canonical_props.get("primary_user_id") or "",
+                    "aliases": canonical_props.get("aliases") or [],
+                },
+                "alias": {
+                    "person_id": alias_id,
+                    "full_name": f"{alias_props.get('first_name', '')} {alias_props.get('last_name', '')}".strip(),
+                    "primary_user_id": alias_props.get("primary_user_id") or "",
+                    "aliases": alias_props.get("aliases") or [],
+                },
+            },
+            "impact": {
+                "authored_records_to_move": authored_to_move,
+                "involves_edges_to_move": involves_to_move,
+                "alias_node_will_be_deleted": True,
+            },
+            "message": (
+                f"This will merge `{alias_id}` into `{canonical_id}`, move "
+                f"{authored_to_move} authored record(s) and {involves_to_move} "
+                ":INVOLVES edge(s), then DETACH DELETE the alias node. "
+                "Confirm with the user, then retry with `confirmed=True`."
+            ),
+        }
 
     # Phase 1: rewrite authorship property on nodes the alias authored, and
     # reassign inbound :INVOLVES edges onto the canonical.
@@ -1732,6 +1947,20 @@ async def merge_persons(
             )).single()
             if r3 is None:
                 return _error("Merge finalization failed after authorship rewrite.")
+
+        _audit(
+            "merge_persons",
+            caller,
+            canonical_id,
+            {"alias": alias_props, "canonical": canonical_props},
+            {
+                "person_id": r3["person_id"],
+                "primary_user_id": r3["primary_user_id"],
+                "aliases": r3["aliases"],
+                "authored_records_rewritten": authored_rewritten,
+                "involves_edges_moved": involves_moved,
+            },
+        )
 
         return {
             "status": "success",
@@ -2021,6 +2250,17 @@ async def create_entity(
                 canonical_caller,
             )
 
+        _audit(
+            "create_entity",
+            caller,
+            created_id,
+            None,
+            {
+                "name": name,
+                "entity_type": canonical_type,
+                "tags": tags or [],
+            },
+        )
         return {
             "status": "success",
             "entity_id": created_id,
@@ -2203,14 +2443,18 @@ async def update_entity(
 
 async def delete_entity(
     entity_id: str,
+    confirmed: bool = False,
     tool_context: ToolContext = None,
 ) -> dict:
     """Delete an :Entity. Only the creator (via `author_user_id`) or admins.
 
-    Removes all outgoing and incoming edges (DETACH DELETE).
+    Removes all outgoing and incoming edges (DETACH DELETE). Two-step
+    confirmation: first call (`confirmed=False`) returns
+    `{"status": "needs_confirmation", "preview": ..., "impact": ...}`.
 
     Args:
         entity_id: ID of the entity.
+        confirmed: Set True to actually delete. Default False = preview only.
     """
     caller = _get_caller(tool_context)
     if caller == "unknown":
@@ -2220,6 +2464,42 @@ async def delete_entity(
     driver = await _ready_driver()
     if driver is None:
         return _error("Neo4j not configured.")
+
+    preview_query = (
+        "MATCH (e:Entity {entity_id: $entity_id}) "
+        "OPTIONAL MATCH (e)-[r]-() "
+        "RETURN e{.*} AS props, count(r) AS edge_count"
+    )
+    try:
+        async with driver.session() as session:
+            preview = await (await session.run(preview_query, entity_id=entity_id)).single()
+    except Exception as e:
+        logger.exception("delete_entity preview failed")
+        return _error(str(e))
+
+    if not preview:
+        return _error(f"Entity `{entity_id}` not found.")
+
+    before_props = dict(preview["props"] or {})
+    edge_count = preview["edge_count"] or 0
+
+    if not confirmed:
+        return {
+            "status": "needs_confirmation",
+            "preview": {
+                "entity_id": entity_id,
+                "name": before_props.get("name") or "",
+                "entity_type": before_props.get("entity_type") or "",
+                "description_preview": (before_props.get("description") or "")[:200],
+                "author_user_id": before_props.get("author_user_id") or "",
+            },
+            "impact": {"relationships_to_delete": edge_count},
+            "message": (
+                f"This will permanently delete entity `{entity_id}` "
+                f"(`{before_props.get('name','')}`, type `{before_props.get('entity_type','')}`) "
+                f"and {edge_count} edge(s). Confirm with the user, then retry with `confirmed=True`."
+            ),
+        }
 
     if is_admin:
         query = (
@@ -2250,6 +2530,7 @@ async def delete_entity(
                     f"Entity `{entity_id}` was not authored by you. "
                     "Only the creator or admins can delete."
                 )
+        _audit("delete_entity", caller, entity_id, before_props, None)
         return {
             "status": "success",
             "message": f"Entity `{entity_id}` deleted.",
@@ -2910,3 +3191,184 @@ async def _link_entity_to_people(
             logger.warning(
                 "Failed to link entity %s to people (%s): %s", entity_id, rel_type, e,
             )
+
+
+# ---------------------------------------------------------------------------
+# Re-embedding (Phase 6.5)
+# ---------------------------------------------------------------------------
+# Admin-only. After an embedding-model swap or schema migration, the
+# stored vectors no longer match what new queries produce — search
+# silently degrades. `reembed_entities` walks the chosen scope and
+# regenerates the `embedding` property via the same `genai.vector.encode`
+# call used at create time.
+#
+# Two-step safety:
+# 1. `dry_run=True` (default) returns counts only — no writes, no
+#    OpenAI calls, no audit-log entries.
+# 2. `dry_run=False` is admin-staged via `admin_tool_guardrail`
+#    (ACT-token + TOTP) — see app/callbacks/guardrails.py.
+# ---------------------------------------------------------------------------
+
+_REEMBED_SCOPES = ("all", "personal", "professional", "technical", "entity")
+
+
+def _labels_for_reembed(scope: str) -> list[tuple[str, str, str]]:
+    """Map a `scope` string to (label, primary_key, embed_text_cypher) tuples.
+
+    `embed_text_cypher` is a Cypher expression evaluated per-node that
+    produces the text to feed into `genai.vector.encode`. Memory uses the
+    full `text`; Person uses the same `full_name + role + ids` summary
+    used at create; Entity reuses the structured form from
+    `_entity_embed_text`.
+    """
+    memory_expr = "coalesce(n.text, '')"
+    person_expr = (
+        "coalesce(n.full_name, '') + '. Role: ' + coalesce(n.role, '') + "
+        "'. IDs: ' + coalesce(reduce(s = '', x IN coalesce(n.user_ids, []) | s + x + ' '), '')"
+    )
+    entity_expr = (
+        "coalesce(n.name, '') + '. Type: ' + coalesce(n.entity_type, '') + "
+        "'. ' + coalesce(n.description, '')"
+    )
+
+    if scope == "all":
+        return [
+            ("PersonalMemory", "record_id", memory_expr),
+            ("ProfessionalMemory", "record_id", memory_expr),
+            ("TechnicalMemory", "record_id", memory_expr),
+            ("PersonalPerson", "person_id", person_expr),
+            ("ProfessionalPerson", "person_id", person_expr),
+            ("Entity", "entity_id", entity_expr),
+        ]
+    if scope == "personal":
+        return [
+            ("PersonalMemory", "record_id", memory_expr),
+            ("PersonalPerson", "person_id", person_expr),
+        ]
+    if scope == "professional":
+        return [
+            ("ProfessionalMemory", "record_id", memory_expr),
+            ("ProfessionalPerson", "person_id", person_expr),
+        ]
+    if scope == "technical":
+        return [("TechnicalMemory", "record_id", memory_expr)]
+    if scope == "entity":
+        return [("Entity", "entity_id", entity_expr)]
+    return []
+
+
+async def reembed_entities(
+    scope: str = "personal",
+    dry_run: bool = True,
+    batch_size: int = 100,
+    tool_context: ToolContext = None,
+) -> dict:
+    """Admin-only: refresh stored embeddings on a scope of nodes.
+
+    Use after swapping the embedding model or after a schema change that
+    invalidates existing vectors. Without it, semantic search silently
+    degrades — new queries produce vectors in a different space than the
+    stored ones.
+
+    Two-step safety:
+    - `dry_run=True` (default): returns the count of nodes that WOULD be
+      re-embedded, plus a small sample of node ids. No writes, no OpenAI
+      calls, no audit-log entries.
+    - `dry_run=False`: this call is staged via `admin_tool_guardrail` —
+      the agent receives an ACT-token; the admin must approve + provide
+      TOTP via `execute_approved_action` before any writes happen.
+
+    Args:
+        scope: One of `all`, `personal`, `professional`, `technical`,
+            `entity`. Default `personal` (smallest blast radius).
+        dry_run: True = count only; False = actually re-embed.
+        batch_size: Nodes per Cypher round-trip (1-500, default 100).
+
+    Returns:
+        Per-label counts, sample of ids (dry_run), and audit log entries
+        (when dry_run=False).
+    """
+    if scope not in _REEMBED_SCOPES:
+        return _error(
+            f"Invalid scope '{scope}'. Must be one of: {', '.join(_REEMBED_SCOPES)}"
+        )
+
+    caller = _get_caller(tool_context)
+    is_admin, _ = _get_acl_flags(caller)
+    if not is_admin:
+        return _forbidden("reembed_entities is admin-only.")
+
+    driver = await _ready_driver()
+    if driver is None:
+        return _error("Neo4j not configured.")
+
+    batch_size = min(max(batch_size, 1), 500)
+
+    openai_key = _get_openai_key()
+    if not dry_run and not openai_key:
+        return _error("OPENAI_API_KEY required for re-embedding writes.")
+
+    label_specs = _labels_for_reembed(scope)
+    results: dict[str, dict] = {}
+
+    try:
+        async with driver.session() as session:
+            for label, pk, embed_expr in label_specs:
+                count_query = f"MATCH (n:{label}) RETURN count(n) AS total"
+                total_row = await (await session.run(count_query)).single()
+                total = total_row["total"] if total_row else 0
+
+                if dry_run:
+                    sample_query = (
+                        f"MATCH (n:{label}) "
+                        f"RETURN n.{pk} AS id "
+                        "ORDER BY n.created_at DESC "
+                        "LIMIT 5"
+                    )
+                    sample_rows = [
+                        r["id"] async for r in await session.run(sample_query)
+                    ]
+                    results[label] = {"total": total, "sample": sample_rows}
+                    continue
+
+                # Real run: batch-update embeddings. SKIP/LIMIT walks the
+                # set; we re-issue until the offset is past `total`.
+                processed = 0
+                offset = 0
+                while offset < total:
+                    update_query = (
+                        f"MATCH (n:{label}) "
+                        f"WITH n, {embed_expr} AS embed_text "
+                        "ORDER BY n.created_at "
+                        f"SKIP {offset} LIMIT {batch_size} "
+                        "WITH n, embed_text, {token: $openai_key, model: 'text-embedding-3-small'} AS cfg "
+                        "SET n.embedding = genai.vector.encode(embed_text, 'OpenAI', cfg), "
+                        "    n.embedded_at = datetime() "
+                        f"RETURN count(n) AS updated, collect(n.{pk}) AS ids"
+                    )
+                    row = await (await session.run(
+                        update_query, openai_key=openai_key
+                    )).single()
+                    updated = row["updated"] if row else 0
+                    processed += updated
+                    offset += batch_size
+
+                    for nid in (row["ids"] if row else []):
+                        _audit("reembed", caller, nid, None, {"label": label})
+
+                results[label] = {"total": total, "processed": processed}
+    except Exception as e:
+        logger.exception("reembed_entities failed")
+        return _error(str(e))
+
+    return {
+        "status": "success",
+        "scope": scope,
+        "dry_run": dry_run,
+        "by_label": results,
+        "message": (
+            f"{'Would re-embed' if dry_run else 'Re-embedded'} "
+            f"{sum(v.get('total' if dry_run else 'processed', 0) for v in results.values())} "
+            f"node(s) across {len(results)} label(s)."
+        ),
+    }

@@ -363,6 +363,231 @@ async def find_path(from_entity_id: str, to_entity_id: str, max_depth: int = 5) 
         return {"status": "error", "message": str(e)}
 
 
+# ---------------------------------------------------------------------------
+# Polymorphic traversal (Phase 6.1)
+#
+# Memory uses `record_id`, Person uses `person_id`, Entity uses `entity_id`.
+# Callers may pass any of those — we infer the starting label from the
+# prefix and emit a uniform shape so the LLM can reason about
+# `(:Memory)-[:ABOUT]->(:Entity)` and friends, not just entity-to-entity.
+# ---------------------------------------------------------------------------
+
+
+_NODE_ID_LABEL_MAP = {
+    "mem_": ("Memory", "record_id"),
+    "per_": ("Person", "person_id"),
+    "ent_": ("Entity", "entity_id"),
+}
+
+
+def _label_and_key_for(node_id: str) -> tuple[str, str] | None:
+    """Return (label, primary_key_property) for a prefix-tagged id, or None."""
+    if not isinstance(node_id, str):
+        return None
+    for prefix, value in _NODE_ID_LABEL_MAP.items():
+        if node_id.startswith(prefix):
+            return value
+    return None
+
+
+def _summarize_node_props(props: dict, labels: list[str]) -> dict:
+    """Project a Neo4j node row into the common shape we surface to the LLM.
+
+    Memories use `record_id` + `short_description`. People use `person_id`
+    + `first_name`/`last_name`. Entities use `entity_id` + `name`. Returning
+    one schema across all three lets the LLM render heterogeneous subgraphs
+    without label-specific branches in the response handler.
+    """
+    out = {"labels": labels}
+    if props.get("record_id"):
+        out["id"] = props["record_id"]
+        out["kind"] = "memory"
+        out["short_description"] = props.get("short_description") or ""
+    elif props.get("person_id"):
+        out["id"] = props["person_id"]
+        out["kind"] = "person"
+        first = props.get("first_name") or ""
+        last = props.get("last_name") or ""
+        out["full_name"] = f"{first} {last}".strip()
+    elif props.get("entity_id"):
+        out["id"] = props["entity_id"]
+        out["kind"] = "entity"
+        out["name"] = props.get("name") or ""
+        out["entity_type"] = props.get("entity_type") or ""
+    else:
+        out["id"] = ""
+        out["kind"] = "unknown"
+    return out
+
+
+async def get_node_neighbors(node_id: str, max_depth: int = 2, limit: int = 25) -> dict:
+    """Return the subgraph around any node (Memory / Person / Entity).
+
+    `node_id` must be prefixed (mem_ / per_ / ent_). Edges connect across
+    labels — a memory's neighbors will typically include both the entities
+    it's `:ABOUT` and the people it `:INVOLVES`.
+    """
+    driver = _get_driver()
+    if not driver:
+        return {"status": "error", "message": "Neo4j not configured."}
+
+    mapping = _label_and_key_for(node_id)
+    if not mapping:
+        return {"status": "error", "message": (
+            f"node_id must start with mem_/per_/ent_ (got '{node_id}'). "
+            "For bare entity names use query_connections."
+        )}
+    start_label, start_key = mapping
+
+    max_depth = min(max(max_depth, 1), 4)
+    limit = min(max(limit, 1), 100)
+
+    query = f"""
+    MATCH path = (start:{start_label} {{{start_key}: $node_id}})-[*1..{max_depth}]-(connected)
+    WITH connected, relationships(path) AS rels, length(path) AS depth
+    ORDER BY depth
+    LIMIT $limit
+    RETURN connected{{.*}} AS props,
+           labels(connected) AS labels,
+           depth,
+           [r IN rels | {{type: type(r), from_props: startNode(r){{.*}}, to_props: endNode(r){{.*}}}}] AS path_rels
+    """
+    try:
+        async with driver.session() as session:
+            result = await session.run(query, node_id=node_id, limit=limit)
+            records = [dict(r) async for r in result]
+
+        connections = [
+            {
+                "node": _summarize_node_props(r["props"] or {}, r["labels"] or []),
+                "depth": r["depth"],
+                "via": [
+                    {
+                        "type": rel["type"],
+                        "from": _summarize_node_props(rel.get("from_props") or {}, []).get("id", ""),
+                        "to": _summarize_node_props(rel.get("to_props") or {}, []).get("id", ""),
+                    }
+                    for rel in (r["path_rels"] or [])
+                ],
+            }
+            for r in records
+        ]
+
+        if not connections:
+            return {"status": "success", "connections": [], "message": "No connections found."}
+
+        return {"status": "success", "start_id": node_id, "count": len(connections), "connections": connections}
+    except Exception as e:
+        logger.error("Neo4j get_node_neighbors error: %s", e)
+        return {"status": "error", "message": str(e)}
+
+
+async def get_graph_stats() -> dict:
+    """Return counts by label, relationship type, and orphan estimates.
+
+    Used by the agent-facing `graph_stats` tool to give the user a
+    snapshot of the knowledge graph's shape without dumping every node.
+    Heavy queries are bounded; orphan detection is a sample (LIMIT 1000)
+    so the cost stays predictable on big graphs.
+    """
+    driver = _get_driver()
+    if not driver:
+        return {"status": "error", "message": "Neo4j not configured."}
+
+    labels_query = """
+    MATCH (n)
+    WITH labels(n) AS lbls
+    UNWIND lbls AS lbl
+    RETURN lbl AS label, count(*) AS count
+    ORDER BY count DESC
+    """
+    rels_query = """
+    MATCH ()-[r]->()
+    RETURN type(r) AS type, count(*) AS count
+    ORDER BY count DESC
+    LIMIT 50
+    """
+    orphans_query = """
+    MATCH (n)
+    WHERE (n:Memory OR n:Person OR n:Entity) AND NOT (n)--()
+    WITH labels(n) AS lbls
+    UNWIND lbls AS lbl
+    RETURN lbl AS label, count(*) AS count
+    """
+
+    try:
+        async with driver.session() as session:
+            label_counts = {
+                r["label"]: r["count"]
+                async for r in await session.run(labels_query)
+            }
+            rel_counts = {
+                r["type"]: r["count"]
+                async for r in await session.run(rels_query)
+            }
+            orphan_counts = {
+                r["label"]: r["count"]
+                async for r in await session.run(orphans_query)
+            }
+
+        return {
+            "status": "success",
+            "nodes_by_label": label_counts,
+            "relationships_by_type": rel_counts,
+            "orphans_by_label": orphan_counts,
+        }
+    except Exception as e:
+        logger.error("Neo4j get_graph_stats error: %s", e)
+        return {"status": "error", "message": str(e)}
+
+
+async def find_node_path(from_id: str, to_id: str, max_depth: int = 5) -> dict:
+    """Shortest path between two nodes of any label combination.
+
+    Both ids must be prefixed (mem_/per_/ent_). For entity-only paths use
+    the legacy `find_path`.
+    """
+    driver = _get_driver()
+    if not driver:
+        return {"status": "error", "message": "Neo4j not configured."}
+
+    src = _label_and_key_for(from_id)
+    dst = _label_and_key_for(to_id)
+    if not src or not dst:
+        return {"status": "error", "message": "Both ids must be prefixed mem_/per_/ent_."}
+    src_label, src_key = src
+    dst_label, dst_key = dst
+
+    max_depth = min(max(max_depth, 1), 8)
+    query = f"""
+    MATCH path = shortestPath(
+        (a:{src_label} {{{src_key}: $from_id}})-[*..{max_depth}]-(b:{dst_label} {{{dst_key}: $to_id}})
+    )
+    RETURN [n IN nodes(path) | {{props: n{{.*}}, labels: labels(n)}}] AS node_rows,
+           [r IN relationships(path) | {{type: type(r), from_props: startNode(r){{.*}}, to_props: endNode(r){{.*}}}}] AS edge_rows,
+           length(path) AS hops
+    """
+    try:
+        async with driver.session() as session:
+            result = await session.run(query, from_id=from_id, to_id=to_id)
+            record = await result.single()
+            if not record:
+                return {"status": "success", "path": None, "message": "No path found."}
+            nodes = [_summarize_node_props(row["props"] or {}, row["labels"] or []) for row in (record["node_rows"] or [])]
+            edges = [
+                {
+                    "type": e["type"],
+                    "from": _summarize_node_props(e.get("from_props") or {}, []).get("id", ""),
+                    "to": _summarize_node_props(e.get("to_props") or {}, []).get("id", ""),
+                }
+                for e in (record["edge_rows"] or [])
+            ]
+            return {"status": "success", "hops": record["hops"], "nodes": nodes, "edges": edges}
+    except Exception as e:
+        logger.error("Neo4j find_node_path error: %s", e)
+        return {"status": "error", "message": str(e)}
+
+
 async def search_entities(
     query_text: str, entity_type: str | None = None, limit: int = 10
 ) -> dict:

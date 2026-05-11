@@ -128,6 +128,12 @@ def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
                 }
         return None
 
+    # `reembed_entities` only stages when it would actually write. The
+    # dry_run preview is cheap, read-only, and stating costs the admin
+    # an extra TOTP round-trip for no real work.
+    if tool.name == "reembed_entities" and args.get("dry_run", True):
+        return None
+
     if tool.name in [
         "configure_integration",
         "remove_integration",
@@ -141,6 +147,7 @@ def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
         "evolution_git_reset",
         "evolution_sync_local_to_upstream",
         "get_my_a2a_key",
+        "reembed_entities",
     ]:
         current_state = tool_context.state.to_dict()
         user_id = current_state.get("user_id", "")

@@ -164,10 +164,11 @@ Graph memory tools — entity and relationship management via Neo4j.
 
 - `async add_entity` (line 30) — Create or update an entity in the knowledge graph.
 - `async link_entities` (line 76) — Create a relationship between two entities in the knowledge graph.
-- `async query_connections` (line 123) — Find all entities connected to a given entity.
-- `async find_connection_path` (line 145) — Find the shortest connection path between two entities.
-- `async entity_timeline` (line 169) — Get the full relationship history of an entity, ordered by time.
-- `async search_graph` (line 187) — Search for entities in the knowledge graph by name.
+- `async query_connections` (line 123) — Find all nodes connected to a given memory / person / entity.
+- `async find_connection_path` (line 156) — Find the shortest connection path between two nodes.
+- `async entity_timeline` (line 201) — Get the full relationship history of an entity, ordered by time.
+- `async search_graph` (line 219) — Search for entities in the knowledge graph by name.
+- `async graph_stats` (line 239) — Summarize the knowledge graph — node counts by label, edge counts by
 
 ## `app/tools/h10_analysis.py`
 Helium10 keyword analysis tools — analyze Cerebro and Magnet CSV/XLSX exports.
@@ -215,32 +216,33 @@ Tools for interacting with Ori's local long-term memory (LanceDB).
 ## `app/tools/memory_tools.py`
 Consolidated memory + knowledge-graph tool surface — Neo4j only.
 
-- `async search_knowledge` (line 516) — Search the knowledge base using natural language.
-- `async get_records` (line 576) — Fetch specific records by their IDs.
-- `async list_records` (line 623) — List all record IDs and short descriptions in a namespace.
-- `async create_record` (line 664) — Create a new knowledge record.
-- `async update_record` (line 852) — Update a record. Only the creator (via `author_user_id`) or admins can modify.
-- `async update_any_record` (line 954) — Admin-only: update a record bypassing the `author_user_id` creator gate.
-- `async delete_record` (line 1028) — Delete a record. Only the creator (via `author_user_id`) or admins can delete.
-- `async create_person` (line 1098) — Create a new person record.
-- `async search_people` (line 1263) — Search people by natural language description, scoped.
-- `async update_person` (line 1323) — Update a person record. Only the creator (via `author_user_id`) or admins can modify.
-- `async update_any_person` (line 1416) — Admin-only: update a person record bypassing the `author_user_id` creator gate.
-- `async promote_person` (line 1493) — Admin-only: add a scope label to an existing person.
-- `async delete_person` (line 1537) — Delete a person. Only the creator (via `author_user_id`) or admins can delete.
-- `async delete_any_person` (line 1595) — Admin-only: delete a person bypassing the `author_user_id` creator gate.
-- `async merge_persons` (line 1630) — Admin-only: merge a duplicate :Person node into a canonical one.
-- `async relate_persons` (line 1755) — Create or reaffirm a typed directional relationship between two existing people.
-- `async create_entity` (line 1884) — Create a referable :Entity node (brand, company, department, product, etc.).
-- `async search_entities` (line 2037) — Semantic search across :Entity nodes, optionally filtered by entity_type.
-- `async update_entity` (line 2108) — Update an :Entity. Only the creator (via `author_user_id`) or admins can modify.
-- `async delete_entity` (line 2204) — Delete an :Entity. Only the creator (via `author_user_id`) or admins.
-- `async relate_entities` (line 2262) — Create or reaffirm a typed edge (:Entity)-[:<REL>]->(:Entity). Idempotent.
-- `async relate_person_to_entity` (line 2438) — Create or reaffirm a typed edge (:Person)-[:<REL>]->(:Entity). Idempotent.
-- `async relate_entity_to_person` (line 2503) — Create or reaffirm a typed edge (:Entity)-[:<REL>]->(:Person). Idempotent.
-- `async relate_memory_to_person` (line 2567) — Create or reaffirm a typed edge (:Memory)-[:<REL>]->(:Person). Idempotent.
-- `async relate_memory_to_entity` (line 2634) — Create or reaffirm a typed edge (:Memory)-[:<REL>]->(:Entity). Idempotent.
-- `async relate_memories` (line 2698) — Create or reaffirm a typed edge between two existing memories. Idempotent.
+- `async search_knowledge` (line 553) — Search the knowledge base using natural language.
+- `async get_records` (line 613) — Fetch specific records by their IDs.
+- `async list_records` (line 660) — List all record IDs and short descriptions in a namespace.
+- `async create_record` (line 701) — Create a new knowledge record.
+- `async update_record` (line 901) — Update a record. Only the creator (via `author_user_id`) or admins can modify.
+- `async update_any_record` (line 1003) — Admin-only: update a record bypassing the `author_user_id` creator gate.
+- `async delete_record` (line 1077) — Delete a record. Only the creator (via `author_user_id`) or admins can delete.
+- `async create_person` (line 1195) — Create a new person record.
+- `async search_people` (line 1372) — Search people by natural language description, scoped.
+- `async update_person` (line 1432) — Update a person record. Only the creator (via `author_user_id`) or admins can modify.
+- `async update_any_person` (line 1525) — Admin-only: update a person record bypassing the `author_user_id` creator gate.
+- `async promote_person` (line 1602) — Admin-only: add a scope label to an existing person.
+- `async delete_person` (line 1646) — Delete a person. Only the creator (via `author_user_id`) or admins can delete.
+- `async delete_any_person` (line 1747) — Admin-only: delete a person bypassing the `author_user_id` creator gate.
+- `async merge_persons` (line 1782) — Admin-only: merge a duplicate :Person node into a canonical one.
+- `async relate_persons` (line 1984) — Create or reaffirm a typed directional relationship between two existing people.
+- `async create_entity` (line 2113) — Create a referable :Entity node (brand, company, department, product, etc.).
+- `async search_entities` (line 2277) — Semantic search across :Entity nodes, optionally filtered by entity_type.
+- `async update_entity` (line 2348) — Update an :Entity. Only the creator (via `author_user_id`) or admins can modify.
+- `async delete_entity` (line 2444) — Delete an :Entity. Only the creator (via `author_user_id`) or admins.
+- `async relate_entities` (line 2543) — Create or reaffirm a typed edge (:Entity)-[:<REL>]->(:Entity). Idempotent.
+- `async relate_person_to_entity` (line 2719) — Create or reaffirm a typed edge (:Person)-[:<REL>]->(:Entity). Idempotent.
+- `async relate_entity_to_person` (line 2784) — Create or reaffirm a typed edge (:Entity)-[:<REL>]->(:Person). Idempotent.
+- `async relate_memory_to_person` (line 2848) — Create or reaffirm a typed edge (:Memory)-[:<REL>]->(:Person). Idempotent.
+- `async relate_memory_to_entity` (line 2915) — Create or reaffirm a typed edge (:Memory)-[:<REL>]->(:Entity). Idempotent.
+- `async relate_memories` (line 2979) — Create or reaffirm a typed edge between two existing memories. Idempotent.
+- `async reembed_entities` (line 3260) — Admin-only: refresh stored embeddings on a scope of nodes.
 
 ## `app/tools/model_tools.py`
 Tools for runtime model discovery, hot-swapping, and provider switching.

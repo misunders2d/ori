@@ -33,13 +33,13 @@ Read this **before** adding new code — most things you'd build already exist.
 - **ClickUpAgent** (Agent) — `app/sub_agents/clickup_agent.py:89`
   - ClickUp task management sub-agent.
 
-- **CoordinatorAgent** (Agent) — `app/sub_agents/coordinator_agent.py:52`
+- **CoordinatorAgent** (Agent) — `app/sub_agents/coordinator_agent.py:53`
 
 - **DeveloperAgent** (Agent) — `app/sub_agents/developer_agent.py:124`
 
 - **KnowledgeAgent** (Agent) — `app/sub_agents/knowledge_agent.py:30`
 
-## Tools (221 public functions across 39 files)
+## Tools (223 public functions across 39 files)
 
 
 ### `app/tools/a2a.py`
@@ -199,10 +199,11 @@ Graph memory tools — entity and relationship management via Neo4j.
 
 - `async add_entity` (line 30) — Create or update an entity in the knowledge graph.
 - `async link_entities` (line 76) — Create a relationship between two entities in the knowledge graph.
-- `async query_connections` (line 123) — Find all entities connected to a given entity.
-- `async find_connection_path` (line 145) — Find the shortest connection path between two entities.
-- `async entity_timeline` (line 169) — Get the full relationship history of an entity, ordered by time.
-- `async search_graph` (line 187) — Search for entities in the knowledge graph by name.
+- `async query_connections` (line 123) — Find all nodes connected to a given memory / person / entity.
+- `async find_connection_path` (line 156) — Find the shortest connection path between two nodes.
+- `async entity_timeline` (line 201) — Get the full relationship history of an entity, ordered by time.
+- `async search_graph` (line 219) — Search for entities in the knowledge graph by name.
+- `async graph_stats` (line 239) — Summarize the knowledge graph — node counts by label, edge counts by
 
 ### `app/tools/h10_analysis.py`
 Helium10 keyword analysis tools — analyze Cerebro and Magnet CSV/XLSX exports.
@@ -250,32 +251,33 @@ Tools for interacting with Ori's local long-term memory (LanceDB).
 ### `app/tools/memory_tools.py`
 Consolidated memory + knowledge-graph tool surface — Neo4j only.
 
-- `async search_knowledge` (line 516) — Search the knowledge base using natural language.
-- `async get_records` (line 576) — Fetch specific records by their IDs.
-- `async list_records` (line 623) — List all record IDs and short descriptions in a namespace.
-- `async create_record` (line 664) — Create a new knowledge record.
-- `async update_record` (line 852) — Update a record. Only the creator (via `author_user_id`) or admins can modify.
-- `async update_any_record` (line 954) — Admin-only: update a record bypassing the `author_user_id` creator gate.
-- `async delete_record` (line 1028) — Delete a record. Only the creator (via `author_user_id`) or admins can delete.
-- `async create_person` (line 1098) — Create a new person record.
-- `async search_people` (line 1263) — Search people by natural language description, scoped.
-- `async update_person` (line 1323) — Update a person record. Only the creator (via `author_user_id`) or admins can modify.
-- `async update_any_person` (line 1416) — Admin-only: update a person record bypassing the `author_user_id` creator gate.
-- `async promote_person` (line 1493) — Admin-only: add a scope label to an existing person.
-- `async delete_person` (line 1537) — Delete a person. Only the creator (via `author_user_id`) or admins can delete.
-- `async delete_any_person` (line 1595) — Admin-only: delete a person bypassing the `author_user_id` creator gate.
-- `async merge_persons` (line 1630) — Admin-only: merge a duplicate :Person node into a canonical one.
-- `async relate_persons` (line 1755) — Create or reaffirm a typed directional relationship between two existing people.
-- `async create_entity` (line 1884) — Create a referable :Entity node (brand, company, department, product, etc.).
-- `async search_entities` (line 2037) — Semantic search across :Entity nodes, optionally filtered by entity_type.
-- `async update_entity` (line 2108) — Update an :Entity. Only the creator (via `author_user_id`) or admins can modify.
-- `async delete_entity` (line 2204) — Delete an :Entity. Only the creator (via `author_user_id`) or admins.
-- `async relate_entities` (line 2262) — Create or reaffirm a typed edge (:Entity)-[:<REL>]->(:Entity). Idempotent.
-- `async relate_person_to_entity` (line 2438) — Create or reaffirm a typed edge (:Person)-[:<REL>]->(:Entity). Idempotent.
-- `async relate_entity_to_person` (line 2503) — Create or reaffirm a typed edge (:Entity)-[:<REL>]->(:Person). Idempotent.
-- `async relate_memory_to_person` (line 2567) — Create or reaffirm a typed edge (:Memory)-[:<REL>]->(:Person). Idempotent.
-- `async relate_memory_to_entity` (line 2634) — Create or reaffirm a typed edge (:Memory)-[:<REL>]->(:Entity). Idempotent.
-- `async relate_memories` (line 2698) — Create or reaffirm a typed edge between two existing memories. Idempotent.
+- `async search_knowledge` (line 553) — Search the knowledge base using natural language.
+- `async get_records` (line 613) — Fetch specific records by their IDs.
+- `async list_records` (line 660) — List all record IDs and short descriptions in a namespace.
+- `async create_record` (line 701) — Create a new knowledge record.
+- `async update_record` (line 901) — Update a record. Only the creator (via `author_user_id`) or admins can modify.
+- `async update_any_record` (line 1003) — Admin-only: update a record bypassing the `author_user_id` creator gate.
+- `async delete_record` (line 1077) — Delete a record. Only the creator (via `author_user_id`) or admins can delete.
+- `async create_person` (line 1195) — Create a new person record.
+- `async search_people` (line 1372) — Search people by natural language description, scoped.
+- `async update_person` (line 1432) — Update a person record. Only the creator (via `author_user_id`) or admins can modify.
+- `async update_any_person` (line 1525) — Admin-only: update a person record bypassing the `author_user_id` creator gate.
+- `async promote_person` (line 1602) — Admin-only: add a scope label to an existing person.
+- `async delete_person` (line 1646) — Delete a person. Only the creator (via `author_user_id`) or admins can delete.
+- `async delete_any_person` (line 1747) — Admin-only: delete a person bypassing the `author_user_id` creator gate.
+- `async merge_persons` (line 1782) — Admin-only: merge a duplicate :Person node into a canonical one.
+- `async relate_persons` (line 1984) — Create or reaffirm a typed directional relationship between two existing people.
+- `async create_entity` (line 2113) — Create a referable :Entity node (brand, company, department, product, etc.).
+- `async search_entities` (line 2277) — Semantic search across :Entity nodes, optionally filtered by entity_type.
+- `async update_entity` (line 2348) — Update an :Entity. Only the creator (via `author_user_id`) or admins can modify.
+- `async delete_entity` (line 2444) — Delete an :Entity. Only the creator (via `author_user_id`) or admins.
+- `async relate_entities` (line 2543) — Create or reaffirm a typed edge (:Entity)-[:<REL>]->(:Entity). Idempotent.
+- `async relate_person_to_entity` (line 2719) — Create or reaffirm a typed edge (:Person)-[:<REL>]->(:Entity). Idempotent.
+- `async relate_entity_to_person` (line 2784) — Create or reaffirm a typed edge (:Entity)-[:<REL>]->(:Person). Idempotent.
+- `async relate_memory_to_person` (line 2848) — Create or reaffirm a typed edge (:Memory)-[:<REL>]->(:Person). Idempotent.
+- `async relate_memory_to_entity` (line 2915) — Create or reaffirm a typed edge (:Memory)-[:<REL>]->(:Entity). Idempotent.
+- `async relate_memories` (line 2979) — Create or reaffirm a typed edge between two existing memories. Idempotent.
+- `async reembed_entities` (line 3260) — Admin-only: refresh stored embeddings on a scope of nodes.
 
 ### `app/tools/model_tools.py`
 Tools for runtime model discovery, hot-swapping, and provider switching.
@@ -422,7 +424,7 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
 
 - **GraphToolset** — `app/toolsets/graph.py:5`
   - Neo4j knowledge graph — entity tracking, relationships, and graph queries.
-  - tools: `add_entity`, `entity_timeline`, `find_connection_path`, `link_entities`, `query_connections`, `search_graph`
+  - tools: `add_entity`, `entity_timeline`, `find_connection_path`, `graph_stats`, `link_entities`, `query_connections`, `search_graph`
 
 - **H10Toolset** — `app/toolsets/h10.py:5`
   - Helium10 keyword analysis — analyze Cerebro and Magnet exports.
@@ -438,7 +440,7 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
 
 - **KnowledgeToolset** — `app/toolsets/knowledge.py:22`
   - Shared knowledge base (memories + people + entities) backed by Neo4j.
-  - tools: `create_entity`, `create_person`, `create_record`, `delete_any_person`, `delete_entity`, `delete_person`, `delete_record`, `get_records`, `list_records`, `merge_persons`, `promote_person`, `relate_entities`, `relate_entity_to_person`, `relate_memories`, `relate_memory_to_entity`, `relate_memory_to_person`, `relate_person_to_entity`, `relate_persons`, `search_entities`, `search_knowledge`, `search_people`, `update_any_person`, `update_any_record`, `update_entity`, `update_person`, `update_record`
+  - tools: `create_entity`, `create_person`, `create_record`, `delete_any_person`, `delete_entity`, `delete_person`, `delete_record`, `get_records`, `list_records`, `merge_persons`, `promote_person`, `reembed_entities`, `relate_entities`, `relate_entity_to_person`, `relate_memories`, `relate_memory_to_entity`, `relate_memory_to_person`, `relate_person_to_entity`, `relate_persons`, `search_entities`, `search_knowledge`, `search_people`, `update_any_person`, `update_any_record`, `update_entity`, `update_person`, `update_record`
 
 - **MemoryToolset** — `app/toolsets/memory.py:5`
   - Groups long-term memory and user preference tools.
@@ -476,14 +478,14 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
 
 
 - `admin_tool_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:93` — Runtime Guardrail: Intercepts highly privileged tool calls before execution.
-- `async prompt_injection_guardrail` (before_model | state) — `app/callbacks/guardrails.py:277` — Runtime Guardrail: Inspects the LLM request before hitting the model.
-- `admin_only_guardrail` (before_model | state) — `app/callbacks/guardrails.py:431` — Runtime Guardrail: Checks if the user is explicitly set in ADMIN_USER_IDS setup.
-- `tool_output_injection_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:494` — After-tool callback: scan high-risk tool outputs for prompt injection.
-- `verify_retry_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:576` — After-tool callback: counts evolution_verify_sandbox failures in session state.
-- `tool_output_spillover_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:677` — After-tool callback: spill oversized outputs to scratchpad.
-- `plan_enforcer` (before_model | state) — `app/callbacks/guardrails.py:760` — Injects active plan context into the model prompt to enforce step-by-step execution.
-- `async state_setter` (before_model | state) — `app/callbacks/guardrails.py:787` — Sets initial fundamental session state keys to prevent KeyErrors during prompt evaluation.
-- `a2a_privacy_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:855` — Deterministic secret-matching guardrail for A2A tools.
+- `async prompt_injection_guardrail` (before_model | state) — `app/callbacks/guardrails.py:284` — Runtime Guardrail: Inspects the LLM request before hitting the model.
+- `admin_only_guardrail` (before_model | state) — `app/callbacks/guardrails.py:438` — Runtime Guardrail: Checks if the user is explicitly set in ADMIN_USER_IDS setup.
+- `tool_output_injection_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:501` — After-tool callback: scan high-risk tool outputs for prompt injection.
+- `verify_retry_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:583` — After-tool callback: counts evolution_verify_sandbox failures in session state.
+- `tool_output_spillover_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:684` — After-tool callback: spill oversized outputs to scratchpad.
+- `plan_enforcer` (before_model | state) — `app/callbacks/guardrails.py:767` — Injects active plan context into the model prompt to enforce step-by-step execution.
+- `async state_setter` (before_model | state) — `app/callbacks/guardrails.py:794` — Sets initial fundamental session state keys to prevent KeyErrors during prompt evaluation.
+- `a2a_privacy_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:862` — Deterministic secret-matching guardrail for A2A tools.
 
 ## Skills (18)
 

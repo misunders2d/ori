@@ -35,6 +35,7 @@ class KnowledgeToolset(BaseToolset):
             list_records,
             merge_persons,
             promote_person,
+            reembed_entities,
             relate_entities,
             relate_entity_to_person,
             relate_memories,
@@ -83,4 +84,6 @@ class KnowledgeToolset(BaseToolset):
             FunctionTool(func=relate_memory_to_person),
             FunctionTool(func=relate_memory_to_entity),
             FunctionTool(func=relate_memories),
+            # Admin maintenance
+            FunctionTool(func=reembed_entities),
         ]

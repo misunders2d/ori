@@ -48,6 +48,7 @@ _slack_tools = (
 _skills_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 _scheduling_skill = load_skill_from_dir(_skills_dir / "scheduling-skill")
 _approval_skill = load_skill_from_dir(_skills_dir / "approval-skill")
+_knowledge_graph_skill = load_skill_from_dir(_skills_dir / "knowledge-graph-skill")
 
 root_agent = Agent(
     name="CoordinatorAgent",
@@ -131,7 +132,7 @@ root_agent = Agent(
         *([clickup_agent] if clickup_agent else []),
     ],
     tools=[
-        skill_toolset.SkillToolset(skills=[_scheduling_skill, _approval_skill]),
+        skill_toolset.SkillToolset(skills=[_scheduling_skill, _approval_skill, _knowledge_graph_skill]),
         # Toolsets — cross-cutting concerns only
         SchedulingToolset(),
         MemoryToolset(),

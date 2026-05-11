@@ -30,7 +30,7 @@
 ## GraphToolset
 - File: `app/toolsets/graph.py:5`
 - Neo4j knowledge graph — entity tracking, relationships, and graph queries.
-- Bundled tools: `add_entity`, `entity_timeline`, `find_connection_path`, `link_entities`, `query_connections`, `search_graph`
+- Bundled tools: `add_entity`, `entity_timeline`, `find_connection_path`, `graph_stats`, `link_entities`, `query_connections`, `search_graph`
 
 ## H10Toolset
 - File: `app/toolsets/h10.py:5`
@@ -50,7 +50,7 @@
 ## KnowledgeToolset
 - File: `app/toolsets/knowledge.py:22`
 - Shared knowledge base (memories + people + entities) backed by Neo4j.
-- Bundled tools: `create_entity`, `create_person`, `create_record`, `delete_any_person`, `delete_entity`, `delete_person`, `delete_record`, `get_records`, `list_records`, `merge_persons`, `promote_person`, `relate_entities`, `relate_entity_to_person`, `relate_memories`, `relate_memory_to_entity`, `relate_memory_to_person`, `relate_person_to_entity`, `relate_persons`, `search_entities`, `search_knowledge`, `search_people`, `update_any_person`, `update_any_record`, `update_entity`, `update_person`, `update_record`
+- Bundled tools: `create_entity`, `create_person`, `create_record`, `delete_any_person`, `delete_entity`, `delete_person`, `delete_record`, `get_records`, `list_records`, `merge_persons`, `promote_person`, `reembed_entities`, `relate_entities`, `relate_entity_to_person`, `relate_memories`, `relate_memory_to_entity`, `relate_memory_to_person`, `relate_person_to_entity`, `relate_persons`, `search_entities`, `search_knowledge`, `search_people`, `update_any_person`, `update_any_record`, `update_entity`, `update_person`, `update_record`
 
 ## MemoryToolset
 - File: `app/toolsets/memory.py:5`

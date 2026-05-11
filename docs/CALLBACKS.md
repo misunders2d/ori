@@ -8,11 +8,11 @@ Module-level callbacks. Hook is inferred from the function signature.
 
 
 - `admin_tool_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:93` — Runtime Guardrail: Intercepts highly privileged tool calls before execution.
-- `async prompt_injection_guardrail` (before_model | state) — `app/callbacks/guardrails.py:277` — Runtime Guardrail: Inspects the LLM request before hitting the model.
-- `admin_only_guardrail` (before_model | state) — `app/callbacks/guardrails.py:431` — Runtime Guardrail: Checks if the user is explicitly set in ADMIN_USER_IDS setup.
-- `tool_output_injection_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:494` — After-tool callback: scan high-risk tool outputs for prompt injection.
-- `verify_retry_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:576` — After-tool callback: counts evolution_verify_sandbox failures in session state.
-- `tool_output_spillover_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:677` — After-tool callback: spill oversized outputs to scratchpad.
-- `plan_enforcer` (before_model | state) — `app/callbacks/guardrails.py:760` — Injects active plan context into the model prompt to enforce step-by-step execution.
-- `async state_setter` (before_model | state) — `app/callbacks/guardrails.py:787` — Sets initial fundamental session state keys to prevent KeyErrors during prompt evaluation.
-- `a2a_privacy_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:855` — Deterministic secret-matching guardrail for A2A tools.
+- `async prompt_injection_guardrail` (before_model | state) — `app/callbacks/guardrails.py:284` — Runtime Guardrail: Inspects the LLM request before hitting the model.
+- `admin_only_guardrail` (before_model | state) — `app/callbacks/guardrails.py:438` — Runtime Guardrail: Checks if the user is explicitly set in ADMIN_USER_IDS setup.
+- `tool_output_injection_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:501` — After-tool callback: scan high-risk tool outputs for prompt injection.
+- `verify_retry_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:583` — After-tool callback: counts evolution_verify_sandbox failures in session state.
+- `tool_output_spillover_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:684` — After-tool callback: spill oversized outputs to scratchpad.
+- `plan_enforcer` (before_model | state) — `app/callbacks/guardrails.py:767` — Injects active plan context into the model prompt to enforce step-by-step execution.
+- `async state_setter` (before_model | state) — `app/callbacks/guardrails.py:794` — Sets initial fundamental session state keys to prevent KeyErrors during prompt evaluation.
+- `a2a_privacy_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:862` — Deterministic secret-matching guardrail for A2A tools.

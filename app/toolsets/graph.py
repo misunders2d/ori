@@ -8,10 +8,11 @@ class GraphToolset(BaseToolset):
     async def get_tools(self, readonly_context=None):
         from app.tools.graph_tools import (
             add_entity,
-            link_entities,
-            query_connections,
             find_connection_path,
             entity_timeline,
+            graph_stats,
+            link_entities,
+            query_connections,
             search_graph,
         )
 
@@ -22,4 +23,5 @@ class GraphToolset(BaseToolset):
             FunctionTool(func=find_connection_path),
             FunctionTool(func=entity_timeline),
             FunctionTool(func=search_graph),
+            FunctionTool(func=graph_stats),
         ]

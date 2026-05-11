@@ -121,47 +121,79 @@ async def link_entities(
 
 
 async def query_connections(
-    entity: str,
+    node: str,
     max_depth: int = 2,
     limit: int = 25,
     tool_context: ToolContext = None,
 ) -> dict:
-    """Find all entities connected to a given entity.
+    """Find all nodes connected to a given memory / person / entity.
 
-    Use this to explore relationships — 'who/what is connected to X?'
-    Returns the subgraph around the entity up to max_depth hops.
+    Polymorphic — accepts any prefix-tagged id:
+    - `mem_...` — starts from a Memory, returns neighbors of any label.
+    - `per_...` — starts from a Person, returns neighbors of any label.
+    - `ent_...` — starts from an Entity (legacy behaviour).
+    - Bare name string — falls back to entity-name search.
+
+    Use this to answer "what do you know about X?" or "what's nearby this
+    memory?". Returns the subgraph around the starting node up to
+    max_depth hops, with relationship types and depth on each neighbor.
 
     Args:
-        entity: Entity ID or name to explore from.
+        node: A `mem_`/`per_`/`ent_` id, or a bare entity name to look up.
         max_depth: How many relationship hops to traverse (1-4, default 2).
         limit: Max results (default 25, max 100).
     """
-    entity_id = await _resolve_entity(entity)
+    if isinstance(node, str) and node[:4] in ("mem_", "per_", "ent_"):
+        return await graph.get_node_neighbors(node, max_depth=max_depth, limit=limit)
+
+    # Bare name → resolve to an entity, then traverse entity-only.
+    entity_id = await _resolve_entity(node)
     if not entity_id:
-        return {"status": "error", "message": f"Entity '{entity}' not found."}
+        return {"status": "error", "message": f"Node '{node}' not found."}
     return await graph.get_connections(entity_id, max_depth=max_depth, limit=limit)
 
 
 async def find_connection_path(
-    from_entity: str,
-    to_entity: str,
+    from_node: str,
+    to_node: str,
     tool_context: ToolContext = None,
 ) -> dict:
-    """Find the shortest connection path between two entities.
+    """Find the shortest connection path between two nodes.
+
+    Polymorphic — both endpoints may be `mem_`/`per_`/`ent_` ids. When both
+    are entity ids (or bare entity names that resolve to entities), the
+    legacy entity-only shortestPath is used; otherwise the cross-label
+    path is computed.
 
     Use this to answer 'how is X connected to Y?' — traces the relationship chain.
 
     Args:
-        from_entity: Starting entity ID or name.
-        to_entity: Target entity ID or name.
+        from_node: Starting node id (or entity name).
+        to_node: Target node id (or entity name).
     """
-    from_id = await _resolve_entity(from_entity)
-    to_id = await _resolve_entity(to_entity)
+    from_prefixed = isinstance(from_node, str) and from_node[:4] in ("mem_", "per_", "ent_")
+    to_prefixed = isinstance(to_node, str) and to_node[:4] in ("mem_", "per_", "ent_")
+
+    if from_prefixed and to_prefixed:
+        return await graph.find_node_path(from_node, to_node)
+
+    # At least one side is a bare name — resolve to an entity, then use
+    # the entity-only path. If either resolution fails, surface a clear
+    # error so the LLM can ask the user for a more specific identifier.
+    from_id = from_node if from_prefixed else await _resolve_entity(from_node)
+    to_id = to_node if to_prefixed else await _resolve_entity(to_node)
 
     if not from_id:
-        return {"status": "error", "message": f"Entity '{from_entity}' not found."}
+        return {"status": "error", "message": f"Node '{from_node}' not found."}
     if not to_id:
-        return {"status": "error", "message": f"Entity '{to_entity}' not found."}
+        return {"status": "error", "message": f"Node '{to_node}' not found."}
+
+    # If both ended up as prefixed ids of different labels, run polymorphic.
+    if isinstance(from_id, str) and isinstance(to_id, str):
+        from_label = from_id[:4] in ("mem_", "per_", "ent_")
+        to_label = to_id[:4] in ("mem_", "per_", "ent_")
+        if from_label and to_label and (from_id[:4] != "ent_" or to_id[:4] != "ent_"):
+            return await graph.find_node_path(from_id, to_id)
 
     return await graph.find_path(from_id, to_id)
 
@@ -202,6 +234,43 @@ async def search_graph(
         entity_type=entity_type or None,
         limit=limit,
     )
+
+
+async def graph_stats(recent_mutations: int = 10, tool_context: ToolContext = None) -> dict:
+    """Summarize the knowledge graph — node counts by label, edge counts by
+    type, orphans, and the most recent mutations from the audit log.
+
+    Use this to answer "what's in the knowledge base?" or "what did Ori
+    learn this week?" without dumping every record.
+
+    Args:
+        recent_mutations: How many recent audit-log lines to include (max 50, default 10).
+    """
+    stats = await graph.get_graph_stats()
+    if stats.get("status") != "success":
+        return stats
+
+    # Tail the audit JSONL for the most recent mutations.
+    import json as _json
+    import os as _os
+    audit_path = _os.path.abspath("./data/graph_audit.jsonl")
+    recent_mutations = min(max(recent_mutations, 0), 50)
+    recent: list[dict] = []
+    if recent_mutations and _os.path.isfile(audit_path):
+        try:
+            with open(audit_path) as f:
+                lines = f.readlines()
+            for line in lines[-recent_mutations:]:
+                line = line.strip()
+                if line:
+                    try:
+                        recent.append(_json.loads(line))
+                    except _json.JSONDecodeError:
+                        continue
+        except Exception as e:
+            logger.warning("graph_stats: audit log read failed: %s", e)
+
+    return {**stats, "recent_mutations": recent}
 
 
 # ---------------------------------------------------------------------------
