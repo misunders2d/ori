@@ -44,8 +44,17 @@ class _FakeSession:
 
 
 class _FakeToolContext:
-    def __init__(self, user_id: str = "admin@example.com"):
-        self.state = _FakeState({"user_id": user_id})
+    def __init__(self, user_id: str = "admin@example.com", docs_read: bool = True):
+        # Phase 8 gate: `evolution_stage_change` refuses without docs_read.
+        # Default this on so we test the post-stage behaviour. The gate
+        # itself is exercised separately in tests/test_phase8_docs_gate.py.
+        state = {"user_id": user_id}
+        if docs_read:
+            state["docs_read"] = {
+                "docs/AI_EDITS.md": True,
+                "docs/INDEX.md": True,
+            }
+        self.state = _FakeState(state)
         self.session = _FakeSession()
 
 

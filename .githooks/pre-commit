@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Pre-commit doc-read gate (Phase 8).
+#
+# Every commit must be preceded by a fresh `.docs_read_marker` proving
+# the committer has opened docs/AI_EDITS.md and docs/INDEX.md. Without
+# the marker, this hook blocks the commit and prints how to satisfy it.
+#
+# Install once per clone:   git config core.hooksPath .githooks
+# (also installed automatically by scripts/install_hooks.py + run_bot.py
+# startup + deploy/ori-supervisor.py boot sequence).
+#
+# Override (forbidden by docs/AI_EDITS.md rule 4): `--no-verify`.
+
+set -e
+
+MARKER=".docs_read_marker"
+MAX_AGE_SECONDS=7200  # 2 hours — long enough for a focused session, short enough that stale markers expire
+
+if [ ! -f "$MARKER" ]; then
+    cat >&2 <<'EOF'
+
+❌  COMMIT BLOCKED — doc-read marker missing.
+
+Every code change in this repo must be preceded by reading:
+  - docs/AI_EDITS.md  (the 12 hard rules)
+  - docs/INDEX.md     (the auto-generated symbol map — never reinvent)
+
+To satisfy the gate (after actually reading them), run:
+
+    uv run python scripts/check_docs_read.py
+
+That writes `.docs_read_marker`, valid for 2 hours, and lets the commit
+through. The marker is in `.gitignore` so it never leaks across clones.
+
+Do NOT bypass with `git commit --no-verify` — it's forbidden by
+docs/AI_EDITS.md rule 4. Bypassing leaves no audit trail.
+
+EOF
+    exit 1
+fi
+
+# Stat the marker: portable mtime via stat -c (GNU) or stat -f (BSD).
+if stat -c %Y "$MARKER" >/dev/null 2>&1; then
+    MARKER_MTIME=$(stat -c %Y "$MARKER")
+else
+    MARKER_MTIME=$(stat -f %m "$MARKER")
+fi
+
+NOW=$(date +%s)
+AGE=$(( NOW - MARKER_MTIME ))
+
+if [ "$AGE" -gt "$MAX_AGE_SECONDS" ]; then
+    cat >&2 <<EOF
+
+❌  COMMIT BLOCKED — doc-read marker is stale ($((AGE / 60)) min old, limit ${MAX_AGE_SECONDS} s).
+
+Re-read docs/AI_EDITS.md + docs/INDEX.md if structure has changed,
+then refresh the marker:
+
+    uv run python scripts/check_docs_read.py
+
+EOF
+    exit 1
+fi
+
+exit 0

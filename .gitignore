@@ -1,6 +1,9 @@
 # Ephemeral working data (caches, scratchpads)
 tmp/
 
+# Per-clone doc-read acknowledgement (Phase 8 pre-commit gate)
+.docs_read_marker
+
 # Secrets & Vault
 .env
 .env*

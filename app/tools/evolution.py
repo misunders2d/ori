@@ -176,6 +176,77 @@ def _audit_actor(tool_context: ToolContext | None) -> str:
     return str(data.get("user_id") or "")
 
 
+# ---------------------------------------------------------------------------
+# Doc-read gate (Phase 8)
+# ---------------------------------------------------------------------------
+# Internal DeveloperAgent MUST open the onboarding docs before staging any
+# change. `evolution_read_file` flips a per-session flag in
+# `tool_context.state["docs_read"]`; `evolution_stage_change` refuses to
+# run until every required doc has been read.
+#
+# External AI editors (Claude Code, etc.) get the matching enforcement
+# via `.githooks/pre-commit` — the git hook blocks commits that lack a
+# fresh `.docs_read_marker` file. CLAUDE.md tells the external AI how
+# to satisfy the hook.
+
+_DOC_READ_REQUIRED = (
+    "docs/AI_EDITS.md",
+    "docs/INDEX.md",
+)
+_DOC_READ_STATE_KEY = "docs_read"
+
+
+def _normalize_doc_path(path: str) -> str:
+    """Strip leading ./ and normalize separators so equivalent paths match."""
+    if not isinstance(path, str):
+        return ""
+    return path.replace("\\", "/").lstrip("./")
+
+
+def _doc_read_state(tool_context: ToolContext | None) -> dict:
+    """Return the docs_read dict on tool_context.state, creating it if missing."""
+    if not tool_context:
+        return {}
+    state = getattr(tool_context, "state", None)
+    if state is None:
+        return {}
+    try:
+        existing = state.get(_DOC_READ_STATE_KEY, None) if hasattr(state, "get") else None
+        if not isinstance(existing, dict):
+            existing = {}
+            try:
+                state[_DOC_READ_STATE_KEY] = existing
+            except Exception:
+                pass
+        return existing
+    except Exception:
+        return {}
+
+
+def _mark_doc_read(tool_context: ToolContext | None, file_path: str) -> None:
+    """Flip the docs_read flag for `file_path` if it's a required doc."""
+    normalized = _normalize_doc_path(file_path)
+    if normalized not in _DOC_READ_REQUIRED:
+        return
+    state = _doc_read_state(tool_context)
+    state[normalized] = True
+
+
+def _doc_read_gate_message(missing: list[str]) -> str:
+    """Construct the refusal message naming exactly what's missing."""
+    reads = "\n".join(
+        f"  evolution_read_file({path!r})" for path in missing
+    )
+    return (
+        "Refusing to stage changes — onboarding docs have not been read in "
+        "this session. Run these tool calls FIRST, then retry:\n\n"
+        f"{reads}\n\n"
+        "docs/AI_EDITS.md lists the rules every code change must follow. "
+        "docs/INDEX.md catalogues every existing tool/agent/toolset/skill — "
+        "checking it prevents you from reinventing things that already exist."
+    )
+
+
 
 def evolution_read_file(file_path: str, tool_context: ToolContext) -> dict:
     """Reads the content of a file from the current agent's source code.
@@ -195,7 +266,16 @@ def evolution_read_file(file_path: str, tool_context: ToolContext) -> dict:
         return {"status": "error", "message": "Security error: Reading .env directly is blocked. Do not read credentials directly."}
     try:
         with open(resolved) as f:
-            return {"status": "success", "content": f.read()}
+            content = f.read()
+
+        # Phase 8 doc-read gate (see _DOC_READ_REQUIRED below) — record
+        # that the agent has actually opened the required onboarding docs.
+        # `evolution_stage_change` refuses to run until both flags are set
+        # for this session, making "read docs first" load-bearing rather
+        # than honor-system.
+        _mark_doc_read(tool_context, file_path)
+
+        return {"status": "success", "content": content}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -265,6 +345,23 @@ def evolution_stage_change(
     """
     if file_path.endswith(".env"):
         return {"status": "error", "message": "Security error: Writing to .env directly is blocked. Instruct human to configure integrations properly."}
+
+    # Phase 8 doc-read gate — refuse to stage anything if onboarding docs
+    # weren't opened in this session. The agent satisfies the gate by
+    # calling evolution_read_file on the required docs BEFORE the first
+    # stage. The refusal message lists the exact tool calls needed.
+    docs_read = _doc_read_state(tool_context)
+    missing_docs = [d for d in _DOC_READ_REQUIRED if not docs_read.get(d)]
+    if missing_docs:
+        _evolution_audit(
+            "stage", _audit_actor(tool_context), "fail",
+            files=[file_path], error="docs_read_gate", missing_docs=missing_docs,
+        )
+        return {
+            "status": "needs_docs_read",
+            "missing_docs": missing_docs,
+            "message": _doc_read_gate_message(missing_docs),
+        }
 
     tool_context.state["evolution_verified_digest"] = ""
 

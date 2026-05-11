@@ -68,20 +68,20 @@ ClickUp task management tools — async, API key auth.
 - `inspect_secure_env` (line 30) — Lists environment variables with sensitive values redacted.
 
 ## `app/tools/evolution.py`
-- `evolution_read_file` (line 180) — Reads the content of a file from the current agent's source code.
-- `evolution_list_directory` (line 203) — Lists the files and folders inside a specific directory of the agent's source code.
-- `evolution_stage_change` (line 248) — Stages a code change in a protected sandbox environment.
-- `evolution_discard_sandbox` (line 309) — Abandons the current self-evolution cycle, wiping the sandbox.
-- `evolution_verify_sandbox` (line 340) — Runs verification checks on staged sandbox changes.
-- `evolution_commit_and_push` (line 769) — Commits verified changes. Uses GitHub if configured, otherwise commits locally.
-- `evolution_git_pull` (line 918) — Pulls the latest code from the GitHub remote repository into the current container and restarts.
-- `evolution_git_reset` (line 950) — Resets the local workspace to match the last commit, deleting untracked 'dangling' files.
-- `evolution_sync_local_to_upstream` (line 973) — Connects a detached local workspace to a remote GitHub repository and populates it.
-- `evolution_git_fetch` (line 1028) — Fetches latest refs from a remote without merging anything.
-- `evolution_git_log` (line 1052) — Shows compact commit history for a branch or ref.
-- `evolution_git_diff_summary` (line 1082) — Shows a compact summary of changes between two refs (files changed, insertions, deletions).
-- `evolution_git_diff_file` (line 1124) — Shows the actual diff for a specific file between two refs.
-- `evolution_git_branches` (line 1164) — Lists all local and remote branches with their latest commit.
+- `evolution_read_file` (line 251) — Reads the content of a file from the current agent's source code.
+- `evolution_list_directory` (line 283) — Lists the files and folders inside a specific directory of the agent's source code.
+- `evolution_stage_change` (line 328) — Stages a code change in a protected sandbox environment.
+- `evolution_discard_sandbox` (line 406) — Abandons the current self-evolution cycle, wiping the sandbox.
+- `evolution_verify_sandbox` (line 437) — Runs verification checks on staged sandbox changes.
+- `evolution_commit_and_push` (line 866) — Commits verified changes. Uses GitHub if configured, otherwise commits locally.
+- `evolution_git_pull` (line 1015) — Pulls the latest code from the GitHub remote repository into the current container and restarts.
+- `evolution_git_reset` (line 1047) — Resets the local workspace to match the last commit, deleting untracked 'dangling' files.
+- `evolution_sync_local_to_upstream` (line 1070) — Connects a detached local workspace to a remote GitHub repository and populates it.
+- `evolution_git_fetch` (line 1125) — Fetches latest refs from a remote without merging anything.
+- `evolution_git_log` (line 1149) — Shows compact commit history for a branch or ref.
+- `evolution_git_diff_summary` (line 1179) — Shows a compact summary of changes between two refs (files changed, insertions, deletions).
+- `evolution_git_diff_file` (line 1221) — Shows the actual diff for a specific file between two refs.
+- `evolution_git_branches` (line 1261) — Lists all local and remote branches with their latest commit.
 
 ## `app/tools/evolution_catalog.py`
 Evolution catalog — verified evolution library for sharing across instances.
@@ -292,12 +292,12 @@ Tools for researching bugs, library docs, and package versions.
 ## `app/tools/scratchpad.py`
 Session-scoped scratchpad for multi-step research tasks.
 
-- `scratchpad_write` (line 119) — Append content to a named scratchpad. Creates it if it doesn't exist.
-- `scratchpad_read` (line 165) — Read the full contents of a named scratchpad.
-- `scratchpad_replace` (line 216) — Replace the entire contents of a scratchpad. Useful for rewriting with a summary.
-- `scratchpad_clear` (line 249) — Delete a scratchpad when the task is complete.
-- `scratchpad_list` (line 271) — List active scratchpads for the current session.
-- `cleanup_session_scratchpads` (line 307) — Delete all scratchpads for a session. Called during session reset.
+- `scratchpad_write` (line 125) — Append content to a named scratchpad. Creates it if it doesn't exist.
+- `scratchpad_read` (line 171) — Read the full contents of a named scratchpad.
+- `scratchpad_replace` (line 222) — Replace the entire contents of a scratchpad. Useful for rewriting with a summary.
+- `scratchpad_clear` (line 255) — Delete a scratchpad when the task is complete.
+- `scratchpad_list` (line 277) — List active scratchpads for the current session.
+- `cleanup_session_scratchpads` (line 313) — Delete all scratchpads for a session. Called during session reset.
 
 ## `app/tools/slack.py`
 - `async slack_post_message` (line 18) — Sends a message to a Slack channel.

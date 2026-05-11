@@ -4,6 +4,13 @@ Anyone modifying this repo — Ori's own sub-agents, Claude Code sessions, or an
 
 The rules are intentionally short and blunt. The longer "why" lives in `AGENTS.md` (the manifesto) and the topic-specific docs (`docs/EVOLUTION.md`, `docs/A2A.md`, etc).
 
+> **Rules 1 and 10 are now load-bearing — not honor-system.**
+>
+> - **Internal `DeveloperAgent`**: `evolution_stage_change` refuses with `{"status": "needs_docs_read"}` until BOTH `evolution_read_file("docs/AI_EDITS.md")` and `evolution_read_file("docs/INDEX.md")` have run in the same session. Helper: `_doc_read_state()` in `app/tools/evolution.py`.
+> - **External AI (Claude Code, etc.)**: `.githooks/pre-commit` blocks `git commit` until `.docs_read_marker` exists (created by `uv run python scripts/check_docs_read.py`, valid 2 h). Installer: `uv run python scripts/install_hooks.py` (also runs from `run_bot.py` startup).
+>
+> Bypass via `git commit --no-verify` is forbidden by rule 4 and leaves no audit trail.
+
 ---
 
 ## 1. Read the index first

@@ -2,9 +2,29 @@
 
 You are likely Claude Code (or another external AI agent) working on the **Ori** repository — a self-evolving Google ADK 1.x agent platform.
 
-Before you edit anything, read these in order:
+## 🛑 Hard-gated requirement before ANY commit
 
-1. **[docs/AI_EDITS.md](docs/AI_EDITS.md)** — 10 hard rules. The most important is rule 1: search `docs/INDEX.md` for what you're about to build; it almost certainly already exists.
+A pre-commit hook (`.githooks/pre-commit`) blocks `git commit` unless a fresh `.docs_read_marker` file is present. To create it:
+
+```
+uv run python scripts/check_docs_read.py
+```
+
+This prompts you to confirm you've read `docs/AI_EDITS.md` + `docs/INDEX.md`, then writes the marker (valid for 2 hours).
+
+The marker is in `.gitignore` so it never crosses clones. **Do NOT** bypass with `git commit --no-verify` — it's forbidden by `docs/AI_EDITS.md` rule 4 and leaves no audit trail.
+
+If the hook isn't firing, the installer probably hasn't run yet for this clone:
+
+```
+uv run python scripts/install_hooks.py
+```
+
+(also run automatically by the bot's startup + supervisor boot sequence).
+
+## Reading order before any edit
+
+1. **[docs/AI_EDITS.md](docs/AI_EDITS.md)** — 12 hard rules. The most important is rule 1: search `docs/INDEX.md` for what you're about to build; it almost certainly already exists.
 2. **[docs/INDEX.md](docs/INDEX.md)** — auto-generated map of every sub-agent, tool, toolset, callback, skill (with `file:line` refs).
 3. **[AGENTS.md](AGENTS.md)** — the constitutional manifesto (philosophy, immutable laws, architectural ethos).
 

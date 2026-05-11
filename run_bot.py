@@ -210,6 +210,15 @@ async def main():
         sweep_scratchpad_sessions()
     except Exception as exc:
         logger.warning("Startup tmp sweep failed: %s", exc)
+    # Phase 8 — install the doc-read pre-commit hook on first start.
+    # Idempotent: a re-run on a clone that already points at .githooks
+    # is a no-op. Non-fatal: bot still runs without hook enforcement.
+    try:
+        sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+        from scripts.install_hooks import install_hooks
+        install_hooks(silent=True)
+    except Exception as exc:
+        logger.warning("Startup hook install skipped: %s", exc)
     runner = get_runner()
     scheduler.start()
     tasks = []
