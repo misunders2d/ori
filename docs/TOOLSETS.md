@@ -85,7 +85,7 @@
 ## SPApiToolset
 - File: `app/toolsets/sp_api.py:5`
 - Amazon Selling Partner API — catalog, listings, pricing, reports.
-- Bundled tools: `data_to_csv`, `export_report_to_csv`, `sp_check_report`, `sp_download_report`, `sp_get_account_health`, `sp_get_catalog_item`, `sp_get_competitive_pricing`, `sp_get_fees_estimate`, `sp_get_inventory_summaries`, `sp_get_listing`, `sp_get_order_items`, `sp_list_orders`, `sp_list_reports`, `sp_request_report`, `sp_search_catalog`
+- Bundled tools: `data_to_csv`, `export_report_to_csv`, `sp_check_report`, `sp_download_report`, `sp_get_account_health`, `sp_get_catalog_item`, `sp_get_competitive_pricing`, `sp_get_fees_estimate`, `sp_get_inventory_summaries`, `sp_get_listing`, `sp_get_order_items`, `sp_list_reports`, `sp_request_report`, `sp_search_catalog`
 
 ## SystemToolset
 - File: `app/toolsets/system.py:19`

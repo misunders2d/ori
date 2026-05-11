@@ -30,12 +30,15 @@ SKILL.md is the routing doc. Each API domain has its own reference file — read
 | `sp_get_listing(sku)` | Your listing for a SKU |
 | `sp_get_competitive_pricing(asins/skus)` | Price vs. competitors, up to 20 items |
 | `sp_get_fees_estimate(asin, price, is_fba)` | Fee breakdown for profitability math |
-| `sp_list_orders(days, order_statuses)` | Recent orders (compact summaries) |
 | `sp_get_order_items(order_id)` | Line items for one order |
 | `sp_get_inventory_summaries(skus)` | Live FBA stock (fulfillable / inbound / reserved) |
 | `sp_get_account_health(days)` | **One-shot account health digest** |
 | `export_report_to_csv(report_type, days)` | **One-shot report → CSV pipeline** |
 | `sp_request_report` / `sp_check_report` / `sp_download_report` / `sp_list_reports` | Manual report lifecycle |
+
+> **The "list orders" tool has been removed.** It returned only the first page (~50 orders) and was used to answer "today's sales" questions where it produced misleading partial totals (reporting 50 orders when reality was 900+). For ANY orders/sales total, use the report path: `sp_request_report(report_type='GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL', days=1)` → poll `sp_check_report` → `sp_download_report` → parse. The one-shot `export_report_to_csv` and `sp_get_account_health` wrap the full pipeline for common needs.
+>
+> **Timezone rule:** "today", "yesterday", or any naked day reference defaults to Pacific Time (`America/Los_Angeles`). Pull `get_current_time(timezone='America/Los_Angeles')` to know "what day is it" before requesting a report. Reports honour the date window you pass via `data_start_time` / `data_end_time` — compute those in Pacific.
 | `data_to_csv(data, filename)` | Convert any JSON you already have into CSV |
 
 ## Cross-cutting rules

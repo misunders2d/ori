@@ -2,34 +2,33 @@
 
 ## Tools
 
-### `sp_list_orders(created_after="", created_before="", order_statuses="", days=7, max_results=50)`
-List recent orders in the US marketplace. Either pass `created_after` (ISO 8601 timestamp or `YYYY-MM-DD`) or leave it empty and set `days` for a rolling window ending now.
-
-Common `order_statuses` filters (comma-separated): `Shipped, Unshipped, Pending, Canceled, PartiallyShipped, InvoiceUnconfirmed, Unfulfillable`. Omit to include all.
-
-Returns a compact list — one row per order with ID, date, status, fulfillment channel, total, and item count. **Not** the line items.
+> The previous `sp_list_orders` tool was **removed** — it returned only the first ~50 orders and produced misleading partial sales totals. Use the report path below for any "how many orders / units / dollars" question.
 
 ### `sp_get_order_items(order_id)`
-Drill into one specific order. Returns the line items (ASIN, SKU, title, quantity ordered/shipped, item price).
+Drill into one specific order. Returns the line items (ASIN, SKU, title, quantity ordered/shipped, item price). The `order_id` comes from a downloaded report row.
 
-## Pattern: list → drill
+## "Today's sales" / any order-count question → report path
 
 ```
-sp_list_orders(days=1, order_statuses="Unshipped")
-# → [{"order_id": "111-1234567-1234567", ...}, ...]
+sp_request_report(report_type="GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL", days=1)
+# → returns report_id; processing takes 1-15 minutes on Amazon's side
 
-sp_get_order_items(order_id="111-1234567-1234567")
-# → [{"asin": "B01EXAMPLE", "sku": "SKU-FOO", "quantity_ordered": 2, ...}]
+sp_check_report(report_id="...")
+# → poll until processing_status == "DONE"; returns report_document_id
+
+sp_download_report(report_document_id="...")
+# → returns file_path to a TSV with ALL orders for the window (pending + shipped + canceled),
+#   including totals for pending orders that the live OrdersV0 endpoint omits.
 ```
 
-Use this flow for ad-hoc "what sold today" or "what's stuck unshipped" questions. For anything that needs thousands of orders or deep historical analysis, don't loop — request `GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL` instead (see `reports.md`). The API is rate-limited; reports are the efficient path for bulk work.
+Or use the one-shot wrapper `export_report_to_csv(report_type, days)` which does the full pipeline + saves a CSV. Then route the CSV path to AmazonDataAnalystAgent for analysis (totals, hourly chart, etc.).
 
-## Today's Sales
+**Why reports, not list-orders pagination:**
+- OrdersV0's GetOrders has a strict rate limit (~1 call/min sustained) — paginating 900+ orders would take 18+ minutes even if you wanted to.
+- Pending orders return `total: null` in OrdersV0 — your sum is always undercount.
+- The report includes everything in one file, authoritatively.
 
-For "today's sales" or "what sold today", use SP-API orders first:
-1. `sp_list_orders(days=1)` for recent orders.
-2. `sp_get_order_items(order_id=...)` only when line-item detail is needed.
-3. Do not route to BigQuery unless the user explicitly asks for BigQuery/SQL/warehouse data.
+**Timezone:** "today" means Pacific (`America/Los_Angeles`) for this user unless they specify otherwise. Call `get_current_time(timezone="America/Los_Angeles")` first, compute your day window in Pacific, then pass that window to the report request. Reports honour the `data_start_time` / `data_end_time` you pass.
 
 ## What's NOT in here
 

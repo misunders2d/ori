@@ -290,84 +290,6 @@ async def sp_get_fees_estimate(
 # ORDERS — list recent orders, drill into items on a specific order
 # ---------------------------------------------------------------------------
 
-async def sp_list_orders(
-    created_after: str = "",
-    created_before: str = "",
-    order_statuses: str = "",
-    days: int = 7,
-    max_results: int = 50,
-    tool_context: ToolContext = None,
-) -> dict:
-    """List recent orders in the US marketplace.
-
-    Either pass `created_after` (ISO 8601 timestamp or YYYY-MM-DD) explicitly,
-    or leave it empty and use `days` for a rolling window ending now. Returns
-    a compact list of order summaries — for full item-level detail, call
-    sp_get_order_items with a specific order_id.
-
-    Args:
-        created_after: Lower bound on order creation time (ISO 8601 / YYYY-MM-DD).
-            If empty, defaults to now - `days`.
-        created_before: Upper bound on order creation time. If empty, no upper bound.
-        order_statuses: Comma-separated list of statuses to filter by, e.g.
-            "Shipped,Unshipped,Pending,Canceled". Empty = all statuses.
-        days: Rolling window size when `created_after` is not provided (default 7).
-        max_results: How many results to include in the response (1-100, default 50).
-            Note: the API paginates — we return only the first page here to keep
-            results tight. For larger pulls, use sp_list_orders on a narrower
-            window or fall back to GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL.
-    """
-    creds = _get_credentials()
-    if not creds:
-        return {"status": "error", "message": "SP-API credentials not configured."}
-
-    # Resolve lower bound
-    if not created_after:
-        days = min(max(days, 1), 90)
-        created_after = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-
-    from sp_api.api import OrdersV0
-    orders = OrdersV0(credentials=creds)
-
-    kwargs: dict = {
-        "MarketplaceIds": [_US_MARKETPLACE],
-        "CreatedAfter": created_after,
-        "MaxResultsPerPage": min(max(max_results, 1), 100),
-    }
-    if created_before:
-        kwargs["CreatedBefore"] = created_before
-    if order_statuses:
-        kwargs["OrderStatuses"] = [s.strip() for s in order_statuses.split(",") if s.strip()]
-
-    result = await _call_with_retry(orders.get_orders, **kwargs)
-    if not result["ok"]:
-        return {"status": "error", "message": result["error"]}
-
-    payload = result["payload"] or {}
-    order_list = payload.get("Orders") or []
-    summaries = []
-    for o in order_list:
-        total = o.get("OrderTotal") or {}
-        summaries.append({
-            "order_id": o.get("AmazonOrderId"),
-            "purchase_date": o.get("PurchaseDate"),
-            "status": o.get("OrderStatus"),
-            "fulfillment_channel": o.get("FulfillmentChannel"),
-            "items": o.get("NumberOfItemsShipped", 0) + o.get("NumberOfItemsUnshipped", 0),
-            "total": total.get("Amount"),
-            "currency": total.get("CurrencyCode"),
-            "is_prime": o.get("IsPrime"),
-            "is_business": o.get("IsBusinessOrder"),
-        })
-
-    return {
-        "status": "success",
-        "count": len(summaries),
-        "orders": summaries,
-        "has_more": bool(payload.get("NextToken")),
-    }
-
-
 async def sp_get_order_items(
     order_id: str,
     tool_context: ToolContext = None,
@@ -375,7 +297,7 @@ async def sp_get_order_items(
     """Get line items for a specific order.
 
     Args:
-        order_id: The Amazon order ID (e.g. 111-1234567-1234567) from sp_list_orders.
+        order_id: The Amazon order ID (e.g. 111-1234567-1234567), typically pulled from a report (GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL).
     """
     creds = _get_credentials()
     if not creds:

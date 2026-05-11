@@ -39,7 +39,7 @@ Read this **before** adding new code — most things you'd build already exist.
 
 - **KnowledgeAgent** (Agent) — `app/sub_agents/knowledge_agent.py:30`
 
-## Tools (235 public functions across 41 files)
+## Tools (234 public functions across 41 files)
 
 
 ### `app/tools/a2a.py`
@@ -373,14 +373,13 @@ Amazon Selling Partner API tools — product catalog, listings, pricing, reports
 - `async sp_get_listing` (line 151) — Get listing details for one of your SKUs.
 - `async sp_get_competitive_pricing` (line 189) — Get competitive pricing data for products (your price vs competitors).
 - `async sp_get_fees_estimate` (line 235) — Estimate Amazon's fees for a given ASIN at a proposed sale price.
-- `async sp_list_orders` (line 293) — List recent orders in the US marketplace.
-- `async sp_get_order_items` (line 371) — Get line items for a specific order.
-- `async sp_get_inventory_summaries` (line 415) — Get live FBA inventory summaries (fulfillable, inbound, reserved).
-- `async sp_request_report` (line 487) — Request an Amazon report. Returns a report ID to check status with sp_check_report.
-- `async sp_check_report` (line 549) — Check the status of a requested report.
-- `async sp_download_report` (line 598) — Download a completed report by its document ID.
-- `async sp_get_account_health` (line 648) — Fetch the Seller Central Account Health digest — AHR, policy compliance,
-- `async sp_list_reports` (line 780) — List previously requested reports.
+- `async sp_get_order_items` (line 293) — Get line items for a specific order.
+- `async sp_get_inventory_summaries` (line 337) — Get live FBA inventory summaries (fulfillable, inbound, reserved).
+- `async sp_request_report` (line 409) — Request an Amazon report. Returns a report ID to check status with sp_check_report.
+- `async sp_check_report` (line 471) — Check the status of a requested report.
+- `async sp_download_report` (line 520) — Download a completed report by its document ID.
+- `async sp_get_account_health` (line 570) — Fetch the Seller Central Account Health digest — AHR, policy compliance,
+- `async sp_list_reports` (line 702) — List previously requested reports.
 
 ### `app/tools/spawn.py`
 Tool for spawning sibling agent containers.
@@ -488,7 +487,7 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
 
 - **SPApiToolset** — `app/toolsets/sp_api.py:5`
   - Amazon Selling Partner API — catalog, listings, pricing, reports.
-  - tools: `data_to_csv`, `export_report_to_csv`, `sp_check_report`, `sp_download_report`, `sp_get_account_health`, `sp_get_catalog_item`, `sp_get_competitive_pricing`, `sp_get_fees_estimate`, `sp_get_inventory_summaries`, `sp_get_listing`, `sp_get_order_items`, `sp_list_orders`, `sp_list_reports`, `sp_request_report`, `sp_search_catalog`
+  - tools: `data_to_csv`, `export_report_to_csv`, `sp_check_report`, `sp_download_report`, `sp_get_account_health`, `sp_get_catalog_item`, `sp_get_competitive_pricing`, `sp_get_fees_estimate`, `sp_get_inventory_summaries`, `sp_get_listing`, `sp_get_order_items`, `sp_list_reports`, `sp_request_report`, `sp_search_catalog`
 
 - **SystemToolset** — `app/toolsets/system.py:19`
   - Core system lifecycle tools.

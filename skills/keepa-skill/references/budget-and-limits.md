@@ -62,7 +62,7 @@ Keepa doesn't impose request-rate limits beyond the token bucket — if you have
 
 ## When to NOT use Keepa
 
-- **Your own listings' real-time stock or sales** → use SP-API (`sp_get_inventory_summaries`, `sp_list_orders`). Keepa shows public market data, not your seller-account internals.
+- **Your own listings' real-time stock or sales** → use SP-API (`sp_get_inventory_summaries` for stock; `sp_request_report` + `GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL` for sales). Keepa shows public market data, not your seller-account internals.
 - **Your own competitive pricing** → SP-API `sp_get_competitive_pricing` is faster and free of Keepa's token cost for ASINs you already track.
 - **Account-level fees / settlement** → SP-API only.
 - **PPC / advertising data** → not in Keepa at all.
