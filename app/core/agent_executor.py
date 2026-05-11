@@ -268,6 +268,24 @@ async def extract_agent_response(
                 if event.content and event.content.parts:
                     for part in event.content.parts:
                         if hasattr(part, "text") and part.text:
+                            # Skip reasoning / thinking parts. ADK's LiteLlm
+                            # wrapper normalises Anthropic ``thinking_blocks``
+                            # (and any provider's reasoning content) into
+                            # ``Part(text=..., thought=True)``. Those are
+                            # internal to the model and must not surface in
+                            # user-facing channels (Slack, Telegram, A2A).
+                            # Gemini's own thinking is suppressed earlier in
+                            # ``state_setter`` via ``thinking_config = None``;
+                            # this filter is the LiteLlm-path counterpart and
+                            # acts as a belt-and-suspenders guard for Gemini
+                            # too.
+                            # Use `is True` rather than truthiness so a
+                            # MagicMock-based test part (whose .thought is a
+                            # MagicMock and therefore truthy) doesn't get
+                            # filtered. Anthropic/ADK both set the literal
+                            # `True`.
+                            if getattr(part, "thought", None) is True:
+                                continue
                             agent_text_parts.append(part.text)
                         # Capture tool results for fallback feedback + file attachments
                         elif hasattr(part, "function_response") and part.function_response:
