@@ -82,6 +82,14 @@ uv run python -m py_compile app/tools/evolution.py
 
 **Do not** call `.venv/bin/python`, `python3`, or system `python` directly. Bypassing uv can pick up a stale interpreter or wrong site-packages and produce results that don't match the locked environment. If you find an existing command in a doc or script that uses raw `python`, fix it to use `uv run python`.
 
+## 12. Trust the supervisor — don't issue manual `uv sync` / `git pull` / `docker build`
+
+`deploy/ori-supervisor.py` already does these for you. It hashes `pyproject.toml` + `uv.lock` into `data/.deps_hash` and runs `uv sync` on mismatch every boot. It pulls master and rebuilds the child Docker image on evolution exit (signal 100). It reverts one commit on rollback exit (101). Full contract in `docs/RUNBOOK.md` §2.
+
+When telling the user how to update production, the answer is almost always **`git pull && ./deploy/start.sh`** — never "and then run `uv sync` too." Pre-empting the supervisor is redundant noise and trains the user to bypass the safety mechanisms baked into the supervisor.
+
+If you genuinely need to force a re-sync (e.g. corrupt `.venv`), the documented escape hatch is `echo > data/.deps_hash && ./deploy/start.sh` — invalidate the fingerprint, let the supervisor handle the rest.
+
 ---
 
 ## When the rules don't fit

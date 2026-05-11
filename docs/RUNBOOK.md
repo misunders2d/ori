@@ -2,14 +2,14 @@
 
 Operational procedures: deploy, restart, rollback, recover, troubleshoot. Read this when something is broken or about to be.
 
-> Source: `deploy/`, `app/tools/system.py`, `app/tools/evolution.py`.
+> Source: `deploy/start.sh`, `deploy/ori-supervisor.py`, `deploy/vault.py`, `app/tools/system.py`, `app/tools/evolution.py`.
 
 ---
 
 ## 1. Architecture quick-recap
 
 - **Bot process**: `run_bot.py` — single long-running Python process bootstrapped by `deploy/start.sh`.
-- **Supervisor**: `deploy/ori-supervisor.py` — restarts the bot process on clean exits (used to react to `data/.exit_signal`).
+- **Supervisor**: `deploy/ori-supervisor.py` — runs `run_bot.py` as a subprocess, reacts to `data/.exit_signal`, handles auto-sync, crash protection, child image rebuilds, Cloudflare tunnel refresh. See §2 below for the full contract.
 - **Persistence**:
   - `data/vault/credentials.json` — secrets (vault, atomic writes, auto-backup).
   - `data/scheduler.db` — APScheduler jobs.
@@ -17,6 +17,7 @@ Operational procedures: deploy, restart, rollback, recover, troubleshoot. Read t
   - `data/model_config.json` — model assignments + provider cache.
   - `data/friends.json` + `data/a2a_keys.json` — A2A peers.
   - `data/.exit_signal` — supervisor handshake.
+  - `data/.deps_hash` — fingerprint of `pyproject.toml` + `uv.lock` for auto-sync.
   - `data/sandbox/` — self-evolution staging area.
   - `data/evo-work/` — local-commit worktree (transient).
 - **Transports**: Telegram (always), Slack (optional, via SLACK_BOT_TOKEN + SLACK_APP_TOKEN), CLI fallback.
@@ -24,7 +25,38 @@ Operational procedures: deploy, restart, rollback, recover, troubleshoot. Read t
 
 ---
 
-## 2. Deploy
+## 2. Supervisor contract — what `ori-supervisor.py` does for you
+
+You almost never invoke `uv sync`, `git pull`, or `docker build` manually. The supervisor does them automatically at the right moments.
+
+### Boot sequence (on `./deploy/start.sh` or systemd start)
+
+1. `load_vault()` decrypts `data/vault/credentials.json` into `os.environ`.
+2. `ensure_secrets()` auto-generates `ADMIN_PASSCODE` and `A2A_API_KEY` if not in vault.
+3. `deps_changed()` hashes `pyproject.toml` + `uv.lock`, compares to `data/.deps_hash`. If different → `uv sync`, then writes the new hash. **This is why you don't run `uv sync` by hand — the supervisor catches lockfile changes automatically.**
+4. `refresh_tunnel()` (re)starts the Cloudflare tunnel container if `deploy/docker-compose.yml` is present.
+5. Starts `.venv/bin/python run_bot.py` as a child process.
+6. Watches `data/.exit_signal` and the child's exit code in a loop.
+
+### Exit-code handling
+
+| Exit code | Meaning | Supervisor action |
+|---|---|---|
+| `0` | Clean shutdown (user/admin) | Stop, do not restart. |
+| `100` | Evolution committed | `apply_evolution()` → `git pull` (if remote configured), reset working tree to FETCH_HEAD, run `uv sync` if deps changed, rebuild child Docker image if children running, refresh tunnel, restart bot. |
+| `101` | Rollback requested | `apply_rollback()` → `git revert HEAD --no-edit`, run `uv sync` if deps changed, restart bot. |
+| crash (non-zero, no signal file) | Bot died | Restart up to `MAX_CRASHES` (3) times with `COOLDOWN` (30 s) between attempts. Process stable for `STABLE_THRESHOLD` (60 s) resets the counter. After max crashes → stop and alert (no auto-rollback). |
+
+### Implications for ops
+
+- **Update flow on host**: `cd <repo> && git pull && ./deploy/start.sh` is enough. The supervisor decides whether `uv sync` is needed by comparing hashes. Don't pre-empt it.
+- **Evolution flow from inside the bot**: agent runs `evolution_commit_and_push` → `_write_exit_signal(100)` → supervisor catches it, applies, restarts. The user does nothing.
+- **Rollback flow**: agent (or admin) runs `trigger_rollback` → exit 101 → supervisor reverts one commit + restarts.
+- **Crash loop**: if the bot crashes 3 times within `STABLE_THRESHOLD`, the supervisor stops. Don't fight the supervisor; read the journal (`journalctl --user -u ori -n 200`) and fix root cause.
+
+---
+
+## 3. Deploy
 
 ### First-time install (host)
 
@@ -57,7 +89,7 @@ The deployment may be a **worktree**, not a single checkout. `git worktree list`
 
 ---
 
-## 3. Restart
+## 4. Restart
 
 ### Clean restart
 
@@ -78,7 +110,7 @@ Or programmatically from inside the bot (admin-only, ACT+TOTP gated):
 
 ---
 
-## 4. Stop
+## 5. Stop
 
 ```
 ./deploy/stop.sh
@@ -88,7 +120,7 @@ Graceful: sends SIGTERM, waits up to 30s for in-flight requests to finish, then 
 
 ---
 
-## 5. Logs
+## 6. Logs
 
 ```
 ./deploy/logs.sh             # tail systemd journal for the ori service
@@ -109,7 +141,7 @@ Key things to grep for:
 
 ---
 
-## 6. Disaster recovery
+## 7. Disaster recovery
 
 ### Vault corrupt
 
@@ -146,7 +178,7 @@ A reflog entry tagged `commit: ...` indicates work that was checked in locally; 
 Order of operations:
 
 1. `journalctl --user -u ori -n 200` — read the actual error.
-2. Common failure: missing module after a partial update. `uv sync` reinstalls deps.
+2. Common failure: missing module after a partial update. **Do not** run `uv sync` by hand — touch `data/.deps_hash` (`echo > data/.deps_hash`) and run `./deploy/start.sh`; supervisor will detect the mismatch and re-sync.
 3. Common failure: vault key missing. The wizard repairs it: `uv run python interfaces/setup_wizard.py`.
 4. Common failure: an evolution committed a broken file. `git revert HEAD && ./deploy/start.sh`.
 
@@ -170,7 +202,7 @@ This does **not** delete jobs — they re-fire on their next schedule.
 
 ---
 
-## 7. Self-evolution recovery
+## 8. Self-evolution recovery
 
 | Situation | Action |
 |---|---|
@@ -181,7 +213,7 @@ This does **not** delete jobs — they re-fire on their next schedule.
 
 ---
 
-## 8. Migration / backup
+## 9. Migration / backup
 
 ### Move to a new host
 
@@ -199,7 +231,7 @@ Knowledge graph (Neo4j Aura) and embeddings (LanceDB) are external — they live
 
 ---
 
-## 9. Useful one-liners
+## 10. Useful one-liners
 
 ```
 # Show currently assigned models
@@ -217,7 +249,7 @@ python scripts/check_connectivity.py
 
 ---
 
-## 10. Hard rules during an incident
+## 11. Hard rules during an incident
 
 1. **Don't do destructive git ops in the heat of debugging.** Always tag + branch first.
 2. **Worktree-aware.** `git worktree list` before any reset or pull.
