@@ -11,7 +11,6 @@ from app.callbacks.guardrails import (
     a2a_privacy_guardrail,
     file_attachment_capture,
     file_attachment_inject,
-    pending_followup_guard,
     admin_tool_guardrail,
     plan_enforcer,
     plan_step_enforcer,
@@ -164,6 +163,6 @@ root_agent = Agent(
     # stays second — its ACT-token staging needs to see the call regardless
     # of plan state for protected tools. a2a_privacy_guardrail last.
     before_tool_callback=[plan_step_enforcer, admin_tool_guardrail, a2a_privacy_guardrail],
-    after_tool_callback=[tool_output_injection_guardrail, tool_output_spillover_guardrail, a2a_privacy_guardrail, pending_followup_guard, file_attachment_capture],
+    after_tool_callback=[tool_output_injection_guardrail, tool_output_spillover_guardrail, a2a_privacy_guardrail, file_attachment_capture],
     after_model_callback=[file_attachment_inject],
 )

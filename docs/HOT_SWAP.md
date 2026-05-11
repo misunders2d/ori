@@ -20,7 +20,7 @@ A component is a named slot that resolves to a model string. There are 15 today 
 | `AmazonDataAnalystAgent` | `google/gemini-3-flash-preview` | Flash | matplotlib codegen + statistical analysis |
 | `BigQueryAgent` | `google/gemini-3-flash-preview` | Flash | SQL synthesis, business reasoning |
 | `youtube_summarizer` | `google/gemini-3-flash-preview` | Flash | one-shot transcript summarisation |
-| `AmazonHeadAgent` | `google/gemini-3.1-flash-lite-preview` | Flash-Lite | pure router between Amazon sub-agents |
+| `AmazonHeadAgent` | `google/gemini-3-flash-preview` | Flash | routes every Amazon request; Lite mis-routed in production (2026-05-11) so kept on Flash |
 | `AmazonAgent` | `google/gemini-3.1-flash-lite-preview` | Flash-Lite | Keepa / SP-API / H10 tool execution |
 | `AmazonMemoryAgent` | `google/gemini-3.1-flash-lite-preview` | Flash-Lite | graph CRUD + memory queries |
 | `AmazonWorkspaceAgent` | `google/gemini-3.1-flash-lite-preview` | Flash-Lite | Drive / Sheets / Calendar CRUD |

@@ -126,66 +126,6 @@ Why this is mandatory: when a scheduling request comes in, the agent often has t
 
 The approval step is the catch-net for both LLM "tidying" AND for the contamination case where the task_prompt was reconstructed from a memory hit. If you skip it, you will eventually schedule the wrong thing — there's a documented incident where this exact failure scheduled an MSRP task in place of an FBA discrepancy task.
 
-## Long-running operations: mandatory self-reminder
-
-Some tools submit work that completes asynchronously — Amazon SP-API report requests, Amazon Ads report jobs, BigQuery long queries, image-generation jobs, etc. Their successful return is **a receipt**, not a result: `{status: "success", report_id: "..."}` says "Amazon will start work", not "data is ready". The data shows up minutes later, and Amazon does NOT push you a notification.
-
-**The hard rule:** when a tool returns a long-running submission, you MUST call `schedule_one_off_task` to wire a self-check **before** you respond to the user. A verbal promise like "I'll get back to you when the report finishes" without a scheduled follow-up is a lie — the turn ends, nothing fires, the user never sees the report.
-
-The `pending_followup_guard` after-tool callback annotates these responses with `__followup_required__` containing:
-
-| Field | Use |
-|---|---|
-| `operation_id` | the report/job id to poll |
-| `instruction` | the verbatim reminder you just read above |
-| `suggested_steps` | the polling discipline as a steps[] list — paste into the scheduled task |
-| `suggested_first_run_in_seconds` | sensible delay before the first check (60s) |
-| `deliver_to_hint` | the session id where the result should land |
-
-### The polling pattern
-
-When you receive a `__followup_required__` annotation, immediately call `schedule_one_off_task` with the suggested template:
-
-```python
-schedule_one_off_task(
-    task_prompt=f"Self-check pending operation {op_id} and post the result.",
-    run_at_iso_datetime="<now + 60 seconds, ISO 8601>",
-    timezone="<user's tz>",
-    deliver_to="<original channel from deliver_to_hint>",
-    steps=[
-        "Call the status-check tool (e.g. sp_check_report) with the op_id; capture processing_status verbatim.",
-        "If status == 'DONE': call the result-fetch tool; format a concise Slack mrkdwn summary; post to deliver_to; STOP.",
-        "If status in ('IN_PROGRESS', 'IN_QUEUE'): call schedule_one_off_task to re-fire this same self-check in +60s, decrementing the attempt counter in task_prompt; STOP.",
-        "If status in ('CANCELLED', 'FATAL'): post the failure to deliver_to and STOP.",
-        "If attempt count >= 20: post 'Still pending after 20 minutes — check manually with <status-tool>(op_id={op_id!r})' and STOP rescheduling.",
-    ],
-)
-```
-
-The `steps` list is enforced via `plan_step_enforcer` — at fire time the agent cannot drift from the polling logic. Each fire either posts a result, reschedules, or surfaces a clear timeout.
-
-**What you say to the user** after scheduling:
-
-> Report submitted (id `3765960020584`). Self-check scheduled at `2026-05-11T18:01:00+03:00` (Europe/Kyiv) under job_id `oneoff_…`. I'll post the result to this channel when it finishes (typically 5–10 minutes).
-
-You quote the actual job id + next-run time — these are returned by `schedule_one_off_task`. Don't paraphrase or guess.
-
-**What you must NEVER say:**
-
-> Report requested. Check back for final CSV.
-
-> I'll let you know once the report finishes.
-
-> Will pull more once Amazon's report API completes.
-
-Without a scheduled follow-up, those are all lies. The 2026-05-14 "give me the sales today!" incident (user had to chase three times) is exactly what this rule prevents.
-
-### When the self-check fires
-
-The fire's plan is seeded from `steps` before any LLM turn. The agent wakes up, checks status, and routes by the result — same isolated-session, deliver-to-channel mechanics as any other scheduled task. Multiple reschedules chain naturally; APScheduler persists each across bot restarts.
-
-The `__followup_required__.suggested_steps` template is conservative (60s poll, max 20 attempts = 20 minutes total). Tune those numbers if the user wants tighter / longer windows.
-
 ## Enforced step-by-step scheduling
 
 Use this pattern when the user says things like "must follow exactly", "precisely", "strict", "every step", "never skip", "daily checklist", or any framing that implies the task is a **playbook** — an ordered process that must execute the same way every fire, with no room for the agent to paraphrase, reorder, or skip.

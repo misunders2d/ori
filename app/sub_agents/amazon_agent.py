@@ -12,7 +12,6 @@ from google.adk.tools import skill_toolset
 from app.app_utils.models import get_model
 from app.callbacks.guardrails import (
     file_attachment_capture,
-    pending_followup_guard,
     prompt_injection_guardrail,
     tool_output_spillover_guardrail,
 )
@@ -52,5 +51,5 @@ amazon_agent = Agent(
         ScratchpadToolset(),
     ],
     before_model_callback=prompt_injection_guardrail,
-    after_tool_callback=[tool_output_spillover_guardrail, pending_followup_guard, file_attachment_capture],
+    after_tool_callback=[tool_output_spillover_guardrail, file_attachment_capture],
 )

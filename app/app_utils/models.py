@@ -39,13 +39,21 @@ MODEL_DEFAULTS: dict[str, str] = {
     # docs/HOT_SWAP.md) — switch back to Flash anytime with `/models set`.
     "DeveloperAgent":           "openrouter/anthropic/claude-opus-4.7",
 
-    # Mechanical / routing / CRUD components default to Flash-Lite
-    # (~50% the per-token price of Flash). They mostly pick the next
-    # tool, parse responses, or forward state — Lite handles that fine
-    # under tight prompts + plan_step_enforcer. If quality drops on any
-    # one of these, hot-swap it back with `/models set <Agent> google/
-    # gemini-3-flash-preview` (no restart needed).
-    "AmazonHeadAgent":          "google/gemini-3.1-flash-lite-preview",
+    # AmazonHeadAgent kept on Flash — it's the routing brain for every
+    # Amazon query (decides which Amazon sub-agent handles the request).
+    # Lite produced bad routing on 2026-05-11 (mis-routed "plot a
+    # chart" to a giphy fetch, plus general latency from retries/
+    # ping-pongs). The 50% savings aren't worth the user-visible
+    # quality drop on the hottest path.
+    "AmazonHeadAgent":          "google/gemini-3-flash-preview",
+
+    # CRUD / tool-execution leaves default to Flash-Lite (~50% the
+    # per-token price of Flash). They run AFTER the head has decided
+    # who handles the request, so a weaker model only affects the
+    # mechanical execution under tight prompts + plan_step_enforcer
+    # (which hard-blocks rogue tool calls anyway). Hot-swap any of
+    # these back with `/models set <Agent> google/gemini-3-flash-preview`
+    # (no restart needed) if quality drops on a specific one.
     "AmazonAgent":              "google/gemini-3.1-flash-lite-preview",
     "AmazonMemoryAgent":        "google/gemini-3.1-flash-lite-preview",
     "AmazonWorkspaceAgent":     "google/gemini-3.1-flash-lite-preview",
