@@ -710,6 +710,27 @@ def _collect_staged_files(sandbox_dir: str) -> list[tuple[str, str]]:
     return staged
 
 
+def _current_branch() -> Optional[str]:
+    """Return PROJECT_ROOT's branch, or None on detached HEAD.
+
+    Used to keep evolution pushes on the same branch as the live checkout
+    (worktree-aware — see CLAUDE.md + RUNBOOK §3). Hardcoding ``master``
+    silently strands evolutions on the wrong branch when contabo or any
+    deploy box is on a feature/release branch.
+    """
+    try:
+        r = subprocess.run(
+            ["git", "symbolic-ref", "--short", "HEAD"],
+            cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode != 0:
+            return None
+        name = r.stdout.strip()
+        return name or None
+    except Exception:
+        return None
+
+
 def _make_signed_message(commit_message: str) -> str:
     bot_name = os.environ.get("BOT_NAME", "Ori")
     signature = f"evolved by {bot_name}"
@@ -729,9 +750,20 @@ def _evolution_commit_remote(
     push_url = f"https://x-access-token:{github_token}@github.com/{github_repo}.git"
     bot_name = os.environ.get("BOT_NAME", "Ori")
 
+    branch = _current_branch()
+    if not branch:
+        return {
+            "status": "error",
+            "message": (
+                "Refusing remote commit: PROJECT_ROOT is on detached HEAD. "
+                "Check out a branch before evolving so the push has a target."
+            ),
+        }
+
     try:
+        clone_cmd = ["git", "clone", "--depth", "1", "--branch", branch, push_url, tmp_repo_dir]
         subprocess.run(
-            ["git", "clone", "--depth", "1", push_url, tmp_repo_dir],
+            clone_cmd,
             capture_output=True, text=True, check=True, timeout=60,
         )
 
@@ -756,7 +788,7 @@ def _evolution_commit_remote(
         subprocess.run(["git", "commit", "-m", signed_message], cwd=tmp_repo_dir, check=True)
 
         result = subprocess.run(
-            ["git", "push", "origin", "HEAD:master"],
+            ["git", "push", "origin", f"HEAD:{branch}"],
             cwd=tmp_repo_dir, capture_output=True, text=True, timeout=60,
         )
 
@@ -1139,8 +1171,9 @@ def evolution_sync_local_to_upstream(tool_context: ToolContext) -> dict:
         except subprocess.CalledProcessError:
             pass # No changes to commit
         
-        # 5. Push to master
-        result = subprocess.run(["git", "push", "-u", "origin", "master"], cwd=PROJECT_ROOT, capture_output=True, text=True)
+        # 5. Push to the current branch (worktree-aware — never hardcode master)
+        branch = _current_branch() or "master"
+        result = subprocess.run(["git", "push", "-u", "origin", branch], cwd=PROJECT_ROOT, capture_output=True, text=True)
         
         if result.returncode != 0:
              return {"status": "error", "message": f"Git push failed: {result.stderr.replace(github_token, '***')}"}

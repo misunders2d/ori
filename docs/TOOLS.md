@@ -13,14 +13,14 @@ All public tool functions grouped by file. Private helpers (`_name`) excluded.
 - `async add_friend` (line 129) — Discovers and registers another A2A-compliant agent as a friend for ongoing collaboration.
 - `update_friend_key` (line 200) — Initiates a secure capture flow to configure an API key for a registered A2A friend.
 - `list_friends` (line 239) — Returns all registered friends in the network with their capabilities and key status.
-- `async call_friend` (line 594) — Sends a message to a registered friend via the A2A protocol and returns their response.
-- `async call_agent` (line 663) — Sends a one-off message to any A2A-compliant agent by URL.
-- `async cancel_friend_task` (line 731) — Cancels a running task on a friend agent. Use this when a task is taking
-- `async perform_a2a_broadcast` (line 790) — Broadcast current A2A_BASE_URL to all friends, retrying failed deliveries.
-- `async broadcast_address_update` (line 878) — Manually triggers a broadcast of this agent's current A2A_BASE_URL to all registered friends.
-- `update_friend_address` (line 886) — Updates the registered address for a friend. 
-- `export_dna` (line 993) — Packages project files into a .tar.gz archive and returns a download URL.
-- `import_dna` (line 1113) — Imports DNA into the sandbox for verification by fetching a .tar.gz archive from the given URL.
+- `async call_friend` (line 638) — Sends a message to a registered friend via the A2A protocol and returns their response.
+- `async call_agent` (line 707) — Sends a one-off message to any A2A-compliant agent by URL.
+- `async cancel_friend_task` (line 775) — Cancels a running task on a friend agent. Use this when a task is taking
+- `async perform_a2a_broadcast` (line 834) — Broadcast current A2A_BASE_URL to all friends, retrying failed deliveries.
+- `async broadcast_address_update` (line 922) — Manually triggers a broadcast of this agent's current A2A_BASE_URL to all registered friends.
+- `update_friend_address` (line 930) — Updates the registered address for a friend. 
+- `export_dna` (line 1037) — Packages project files into a .tar.gz archive and returns a download URL.
+- `import_dna` (line 1157) — Imports DNA into the sandbox for verification by fetching a .tar.gz archive from the given URL.
 
 ## `app/tools/analyze_data.py`
 Data analysis tool — run pandas code on uploaded files.
@@ -73,15 +73,15 @@ ClickUp task management tools — async, API key auth.
 - `evolution_stage_change` (line 349) — Stages a code change in a protected sandbox environment.
 - `evolution_discard_sandbox` (line 427) — Abandons the current self-evolution cycle, wiping the sandbox.
 - `evolution_verify_sandbox` (line 458) — Runs verification checks on staged sandbox changes.
-- `evolution_commit_and_push` (line 887) — Commits verified changes. Uses GitHub if configured, otherwise commits locally.
-- `evolution_git_pull` (line 1045) — Pulls the latest code from the GitHub remote repository into the current container and restarts.
-- `evolution_git_reset` (line 1077) — Resets the local workspace to match the last commit, deleting untracked 'dangling' files.
-- `evolution_sync_local_to_upstream` (line 1100) — Connects a detached local workspace to a remote GitHub repository and populates it.
-- `evolution_git_fetch` (line 1155) — Fetches latest refs from a remote without merging anything.
-- `evolution_git_log` (line 1179) — Shows compact commit history for a branch or ref.
-- `evolution_git_diff_summary` (line 1209) — Shows a compact summary of changes between two refs (files changed, insertions, deletions).
-- `evolution_git_diff_file` (line 1251) — Shows the actual diff for a specific file between two refs.
-- `evolution_git_branches` (line 1291) — Lists all local and remote branches with their latest commit.
+- `evolution_commit_and_push` (line 919) — Commits verified changes. Uses GitHub if configured, otherwise commits locally.
+- `evolution_git_pull` (line 1077) — Pulls the latest code from the GitHub remote repository into the current container and restarts.
+- `evolution_git_reset` (line 1109) — Resets the local workspace to match the last commit, deleting untracked 'dangling' files.
+- `evolution_sync_local_to_upstream` (line 1132) — Connects a detached local workspace to a remote GitHub repository and populates it.
+- `evolution_git_fetch` (line 1188) — Fetches latest refs from a remote without merging anything.
+- `evolution_git_log` (line 1212) — Shows compact commit history for a branch or ref.
+- `evolution_git_diff_summary` (line 1242) — Shows a compact summary of changes between two refs (files changed, insertions, deletions).
+- `evolution_git_diff_file` (line 1284) — Shows the actual diff for a specific file between two refs.
+- `evolution_git_branches` (line 1324) — Lists all local and remote branches with their latest commit.
 
 ## `app/tools/evolution_catalog.py`
 Evolution catalog — verified evolution library for sharing across instances.
@@ -258,12 +258,12 @@ Structured plan-and-execute system for complex multi-step tasks.
 - `plan_has_pending_steps` (line 47) — True if there's an active plan for this session with steps not yet done.
 - `seed_plan` (line 60) — Programmatically populate a plan in storage — no LLM, no tool_context.
 - `create_plan` (line 122) — Create a structured execution plan for a complex task.
-- `get_next_step` (line 192) — Get the next pending step in the active plan.
-- `complete_step` (line 241) — Mark the current step as done and record its result.
-- `get_plan_status` (line 313) — Show the full plan with current progress and checkboxes.
-- `abandon_plan` (line 346) — Abandon the current active plan. Use when the task is no longer needed.
-- `get_active_plan_context` (line 370) — Called by the before_model_callback to inject plan context.
-- `get_current_step_constraints` (line 404) — Return the active step's constraints, or None if no plan / no constraints.
+- `get_next_step` (line 195) — Get the next pending step in the active plan.
+- `complete_step` (line 244) — Mark the current step as done and record its result.
+- `get_plan_status` (line 316) — Show the full plan with current progress and checkboxes.
+- `abandon_plan` (line 349) — Abandon the current active plan. Use when the task is no longer needed.
+- `get_active_plan_context` (line 373) — Called by the before_model_callback to inject plan context.
+- `get_current_step_constraints` (line 407) — Return the active step's constraints, or None if no plan / no constraints.
 
 ## `app/tools/preferences.py`
 User preferences storage.

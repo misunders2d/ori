@@ -85,8 +85,25 @@ def test_build_parts_text_only():
     assert parts == [{"text": "hello"}]
 
 
-def test_build_parts_with_inline_image(tmp_path):
+def _patch_attachment_allowlist(monkeypatch, *roots):
+    """Make ``_A2A_ATTACHMENT_ALLOWLIST`` accept arbitrary tmp dirs so
+    these tests can use ``tmp_path``-style locations without going through
+    the production allowlist roots (which need to live under ``./tmp/...``
+    relative to cwd).
+    """
+    from app.tools import a2a as a2a_mod
+
+    monkeypatch.setattr(
+        a2a_mod,
+        "_A2A_ATTACHMENT_ALLOWLIST",
+        tuple(os.path.realpath(str(r)) for r in roots),
+    )
+
+
+def test_build_parts_with_inline_image(tmp_path, monkeypatch):
     from app.tools.a2a import _build_a2a_parts
+
+    _patch_attachment_allowlist(monkeypatch, tmp_path)
 
     img = tmp_path / "x.png"
     img.write_bytes(b"\x89PNG\r\n\x1a\nfake-pixels")
@@ -101,8 +118,10 @@ def test_build_parts_with_inline_image(tmp_path):
     assert base64.b64decode(parts[1]["file"]["bytes"]) == b"\x89PNG\r\n\x1a\nfake-pixels"
 
 
-def test_build_parts_rejects_disallowed_mime(tmp_path):
+def test_build_parts_rejects_disallowed_mime(tmp_path, monkeypatch):
     from app.tools.a2a import _build_a2a_parts
+
+    _patch_attachment_allowlist(monkeypatch, tmp_path)
 
     blob = tmp_path / "x.bin"
     blob.write_bytes(b"\x00" * 100)
@@ -117,6 +136,7 @@ def test_build_parts_rejects_oversize(tmp_path, monkeypatch):
     """Attachment exceeding the inline limit raises."""
     from app.tools import a2a as a2a_mod
 
+    _patch_attachment_allowlist(monkeypatch, tmp_path)
     monkeypatch.setattr(a2a_mod, "_A2A_INLINE_LIMIT_BYTES", 1024)  # 1 KB cap
 
     big = tmp_path / "big.png"

@@ -92,20 +92,23 @@ def test_seed_plan_constraints_optional(isolated_plans_dir):
     assert plan["steps"][1]["allowed_tools"] == []
 
 
-def test_create_plan_accepts_constraints(isolated_plans_dir):
+def test_create_plan_writes_unconstrained_steps(isolated_plans_dir):
+    """`create_plan` was historically allowed to set per-step constraints via a
+    `step_constraints: list[dict]` kwarg. That parameter was removed because
+    `list[dict] | None` produces a function-declaration schema Gemini rejects
+    (nested `additional_properties` under `any_of[].items`) — see
+    `tests/test_gemini_schema_compat.py` and the create_plan docstring. The
+    scheduler still passes constraints through `seed_plan`; LLM-initiated
+    plans are unconstrained at the tool-whitelist level.
+    """
     from app.tools.planner import _load_plan, create_plan
 
     ctx = _FakeToolContext("sess-C")
-    res = create_plan(
-        task_description="t",
-        steps=["a", "b"],
-        tool_context=ctx,
-        step_constraints=[{"allowed_tools": ["keepa_*"]}, {}],
-    )
+    res = create_plan(task_description="t", steps=["a", "b"], tool_context=ctx)
     assert res["status"] == "success"
 
     plan = _load_plan("sess-C")
-    assert plan["steps"][0]["allowed_tools"] == ["keepa_*"]
+    assert plan["steps"][0]["allowed_tools"] == []
     assert plan["steps"][1]["allowed_tools"] == []
 
 

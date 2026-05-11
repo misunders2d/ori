@@ -123,7 +123,6 @@ def create_plan(
     task_description: str,
     steps: list[str],
     tool_context: ToolContext,
-    step_constraints: list[dict] | None = None,
 ) -> dict:
     """Create a structured execution plan for a complex task.
 
@@ -133,17 +132,21 @@ def create_plan(
     Args:
         task_description: High-level description of what you're trying to accomplish.
         steps: Ordered list of step descriptions (e.g. ["Fetch sales data from BigQuery", "Generate chart", "Post to Slack"]).
-        step_constraints: Optional parallel list of per-step constraint dicts.
-            Each dict may contain:
-              - `allowed_tools`: list of glob patterns whitelisting tool names
-                for this step (e.g. `["bigquery_*", "scratchpad_*"]`).
-                Omit / empty → unconstrained (soft enforcement only).
-              - `must_call`: list of tool names that must be invoked before
-                `complete_step` is allowed (reserved — not enforced in Phase 3).
 
     Returns:
         dict with the plan overview.
+
+    Per-step tool whitelists / required-call constraints (Phase 3 hard
+    enforcement) are only available via the scheduler's `seed_plan` path
+    — they used to be exposed here as `step_constraints: list[dict]`,
+    but `list[dict]` produces a schema with nested `additionalProperties`
+    that Gemini rejects (`Unknown name "additional_properties"`). The
+    parameter was removed from this tool to keep the function-declaration
+    Gemini-compatible. The scheduler still calls `seed_plan(..., step_constraints=...)`
+    directly with the rich dict shape; LLM-initiated plans are unconstrained
+    at the tool-whitelist level (the plan_enforcer still injects context).
     """
+    step_constraints: list[dict] | None = None
     if not steps:
         return {"status": "error", "message": "Plan must have at least one step."}
 

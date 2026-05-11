@@ -281,21 +281,65 @@ def _a2a_headers(api_key: Optional[str] = None, caller_id: Optional[str] = None)
     return headers
 
 
+_A2A_ATTACHMENT_ALLOWLIST = tuple(
+    os.path.realpath(p)
+    for p in (
+        os.path.abspath("./tmp/uploads"),
+        os.path.abspath("./tmp/scratchpads"),
+        os.path.abspath("./tmp/plans"),
+        os.path.abspath("./data/exports"),
+    )
+)
+
+
+def _validate_attachment_path(path: str) -> str:
+    """Resolve ``path`` and confirm it sits under an allowlisted directory.
+
+    Returns the canonicalised real path on success. Raises ``ValueError`` if
+    the resolved location escapes the allowlist (symlink hop, ``..`` traversal,
+    or just an absolute reference to anywhere else on disk).
+
+    The allowlist exists because A2A attachments leave the box: anything the
+    LLM can name as a path becomes exfiltratable through the friend channel.
+    Without this guard, a prompt-injected friend message asking the agent to
+    "share this file" with another friend can read arbitrary local files
+    (``/etc/passwd``, vault credentials, etc.). The four allowlist roots are
+    where the rest of the agent legitimately writes A2A-shareable artefacts:
+    inbound uploads, scratchpad spillover, plan exports, and report exports.
+    """
+    if not path:
+        raise ValueError("attachment 'path' must be non-empty")
+    resolved = os.path.realpath(os.path.abspath(path))
+    for root in _A2A_ATTACHMENT_ALLOWLIST:
+        # Use commonpath rather than startswith so a sibling like
+        # "/tmp/uploads-evil" cannot impersonate "/tmp/uploads".
+        try:
+            if os.path.commonpath([resolved, root]) == root:
+                return resolved
+        except ValueError:
+            # commonpath raises on mixed drives (Windows) — treat as no-match.
+            continue
+    raise ValueError(
+        f"attachment 'path' is outside the A2A allowlist "
+        f"({', '.join(_A2A_ATTACHMENT_ALLOWLIST)}); refusing to read {path!r}"
+    )
+
+
 def _load_attachment_bytes(att: Dict[str, Any]) -> tuple[bytes, str, str]:
     """Resolve an attachment dict into (bytes, name, mime_type).
 
     Accepted shapes:
-      - {"path": "/abs/or/rel/path"} — read from disk
-      - {"data": <bytes>}             — already in memory
-      - {"data": "<base64>"}          — base64-encoded string
+      - {"path": "<allowlisted-path>"}  — read from disk (path must resolve
+                                          under tmp/uploads, tmp/scratchpads,
+                                          tmp/plans, or data/exports)
+      - {"data": <bytes>}               — already in memory
+      - {"data": "<base64>"}            — base64-encoded string
     """
     name = att.get("name") or ""
     mime = att.get("mime_type") or ""
 
     if "path" in att and att["path"]:
-        path = att["path"]
-        if not os.path.isabs(path):
-            path = os.path.abspath(path)
+        path = _validate_attachment_path(att["path"])
         with open(path, "rb") as f:
             data = f.read()
         if not name:

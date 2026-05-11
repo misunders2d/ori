@@ -151,18 +151,63 @@ def sync_deps():
     return True
 
 
+def _current_branch() -> str | None:
+    """Return the branch name PROJECT_ROOT is checked out on, or None on detached HEAD."""
+    try:
+        r = subprocess.run(
+            ["git", "symbolic-ref", "--short", "HEAD"],
+            cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode != 0:
+            return None
+        name = r.stdout.strip()
+        return name or None
+    except Exception:
+        return None
+
+
+def _upstream_branch(branch: str) -> str | None:
+    """Return the remote-tracking branch for ``branch`` (e.g. 'origin/evo/x'), or None."""
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", f"{branch}@{{u}}"],
+            cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode != 0:
+            return None
+        name = r.stdout.strip()
+        return name or None
+    except Exception:
+        return None
+
+
 def apply_evolution():
-    """After exit 100: pull from remote if configured, update files, sync deps."""
+    """After exit 100: fast-forward the current branch to its upstream, sync deps.
+
+    Worktree/branch aware (May 2026 incident lesson): never hardcode ``master``.
+    The bot's evolution flow commits + pushes to whatever branch PROJECT_ROOT is on,
+    so the supervisor must fetch + reset that same branch — not master.
+
+    Refuses to act on detached HEAD or a branch with no upstream, to avoid
+    silently clobbering local work.
+    """
     logger.info("Applying evolution...")
 
-    # Pull from remote if configured
+    branch = _current_branch()
+    if not branch:
+        logger.error(
+            "Refusing apply_evolution: HEAD is detached. "
+            "Check out a branch with an upstream before retrying."
+        )
+        return
+
     github_token = get("GITHUB_TOKEN")
     github_repo = get("GITHUB_REPO")
     if github_token and github_repo:
         fetch_url = f"https://x-access-token:{github_token}@github.com/{github_repo}.git"
         try:
             subprocess.run(
-                ["git", "fetch", fetch_url, "master"],
+                ["git", "fetch", fetch_url, branch],
                 cwd=PROJECT_ROOT, capture_output=True, timeout=60,
             )
             subprocess.run(
@@ -173,17 +218,20 @@ def apply_evolution():
                 ["git", "clean", "-fd", "--exclude=data"],
                 cwd=PROJECT_ROOT, capture_output=True, timeout=30,
             )
-            logger.info("Pulled latest from remote")
+            logger.info("Pulled latest from remote (branch=%s)", branch)
         except Exception as e:
             logger.error("Git pull failed: %s", e)
     else:
-        # Local evolution: files are already committed to master by the worktree flow
-        # Just checkout to update working tree from git state
+        # Local evolution: files are already committed to the current branch by the
+        # worktree flow. Refresh the working tree from git state on that branch.
+        upstream = _upstream_branch(branch)
+        ref = upstream or branch
         try:
             subprocess.run(
-                ["git", "checkout", "master", "--", "."],
+                ["git", "checkout", ref, "--", "."],
                 cwd=PROJECT_ROOT, capture_output=True, timeout=30,
             )
+            logger.info("Refreshed working tree from %s", ref)
         except Exception as e:
             logger.error("Git checkout failed: %s", e)
 
@@ -265,8 +313,21 @@ def refresh_tunnel():
 
 
 def apply_rollback():
-    """After exit 101: revert one commit, sync deps."""
-    logger.info("Applying rollback (HEAD~1)...")
+    """After exit 101: revert one commit on the current branch, sync deps.
+
+    Worktree/branch aware: refuses on detached HEAD so a stray ``reset --hard
+    HEAD~1`` can't quietly demote a non-branch reference (which would lose
+    the only pointer to the previous tip).
+    """
+    branch = _current_branch()
+    if not branch:
+        logger.error(
+            "Refusing apply_rollback: HEAD is detached. "
+            "Check out a branch before retrying so HEAD~1 has a recoverable ref."
+        )
+        return
+
+    logger.info("Applying rollback on branch %s (HEAD~1)...", branch)
     try:
         subprocess.run(
             ["git", "reset", "--hard", "HEAD~1"],
