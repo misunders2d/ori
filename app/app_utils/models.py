@@ -22,28 +22,40 @@ logger = logging.getLogger(__name__)
 # Default model assignments per component
 # ---------------------------------------------------------------------------
 MODEL_DEFAULTS: dict[str, str] = {
+    # Heavy-reasoning / final-response components stay on Flash. These
+    # do judgment calls, codegen, SQL synthesis, or research — Lite
+    # degrades them noticeably.
     "CoordinatorAgent":         "google/gemini-3-flash-preview",
+    "KnowledgeAgent":           "google/gemini-3-flash-preview",
+    "AmazonDataAnalystAgent":   "google/gemini-3-flash-preview",
+    "BigQueryAgent":            "google/gemini-3-flash-preview",
+    "youtube_summarizer":       "google/gemini-3-flash-preview",
+
     # Self-evolution is irreversible code-modifying-code — pay for the
     # safer answer by default. Opus 4.7 leads MCP-Atlas (multi-turn
     # tool-calling) and cut multi-step task abandonment ~60% vs 4.6 in
     # Anthropic's internal data. Routed via OpenRouter so a single
-    # OPENROUTER_API_KEY in vault covers it (no separate Anthropic key
-    # or Vertex Model Garden setup required). Hot-swap is wired (see
+    # OPENROUTER_API_KEY in vault covers it. Hot-swap is wired (see
     # docs/HOT_SWAP.md) — switch back to Flash anytime with `/models set`.
     "DeveloperAgent":           "openrouter/anthropic/claude-opus-4.7",
-    "KnowledgeAgent":           "google/gemini-3-flash-preview",
-    "ClickUpAgent":             "google/gemini-3-flash-preview",
-    "AmazonHeadAgent":          "google/gemini-3-flash-preview",
-    "AmazonAgent":              "google/gemini-3-flash-preview",
-    "AmazonMemoryAgent":        "google/gemini-3-flash-preview",
-    "AmazonWorkspaceAgent":     "google/gemini-3-flash-preview",
-    "AmazonDataAnalystAgent":   "google/gemini-3-flash-preview",
-    "BigQueryAgent":            "google/gemini-3-flash-preview",
-    "google_search":            "google/gemini-3-flash-preview",
+
+    # Mechanical / routing / CRUD components default to Flash-Lite
+    # (~50% the per-token price of Flash). They mostly pick the next
+    # tool, parse responses, or forward state — Lite handles that fine
+    # under tight prompts + plan_step_enforcer. If quality drops on any
+    # one of these, hot-swap it back with `/models set <Agent> google/
+    # gemini-3-flash-preview` (no restart needed).
+    "AmazonHeadAgent":          "google/gemini-3.1-flash-lite-preview",
+    "AmazonAgent":              "google/gemini-3.1-flash-lite-preview",
+    "AmazonMemoryAgent":        "google/gemini-3.1-flash-lite-preview",
+    "AmazonWorkspaceAgent":     "google/gemini-3.1-flash-lite-preview",
+    "ClickUpAgent":             "google/gemini-3.1-flash-lite-preview",
+    "google_search":            "google/gemini-3.1-flash-lite-preview",
+
+    # Compaction + embedding — already cheap.
     "summarizer":               "google/gemini-3.1-flash-lite-preview",
     "session_summarizer":       "google/gemini-3.1-flash-lite-preview",
     "embedding":                "google/gemini-embedding-001",
-    "youtube_summarizer":       "google/gemini-3-flash-preview",
 }
 
 VALID_COMPONENTS = frozenset(MODEL_DEFAULTS.keys())

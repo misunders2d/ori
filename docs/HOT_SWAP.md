@@ -12,21 +12,27 @@ A component is a named slot that resolves to a model string. There are 15 today 
 
 | Component | Default |
 |---|---|
-| `CoordinatorAgent` | `google/gemini-3-flash-preview` |
-| `DeveloperAgent` | `openrouter/anthropic/claude-opus-4.7` |
-| `KnowledgeAgent` | `google/gemini-3-flash-preview` |
-| `ClickUpAgent` | `google/gemini-3-flash-preview` |
-| `AmazonHeadAgent` | `google/gemini-3-flash-preview` |
-| `AmazonAgent` | `google/gemini-3-flash-preview` |
-| `AmazonMemoryAgent` | `google/gemini-3-flash-preview` |
-| `AmazonWorkspaceAgent` | `google/gemini-3-flash-preview` |
-| `AmazonDataAnalystAgent` | `google/gemini-3-flash-preview` |
-| `BigQueryAgent` | `google/gemini-3-flash-preview` |
-| `google_search` | `google/gemini-3-flash-preview` |
-| `summarizer` | `google/gemini-3.1-flash-lite-preview` |
-| `session_summarizer` | `google/gemini-3.1-flash-lite-preview` |
-| `embedding` | `google/gemini-embedding-001` |
-| `youtube_summarizer` | `google/gemini-3-flash-preview` |
+| Component | Default | Tier | Why |
+|---|---|---|---|
+| `CoordinatorAgent` | `google/gemini-3-flash-preview` | Flash | top router, judgment calls |
+| `DeveloperAgent` | `openrouter/anthropic/claude-opus-4.7` | Opus | writes its own code (irreversible) |
+| `KnowledgeAgent` | `google/gemini-3-flash-preview` | Flash | research + summarisation |
+| `AmazonDataAnalystAgent` | `google/gemini-3-flash-preview` | Flash | matplotlib codegen + statistical analysis |
+| `BigQueryAgent` | `google/gemini-3-flash-preview` | Flash | SQL synthesis, business reasoning |
+| `youtube_summarizer` | `google/gemini-3-flash-preview` | Flash | one-shot transcript summarisation |
+| `AmazonHeadAgent` | `google/gemini-3.1-flash-lite-preview` | Flash-Lite | pure router between Amazon sub-agents |
+| `AmazonAgent` | `google/gemini-3.1-flash-lite-preview` | Flash-Lite | Keepa / SP-API / H10 tool execution |
+| `AmazonMemoryAgent` | `google/gemini-3.1-flash-lite-preview` | Flash-Lite | graph CRUD + memory queries |
+| `AmazonWorkspaceAgent` | `google/gemini-3.1-flash-lite-preview` | Flash-Lite | Drive / Sheets / Calendar CRUD |
+| `ClickUpAgent` | `google/gemini-3.1-flash-lite-preview` | Flash-Lite | task CRUD |
+| `google_search` | `google/gemini-3.1-flash-lite-preview` | Flash-Lite | search-query generation |
+| `summarizer` | `google/gemini-3.1-flash-lite-preview` | Flash-Lite | context compaction |
+| `session_summarizer` | `google/gemini-3.1-flash-lite-preview` | Flash-Lite | session compaction |
+| `embedding` | `google/gemini-embedding-001` | Embedding | semantic search vectors |
+
+Cost-saving rationale: Flash-Lite is ~50% of Flash on Google direct pricing. The Lite components do tool-routing and CRUD where deep reasoning isn't needed — `plan_step_enforcer` hard-blocks any out-of-step tool call so a weaker model can't wander off-plan. Components that DO need reasoning (CoordinatorAgent's top routing, DeveloperAgent's self-modifying code, BigQueryAgent's SQL, DataAnalyst's matplotlib codegen, KnowledgeAgent's research, YouTube transcript summarisation) stay on Flash.
+
+Rollback a single Lite component if quality drops: `/models set <AgentName> google/gemini-3-flash-preview` (hot-swap, no restart). Rollback all to Flash: edit `MODEL_DEFAULTS` directly + commit.
 
 `VALID_COMPONENTS = frozenset(MODEL_DEFAULTS.keys())` enforces the set. Adding a new component means adding a new entry to `MODEL_DEFAULTS`; you cannot `set_model` on an unknown name.
 
