@@ -10,7 +10,7 @@ Augment by hand for fields the AST cannot infer (parent_agent, when_to_use, etc)
 
 
 ## AmazonAgent
-- File: `app/sub_agents/amazon_agent.py:23` (Agent)
+- File: `app/sub_agents/amazon_agent.py:27` (Agent)
 - Module variable: `amazon_agent`
 - Module doc: Amazon Manager sub-agent — product research, pricing, competitors, listing management.
 
@@ -20,7 +20,7 @@ Augment by hand for fields the AST cannot infer (parent_agent, when_to_use, etc)
 - Module doc: Amazon Data Analyst sub-agent — statistical analysis, visualization, and data processing.
 
 ## AmazonHeadAgent
-- File: `app/sub_agents/amazon_head_agent.py:34` (Agent)
+- File: `app/sub_agents/amazon_head_agent.py:38` (Agent)
 - Module variable: `amazon_head_agent`
 - Module doc: Amazon Head Agent — domain router for all Amazon business operations.
 
@@ -45,7 +45,7 @@ Augment by hand for fields the AST cannot infer (parent_agent, when_to_use, etc)
 - Module doc: ClickUp task management sub-agent.
 
 ## CoordinatorAgent
-- File: `app/sub_agents/coordinator_agent.py:55` (Agent)
+- File: `app/sub_agents/coordinator_agent.py:56` (Agent)
 - Module variable: `root_agent`
 
 ## DeveloperAgent

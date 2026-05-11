@@ -490,7 +490,27 @@ async def sp_request_report(
     report_options: str = "{}",
     tool_context: ToolContext = None,
 ) -> dict:
-    """Request an Amazon report. Returns a report ID to check status with sp_check_report.
+    """Submit an Amazon report request. **Long-running** — returns a
+    report_id; the actual data is NOT ready when this call returns.
+
+    ⚠ Reports take 30 seconds to 15+ minutes on Amazon's side. The tool
+    returns immediately with ``{status: "success", report_id: "..."}``;
+    the agent fire ends right after that response. There is NO automatic
+    push from Amazon when the report finishes.
+
+    Therefore, after calling this tool, BEFORE you respond to the user
+    with any "I'll get back to you" / "will update once ready" language,
+    you MUST call ``schedule_one_off_task`` to wire a self-check that
+    polls ``sp_check_report`` and posts the result to the user's channel
+    when it flips to ``DONE``. Without that scheduled follow-up the user
+    will never get the report.
+
+    The ``pending_followup_guard`` after-tool callback annotates the
+    response with a ``__followup_required__`` block and a
+    ``suggested_steps`` template — use those as the ``steps=`` list for
+    your scheduled task. The contract pipeline (``docs/CONTRACTS.md``)
+    is the long-term home for recurring polled-reports; this skill-rule
+    mechanism covers ad-hoc one-shots.
 
     Args:
         report_type: The report type identifier. Common types:

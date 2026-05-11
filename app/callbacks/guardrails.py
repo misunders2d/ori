@@ -1046,3 +1046,158 @@ def a2a_privacy_guardrail(tool, args, tool_context, tool_response=None):
                 }
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Pending-follow-up Guard — kill the "I'll get back to you" lie
+# ---------------------------------------------------------------------------
+
+
+# Tools whose successful return means "operation submitted, NOT complete".
+# When one of these returns success, the agent MUST schedule a follow-up
+# (via schedule_one_off_task) before responding to the user. The guardrail
+# below annotates the response so the LLM sees the requirement inline.
+#
+# Add a tool here when:
+#   - It submits work that completes asynchronously (Amazon report request,
+#     ads report request, BigQuery long jobs, image generation jobs, …)
+#   - Its successful return shape carries an operation/report/job id, not
+#     the actual result
+_LONG_RUNNING_SUBMIT_TOOLS: set[str] = {
+    "sp_request_report",
+    # Add Amazon Ads / BigQuery / image gen / etc. tools as they're wired:
+    # "amazon_ads_request_report",
+    # "bigquery_request_long_query",
+    # "generate_image_async",
+}
+
+# Response keys the guard checks to find the operation id to thread into
+# the agent's follow-up task. First match wins. New service trackers can
+# add their key here.
+_OPERATION_ID_KEYS: tuple[str, ...] = (
+    "report_id",
+    "operation_id",
+    "job_id",
+    "request_id",
+    "task_id",
+)
+
+# Tools that are FOLLOWUPS or status-checks themselves — skip the guard
+# so we don't recurse infinitely on rescheduling logic.
+_FOLLOWUP_EXEMPT_TOOLS: set[str] = {
+    "schedule_one_off_task",
+    "schedule_recurring_task",
+    "edit_scheduled_task",
+    "delete_scheduled_task",
+    "sp_check_report",
+    "sp_download_report",
+    # Contract pipeline tools never trigger the guard — contracts own
+    # their polling discipline internally.
+    "contract_freeze",
+    "contract_schedule",
+    "contract_dry_run",
+    "contract_revise",
+}
+
+
+def pending_followup_guard(tool, args, tool_context, tool_response):
+    """After-tool callback: detect long-running submissions + force a
+    scheduled follow-up.
+
+    When a tool from ``_LONG_RUNNING_SUBMIT_TOOLS`` returns success with
+    an operation id, this callback annotates the tool response so the
+    next LLM turn sees an explicit, hard-to-miss instruction:
+
+        ⚠ This is a PENDING long-running op (key=value). Before you
+        respond to the user, you MUST call schedule_one_off_task with
+        strict steps to poll the op and post the result. Verbal
+        promises without a scheduled follow-up are a lie.
+
+    The annotation is added under ``__followup_required__`` so it does
+    NOT pollute the response data for any tool consumers that read by
+    known keys. It DOES surface in the LLM's tool-result message
+    because the response dict is serialised whole.
+
+    The agent is also free to read ``__followup_required__.suggested_steps``
+    as a template for the steps[] list to pass to schedule_one_off_task —
+    these steps follow the polling discipline (check, post-or-reschedule,
+    cap on attempts).
+    """
+    tool_name = getattr(tool, "name", "") or (tool.__name__ if callable(tool) else "")
+    if tool_name in _FOLLOWUP_EXEMPT_TOOLS:
+        return None
+    if tool_name not in _LONG_RUNNING_SUBMIT_TOOLS:
+        return None
+    if not isinstance(tool_response, dict):
+        return None
+    if tool_response.get("status") not in ("success", "ok", None):
+        return None  # already an error — nothing to follow up on
+
+    op_id_key = None
+    op_id_value = None
+    for key in _OPERATION_ID_KEYS:
+        val = tool_response.get(key)
+        if val:
+            op_id_key = key
+            op_id_value = val
+            break
+    if not op_id_value:
+        return None
+
+    # Best-effort: extract the originating channel so the agent can wire
+    # ``deliver_to`` for the follow-up. Falls back to "current chat".
+    deliver_to = ""
+    try:
+        state = tool_context.state.to_dict() if tool_context else {}
+        deliver_to = (
+            state.get("deliver_to_session")
+            or state.get("origin_session_id")
+            or ""
+        )
+    except Exception:
+        deliver_to = ""
+
+    suggested_steps = [
+        f"Call sp_check_report with report_id='{op_id_value}'. Capture processing_status verbatim.",
+        (
+            f"If processing_status == 'DONE': call sp_download_report with the "
+            f"report_document_id; format a concise Slack mrkdwn summary "
+            f"(orders, revenue, time window); post to the deliver_to channel; STOP."
+        ),
+        (
+            f"If processing_status in ('IN_PROGRESS', 'IN_QUEUE'): call "
+            f"schedule_one_off_task to re-fire this same self-check in +60 "
+            f"seconds (decrement attempts in the task_prompt); STOP. Do NOT "
+            f"poll synchronously."
+        ),
+        (
+            f"If processing_status in ('CANCELLED', 'FATAL'): post "
+            f"'Report {op_id_value} failed: <status>' to the channel; STOP."
+        ),
+        (
+            "If you've already attempted 20+ self-checks (track count in "
+            "task_prompt), post 'Report still pending after 20 minutes — "
+            f"check sp_check_report(report_id={op_id_value!r}) manually' "
+            "and STOP rescheduling."
+        ),
+    ]
+
+    annotated = dict(tool_response)
+    annotated["__followup_required__"] = {
+        "operation_id_key": op_id_key,
+        "operation_id": op_id_value,
+        "tool_called": tool_name,
+        "deliver_to_hint": deliver_to,
+        "instruction": (
+            f"⚠ PENDING long-running operation: {op_id_key}={op_id_value!r}. "
+            "BEFORE you respond to the user with any 'I'll get back to you' / "
+            "'will check later' language, you MUST call schedule_one_off_task "
+            "with strict `steps` (see suggested_steps below) so the operation "
+            "actually gets polled and the result actually gets posted. A "
+            "verbal promise without a scheduled follow-up is a LIE — the "
+            "turn ends and nothing fires."
+        ),
+        "suggested_steps": suggested_steps,
+        "suggested_first_run_in_seconds": 60,
+    }
+    return annotated

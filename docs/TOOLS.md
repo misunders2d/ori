@@ -336,11 +336,11 @@ Amazon Selling Partner API tools — product catalog, listings, pricing, reports
 - `async sp_list_orders` (line 293) — List recent orders in the US marketplace.
 - `async sp_get_order_items` (line 371) — Get line items for a specific order.
 - `async sp_get_inventory_summaries` (line 415) — Get live FBA inventory summaries (fulfillable, inbound, reserved).
-- `async sp_request_report` (line 487) — Request an Amazon report. Returns a report ID to check status with sp_check_report.
-- `async sp_check_report` (line 549) — Check the status of a requested report.
-- `async sp_download_report` (line 598) — Download a completed report by its document ID.
-- `async sp_get_account_health` (line 648) — Fetch the Seller Central Account Health digest — AHR, policy compliance,
-- `async sp_list_reports` (line 780) — List previously requested reports.
+- `async sp_request_report` (line 487) — Submit an Amazon report request. **Long-running** — returns a
+- `async sp_check_report` (line 569) — Check the status of a requested report.
+- `async sp_download_report` (line 618) — Download a completed report by its document ID.
+- `async sp_get_account_health` (line 668) — Fetch the Seller Central Account Health digest — AHR, policy compliance,
+- `async sp_list_reports` (line 800) — List previously requested reports.
 
 ## `app/tools/spawn.py`
 Tool for spawning sibling agent containers.

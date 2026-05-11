@@ -17,3 +17,4 @@ Module-level callbacks. Hook is inferred from the function signature.
 - `plan_step_enforcer` (before_tool | after_tool) — `app/callbacks/guardrails.py:839` — before_tool guard: block tool calls outside the active step's allowed_tools.
 - `async state_setter` (before_model | state) — `app/callbacks/guardrails.py:902` — Sets initial fundamental session state keys to prevent KeyErrors during prompt evaluation.
 - `a2a_privacy_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:970` — Deterministic secret-matching guardrail for A2A tools.
+- `pending_followup_guard` (before_tool | after_tool) — `app/callbacks/guardrails.py:1103` — After-tool callback: detect long-running submissions + force a
