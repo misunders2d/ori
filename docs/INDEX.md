@@ -15,7 +15,7 @@ Read this **before** adding new code — most things you'd build already exist.
 - **AmazonAgent** (Agent) — `app/sub_agents/amazon_agent.py:27`
   - Amazon Manager sub-agent — product research, pricing, competitors, listing management.
 
-- **AmazonDataAnalystAgent** (Agent) — `app/sub_agents/amazon_data_analyst_agent.py:27`
+- **AmazonDataAnalystAgent** (Agent) — `app/sub_agents/amazon_data_analyst_agent.py:29`
   - Amazon Data Analyst sub-agent — statistical analysis, visualization, and data processing.
 
 - **AmazonHeadAgent** (Agent) — `app/sub_agents/amazon_head_agent.py:38`
@@ -39,7 +39,7 @@ Read this **before** adding new code — most things you'd build already exist.
 
 - **KnowledgeAgent** (Agent) — `app/sub_agents/knowledge_agent.py:30`
 
-## Tools (234 public functions across 40 files)
+## Tools (235 public functions across 41 files)
 
 
 ### `app/tools/a2a.py`
@@ -320,6 +320,11 @@ User preferences storage.
 - `save_user_preferences` (line 29) — Save or update the current user's preferences.
 - `get_user_preferences` (line 61) — Retrieve the current user's saved preferences.
 
+### `app/tools/presentations.py`
+PowerPoint (.pptx) generation.
+
+- `generate_presentation` (line 391) — Build a PowerPoint deck and save it to disk. The returned file_path
+
 ### `app/tools/research.py`
 Tools for researching bugs, library docs, and package versions.
 
@@ -418,7 +423,7 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
 
 - `async youtube_summary` (line 11) — Answer questions about a specific YouTube video, focusing on a specific query.
 
-## Toolsets (18)
+## Toolsets (19)
 
 
 - **ClickUpToolset** — `app/toolsets/clickup.py:5`
@@ -469,6 +474,10 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
   - Structured plan-and-execute — create plans, execute steps sequentially.
   - tools: `abandon_plan`, `complete_step`, `create_plan`, `get_next_step`, `get_plan_status`
 
+- **PresentationToolset** — `app/toolsets/presentations.py:14`
+  - Build PowerPoint decks for ads, sales, warehouse, inventory,
+  - tools: `generate_presentation`
+
 - **SchedulingToolset** — `app/toolsets/scheduling.py:5`
   - Core scheduling and timing tools.
   - tools: `delete_scheduled_task`, `edit_scheduled_task`, `get_current_time`, `get_scheduled_task_logs`, `list_scheduled_tasks`, `schedule_one_off_task`, `schedule_recurring_task`
@@ -509,7 +518,7 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
 - `file_attachment_capture` (before_tool | after_tool) — `app/callbacks/guardrails.py:1087` — After-tool callback: stash a tool's emitted file_path so the next
 - `file_attachment_inject` (before_model | state) — `app/callbacks/guardrails.py:1160` — After-model callback: drain ``__pending_file_parts__`` and append
 
-## Skills (18)
+## Skills (19)
 
 
 - **amazon-routing-skill** — `skills/amazon-routing-skill/SKILL.md` — How to route Amazon business requests to the right specialist agent. Use this skill when you need to decide which agent handles a request — product research, knowledge/memory, BigQuery analytics, Google Workspace, or data analysis. Also use when coordinating multi-agent workflows where data passes between agents via the scratchpad.
@@ -525,6 +534,7 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
 - **h10-keyword-skill** — `skills/h10-keyword-skill/SKILL.md` — Helium10 keyword analysis protocol — Cerebro/Magnet export analysis, scoring, gaps, trends.
 - **keepa-skill** — `skills/keepa-skill/SKILL.md` — Keepa API workflow for Amazon product research — single-ASIN fetch-store-extract pattern AND a bulk-query tool that returns a flat table for many ASINs in one call (review counts / BSR / monthly sold / prices across 100+ children of a parent, competitor lists, catalog audits). Detailed pricing, real sales estimates (from Keepa's monthlySold tier mapping), historical price/rank trends, competitor analysis, bestseller discovery, and product-finder filtered search. Use this skill whenever the user asks about an ASIN's price history, BSR trend, sales volume, who's selling it, who the competitors are, what's in a category, ANY multi-ASIN comparison or batch lookup ('check this for all 100 children', 'compare these 30 ASINs', 'pull review counts for the whole catalog'), or any product research question on Amazon — even if they don't say 'Keepa' explicitly.
 - **knowledge-graph-skill** — `skills/knowledge-graph-skill/SKILL.md` — How to use the knowledge base — a single Neo4j store with native vector search for memories, people, and their relationships. Use this skill when storing or retrieving knowledge, people, products, concepts, or when deciding what to put in the knowledge base vs the scratchpad.
+- **presentation-skill** — `skills/presentation-skill/SKILL.md` — How to build PowerPoint (.pptx) decks for business reports — ads, sales, warehouse, inventory, ASIN audit, anything else. Load this skill any time the user asks for a deck, presentation, pptx, slide deck, or 'put this in a presentation'.
 - **scheduling-skill** — `skills/scheduling-skill/SKILL.md` — How to schedule one-off and recurring agent tasks, route their delivery to specific Slack/Telegram channels, and use plan enforcement reliably. Load this any time the user asks to remind, schedule, automate, or run something on a cron.
 - **scratchpad-skill** — `skills/scratchpad-skill/SKILL.md` — Working memory protocol for multi-step tasks. Use the scratchpad to record intermediate findings without bloating LLM context.
 - **skill-creator-skill** — `skills/skill-creator-skill/SKILL.md` — A metacognitive workflow to create or modify skills in a Rootless environment. Use this when adding a new integration, capability, or domain-specific knowledge.

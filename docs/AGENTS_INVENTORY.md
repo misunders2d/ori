@@ -15,7 +15,7 @@ Augment by hand for fields the AST cannot infer (parent_agent, when_to_use, etc)
 - Module doc: Amazon Manager sub-agent — product research, pricing, competitors, listing management.
 
 ## AmazonDataAnalystAgent
-- File: `app/sub_agents/amazon_data_analyst_agent.py:27` (Agent)
+- File: `app/sub_agents/amazon_data_analyst_agent.py:29` (Agent)
 - Module variable: `amazon_data_analyst_agent`
 - Module doc: Amazon Data Analyst sub-agent — statistical analysis, visualization, and data processing.
 

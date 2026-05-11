@@ -285,6 +285,11 @@ User preferences storage.
 - `save_user_preferences` (line 29) — Save or update the current user's preferences.
 - `get_user_preferences` (line 61) — Retrieve the current user's saved preferences.
 
+## `app/tools/presentations.py`
+PowerPoint (.pptx) generation.
+
+- `generate_presentation` (line 391) — Build a PowerPoint deck and save it to disk. The returned file_path
+
 ## `app/tools/research.py`
 Tools for researching bugs, library docs, and package versions.
 

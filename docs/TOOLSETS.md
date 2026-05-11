@@ -67,6 +67,11 @@
 - Structured plan-and-execute — create plans, execute steps sequentially.
 - Bundled tools: `abandon_plan`, `complete_step`, `create_plan`, `get_next_step`, `get_plan_status`
 
+## PresentationToolset
+- File: `app/toolsets/presentations.py:14`
+- Build PowerPoint decks for ads, sales, warehouse, inventory,
+- Bundled tools: `generate_presentation`
+
 ## SchedulingToolset
 - File: `app/toolsets/scheduling.py:5`
 - Core scheduling and timing tools.

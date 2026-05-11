@@ -18,11 +18,13 @@ from app.callbacks.guardrails import (
     tool_output_spillover_guardrail,
 )
 from app.toolsets import ScratchpadToolset, VisualizationToolset
+from app.toolsets.presentations import PresentationToolset
 
 _base_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 _data_analysis_skill = load_skill_from_dir(_base_dir / "data-analysis-skill")
 _visualization_skill = load_skill_from_dir(_base_dir / "visualization-skill")
 _scratchpad_skill = load_skill_from_dir(_base_dir / "scratchpad-skill")
+_presentation_skill = load_skill_from_dir(_base_dir / "presentation-skill")
 
 amazon_data_analyst_agent = Agent(
     name="AmazonDataAnalystAgent",
@@ -46,8 +48,9 @@ amazon_data_analyst_agent = Agent(
         "Write results to scratchpad for other agents to consume."
     ),
     tools=[
-        skill_toolset.SkillToolset(skills=[_data_analysis_skill, _visualization_skill, _scratchpad_skill]),
+        skill_toolset.SkillToolset(skills=[_data_analysis_skill, _visualization_skill, _scratchpad_skill, _presentation_skill]),
         VisualizationToolset(),
+        PresentationToolset(),
         ScratchpadToolset(),
     ],
     before_model_callback=prompt_injection_guardrail,
