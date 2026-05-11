@@ -114,9 +114,29 @@ Result: every agent constructed afterward sees the override via env (highest-pri
 
 The agent-facing flow is documented in `skills/model-swap-skill/SKILL.md`. Setup-wizard collects provider API keys interactively (`app/interfaces/setup_wizard.py`).
 
-## 7. Validation
+## 7. Validation + auto-repair
 
 Probing whether a model is actually reachable is **not done today** (Phase 2 stops at rehydration). A future addition (deferred — see plan §2 for the option we chose against) would `litellm.completion(..., max_tokens=1)`-ping each assignment at startup and log unreachable ones.
+
+What IS done (added later as a focused fix):
+
+- `set_model(component, model_str)` performs a **provider-key preflight** before persisting. If the provider's API key (or Vertex flag) is missing from the environment, the call raises with a clear error instead of writing an override the runtime can't honour.
+- `get_model(component)`'s fallback path **auto-repairs** when the build fails: it clears the bad override from `data/model_config.json` AND `os.environ` before returning the default-built model. Otherwise the persisted bad override would re-hydrate on every restart, the build would keep falling back, and `state_setter` would emit a permanent `Cross-provider hot-swap requested for X (a -> b). Takes effect after restart` warning that no restart could reconcile.
+
+The repair logs a single WARNING at boot so operators see why the override was discarded. After the first run, the warning stops firing.
+
+## 8. Global thinking on/off switch
+
+Independent of model assignments, every agent's "extended thinking" can be toggled globally:
+
+- File: `data/thinking_config.json` (`{"enabled": bool, "budget_tokens": int}`), persisted across restarts.
+- Tool: `set_thinking_mode(enabled, budget_tokens=4096)` — admin-gated, atomic write.
+- Application:
+  - Gemini agents — per-turn `llm_request.config.thinking_config` set in `state_setter` (`app/callbacks/guardrails.py`). On = leave default, off = None.
+  - LiteLlm agents (Anthropic via OpenRouter etc.) — `apply_to_agent_tree(root_agent)` walks every sub-agent and mutates each LiteLlm instance's `_additional_args["thinking"]` in-place. Runs at boot (`app/agent.py`) and after each toggle so the change is hot.
+- Thoughts NEVER reach Slack/Telegram/A2A regardless of the flag — `extract_agent_response` (`app/core/agent_executor.py`) filters `Part(thought=True)` parts and the LiteLlm wrapper's `thinking_blocks` get normalised into the same shape upstream.
+
+See `app/app_utils/thinking.py` for the storage + apply helpers.
 
 For now: if you set a typoed model name, the failure surfaces only when the agent next tries to call it — typically a 4xx from the provider. That message is relayed to the user verbatim per the `relay_error` rule in `AI_EDITS.md`.
 

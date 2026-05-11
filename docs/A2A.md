@@ -114,6 +114,19 @@ URL-spillover for >5 MB payloads is deferred — for now the call raises a clear
 
 Inbound `FilePart` decoding is handled by ADK's `to_a2a()` runtime — `FilePart` is a first-class A2A v1.0 part, so Gemini-backed agents see the attachment natively. The only inbound-side addition here is the size cap.
 
+### Auto-attach for tool-generated files
+
+Tools like `generate_chart`, `generate_image`, drive exports, and report downloaders save bytes to disk and return `{"status": "success", "file_path": "..."}`. Those file_paths are NOT inline parts — ADK's A2A converter sees only `function_response` (which becomes a JSON `DataPart` with no bytes) and the agent's text reply (text Part). Without further plumbing, Streamlit / any A2A peer receives only the text and the chart never leaves the server. The agent then claims "attached" while the bytes stayed on disk — the 2026-05-14 Streamlit chart incident.
+
+Plumbing (`app/callbacks/guardrails.py`):
+
+- `file_attachment_capture` — `after_tool_callback`. When any tool returns a `file_path` (or a spillover-shape `file_payloads` list), the path is appended to session state under `__pending_file_parts__`. Wired on every file-producing sub-agent (Coordinator, AmazonHeadAgent, AmazonAgent, AmazonDataAnalystAgent, AmazonWorkspaceAgent).
+- `file_attachment_inject` — `after_model_callback`, wired on Coordinator only. Drains `__pending_file_parts__` and appends one `Part(inline_data=Blob(data=bytes, mime_type, display_name=f"__contract_file:{path}"))` per pending file to the model's response. ADK's A2A converter then translates each `inline_data` Part into an A2A `FilePart` carrying base64 bytes.
+
+The `__contract_file:<path>` marker on `display_name` is the dedup key for the Slack / Telegram path: `extract_agent_response` (`app/core/agent_executor.py`) tracks attached paths in a set, sees both the function_response branch and the marker'd inline_data branch, and attaches each file only once.
+
+Size cap on the auto-attach path is `_FILE_ATTACHMENT_MAX_BYTES = 20 MB` — matched to `A2A_INBOUND_MAX_BYTES` so files that fit through inbound also fit through outbound auto-attach.
+
 ### Size caps
 
 | Knob | Default | Behaviour at limit |
