@@ -43,19 +43,19 @@ Read this **before** adding new code — most things you'd build already exist.
 
 
 ### `app/tools/a2a.py`
-- `get_agent_identity` (line 42) — Returns this agent's public A2A v1.0 Agent Card.
-- `get_my_a2a_key` (line 61) — Returns this agent's own A2A API key so the admin can share it with friends.
-- `async add_friend` (line 100) — Discovers and registers another A2A-compliant agent as a friend for ongoing collaboration.
-- `update_friend_key` (line 171) — Initiates a secure capture flow to configure an API key for a registered A2A friend.
-- `list_friends` (line 210) — Returns all registered friends in the network with their capabilities and key status.
-- `async call_friend` (line 399) — Sends a message to a registered friend via the A2A protocol and returns their response.
-- `async call_agent` (line 457) — Sends a one-off message to any A2A-compliant agent by URL.
-- `async cancel_friend_task` (line 515) — Cancels a running task on a friend agent. Use this when a task is taking
-- `async perform_a2a_broadcast` (line 574) — Broadcast current A2A_BASE_URL to all friends, retrying failed deliveries.
-- `async broadcast_address_update` (line 662) — Manually triggers a broadcast of this agent's current A2A_BASE_URL to all registered friends.
-- `update_friend_address` (line 670) — Updates the registered address for a friend. 
-- `export_dna` (line 777) — Packages project files into a .tar.gz archive and returns a download URL.
-- `import_dna` (line 897) — Imports DNA into the sandbox for verification by fetching a .tar.gz archive from the given URL.
+- `get_agent_identity` (line 71) — Returns this agent's public A2A v1.0 Agent Card.
+- `get_my_a2a_key` (line 90) — Returns this agent's own A2A API key so the admin can share it with friends.
+- `async add_friend` (line 129) — Discovers and registers another A2A-compliant agent as a friend for ongoing collaboration.
+- `update_friend_key` (line 200) — Initiates a secure capture flow to configure an API key for a registered A2A friend.
+- `list_friends` (line 239) — Returns all registered friends in the network with their capabilities and key status.
+- `async call_friend` (line 594) — Sends a message to a registered friend via the A2A protocol and returns their response.
+- `async call_agent` (line 663) — Sends a one-off message to any A2A-compliant agent by URL.
+- `async cancel_friend_task` (line 731) — Cancels a running task on a friend agent. Use this when a task is taking
+- `async perform_a2a_broadcast` (line 790) — Broadcast current A2A_BASE_URL to all friends, retrying failed deliveries.
+- `async broadcast_address_update` (line 878) — Manually triggers a broadcast of this agent's current A2A_BASE_URL to all registered friends.
+- `update_friend_address` (line 886) — Updates the registered address for a friend. 
+- `export_dna` (line 993) — Packages project files into a .tar.gz archive and returns a download URL.
+- `import_dna` (line 1113) — Imports DNA into the sandbox for verification by fetching a .tar.gz archive from the given URL.
 
 ### `app/tools/analyze_data.py`
 Data analysis tool — run pandas code on uploaded files.

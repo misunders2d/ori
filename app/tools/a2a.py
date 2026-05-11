@@ -1,9 +1,14 @@
+import base64
 import re
 import asyncio
+import ipaddress
+import mimetypes
 import os
 import json
 import logging
 import uuid
+from urllib.parse import urlparse
+
 import httpx
 from datetime import datetime
 from typing import Dict, Any, Optional, List
@@ -16,6 +21,30 @@ KEYS_FILE = os.path.abspath("./data/a2a_keys.json")
 A2A_STATE_FILE = os.path.abspath("./data/a2a_state.json")
 AGENT_CARD_PATH = os.path.abspath("./data/agent.json")
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — A2A media + hardening constants
+# ---------------------------------------------------------------------------
+
+# Outbound: maximum total bytes (sum of attachment sizes) we'll inline in a
+# single A2A message. Above this, the call refuses rather than silently
+# producing a payload the peer may reject. Configurable via env so admins
+# can tune for their tunnel / peer's limits.
+_A2A_INLINE_LIMIT_BYTES = int(os.environ.get("A2A_INLINE_LIMIT_BYTES", str(5 * 1024 * 1024)))
+
+# Mime types we'll accept on an outbound FilePart. Mirrors the multimodal
+# allowlist used by app_utils/file_convert.py (PDF, common images, audio,
+# video). Refusing unknown MIMEs at send time protects the peer from
+# accidentally being asked to render arbitrary binary.
+_A2A_SAFE_MIME_PREFIXES = (
+    "image/",
+    "audio/",
+    "video/",
+    "text/",
+    "application/pdf",
+    "application/json",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -240,11 +269,151 @@ def list_friends(tool_context: ToolContext) -> Dict[str, Any]:
 _TERMINAL_STATES = {"completed", "failed", "canceled", "rejected", "input_required"}
 
 
-def _a2a_headers(api_key: Optional[str] = None) -> Dict[str, str]:
+def _a2a_headers(api_key: Optional[str] = None, caller_id: Optional[str] = None) -> Dict[str, str]:
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["x-a2a-api-key"] = api_key
+    if caller_id:
+        # Optional convenience for receivers that read the header directly.
+        # The in-text `[__caller_id:X__]` tag remains the canonical channel
+        # since `state_setter` already knows how to extract it.
+        headers["x-a2a-caller-id"] = caller_id
     return headers
+
+
+def _load_attachment_bytes(att: Dict[str, Any]) -> tuple[bytes, str, str]:
+    """Resolve an attachment dict into (bytes, name, mime_type).
+
+    Accepted shapes:
+      - {"path": "/abs/or/rel/path"} — read from disk
+      - {"data": <bytes>}             — already in memory
+      - {"data": "<base64>"}          — base64-encoded string
+    """
+    name = att.get("name") or ""
+    mime = att.get("mime_type") or ""
+
+    if "path" in att and att["path"]:
+        path = att["path"]
+        if not os.path.isabs(path):
+            path = os.path.abspath(path)
+        with open(path, "rb") as f:
+            data = f.read()
+        if not name:
+            name = os.path.basename(path)
+        if not mime:
+            mime, _ = mimetypes.guess_type(path)
+            mime = mime or "application/octet-stream"
+        return data, name, mime
+
+    raw = att.get("data", b"")
+    if isinstance(raw, bytes):
+        data = raw
+    elif isinstance(raw, str):
+        # Accept base64 or fall back to encoded text.
+        try:
+            data = base64.b64decode(raw, validate=True)
+        except Exception:
+            data = raw.encode("utf-8")
+    else:
+        raise ValueError(f"attachment 'data' must be bytes or base64 str, got {type(raw).__name__}")
+
+    if not mime:
+        mime = mimetypes.guess_type(name or "")[0] or "application/octet-stream"
+    if not name:
+        name = f"attachment-{uuid.uuid4().hex[:8]}"
+    return data, name, mime
+
+
+def _build_a2a_parts(
+    message_text: str,
+    attachments: Optional[List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    """Construct the JSON parts array for an A2A message.
+
+    Text first, then one FilePart per attachment (A2A v1.0 shape — inline
+    bytes are base64 in `file.bytes`). Enforces:
+      - Total attachment size ≤ _A2A_INLINE_LIMIT_BYTES.
+      - MIME types in the safe allowlist.
+    Raises ValueError when a guard fails — caller surfaces to the agent.
+    """
+    parts: List[Dict[str, Any]] = [{"text": message_text}] if message_text else []
+    if not attachments:
+        return parts or [{"text": ""}]
+
+    total = 0
+    for att in attachments:
+        data, name, mime = _load_attachment_bytes(att)
+        if not any(mime.startswith(p) or mime == p for p in _A2A_SAFE_MIME_PREFIXES):
+            raise ValueError(
+                f"attachment '{name}' has disallowed mime type '{mime}'. "
+                f"Allowed prefixes: {_A2A_SAFE_MIME_PREFIXES}"
+            )
+        total += len(data)
+        if total > _A2A_INLINE_LIMIT_BYTES:
+            raise ValueError(
+                f"total attachment size exceeds A2A_INLINE_LIMIT_BYTES "
+                f"({total} > {_A2A_INLINE_LIMIT_BYTES}). Reduce or split into "
+                "multiple messages. URL-spillover is a future addition."
+            )
+        parts.append({
+            "kind": "file",
+            "file": {"name": name, "bytes": base64.b64encode(data).decode("ascii")},
+            "mimeType": mime,
+        })
+    return parts
+
+
+def _scan_text_for_secrets(text: str) -> list[str]:
+    """Scan a single string for known-pattern secrets + live env-var matches.
+
+    Returns a list of human-readable findings (pattern hints), or [] when
+    clean. Re-uses `_SECRET_PATTERNS` defined later in this module.
+    """
+    if not text:
+        return []
+    findings: list[str] = []
+    for pattern in _SECRET_PATTERNS:
+        if pattern.search(text):
+            findings.append(pattern.pattern[:30])
+
+    # Also catch live env-var values that shouldn't leave the process.
+    try:
+        from app.app_utils.config import ALLOWED_CONFIG_KEYS
+        _SAFE_KEYS = {"BOT_NAME", "GITHUB_REPO", "APP_NAME"}
+        for key in ALLOWED_CONFIG_KEYS:
+            if key in _SAFE_KEYS:
+                continue
+            val = os.environ.get(key, "")
+            if val and len(val) > 6 and val in text:
+                findings.append(f"env:{key}")
+    except Exception:
+        pass
+
+    return findings
+
+
+def _resolve_caller_id_from_context(tool_context: Optional[ToolContext]) -> str:
+    """Pull the originating caller_id from the tool context, if available.
+
+    Phase 4.4 multi-hop propagation: when ori-A → ori-B and ori-B calls
+    ori-C, the receiver on B has `state["actual_caller_id"]` set by
+    `state_setter` (from the inbound text tag). We prepend the same tag
+    on the OUTBOUND call so ori-C sees the original human, not the peer.
+
+    Returns "" when no caller is tagged or no context is provided.
+    """
+    if not tool_context:
+        return ""
+    state = getattr(tool_context, "state", None)
+    if state is None:
+        return ""
+    # ADK exposes state via .to_dict() for Pydantic-backed shapes; some
+    # fakes use a plain dict.
+    try:
+        data = state.to_dict() if hasattr(state, "to_dict") else dict(state)
+    except Exception:
+        return ""
+    return str(data.get("actual_caller_id") or data.get("user_id") or "")
 
 
 async def _send_a2a_message(
@@ -253,16 +422,42 @@ async def _send_a2a_message(
     task_id: Optional[str] = None,
     api_key: Optional[str] = None,
     blocking: bool = True,
+    attachments: Optional[List[Dict[str, Any]]] = None,
+    caller_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Send a JSON-RPC message/send request to a remote A2A agent.
 
     When blocking=False, includes configuration.blocking=false so the server
     returns immediately with a task in 'working' state.
+
+    Phase 4 additions:
+    - `attachments`: optional list of {path|data, name, mime_type} dicts.
+      Each is encoded as an A2A v1.0 FilePart with inline base64 bytes.
+      Total size capped at `A2A_INLINE_LIMIT_BYTES` (default 5 MB).
+    - `caller_id`: original human's identifier. Propagated both as a header
+      and as a `[__caller_id:X__]` prefix on the text so the receiver's
+      `state_setter` extracts it via the existing path.
+    - Outbound secret scan: rejects the call if the text matches known
+      hardcoded-secret patterns or live env values.
     """
+    if message_text:
+        findings = _scan_text_for_secrets(message_text)
+        if findings:
+            raise ValueError(
+                "A2A send blocked — outbound text matched secret pattern(s): "
+                + ", ".join(findings[:5])
+            )
+
+    tagged_text = message_text
+    if caller_id and message_text and not message_text.startswith("[__caller_id:"):
+        tagged_text = f"[__caller_id:{caller_id}__] {message_text}"
+
+    parts = _build_a2a_parts(tagged_text, attachments)
+
     message_obj: Dict[str, Any] = {
         "messageId": str(uuid.uuid4()),
         "role": "user",
-        "parts": [{"text": message_text}],
+        "parts": parts,
     }
 
     if task_id:
@@ -281,7 +476,7 @@ async def _send_a2a_message(
 
     timeout = 30.0 if not blocking else 300.0
     async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(endpoint_url, json=payload, headers=_a2a_headers(api_key))
+        resp = await client.post(endpoint_url, json=payload, headers=_a2a_headers(api_key, caller_id))
         resp.raise_for_status()
         return resp.json()
 
@@ -419,13 +614,24 @@ async def call_friend(friend_name: str, message: str, tool_context: ToolContext 
         friend = friends[friend_name]
         endpoint_url = friend.get("endpoint_url", friend.get("base_url"))
         api_key = _load_friend_key(friend_name)
+        caller_id = _resolve_caller_id_from_context(tool_context)
 
         # Try non-blocking send first
         try:
-            result = await _send_a2a_message(endpoint_url, message, api_key=api_key, blocking=False)
+            result = await _send_a2a_message(
+                endpoint_url, message, api_key=api_key, blocking=False, caller_id=caller_id,
+            )
+        except ValueError as e:
+            # Secret-scan / attachment-validation failure — surface unchanged.
+            return {"status": "error", "message": f"A2A send blocked: {e}"}
         except Exception:
             # Fallback to blocking for agents that don't support async
-            result = await _send_a2a_message(endpoint_url, message, api_key=api_key, blocking=True)
+            try:
+                result = await _send_a2a_message(
+                    endpoint_url, message, api_key=api_key, blocking=True, caller_id=caller_id,
+                )
+            except ValueError as e:
+                return {"status": "error", "message": f"A2A send blocked: {e}"}
 
         if "error" in result:
             return {"status": "error", "message": f"Remote agent error: {result['error']}"}
@@ -484,10 +690,20 @@ async def call_agent(url: str, message: str, tool_context: ToolContext, api_key:
                     api_key = _load_friend_key(nick)
                     break
 
+        caller_id = _resolve_caller_id_from_context(tool_context)
         try:
-            result = await _send_a2a_message(endpoint_url, message, api_key=api_key, blocking=False)
+            result = await _send_a2a_message(
+                endpoint_url, message, api_key=api_key, blocking=False, caller_id=caller_id,
+            )
+        except ValueError as e:
+            return {"status": "error", "message": f"A2A send blocked: {e}"}
         except Exception:
-            result = await _send_a2a_message(endpoint_url, message, api_key=api_key, blocking=True)
+            try:
+                result = await _send_a2a_message(
+                    endpoint_url, message, api_key=api_key, blocking=True, caller_id=caller_id,
+                )
+            except ValueError as e:
+                return {"status": "error", "message": f"A2A send blocked: {e}"}
 
         if "error" in result:
             return {"status": "error", "message": f"Remote agent error: {result['error']}"}

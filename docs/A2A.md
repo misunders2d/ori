@@ -86,54 +86,60 @@ Lifecycle:
 }
 ```
 
-That's it. The outbound builder at `app/tools/a2a.py:262-266` writes `parts: [{"text": message_text}]` — no inline data, no file references. If the caller wants to share an image, the workaround today is to DNA-export the file separately and reference the URL inside the text.
+When `attachments` is empty, `parts` is `[{"text": message_text}]` and that's it.
 
-### Target (Phase 4 of the hardening plan)
+### With attachments (Phase 4 landed)
 
-Parts become a discriminated union:
+`_send_a2a_message(..., attachments=[...])` accepts a list of `{path | data, name?, mime_type?}` dicts. Each one is encoded as an A2A v1.0 `FilePart` with inline base64 bytes:
 
 ```json
 "parts": [
-  {"kind": "text", "text": "..."},
+  {"text": "describe this image"},
   {
-    "kind": "inline_data",
-    "mime_type": "image/png",
-    "data": "<base64-encoded bytes>"
-  },
-  {
-    "kind": "file_ref",
-    "mime_type": "application/octet-stream",
-    "name": "<uuid>",
-    "size_bytes": 12345678,
-    "scratchpad": "_a2a_outbound"
+    "kind": "file",
+    "mimeType": "image/png",
+    "file": {"name": "asin-history.png", "bytes": "<base64-encoded bytes>"}
   }
 ]
 ```
 
-Encoding rules (outbound, `_send_a2a_message`):
+Outbound encoding (`app/tools/a2a.py:_build_a2a_parts`):
 
-1. For each attachment, read bytes from disk-or-bytes input.
-2. If total payload (text + base64 attachments) ≤ `A2A_INLINE_LIMIT` (default **5 MB**): emit as `inline_data` parts.
-3. Otherwise: write the attachment to `tmp/scratchpads/_a2a_outbound/<uuid>.bin`, replace the part with a `file_ref`. The receiving side fetches via `GET https://<peer.base_url>/dna/<uuid>` with the same `x-a2a-api-key`.
+1. Resolve each attachment to `(bytes, name, mime)` — from disk path, raw `bytes`, or pre-encoded base64 string.
+2. Reject any MIME outside the allowlist (`image/*`, `audio/*`, `video/*`, `text/*`, `application/pdf`, `application/json`).
+3. Reject if the running total exceeds `A2A_INLINE_LIMIT_BYTES` (default **5 MB**).
+4. Emit one `FilePart` per attachment, with `file.bytes` = base64-encoded.
 
-Decoding rules (inbound, server pre-processor at `app/a2a_server.py`):
+URL-spillover for >5 MB payloads is deferred — for now the call raises a clear error and the agent decides how to proceed (split into multiple messages, downscale, or fall back to DNA exchange for whole-archive transfer).
 
-- `kind: inline_data` → base64-decode, write to `tmp/uploads/`, hand to `app/app_utils/file_convert.py:prepare_for_llm`.
-- `kind: file_ref` → authenticated fetch, then same as `inline_data`.
+Inbound `FilePart` decoding is handled by ADK's `to_a2a()` runtime — `FilePart` is a first-class A2A v1.0 part, so Gemini-backed agents see the attachment natively. The only inbound-side addition here is the size cap.
 
-### Size caps (Phase 4)
+### Size caps
 
 | Knob | Default | Behaviour at limit |
 |---|---|---|
-| `A2A_INLINE_LIMIT` | 5 MB | Outbound: spill to `file_ref` |
-| `A2A_INBOUND_MAX_BYTES` | 20 MB | Inbound: hard reject (HTTP 413) |
-| `_SUPPORTED_INLINE_MIMES` | see `app/app_utils/file_convert.py:80-109` | Reject non-allowlisted MIMEs |
+| `A2A_INLINE_LIMIT_BYTES` | 5 MB (5_242_880) | Outbound: `_send_a2a_message` raises `ValueError` — caller surfaces a clear error to the agent. URL-spillover deferred. |
+| `A2A_INBOUND_MAX_BYTES` | 20 MB (20_971_520) | Inbound: middleware returns HTTP 413 with JSON-RPC error code `-32004` before body is buffered. |
+| Outbound MIME allowlist | `image/`, `audio/`, `video/`, `text/`, `application/pdf`, `application/json` | Outbound: rejects with `ValueError`. |
+
+### Outbound secret scan
+
+Before each `_send_a2a_message` call, the text payload is scanned for hardcoded secret patterns (Slack tokens, OpenAI/Anthropic keys, AWS keys, GitHub PATs, private-key blocks, Google API keys) **and** for any live env-var value from `ALLOWED_CONFIG_KEYS` that isn't on the safe-key whitelist (`BOT_NAME`, `GITHUB_REPO`, `APP_NAME`). Match → `ValueError` raised, no network call made.
+
+This is best-effort — exfiltration through paraphrasing or partial values isn't caught, and entropy-based detection isn't yet wired in. The intent is to catch the obvious "leaked-the-key-in-plaintext" mistake.
 
 ---
 
-## 5. Caller-ID propagation (multi-hop)
+## 5. Caller-ID propagation (multi-hop, Phase 4 landed)
 
-Today an inbound A2A request arrives at the root agent with `user_id` set to whatever the peer used (typically the peer's agent ID). If you call ori-A → ori-B → ori-C, by the time you reach ori-C, the original human's identity is lost.
+By default an inbound A2A request arrives at the root agent with `user_id` set to whatever the peer used (typically the peer's agent ID). If you call ori-A → ori-B → ori-C, by the time you reach ori-C, the original human's identity is lost.
+
+**`_send_a2a_message` now propagates the original caller in two channels**, both populated from `tool_context.state["actual_caller_id"]` (or `state["user_id"]` as fallback):
+
+1. `x-a2a-caller-id` header — convenience for receivers that want to read it directly.
+2. `[__caller_id:<id>__] ` prefix on the outbound text — picked up by the receiver's `state_setter` callback (`app/callbacks/guardrails.py:state_setter`) via the existing tag-extraction regex.
+
+Channel #2 is the canonical one because `state_setter` already handles this exact shape for in-tree group sessions, so multi-hop A2A reuses the same code path with no receive-side changes.
 
 Existing mechanism (used between Coordinator and its sub-agents for group sessions): a hidden tag `[__caller_id:<id>__]` inside the message text, extracted by `state_setter` (`app/callbacks/guardrails.py:787`).
 
@@ -167,9 +173,14 @@ Hardening to add (tracked in the Phase 5 evolution-audit work):
 
 Updates `friends.json` so the next outbound call uses the new address.
 
-Hardening to add (tracked in Phase 4):
+Hardening landed in Phase 4:
 
-- Validate `new_base_url` scheme (http/https only) and reject loopback/private IPs unless `A2A_ALLOW_LAN=true`.
+- `_validate_peer_url` rejects loopback (`127.0.0.0/8`), link-local (`169.254/16` — AWS IMDS), private (`10/8`, `192.168/16`, `172.16/12`), reserved, and multicast addresses. Set `A2A_ALLOW_LAN=true` to opt in (useful for local dev).
+- Hostname-based heuristics reject `localhost`, `*.local`, `*.internal` even when DNS would resolve them publicly.
+- Non-http(s) schemes (e.g. `ftp://`, `file://`) are rejected.
+
+Still pending follow-up:
+
 - Rate-limit per friend (current code accepts unlimited updates).
 - Re-fetch the Agent Card after the update and confirm `card.id` matches what we have on file — defends against an attacker who has the api_key but is impersonating the peer.
 

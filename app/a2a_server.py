@@ -1,6 +1,8 @@
-import os
+import ipaddress
 import json
 import logging
+import os
+from urllib.parse import urlparse
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, FileResponse, Response
@@ -18,6 +20,11 @@ _OAUTH_CALLBACK_PATH = "/oauth/google/callback"
 
 DNA_EXPORTS_DIR = os.path.abspath("data/dna_exports")
 
+# Phase 4 hardening — inbound caps. Content-Length above this is rejected
+# at the middleware before any body is buffered, so an attacker can't
+# OOM the bot by streaming a multi-GB blob.
+_INBOUND_MAX_BYTES = int(os.environ.get("A2A_INBOUND_MAX_BYTES", str(20 * 1024 * 1024)))
+
 
 class A2AApiKeyMiddleware(BaseHTTPMiddleware):
     """Enforces API key authentication on non-discovery A2A endpoints."""
@@ -29,6 +36,32 @@ class A2AApiKeyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         if request.url.path in _PUBLIC_PATHS:
             return await call_next(request)
+
+        # Inbound size cap — reject oversized payloads before buffering
+        # the body. `Content-Length` may be missing on streamed requests;
+        # in that case we trust the downstream handler to apply its own
+        # limit (ADK + Starlette both have defaults).
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                cl = int(content_length)
+            except ValueError:
+                cl = 0
+            if cl > _INBOUND_MAX_BYTES:
+                return JSONResponse(
+                    {
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": -32004,
+                            "message": (
+                                f"Payload too large: {cl} bytes exceeds "
+                                f"A2A_INBOUND_MAX_BYTES={_INBOUND_MAX_BYTES}."
+                            ),
+                        },
+                        "id": None,
+                    },
+                    status_code=413,
+                )
 
         # OAuth callback — handled here, no API key, never reaches the agent
         if request.url.path == _OAUTH_CALLBACK_PATH:
@@ -125,6 +158,42 @@ def _oauth_page(title: str, body_html: str) -> str:
     )
 
 
+def _validate_peer_url(url: str) -> tuple[bool, str]:
+    """SSRF guard: accept only http/https URLs to public hosts.
+
+    Phase 4 §4.3. Without this, an attacker holding the api_key could
+    point our friend registry at `http://localhost:6379` or
+    `http://169.254.169.254/latest/meta-data/` and use subsequent
+    outbound calls to probe internal services.
+
+    Set `A2A_ALLOW_LAN=true` to opt in to private / loopback ranges
+    (useful for local dev). Returns (is_safe, reason_if_not).
+    """
+    if not url:
+        return False, "URL is empty."
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False, f"scheme '{parsed.scheme}' not allowed (http/https only)."
+    host = parsed.hostname or ""
+    if not host:
+        return False, "no host in URL."
+    allow_lan = os.environ.get("A2A_ALLOW_LAN", "").lower() in ("1", "true", "yes")
+    if allow_lan:
+        return True, ""
+    # If hostname is an IP literal, reject loopback / link-local / private ranges.
+    try:
+        ip = ipaddress.ip_address(host)
+        if ip.is_loopback or ip.is_link_local or ip.is_private or ip.is_reserved or ip.is_multicast:
+            return False, f"host '{host}' is not a public address (set A2A_ALLOW_LAN=true to override)."
+        return True, ""
+    except ValueError:
+        # Not an IP — DNS name. Reject obvious internal-looking hosts.
+        lowered = host.lower()
+        if lowered in {"localhost", "localhost.localdomain"} or lowered.endswith(".local") or lowered.endswith(".internal"):
+            return False, f"host '{host}' is not a public address (set A2A_ALLOW_LAN=true to override)."
+        return True, ""
+
+
 async def _handle_address_update(request) -> JSONResponse:
     """Deterministic handler: update a friend's URL when they broadcast a new address.
 
@@ -142,6 +211,15 @@ async def _handle_address_update(request) -> JSONResponse:
 
         if not sender_name or not new_url:
             return JSONResponse({"status": "error", "message": "Missing sender_name or new_base_url"}, status_code=400)
+
+        # Phase 4 SSRF guard — reject loopback / private / non-http(s) URLs.
+        is_safe, reason = _validate_peer_url(new_url)
+        if not is_safe:
+            logger.warning("Address update from '%s' rejected: %s", sender_name, reason)
+            return JSONResponse(
+                {"status": "rejected", "message": f"new_base_url rejected: {reason}"},
+                status_code=400,
+            )
 
         if not os.path.exists(FRIENDS_FILE):
             return JSONResponse({"status": "ignored", "message": "No friends registered"})
