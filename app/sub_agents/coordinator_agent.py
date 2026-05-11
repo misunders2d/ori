@@ -29,6 +29,7 @@ from app.toolsets import (
     CreativesToolset,
 )
 from app.toolsets.planner import PlannerToolset
+from app.toolsets.contracts import ContractToolset
 from app.tools.a2a import get_agent_identity, get_my_a2a_key
 from app.tools.google_search import google_search_agent_tool
 from app.tools.web import web_fetch
@@ -136,6 +137,7 @@ root_agent = Agent(
         skill_toolset.SkillToolset(skills=[_scheduling_skill, _approval_skill, _knowledge_graph_skill]),
         # Toolsets — cross-cutting concerns only
         SchedulingToolset(),
+        ContractToolset(),  # contract-driven scheduling — preferred path for recurring tasks
         MemoryToolset(),
         SystemToolset(),
         ScratchpadToolset(),

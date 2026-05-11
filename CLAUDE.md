@@ -39,6 +39,7 @@ For the area you're touching, read the matching topic doc:
 | Self-evolution flow | `docs/EVOLUTION.md` |
 | Model assignments | `docs/HOT_SWAP.md` |
 | Plan / scheduler | `docs/PLANS.md` |
+| Scheduled tasks (contracts) | `docs/CONTRACTS.md` |
 | Scratchpad | `docs/SCRATCHPAD.md` |
 | Production / deploy / disaster recovery | `docs/RUNBOOK.md` |
 

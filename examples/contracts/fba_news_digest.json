@@ -1,0 +1,79 @@
+{
+  "id": "fba_news_5d_digest",
+  "description": "Weekly FBA news digest — pull 5 days of FBA/Amazon-seller news, cross-reference against the company knowledge base, score by importance, post top items to #fba_updates.",
+  "author": "sergey",
+  "trigger": {
+    "type": "cron",
+    "cron": "0 9 * * MON",
+    "timezone": "Europe/Kyiv"
+  },
+  "inputs": [
+    {
+      "id": "raw_news",
+      "loader": "web_search",
+      "args": {
+        "url": "https://example.com/fba-news-feed?since={today-5d}"
+      }
+    },
+    {
+      "id": "kb_snapshot",
+      "loader": "graph_query",
+      "args": {
+        "cypher": "MATCH (m:Memory)-[:ABOUT]->(t:Entity {name: 'FBA'}) WHERE m.namespace = 'professional' RETURN m.id AS id, m.title AS title, m.summary AS summary ORDER BY m.created_at DESC LIMIT 50"
+      }
+    }
+  ],
+  "reasoning": [
+    {
+      "id": "digest",
+      "description": "Score each news item, identify KB gaps, surface top 3.",
+      "entry_agent": "AmazonHeadAgent",
+      "transfers_allowed": ["AmazonHeadAgent", "AmazonMemoryAgent", "KnowledgeAgent"],
+      "tools": [],
+      "user_template": "Given these news items:\n{raw_news}\n\nAnd the company's existing FBA knowledge:\n{kb_snapshot}\n\nFor each news item, decide if it's new, conflicts with KB, or confirms it. Score importance 1-5. Surface the top 3 items.",
+      "output": {
+        "type": "json",
+        "schema": {
+          "type": "object",
+          "required": ["top_items", "all_items", "kb_gaps"],
+          "properties": {
+            "top_items": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 3,
+              "items": {
+                "type": "object",
+                "required": ["title", "url", "why_matters", "kb_status", "importance"],
+                "properties": {
+                  "title": {"type": "string", "maxLength": 200},
+                  "url": {"type": "string"},
+                  "why_matters": {"type": "string", "maxLength": 280},
+                  "kb_status": {"enum": ["new", "conflicts_with_kb", "confirms_kb"]},
+                  "importance": {"type": "integer", "minimum": 4, "maximum": 5}
+                }
+              }
+            },
+            "all_items": {"type": "array"},
+            "kb_gaps": {"type": "array", "maxItems": 5}
+          }
+        }
+      },
+      "retry": {"on_validation_fail": 1, "on_tool_error": 2}
+    }
+  ],
+  "emit": [
+    {
+      "id": "post_to_slack",
+      "adapter": "slack_post",
+      "args": {
+        "channel": "#fba_updates",
+        "content": "*FBA news — past 5 days* ({today})\n\n{digest}"
+      }
+    }
+  ],
+  "on_failure": {
+    "action": "alert_admin",
+    "notify": ["tg_330959414"],
+    "abort": true
+  }
+}

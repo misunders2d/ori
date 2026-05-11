@@ -12,6 +12,11 @@
 - ClickUp task management — workspace discovery, task CRUD, comments.
 - Bundled tools: `clickup_add_comment`, `clickup_create_task`, `clickup_delete_task`, `clickup_get_task`, `clickup_get_workspace`, `clickup_list_folders_and_lists`, `clickup_list_tasks`, `clickup_task_link`, `clickup_timestamp`, `clickup_update_task`
 
+## ContractToolset
+- File: `app/toolsets/contracts.py:20`
+- Contract pipeline — author, dry-run, freeze, schedule scheduled
+- Bundled tools: `contract_draft_validate`, `contract_dry_run`, `contract_freeze`, `contract_from_existing`, `contract_inspect`, `contract_list`, `contract_revise`, `contract_schedule`, `contract_unschedule`
+
 ## EvolutionToolset
 - File: `app/toolsets/evolution.py:20`
 - Groups all self-evolution tools: read, stage, verify, commit, git ops.

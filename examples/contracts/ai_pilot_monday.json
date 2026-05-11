@@ -1,0 +1,51 @@
+{
+  "id": "ai_pilot_monday",
+  "description": "Weekly 'AI Pilot' Monday post — Dirty Data Cleanup with Gemini in Google Sheets. Static content, dedup-gated against the tracking spreadsheet.",
+  "author": "sergey",
+  "trigger": {
+    "type": "cron",
+    "cron": "0 18 * * MON",
+    "timezone": "Europe/Kyiv"
+  },
+  "inputs": [
+    {
+      "id": "post",
+      "loader": "static_param",
+      "args": {
+        "value": "*Monday: The \"Dirty Data\" Cleanup*\n_Goal:_ Fix messy SKU or Product Title lists in seconds.\n_The Tool:_ *Gemini in Google Sheets* (Gemini Menu).\n_The Pilot:_ Highlight a column of inconsistent competitor titles. Go to `Gemini > Ask something else`. In the side panel, type: \"Extract the Material, Color, and Thread Count from the highlighted cells into a new table with 3 columns.\"\n_Mellanni Impact:_ Automates catalog mapping and competitor benchmarking without manual typing."
+      }
+    }
+  ],
+  "reasoning": [],
+  "emit": [
+    {
+      "id": "post_to_slack",
+      "adapter": "slack_post",
+      "args": {
+        "channel": "#ai_in_mellanni",
+        "content": "{post}"
+      },
+      "gate": {
+        "type": "sheet_dedup",
+        "args": {
+          "source": "10cSeLaioaJXRN8eKitDTDIu_7iYZGkhnhGsUyF4PO-w",
+          "key": "{today}"
+        }
+      },
+      "abort_on_gate_fail": true
+    },
+    {
+      "id": "log_to_sheet",
+      "adapter": "sheet_append",
+      "args": {
+        "spreadsheet_id": "10cSeLaioaJXRN8eKitDTDIu_7iYZGkhnhGsUyF4PO-w",
+        "row": ["{today}", "{post}"]
+      }
+    }
+  ],
+  "on_failure": {
+    "action": "alert_admin",
+    "notify": ["tg_330959414"],
+    "abort": true
+  }
+}

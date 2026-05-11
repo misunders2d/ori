@@ -11,6 +11,7 @@ This document is the foundational instruction set for all AI coding agents (both
 > - [docs/EVOLUTION.md](docs/EVOLUTION.md) — self-evolution pipeline (stage → verify → approve → commit → restart)
 > - [docs/HOT_SWAP.md](docs/HOT_SWAP.md) — model/provider swapping
 > - [docs/PLANS.md](docs/PLANS.md) — plan schema + enforcer behavior
+> - [docs/CONTRACTS.md](docs/CONTRACTS.md) — contract-driven scheduling (preferred over bare `schedule_recurring_task` for recurring content)
 > - [docs/SCRATCHPAD.md](docs/SCRATCHPAD.md) — session-scoped working memory
 > - [docs/RUNBOOK.md](docs/RUNBOOK.md) — production deploy / rollback / disaster recovery
 >

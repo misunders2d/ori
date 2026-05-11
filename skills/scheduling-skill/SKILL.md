@@ -7,13 +7,46 @@ description: "How to schedule one-off and recurring agent tasks, route their del
 
 Scheduled tasks run the agent (you) at a future time in an **isolated session per fire**, then deliver the result to a chosen channel. Use this skill whenever the user asks you to remind, schedule, automate, or run a task on a recurring cron.
 
-## Tools
+## ⚠️ Use the contract pipeline for recurring tasks
+
+For ANY recurring task that posts content, fills a doc, summarises data, or emits a structured side effect — **draft a contract instead of `schedule_recurring_task`**. The contract pipeline (see `docs/CONTRACTS.md`) eliminates the classes of drift the bare scheduler suffers from:
+
+- Generic `task_prompt` → wrong content at fire time
+- Sub-agent transfer narration leaking to the user channel
+- Wildly varying output format across fires
+- No dry-run / preview before commit
+
+The contract tool surface (mounted on this agent as `ContractToolset`):
+
+| Tool | Use |
+|---|---|
+| `contract_draft_validate(spec)` | sanity-check a spec dict before showing it to the user |
+| `contract_dry_run(spec, mock_inputs?)` | simulate one fire — see exactly what would post |
+| `contract_freeze(spec)` | hash + persist; refuses anything but `enforcement: strict` |
+| `contract_schedule(id)` | wire to APScheduler under `contract:<id>` |
+| `contract_revise(id, new_spec)` | new version, parent_hash chained |
+| `contract_unschedule(id)` / `contract_list()` / `contract_inspect(id)` | management |
+| `contract_from_existing(job_id)` | sketch a contract from a legacy `cron_*` job |
+
+**Hard rules for contract authoring:**
+
+1. EVERY recurring or repeatedly-fired task should use the contract pipeline. Use `schedule_recurring_task` only for genuinely free-form one-shot reminders.
+2. NEVER call `contract_freeze` before `contract_dry_run` shows the user the rendered output and they explicitly approve.
+3. Reasoning step output schemas MUST be tight (JSON Schema for structured posts; text constraints for free-form). Loose schemas re-introduce drift.
+4. Emit adapters render templates from `state` — `content` must reference `{step.field}` or `{input.field}`, never embed reconstructed prose.
+5. Use `sheet_dedup` gate on every contract that posts daily to avoid double-fires.
+
+The bare scheduler tools below remain for one-off reminders, ad-hoc system maintenance, and any task that doesn't fit the contract envelope cleanly. For everything else: contracts.
+
+## Legacy scheduler tools (bare-LLM-prompt path)
+
+### Bare scheduler tools
 
 | Tool | Use |
 |------|-----|
 | `get_current_time(timezone)` | **ALWAYS call first.** Confirms current time + weekday in the user's tz. |
 | `schedule_one_off_task(task_prompt, run_at_iso_datetime, timezone, deliver_to="")` | Run once at a specific ISO datetime. |
-| `schedule_recurring_task(task_prompt, cron_expression, timezone, deliver_to="")` | Run on a 5-part cron schedule. |
+| `schedule_recurring_task(task_prompt, cron_expression, timezone, deliver_to="")` | Run on a 5-part cron schedule. **For recurring content, prefer the contract pipeline.** |
 | `list_scheduled_tasks()` | Show jobs the current user owns (admins see all). |
 | `edit_scheduled_task(job_id, ...)` | Change prompt / time / cron without recreating. |
 | `delete_scheduled_task(job_id)` | Cancel a job. |

@@ -45,7 +45,7 @@ Augment by hand for fields the AST cannot infer (parent_agent, when_to_use, etc)
 - Module doc: ClickUp task management sub-agent.
 
 ## CoordinatorAgent
-- File: `app/sub_agents/coordinator_agent.py:54` (Agent)
+- File: `app/sub_agents/coordinator_agent.py:55` (Agent)
 - Module variable: `root_agent`
 
 ## DeveloperAgent

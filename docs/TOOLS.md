@@ -62,6 +62,19 @@ ClickUp task management tools — async, API key auth.
 - `clickup_timestamp` (line 420) — Convert a local date/time to a Unix timestamp in milliseconds for ClickUp.
 - `clickup_task_link` (line 441) — Get the direct web URL for a ClickUp task.
 
+## `app/tools/contracts.py`
+Contract-pipeline tools — the agent-facing surface for authoring,
+
+- `async contract_draft_validate` (line 71) — Validate a freshly-drafted contract spec WITHOUT persisting.
+- `async contract_dry_run` (line 106) — Simulate one fire of a contract WITHOUT applying any side
+- `async contract_freeze` (line 156) — Persist a contract to disk, hash it, and record it in the
+- `async contract_schedule` (line 201) — Wire the latest frozen version of ``contract_id`` into
+- `async contract_unschedule` (line 220) — Remove ``contract_id`` from APScheduler. The frozen body stays
+- `async contract_revise` (line 233) — Freeze a new version of an existing contract, recording the
+- `async contract_list` (line 268) — List all known contracts (latest version of each), plus their
+- `async contract_inspect` (line 301) — Return the full frozen body of a contract — useful for the
+- `async contract_from_existing` (line 344) — Sketch a draft contract spec that approximates a legacy
+
 ## `app/tools/diagnostics.py`
 - `check_active_tasks` (line 8) — Check background task status.
 - `async report_health` (line 22) — Returns a full system health report including API, disk, and git integrity.

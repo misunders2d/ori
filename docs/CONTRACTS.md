@@ -1,0 +1,294 @@
+# Contract-driven scheduling
+
+> Why this exists: scheduled tasks used to drift between authoring and
+> fire time. The agent would store a generic `task_prompt` ("Execute
+> Monday Pilot"), and at fire time it would reconstruct content from
+> memory — fuzzy recall, sub-agent narration leaks, wrong format. The
+> 2026-05-11 audit caught this and led to the contract architecture
+> described here.
+
+## TL;DR
+
+Every recurring/scheduled task is described by a **frozen contract**:
+inputs to gather, reasoning steps (LLM calls with schema-locked
+output), and emit adapters (deterministic side effects). Authoring is
+conversational — the bot drafts the contract dict with the user;
+freezing hashes it; firing executes it literally.
+
+**Author once**, **dry-run for review**, **freeze + hash**, **schedule
+once**, **fires deterministically every time**.
+
+## Five-stage envelope
+
+```
+GATHER → REASON → MATERIALIZE → VALIDATE → EMIT
+```
+
+Every task walks these five stages. Per-task variability lives only in
+slot values; the structure never changes.
+
+| Stage | Determinism | Detail |
+|---|---|---|
+| **GATHER** | deterministic, NO LLM | typed input loaders (BigQuery, Keepa, web search, graph query, …) |
+| **REASON** | LLM calls, 0..N | each step has `entry_agent`, tool whitelist, output schema |
+| **MATERIALIZE** | deterministic | structured outputs stored under `state[step.id]` |
+| **VALIDATE** | mechanical | JSON Schema or text predicates; one retry on fail; then `on_failure` |
+| **EMIT** | deterministic, NO LLM | side-effect adapters (slack_post, sheet_append, drive_doc_fill, …) |
+
+## Authoring UX
+
+The agent (CoordinatorAgent + ContractToolset) handles all the wiring.
+You describe the task in natural language; the bot drafts the
+contract dict, calls `contract_dry_run` to simulate, shows the
+simulated output, iterates with you, then freezes + schedules.
+
+Example flow:
+
+```
+USER: schedule a daily FBA news digest at 9am Kyiv to #fba_updates
+
+BOT (drafts contract):
+  inputs: [web_search, graph_query for KB]
+  reasoning: [one LLM call with structured output schema for top items]
+  emit: [slack_post, sheet_append for dedup log]
+
+BOT: contract_dry_run(spec) → simulated post:
+     "*FBA news — past 5 days* (2026-05-11)
+      *5/5 — Amazon raises FBA storage fees ..."
+
+USER: looks good, but lower importance threshold to 3.
+
+BOT (revises): updates output.schema.top_items.importance.minimum → 3
+BOT: contract_dry_run(...) → new preview
+USER: approve
+
+BOT: contract_freeze(spec)         → hash a1b2c3...
+BOT: contract_schedule("fba_news") → wired to APScheduler at contract:fba_news
+```
+
+## Contract schema
+
+See `app/contracts/schema.py` for the canonical Pydantic models. Top-level
+shape:
+
+```yaml
+id:           string              # snake_case, globally unique
+version:      int                 # auto-managed by the store
+hash:         string              # SHA-256, populated at freeze time
+description:  string              # human readable
+author:       string              # user id
+parent_hash:  string | null       # link to previous version (revisions)
+trigger:      Trigger             # cron | on_demand | event
+inputs:       [InputSpec]         # deterministic loaders, 0..N
+reasoning:    [ReasoningStep]     # LLM calls, 0..N
+emit:         [EmitStep]          # 1..N side effects
+acceptance:   Acceptance          # global post-reason / pre-emit checks
+on_failure:   FailureAction       # alert_admin | abort_silent | retry_later
+enforcement:  EnforcementMode     # STRICT (default; only mode that fires)
+```
+
+### Reasoning step shape
+
+```yaml
+- id:                 string             # snake_case; state[id] holds the output
+  description:        string             # human label
+  entry_agent:        string             # sub-agent name (e.g. AmazonHeadAgent)
+  transfers_allowed:  [string]           # sub-agents this step may transfer to
+  tools:              [string]           # hard tool whitelist
+  model:              string | null      # hot-swap model key, else entry_agent's default
+  user_template:      string             # rendered against state at fire time
+  output:
+    type:             "json" | "text" | "none"
+    schema:           {...}              # JSON Schema (for json)
+    constraints:      [string]           # for text: "min 200 chars", "contains 'X'", …
+  retry:
+    on_validation_fail: int              # default 1
+    on_tool_error:     int               # default 2
+  max_tool_calls:     int                # default 20
+```
+
+### Emit step shape
+
+```yaml
+- id:                 string | null
+  adapter:            string             # registered emit adapter name
+  args:               {...}              # template-rendered against state
+  gate:                                  # optional pre-emit check
+    type:             string             # registered gate name (e.g. sheet_dedup)
+    args:             {...}
+  abort_on_gate_fail: bool               # default false (skip just this emit)
+```
+
+## Loaders (GATHER)
+
+Registered in `app/contracts/loaders.py`. Each loader is a coroutine
+`(rendered_args, state) → JSON-serialisable value`.
+
+| Loader | Status | Args |
+|---|---|---|
+| `static_param` | ✅ live | `value` (any) |
+| `web_search` | ✅ V1 (single URL) | `url` |
+| `graph_query` | ✅ live | `cypher`, optional `params` |
+| `memory_search` | ✅ live | `query`, optional `namespace`, `limit` |
+| `sheet_read` | 🚧 P7 | `spreadsheet_id`, `range` |
+| `drive_doc_read` | 🚧 P7 | `doc_id` |
+| `bigquery_query` | 🚧 P7 | `sql`, optional `params` |
+| `keepa_get_history` | 🚧 P7 | `asin`, `days` |
+
+🚧 = registered slot, raises `NotImplementedError`; lit up in follow-up.
+
+## Emit adapters (EMIT)
+
+Registered in `app/contracts/emit.py`.
+
+| Adapter | Status | Args |
+|---|---|---|
+| `slack_post` | ✅ live | `channel`, `content`, optional `thread_ts` |
+| `telegram_dm` | ✅ live | `user_id`, `text` |
+| `sheet_append` | 🚧 P7 | `spreadsheet_id`, `row` |
+| `drive_doc_fill` | 🚧 P7 | `doc_id`, `fields` |
+| `email` | 🚧 P7 | `to`, `subject`, `body` |
+| `memory_update` | 🚧 P7 | `title`, `summary`, optional `relations` |
+
+## Gates
+
+Pre-emit checks. The most common is `sheet_dedup` — read a tracking
+sheet, fail if today's row already exists. With `abort_on_gate_fail:
+true`, a failing gate aborts the entire contract fire (default: skip
+just that one emit, keep going).
+
+| Gate | Status | Purpose |
+|---|---|---|
+| `sheet_dedup` | 🚧 P7 | reject if row for `{key}` already in `{source}` sheet |
+| `always_pass` | ✅ | explicit "we chose no gating here" marker (testing) |
+| `always_fail` | ✅ | testing the abort path |
+
+## Templating
+
+Loader args, `user_template` strings, and emit args all support
+placeholder substitution before fire time:
+
+| Placeholder | Resolves to |
+|---|---|
+| `{name}` | `state["name"]` |
+| `{name.key}` / `{name.k.sk}` | nested dict descent |
+| `{name[0]}` / `{items[2].title}` | list subscript |
+| `{today}` | YYYY-MM-DD (UTC) |
+| `{today-Nd}` / `{today+Nd}` | N days back / forward |
+| `{now}` | ISO-8601 timestamp (UTC) |
+
+Unresolved placeholders raise `TemplateError` at fire time and route
+through `on_failure`. No silent fallbacks — the whole point is to
+surface drift early.
+
+## Storage + integrity
+
+```
+data/contracts/
+  <contract_id>/
+    index.json                     ← version chain (latest first)
+    v1__<hash[:12]>.json           ← frozen body
+    v2__<hash[:12]>.json
+    ...
+data/contract_audit/
+  <contract_id>/
+    <YYYYMMDDTHHMMSSZ>_<uuid>.jsonl   ← per-fire audit trail
+```
+
+The frozen body is written once and never edited in place. Revisions
+produce new version files; old versions remain loadable for audit.
+
+Every load verifies `sha256(canonical_body) == hash`. Any drift
+(manual edit, partial write, hostile tampering) aborts the fire with
+`ContractHashMismatch`.
+
+## Step enforcement guarantee
+
+Once a contract is frozen, the executor walks its steps **literally**:
+
+- Steps **cannot be skipped** — every entry in `reasoning[]` produces
+  a validated output stored in state.
+- Steps **cannot be mocked at fire time** — dry-run uses
+  `mock_inputs` parameter; real fires never substitute mock data.
+- Steps **cannot be discarded** — every step's output is captured in
+  `state[step.id]` and persisted to the audit log.
+- Tool calls **cannot escape the whitelist** — the
+  `contract_step_enforcer` callback (P3+ extension to
+  `plan_step_enforcer`) hard-blocks anything outside `step.tools`.
+- Sub-agent transfers happen **inside** the worker session but never
+  reach the user channel. Only emit adapters touch the outside world.
+- Schema mismatches **retry exactly once** with the validation error
+  as feedback; if still bad, `on_failure` fires — no partial emit.
+
+Step enforcement strictness is captured by `Contract.enforcement` —
+`STRICT` is the only production mode. The worker refuses to fire a
+`PERMISSIVE` contract.
+
+## Coexistence with legacy scheduled jobs
+
+The legacy `schedule_recurring_task` / `schedule_one_off_task` path
+remains operational. Contract jobs use a **different** APScheduler id
+prefix (`contract:<id>` vs `cron_<random>`) and a different fire
+callback (`run_contract_fire` vs `run_scheduled_task`), so the two
+coexist without stepping on each other.
+
+Migration is opt-in, one job at a time:
+
+```
+agent: contract_from_existing("cron_79d58bac")
+   → returns a draft contract spec approximating the legacy job
+agent / user: review, tighten (real inputs, real reasoning, real
+   templates), dry-run, freeze, schedule
+agent: delete_scheduled_task("cron_79d58bac")   ← only after the new
+   contract is firing correctly
+```
+
+No bulk auto-migration. The user keeps full control of when each job
+moves over.
+
+## Failure modes + alerts
+
+`on_failure` defaults to `alert_admin` + `abort=true`:
+
+- Reasoning step exhausts retries → DM the listed admin user IDs with
+  the contract id, the error, and the audit log path. The contract
+  does NOT emit anything.
+- Pre-emit gate fails AND `abort_on_gate_fail=true` → same path.
+- Emit adapter raises → same path.
+- Hash drift between load and execute → same path.
+
+Audit log lives at `data/contract_audit/<id>/<fire_id>.jsonl` and
+captures one event per phase (input fetch, reasoning attempt, gate
+result, emit success/fail, on_failure invocation).
+
+## Worked examples
+
+See `examples/contracts/`:
+
+- `ai_pilot_monday.json` — static recurring (no LLM). Sheet dedup +
+  Slack post + sheet log.
+- `fba_news_digest.json` — one-call reasoning with structured output.
+  Web fetch + graph query + Gemini Flash + slack_post.
+
+The 30-step ASIN audit contract is a follow-up — it requires
+sub-agent transfers within a single reasoning step, which V1 of the
+worker doesn't yet support cleanly. (V1 already executes 0..N
+sequential reasoning steps, so the audit can be expressed as 30
+chained single-step reasoning entries with `entry_agent` set per
+step. Sub-agent transfers WITHIN a step land in V2.)
+
+## Authoring tools — quick reference
+
+All exposed via `ContractToolset` on CoordinatorAgent.
+
+| Tool | Use |
+|---|---|
+| `contract_draft_validate(spec)` | catch schema errors before showing the user |
+| `contract_dry_run(spec, mock_inputs?)` | simulate one fire, return rendered emit args |
+| `contract_freeze(spec)` | persist + hash; refuses non-STRICT |
+| `contract_schedule(id)` | wire to APScheduler (or report on_demand / event) |
+| `contract_unschedule(id)` | remove from APScheduler (body stays on disk) |
+| `contract_revise(id, new_spec)` | freeze a new version with `parent_hash` set |
+| `contract_list()` | every contract on disk + scheduler state |
+| `contract_inspect(id, version?)` | full body for review |
+| `contract_from_existing(job_id)` | draft a spec from a legacy job (migration helper) |
