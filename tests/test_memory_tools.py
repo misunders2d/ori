@@ -62,6 +62,24 @@ def _is_resolve_caller_lookup(query: str) -> bool:
     return "$caller IN coalesce(p.aliases" in query
 
 
+def _is_delete_preview(query: str) -> bool:
+    """True if a query is the Phase-6 delete/merge preview fetch.
+
+    Preview queries pull the node's props + edge count BEFORE the actual
+    destructive op runs. Their distinguishing shape is the `RETURN ... AS
+    props, count(r) AS edge_count` tail.
+    """
+    return ("AS props" in query and "count(r) AS edge_count" in query)
+
+
+def _is_merge_preview(query: str) -> bool:
+    """True if a query is the Phase-6 merge_persons preview fetch."""
+    return (
+        "RETURN canon{.*} AS canonical" in query
+        and "alias{.*} AS alias" in query
+    )
+
+
 def _dispatched_run(record_row=None, resolve_hit=None):
     """A session.run mock that disambiguates between:
     - the resolve-caller lookup → returns `resolve_hit` (None = miss, MERGE then runs)
@@ -74,6 +92,54 @@ def _dispatched_run(record_row=None, resolve_hit=None):
         query = args[0] if args else ""
         r = AsyncMock()
         if _is_resolve_caller_lookup(query):
+            r.single = AsyncMock(return_value=resolve_hit)
+        else:
+            r.single = AsyncMock(return_value=record_row)
+        return r
+    return AsyncMock(side_effect=_run)
+
+
+def _dispatched_run_with_preview(
+    record_row=None,
+    resolve_hit=None,
+    preview_props=None,
+    preview_edges=0,
+    merge_preview=None,
+):
+    """Like `_dispatched_run`, but also recognizes Phase-6 preview queries.
+
+    - Preview fetch (delete_record / delete_person / delete_entity):
+      returns `{"props": preview_props, "edge_count": preview_edges}`.
+    - Merge preview (merge_persons): returns the `merge_preview` dict.
+    - Resolve-caller lookup: returns `resolve_hit`.
+    - Everything else (the actual destructive query): returns `record_row`.
+
+    `preview_props` defaults to a minimal valid dict so the preview path
+    doesn't crash. Pass `None` explicitly to simulate node-not-found.
+    """
+    if preview_props is None:
+        preview_props = {
+            "short_description": "test",
+            "text": "test text",
+            "name": "test",
+            "first_name": "Test",
+            "last_name": "User",
+            "author_user_id": "bob@example.com",
+            "user_ids": [],
+            "entity_type": "concept",
+        }
+
+    async def _run(*args, **kwargs):
+        query = args[0] if args else ""
+        r = AsyncMock()
+        if _is_merge_preview(query):
+            r.single = AsyncMock(return_value=merge_preview)
+        elif _is_delete_preview(query):
+            r.single = AsyncMock(return_value={
+                "props": preview_props,
+                "edge_count": preview_edges,
+            })
+        elif _is_resolve_caller_lookup(query):
             r.single = AsyncMock(return_value=resolve_hit)
         else:
             r.single = AsyncMock(return_value=record_row)
@@ -467,30 +533,39 @@ class TestCypherConstruction:
 
     @pytest.mark.asyncio
     async def test_delete_record_as_admin_uses_label_match(self, patched_driver):
-        async def _run(*args, **kwargs):
-            r = AsyncMock()
-            r.single = AsyncMock(return_value={"deleted": 1})
-            return r
-        patched_driver.run = AsyncMock(side_effect=_run)
+        # Phase 6: confirmed=True bypasses the two-step preview gate so we
+        # can assert the actual DETACH DELETE query shape.
+        patched_driver.run = _dispatched_run_with_preview(
+            record_row={"deleted": 1},
+            resolve_hit={"canonical": "admin@example.com"},
+        )
 
         result = await memory_tools.delete_record(
-            "mem_1", "personal", tool_context=_make_ctx("admin@example.com"),
+            "mem_1", "personal", confirmed=True,
+            tool_context=_make_ctx("admin@example.com"),
         )
         assert result["status"] == "success"
-        # Admin path skips the author_user_id predicate.
-        query = patched_driver.run.await_args_list[0].args[0]
-        assert "author_user_id" not in query
-        assert ":PersonalMemory" in query
-        assert "DETACH DELETE m" in query
+        # Admin path: DETACH DELETE query has no author_user_id predicate
+        # and uses the namespace-scoped Memory label.
+        delete_query = next(
+            (c.args[0] for c in patched_driver.run.await_args_list
+             if "DETACH DELETE m" in c.args[0]),
+            None,
+        )
+        assert delete_query is not None
+        assert "author_user_id" not in delete_query
+        assert ":PersonalMemory" in delete_query
 
     @pytest.mark.asyncio
     async def test_delete_record_as_author_uses_authored_predicate(self, patched_driver):
-        patched_driver.run = _dispatched_run(
-            record_row={"deleted": 1}, resolve_hit={"canonical": "bob@example.com"}
+        patched_driver.run = _dispatched_run_with_preview(
+            record_row={"deleted": 1},
+            resolve_hit={"canonical": "bob@example.com"},
         )
 
         result = await memory_tools.delete_record(
-            "mem_1", "professional", tool_context=_make_ctx("bob@example.com"),
+            "mem_1", "professional", confirmed=True,
+            tool_context=_make_ctx("bob@example.com"),
         )
         assert result["status"] == "success"
         authored_query = next(
@@ -504,17 +579,81 @@ class TestCypherConstruction:
 
     @pytest.mark.asyncio
     async def test_delete_non_author_gets_forbidden(self, patched_driver):
+        # Preview hit (record exists), delete returns 0 (no author match),
+        # ACL gate fires `forbidden`.
+        patched_driver.run = _dispatched_run_with_preview(
+            record_row={"deleted": 0},
+            resolve_hit={"canonical": "bob@example.com"},
+            preview_props={"short_description": "x", "text": "x", "author_user_id": "alice@example.com"},
+        )
+
+        result = await memory_tools.delete_record(
+            "mem_1", "professional", confirmed=True,
+            tool_context=_make_ctx("bob@example.com"),
+        )
+        assert result["status"] == "forbidden"
+        assert "not authored by you" in result["message"]
+
+    # ----------------------------------------------------------------------
+    # Phase 6 confirmation-gate coverage — first-call preview + missing node
+    # ----------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_delete_record_without_confirm_returns_needs_confirmation(
+        self, patched_driver,
+    ):
+        """Default `confirmed=False` returns preview + impact, no delete."""
+        patched_driver.run = _dispatched_run_with_preview(
+            record_row={"deleted": 1},
+            resolve_hit={"canonical": "bob@example.com"},
+            preview_props={
+                "short_description": "Q2 review",
+                "text": "long meeting notes",
+                "author_user_id": "bob@example.com",
+            },
+            preview_edges=3,
+        )
+
+        result = await memory_tools.delete_record(
+            "mem_1", "personal", tool_context=_make_ctx("bob@example.com"),
+        )
+        assert result["status"] == "needs_confirmation"
+        assert result["preview"]["record_id"] == "mem_1"
+        assert result["preview"]["short_description"] == "Q2 review"
+        assert result["impact"]["relationships_to_delete"] == 3
+        # Crucially: no DETACH DELETE query ran.
+        queries = [c.args[0] for c in patched_driver.run.await_args_list]
+        assert not any("DETACH DELETE m" in q for q in queries)
+
+    @pytest.mark.asyncio
+    async def test_delete_record_missing_node_returns_error(self, patched_driver):
+        """Preview misses (None) → tool returns error before any delete attempt."""
+        patched_driver.run = _dispatched_run_with_preview(
+            record_row={"deleted": 0},
+            resolve_hit={"canonical": "bob@example.com"},
+            preview_props=None,  # node not found
+        )
+        # When preview_props is None, the dict shape is still returned but
+        # the function checks for truthy preview row; emulate node-missing
+        # by overriding to return None for the preview itself.
         async def _run(*args, **kwargs):
+            query = args[0] if args else ""
             r = AsyncMock()
-            r.single = AsyncMock(return_value={"deleted": 0})
+            if _is_delete_preview(query):
+                r.single = AsyncMock(return_value=None)
+            elif _is_resolve_caller_lookup(query):
+                r.single = AsyncMock(return_value={"canonical": "bob@example.com"})
+            else:
+                r.single = AsyncMock(return_value={"deleted": 0})
             return r
         patched_driver.run = AsyncMock(side_effect=_run)
 
         result = await memory_tools.delete_record(
-            "mem_1", "professional", tool_context=_make_ctx("bob@example.com"),
+            "mem_nope", "personal", confirmed=True,
+            tool_context=_make_ctx("bob@example.com"),
         )
-        assert result["status"] == "forbidden"
-        assert "not authored by you" in result["message"]
+        assert result["status"] == "error"
+        assert "not found" in result["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -752,14 +891,21 @@ class TestResolveCallerPerson:
 class TestDeletePerson:
     @pytest.mark.asyncio
     async def test_delete_as_author(self, patched_driver):
-        async def _run(*args, **kwargs):
-            r = AsyncMock()
-            r.single = AsyncMock(return_value={"deleted": 1})
-            return r
-        patched_driver.run = AsyncMock(side_effect=_run)
+        patched_driver.run = _dispatched_run_with_preview(
+            record_row={"deleted": 1},
+            resolve_hit={"canonical": "bob@example.com"},
+            preview_props={
+                "first_name": "Alice",
+                "last_name": "Smith",
+                "role": "Engineer",
+                "user_ids": ["alice@example.com"],
+                "author_user_id": "bob@example.com",
+            },
+        )
 
         result = await memory_tools.delete_person(
-            "per_alice", tool_context=_make_ctx("bob@example.com"),
+            "per_alice", confirmed=True,
+            tool_context=_make_ctx("bob@example.com"),
         )
         assert result["status"] == "success"
         assert "per_alice" in result["message"]
@@ -772,28 +918,37 @@ class TestDeletePerson:
 
     @pytest.mark.asyncio
     async def test_delete_non_author_forbidden(self, patched_driver):
-        async def _run(*args, **kwargs):
-            r = AsyncMock()
-            r.single = AsyncMock(return_value={"deleted": 0})
-            return r
-        patched_driver.run = AsyncMock(side_effect=_run)
+        patched_driver.run = _dispatched_run_with_preview(
+            record_row={"deleted": 0},  # delete affected 0 rows → forbidden path
+            resolve_hit={"canonical": "bob@example.com"},
+            preview_props={
+                "first_name": "Alice",
+                "last_name": "Smith",
+                "author_user_id": "someone_else@example.com",
+            },
+        )
 
         result = await memory_tools.delete_person(
-            "per_alice", tool_context=_make_ctx("bob@example.com"),
+            "per_alice", confirmed=True,
+            tool_context=_make_ctx("bob@example.com"),
         )
         assert result["status"] == "forbidden"
         assert "not authored by you" in result["message"]
 
     @pytest.mark.asyncio
     async def test_delete_as_admin_uses_plain_match(self, patched_driver):
-        async def _run(*args, **kwargs):
-            r = AsyncMock()
-            r.single = AsyncMock(return_value={"deleted": 1})
-            return r
-        patched_driver.run = AsyncMock(side_effect=_run)
+        patched_driver.run = _dispatched_run_with_preview(
+            record_row={"deleted": 1},
+            resolve_hit={"canonical": "admin@example.com"},
+            preview_props={
+                "first_name": "Alice", "last_name": "Smith",
+                "author_user_id": "someone_else@example.com",
+            },
+        )
 
         result = await memory_tools.delete_person(
-            "per_alice", tool_context=_make_ctx("admin@example.com"),
+            "per_alice", confirmed=True,
+            tool_context=_make_ctx("admin@example.com"),
         )
         assert result["status"] == "success"
         delete_query = next(
@@ -801,6 +956,55 @@ class TestDeletePerson:
             if "DETACH DELETE p" in c.args[0]
         )
         assert "author_user_id" not in delete_query
+
+    # Phase 6 gate coverage — confirmed=False + missing node ------------------
+
+    @pytest.mark.asyncio
+    async def test_delete_person_without_confirm_returns_needs_confirmation(
+        self, patched_driver,
+    ):
+        patched_driver.run = _dispatched_run_with_preview(
+            record_row={"deleted": 1},
+            resolve_hit={"canonical": "bob@example.com"},
+            preview_props={
+                "first_name": "Alice",
+                "last_name": "Smith",
+                "role": "Engineer",
+                "user_ids": ["alice@example.com"],
+                "author_user_id": "bob@example.com",
+            },
+            preview_edges=4,
+        )
+
+        result = await memory_tools.delete_person(
+            "per_alice", tool_context=_make_ctx("bob@example.com"),
+        )
+        assert result["status"] == "needs_confirmation"
+        assert result["preview"]["person_id"] == "per_alice"
+        assert "Alice Smith" in result["preview"]["full_name"]
+        assert result["impact"]["relationships_to_delete"] == 4
+        # No DETACH DELETE ran.
+        queries = [c.args[0] for c in patched_driver.run.await_args_list]
+        assert not any("DETACH DELETE p" in q for q in queries)
+
+    @pytest.mark.asyncio
+    async def test_delete_person_missing_node_returns_error(self, patched_driver):
+        async def _run(*args, **kwargs):
+            q = args[0] if args else ""
+            r = AsyncMock()
+            if _is_delete_preview(q):
+                r.single = AsyncMock(return_value=None)
+            else:
+                r.single = AsyncMock(return_value={"deleted": 0})
+            return r
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.delete_person(
+            "per_nope", confirmed=True,
+            tool_context=_make_ctx("bob@example.com"),
+        )
+        assert result["status"] == "error"
+        assert "not found" in result["message"]
 
     @pytest.mark.asyncio
     async def test_delete_any_person_admin_only(self, patched_driver):
@@ -847,12 +1051,28 @@ class TestMergePersons:
 
     @pytest.mark.asyncio
     async def test_happy_path(self, patched_driver):
-        # Phase 1 reassign-authored returns moved count.
-        # Phase 1b reassign-involves returns moved count.
-        # Phase 2 finalize returns canonical details.
-        call_seq = iter([
-            {"moved": 3},  # authored
-            {"moved": 1},  # involves
+        # Phase 6 added a preview pass before the merge fires. Sequence:
+        #   0. preview        → canonical + alias props + counts to-move
+        #   1. rewrite_authored → {"moved": 3}
+        #   2. reassign_involves → {"moved": 1}
+        #   3. finalize         → canonical details
+        preview = {
+            "canonical": {
+                "first_name": "Sergey", "last_name": "K",
+                "primary_user_id": "tg_330959414",
+                "aliases": [],
+            },
+            "alias": {
+                "first_name": "Sergey", "last_name": "K",
+                "primary_user_id": "Telegram: 330959414",
+                "aliases": [],
+            },
+            "authored_to_move": 3,
+            "involves_to_move": 1,
+        }
+        non_preview_seq = iter([
+            {"moved": 3},
+            {"moved": 1},
             {
                 "person_id": "per_canon",
                 "primary_user_id": "tg_330959414",
@@ -861,23 +1081,28 @@ class TestMergePersons:
         ])
 
         async def _run(*args, **kwargs):
+            q = args[0] if args else ""
             r = AsyncMock()
-            try:
-                r.single = AsyncMock(return_value=next(call_seq))
-            except StopIteration:
-                r.single = AsyncMock(return_value=None)
+            if _is_merge_preview(q):
+                r.single = AsyncMock(return_value=preview)
+            else:
+                try:
+                    r.single = AsyncMock(return_value=next(non_preview_seq))
+                except StopIteration:
+                    r.single = AsyncMock(return_value=None)
             return r
 
         patched_driver.run = AsyncMock(side_effect=_run)
 
         result = await memory_tools.merge_persons(
-            "per_canon", "per_alias", tool_context=_make_ctx("admin@example.com"),
+            "per_canon", "per_alias", confirmed=True,
+            tool_context=_make_ctx("admin@example.com"),
         )
         assert result["status"] == "success"
         assert result["authored_records_rewritten"] == 3
         assert result["involves_edges_moved"] == 1
         assert "Telegram: 330959414" in result["aliases"]
-        # All three phases ran.
+        # All three destructive phases ran.
         queries = [c.args[0] for c in patched_driver.run.await_args_list]
         assert any(
             "SET t.author_user_id = canon.primary_user_id" in q for q in queries
@@ -886,8 +1111,51 @@ class TestMergePersons:
         assert any("DETACH DELETE alias" in q for q in queries)
 
     @pytest.mark.asyncio
+    async def test_merge_without_confirm_returns_needs_confirmation(
+        self, patched_driver,
+    ):
+        """Default confirmed=False returns the preview + impact only."""
+        preview = {
+            "canonical": {
+                "first_name": "Sergey", "last_name": "K",
+                "primary_user_id": "tg_330959414",
+                "aliases": [],
+            },
+            "alias": {
+                "first_name": "Sergey", "last_name": "K",
+                "primary_user_id": "Telegram: 330959414",
+                "aliases": [],
+            },
+            "authored_to_move": 5,
+            "involves_to_move": 2,
+        }
+
+        async def _run(*args, **kwargs):
+            q = args[0] if args else ""
+            r = AsyncMock()
+            if _is_merge_preview(q):
+                r.single = AsyncMock(return_value=preview)
+            else:
+                # Should never reach the destructive queries.
+                r.single = AsyncMock(return_value={"moved": -1})
+            return r
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.merge_persons(
+            "per_canon", "per_alias",
+            tool_context=_make_ctx("admin@example.com"),
+        )
+        assert result["status"] == "needs_confirmation"
+        assert result["preview"]["canonical"]["person_id"] == "per_canon"
+        assert result["preview"]["alias"]["person_id"] == "per_alias"
+        assert result["impact"]["authored_records_to_move"] == 5
+        assert result["impact"]["involves_edges_to_move"] == 2
+        queries = [c.args[0] for c in patched_driver.run.await_args_list]
+        assert not any("DETACH DELETE alias" in q for q in queries)
+
+    @pytest.mark.asyncio
     async def test_canonical_not_found(self, patched_driver):
-        # Phase 1 finds no canonical/alias pair → single() returns None.
+        # Phase 6: preview returns None → tool reports not-found.
         async def _run(*args, **kwargs):
             r = AsyncMock()
             r.single = AsyncMock(return_value=None)
@@ -895,7 +1163,8 @@ class TestMergePersons:
         patched_driver.run = AsyncMock(side_effect=_run)
 
         result = await memory_tools.merge_persons(
-            "per_missing", "per_alias", tool_context=_make_ctx("admin@example.com"),
+            "per_missing", "per_alias", confirmed=True,
+            tool_context=_make_ctx("admin@example.com"),
         )
         assert result["status"] == "error"
         assert "not found" in result["message"]
@@ -1660,28 +1929,42 @@ class TestUpdateEntity:
 class TestDeleteEntity:
     @pytest.mark.asyncio
     async def test_admin_plain_match(self, patched_driver):
-        async def _run(*args, **kwargs):
-            r = AsyncMock()
-            r.single = AsyncMock(return_value={"deleted": 1})
-            return r
-        patched_driver.run = AsyncMock(side_effect=_run)
+        patched_driver.run = _dispatched_run_with_preview(
+            record_row={"deleted": 1},
+            resolve_hit={"canonical": "admin@example.com"},
+            preview_props={
+                "name": "Mellanni",
+                "entity_type": "brand",
+                "description": "an Amazon brand",
+                "author_user_id": "someone_else@example.com",
+            },
+        )
 
         result = await memory_tools.delete_entity(
-            "ent_x", tool_context=_make_ctx("admin@example.com"),
+            "ent_x", confirmed=True,
+            tool_context=_make_ctx("admin@example.com"),
         )
         assert result["status"] == "success"
-        delete_q = patched_driver.run.await_args_list[0].args[0]
+        delete_q = next(
+            q for q in (c.args[0] for c in patched_driver.run.await_args_list)
+            if "DETACH DELETE e" in q
+        )
         assert "author_user_id" not in delete_q
-        assert "DETACH DELETE e" in delete_q
 
     @pytest.mark.asyncio
     async def test_author_path_gated(self, patched_driver):
-        patched_driver.run = _dispatched_run(
+        patched_driver.run = _dispatched_run_with_preview(
             record_row={"deleted": 1},
             resolve_hit={"canonical": "bob@example.com"},
+            preview_props={
+                "name": "Mellanni",
+                "entity_type": "brand",
+                "author_user_id": "bob@example.com",
+            },
         )
         result = await memory_tools.delete_entity(
-            "ent_x", tool_context=_make_ctx("bob@example.com"),
+            "ent_x", confirmed=True,
+            tool_context=_make_ctx("bob@example.com"),
         )
         assert result["status"] == "success"
         del_q = next(
@@ -1689,6 +1972,54 @@ class TestDeleteEntity:
             if "DETACH DELETE e" in q
         )
         assert "e.author_user_id = $caller_id" in del_q
+
+    # Phase 6 gate coverage ---------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_delete_entity_without_confirm_returns_needs_confirmation(
+        self, patched_driver,
+    ):
+        patched_driver.run = _dispatched_run_with_preview(
+            record_row={"deleted": 1},
+            resolve_hit={"canonical": "bob@example.com"},
+            preview_props={
+                "name": "Mellanni",
+                "entity_type": "brand",
+                "description": "an Amazon brand",
+                "author_user_id": "bob@example.com",
+            },
+            preview_edges=7,
+        )
+
+        result = await memory_tools.delete_entity(
+            "ent_x", tool_context=_make_ctx("bob@example.com"),
+        )
+        assert result["status"] == "needs_confirmation"
+        assert result["preview"]["entity_id"] == "ent_x"
+        assert result["preview"]["name"] == "Mellanni"
+        assert result["preview"]["entity_type"] == "brand"
+        assert result["impact"]["relationships_to_delete"] == 7
+        queries = [c.args[0] for c in patched_driver.run.await_args_list]
+        assert not any("DETACH DELETE e" in q for q in queries)
+
+    @pytest.mark.asyncio
+    async def test_delete_entity_missing_node_returns_error(self, patched_driver):
+        async def _run(*args, **kwargs):
+            q = args[0] if args else ""
+            r = AsyncMock()
+            if _is_delete_preview(q):
+                r.single = AsyncMock(return_value=None)
+            else:
+                r.single = AsyncMock(return_value={"deleted": 0})
+            return r
+        patched_driver.run = AsyncMock(side_effect=_run)
+
+        result = await memory_tools.delete_entity(
+            "ent_nope", confirmed=True,
+            tool_context=_make_ctx("bob@example.com"),
+        )
+        assert result["status"] == "error"
+        assert "not found" in result["message"]
 
 
 class TestRelateEntities:

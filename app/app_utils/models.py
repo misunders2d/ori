@@ -23,7 +23,14 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 MODEL_DEFAULTS: dict[str, str] = {
     "CoordinatorAgent":         "google/gemini-3-flash-preview",
-    "DeveloperAgent":           "google/gemini-3-flash-preview",
+    # Self-evolution is irreversible code-modifying-code — pay for the
+    # safer answer by default. Opus 4.7 leads MCP-Atlas (multi-turn
+    # tool-calling) and cut multi-step task abandonment ~60% vs 4.6 in
+    # Anthropic's internal data. Routed via OpenRouter so a single
+    # OPENROUTER_API_KEY in vault covers it (no separate Anthropic key
+    # or Vertex Model Garden setup required). Hot-swap is wired (see
+    # docs/HOT_SWAP.md) — switch back to Flash anytime with `/models set`.
+    "DeveloperAgent":           "openrouter/anthropic/claude-opus-4.7",
     "KnowledgeAgent":           "google/gemini-3-flash-preview",
     "ClickUpAgent":             "google/gemini-3-flash-preview",
     "AmazonHeadAgent":          "google/gemini-3-flash-preview",

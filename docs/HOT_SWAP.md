@@ -13,7 +13,7 @@ A component is a named slot that resolves to a model string. There are 15 today 
 | Component | Default |
 |---|---|
 | `CoordinatorAgent` | `google/gemini-3-flash-preview` |
-| `DeveloperAgent` | `google/gemini-3-flash-preview` |
+| `DeveloperAgent` | `openrouter/anthropic/claude-opus-4.7` |
 | `KnowledgeAgent` | `google/gemini-3-flash-preview` |
 | `ClickUpAgent` | `google/gemini-3-flash-preview` |
 | `AmazonHeadAgent` | `google/gemini-3-flash-preview` |

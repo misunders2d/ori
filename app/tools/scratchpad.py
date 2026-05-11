@@ -40,7 +40,13 @@ def _sanitize_name(name: str) -> str:
     return "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
 
 
-def _sanitize_owner(owner: str) -> str:
+def _sanitize_owner(owner) -> str:
+    # Tolerate non-string inputs gracefully. Mocked tool_contexts in tests
+    # have `_invocation_context.agent.name` return a `MagicMock`, not a
+    # str — without this guard the call to `.strip()` raises and breaks
+    # every scratchpad write that flows through `_detect_owner`.
+    if not isinstance(owner, str):
+        return ""
     return _OWNER_SAFE.sub("_", owner.strip()) if owner else ""
 
 
