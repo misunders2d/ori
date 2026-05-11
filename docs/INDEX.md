@@ -33,13 +33,13 @@ Read this **before** adding new code — most things you'd build already exist.
 - **ClickUpAgent** (Agent) — `app/sub_agents/clickup_agent.py:89`
   - ClickUp task management sub-agent.
 
-- **CoordinatorAgent** (Agent) — `app/sub_agents/coordinator_agent.py:53`
+- **CoordinatorAgent** (Agent) — `app/sub_agents/coordinator_agent.py:54`
 
 - **DeveloperAgent** (Agent) — `app/sub_agents/developer_agent.py:124`
 
 - **KnowledgeAgent** (Agent) — `app/sub_agents/knowledge_agent.py:30`
 
-## Tools (223 public functions across 39 files)
+## Tools (224 public functions across 39 files)
 
 
 ### `app/tools/a2a.py`
@@ -292,12 +292,13 @@ Structured plan-and-execute system for complex multi-step tasks.
 
 - `plan_has_pending_steps` (line 47) — True if there's an active plan for this session with steps not yet done.
 - `seed_plan` (line 60) — Programmatically populate a plan in storage — no LLM, no tool_context.
-- `create_plan` (line 86) — Create a structured execution plan for a complex task.
-- `get_next_step` (line 141) — Get the next pending step in the active plan.
-- `complete_step` (line 190) — Mark the current step as done and record its result.
-- `get_plan_status` (line 250) — Show the full plan with current progress and checkboxes.
-- `abandon_plan` (line 283) — Abandon the current active plan. Use when the task is no longer needed.
-- `get_active_plan_context` (line 307) — Called by the before_model_callback to inject plan context.
+- `create_plan` (line 122) — Create a structured execution plan for a complex task.
+- `get_next_step` (line 192) — Get the next pending step in the active plan.
+- `complete_step` (line 241) — Mark the current step as done and record its result.
+- `get_plan_status` (line 313) — Show the full plan with current progress and checkboxes.
+- `abandon_plan` (line 346) — Abandon the current active plan. Use when the task is no longer needed.
+- `get_active_plan_context` (line 370) — Called by the before_model_callback to inject plan context.
+- `get_current_step_constraints` (line 404) — Return the active step's constraints, or None if no plan / no constraints.
 
 ### `app/tools/preferences.py`
 User preferences storage.
@@ -474,7 +475,7 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
   - AI image generation and editing — text-to-image, image-to-image, prompt enhancement.
   - tools: `enhance_image_prompt`, `generate_image`
 
-## Callbacks (9)
+## Callbacks (10)
 
 
 - `admin_tool_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:93` — Runtime Guardrail: Intercepts highly privileged tool calls before execution.
@@ -484,8 +485,9 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
 - `verify_retry_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:583` — After-tool callback: counts evolution_verify_sandbox failures in session state.
 - `tool_output_spillover_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:684` — After-tool callback: spill oversized outputs to scratchpad.
 - `plan_enforcer` (before_model | state) — `app/callbacks/guardrails.py:767` — Injects active plan context into the model prompt to enforce step-by-step execution.
-- `async state_setter` (before_model | state) — `app/callbacks/guardrails.py:794` — Sets initial fundamental session state keys to prevent KeyErrors during prompt evaluation.
-- `a2a_privacy_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:862` — Deterministic secret-matching guardrail for A2A tools.
+- `plan_step_enforcer` (before_tool | after_tool) — `app/callbacks/guardrails.py:822` — before_tool guard: block tool calls outside the active step's allowed_tools.
+- `async state_setter` (before_model | state) — `app/callbacks/guardrails.py:885` — Sets initial fundamental session state keys to prevent KeyErrors during prompt evaluation.
+- `a2a_privacy_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:953` — Deterministic secret-matching guardrail for A2A tools.
 
 ## Skills (18)
 

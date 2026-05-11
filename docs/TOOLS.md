@@ -257,12 +257,13 @@ Structured plan-and-execute system for complex multi-step tasks.
 
 - `plan_has_pending_steps` (line 47) — True if there's an active plan for this session with steps not yet done.
 - `seed_plan` (line 60) — Programmatically populate a plan in storage — no LLM, no tool_context.
-- `create_plan` (line 86) — Create a structured execution plan for a complex task.
-- `get_next_step` (line 141) — Get the next pending step in the active plan.
-- `complete_step` (line 190) — Mark the current step as done and record its result.
-- `get_plan_status` (line 250) — Show the full plan with current progress and checkboxes.
-- `abandon_plan` (line 283) — Abandon the current active plan. Use when the task is no longer needed.
-- `get_active_plan_context` (line 307) — Called by the before_model_callback to inject plan context.
+- `create_plan` (line 122) — Create a structured execution plan for a complex task.
+- `get_next_step` (line 192) — Get the next pending step in the active plan.
+- `complete_step` (line 241) — Mark the current step as done and record its result.
+- `get_plan_status` (line 313) — Show the full plan with current progress and checkboxes.
+- `abandon_plan` (line 346) — Abandon the current active plan. Use when the task is no longer needed.
+- `get_active_plan_context` (line 370) — Called by the before_model_callback to inject plan context.
+- `get_current_step_constraints` (line 404) — Return the active step's constraints, or None if no plan / no constraints.
 
 ## `app/tools/preferences.py`
 User preferences storage.

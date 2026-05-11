@@ -14,5 +14,6 @@ Module-level callbacks. Hook is inferred from the function signature.
 - `verify_retry_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:583` — After-tool callback: counts evolution_verify_sandbox failures in session state.
 - `tool_output_spillover_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:684` — After-tool callback: spill oversized outputs to scratchpad.
 - `plan_enforcer` (before_model | state) — `app/callbacks/guardrails.py:767` — Injects active plan context into the model prompt to enforce step-by-step execution.
-- `async state_setter` (before_model | state) — `app/callbacks/guardrails.py:794` — Sets initial fundamental session state keys to prevent KeyErrors during prompt evaluation.
-- `a2a_privacy_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:862` — Deterministic secret-matching guardrail for A2A tools.
+- `plan_step_enforcer` (before_tool | after_tool) — `app/callbacks/guardrails.py:822` — before_tool guard: block tool calls outside the active step's allowed_tools.
+- `async state_setter` (before_model | state) — `app/callbacks/guardrails.py:885` — Sets initial fundamental session state keys to prevent KeyErrors during prompt evaluation.
+- `a2a_privacy_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails.py:953` — Deterministic secret-matching guardrail for A2A tools.

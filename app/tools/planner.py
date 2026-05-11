@@ -57,7 +57,12 @@ def plan_has_pending_steps(session_id: str) -> bool:
     return any(s.get("status") != "done" for s in plan.get("steps", []))
 
 
-def seed_plan(session_id: str, task: str, steps: list[str]) -> None:
+def seed_plan(
+    session_id: str,
+    task: str,
+    steps: list[str],
+    step_constraints: list[dict] | None = None,
+) -> None:
     """Programmatically populate a plan in storage — no LLM, no tool_context.
 
     Used by the scheduler at fire time when a task carries an enforced step list.
@@ -67,6 +72,12 @@ def seed_plan(session_id: str, task: str, steps: list[str]) -> None:
 
     Overwrites any existing plan for the session (scheduler sessions are ephemeral,
     so collisions are unexpected; if one occurs, the caller's intent wins).
+
+    `step_constraints` (Phase 3 hard enforcement): optional list parallel to
+    `steps`, where each dict can include `allowed_tools` (glob patterns) and
+    `must_call` (tools that must be invoked before `complete_step`). Missing or
+    empty constraints leave the step unconstrained (soft enforcement only,
+    like the legacy behaviour).
     """
     if not steps:
         return
@@ -76,17 +87,43 @@ def seed_plan(session_id: str, task: str, steps: list[str]) -> None:
         "created_at": time.time(),
         "current_step": 0,
         "steps": [
-            {"id": i, "description": desc, "status": "pending", "result": None}
+            {
+                "id": i,
+                "description": desc,
+                "status": "pending",
+                "result": None,
+                "allowed_tools": _coerce_constraints(step_constraints, i, "allowed_tools"),
+                "must_call": _coerce_constraints(step_constraints, i, "must_call"),
+            }
             for i, desc in enumerate(steps)
         ],
     }
     _save_plan(session_id, plan)
 
 
+def _coerce_constraints(
+    step_constraints: list[dict] | None, index: int, key: str
+) -> list[str]:
+    """Pull a list[str] field from a parallel constraints array.
+
+    Returns [] when constraints is None, the index is out of range, the
+    field is missing, or the value isn't a list of strings. Defensive
+    because plan files may have been written before constraints existed.
+    """
+    if not step_constraints or index >= len(step_constraints):
+        return []
+    entry = step_constraints[index] or {}
+    raw = entry.get(key) if isinstance(entry, dict) else None
+    if isinstance(raw, list):
+        return [str(x) for x in raw if isinstance(x, (str, int))]
+    return []
+
+
 def create_plan(
     task_description: str,
     steps: list[str],
     tool_context: ToolContext,
+    step_constraints: list[dict] | None = None,
 ) -> dict:
     """Create a structured execution plan for a complex task.
 
@@ -96,6 +133,13 @@ def create_plan(
     Args:
         task_description: High-level description of what you're trying to accomplish.
         steps: Ordered list of step descriptions (e.g. ["Fetch sales data from BigQuery", "Generate chart", "Post to Slack"]).
+        step_constraints: Optional parallel list of per-step constraint dicts.
+            Each dict may contain:
+              - `allowed_tools`: list of glob patterns whitelisting tool names
+                for this step (e.g. `["bigquery_*", "scratchpad_*"]`).
+                Omit / empty → unconstrained (soft enforcement only).
+              - `must_call`: list of tool names that must be invoked before
+                `complete_step` is allowed (reserved — not enforced in Phase 3).
 
     Returns:
         dict with the plan overview.
@@ -121,7 +165,14 @@ def create_plan(
         "created_at": time.time(),
         "current_step": 0,
         "steps": [
-            {"id": i, "description": desc, "status": "pending", "result": None}
+            {
+                "id": i,
+                "description": desc,
+                "status": "pending",
+                "result": None,
+                "allowed_tools": _coerce_constraints(step_constraints, i, "allowed_tools"),
+                "must_call": _coerce_constraints(step_constraints, i, "must_call"),
+            }
             for i, desc in enumerate(steps)
         ],
     }
@@ -195,10 +246,22 @@ def complete_step(
 
     Args:
         result: Brief summary of what was accomplished in this step.
+            Must be a non-empty string — empty results cause silent plan
+            drift where the agent reports "done" without explaining what
+            actually happened.
 
     Returns:
         dict with updated progress and the next step preview.
     """
+    if not isinstance(result, str) or not result.strip():
+        return {
+            "status": "error",
+            "message": (
+                "`result` must be a non-empty string. Summarize what you did "
+                "this step (1–2 sentences). Empty results break plan auditability."
+            ),
+        }
+
     session_id = _get_session_id(tool_context)
     plan = _load_plan(session_id)
 
@@ -336,3 +399,41 @@ def get_active_plan_context(session_id: str) -> str | None:
             f"Progress: {completed}/{total}. "
             "No step in progress. Call get_next_step to continue."
         )
+
+
+def get_current_step_constraints(session_id: str) -> dict | None:
+    """Return the active step's constraints, or None if no plan / no constraints.
+
+    Used by `plan_step_enforcer` (before_tool callback). Returns the dict
+    with `allowed_tools` and `must_call` lists for the in_progress step.
+    Returns None when:
+      - No plan exists for the session.
+      - Plan is not `active`.
+      - No step is `in_progress`.
+      - The current step has empty `allowed_tools` AND `must_call`
+        (= unconstrained, soft-enforce only).
+
+    Soft-enforce fallback: when this returns None, the legacy
+    prompt-injection-only `plan_enforcer` is the only guard left, and
+    every tool call passes the hard gate.
+    """
+    plan = _load_plan(session_id)
+    if not plan or plan.get("status") != "active":
+        return None
+    current = None
+    for s in plan["steps"]:
+        if s.get("status") == "in_progress":
+            current = s
+            break
+    if not current:
+        return None
+    allowed = current.get("allowed_tools") or []
+    must = current.get("must_call") or []
+    if not allowed and not must:
+        return None
+    return {
+        "step_id": current.get("id"),
+        "description": current.get("description") or "",
+        "allowed_tools": list(allowed),
+        "must_call": list(must),
+    }

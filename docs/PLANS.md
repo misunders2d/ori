@@ -47,25 +47,37 @@ A plan is wrong (overhead, drift risk) when the task is a single tool call or a 
 
 Plans are session-scoped — they go away when the session is reset. The scheduler uses fresh session IDs for fired tasks, so there's no collision between a user's interactive session and a background job.
 
-### Phase 3 schema extension (hard enforcement)
+### Schema extension (hard enforcement)
 
-After Phase 3 lands, each step grows two optional fields used by `plan_step_enforcer`:
+Each step grows two optional fields used by `plan_step_enforcer`:
 
 ```json
 {
   "id": 0,
   "description": "Run BigQuery: revenue by category, Q2 2026",
   "status": "pending",
-  "allowed_tools": ["bigquery_*", "scratchpad_*"],
-  "must_call": ["mark_step_done"],
+  "allowed_tools": ["bigquery_*", "scratchpad_write"],
+  "must_call": [],
   "result": null
 }
 ```
 
-- `allowed_tools` — glob patterns (`bigquery_*`, `keepa_*`, `*`); the agent can only call tools matching one of them while this step is active.
-- `must_call` — tool the agent must invoke before advancing.
+- `allowed_tools` — list of fnmatch glob patterns (`bigquery_*`, `keepa_*`, `*`). When non-empty, only tool names matching at least one pattern are permitted during this step. Empty list → unconstrained step (soft enforcement only, like the legacy behaviour).
+- `must_call` — reserved for future use. Will track tools the agent must invoke before `complete_step` is allowed.
 
-If both fields are omitted, the step is unconstrained (soft enforcement only, like today).
+Pass via `step_constraints` argument to `create_plan` or `seed_plan`:
+
+```python
+seed_plan(
+    session_id,
+    task="Quarterly review",
+    steps=["fetch sales", "summarize"],
+    step_constraints=[
+        {"allowed_tools": ["bigquery_*"]},
+        {"allowed_tools": ["scratchpad_write"]},
+    ],
+)
+```
 
 ---
 
@@ -106,17 +118,27 @@ When the last step is marked done, `status` flips to `completed`. The file stays
 
 The LLM **can** still call any tool it wants and ignore the injected context. It's a soft fence. In practice the well-trained models follow it; jailbroken or off-script ones don't.
 
-### Phase 3 (hard, callback block)
+### Hard (callback block)
 
-A new `plan_step_enforcer` callback layered on top of `plan_enforcer`:
+`plan_step_enforcer` (`app/callbacks/guardrails.py`) layered on top of `plan_enforcer` — registered on Coordinator's `before_tool_callback`. It runs **first** so out-of-plan calls are rejected before admin/A2A guards do any work.
 
-1. Same lookup.
-2. For each tool call in `llm_request`, check `tool_name` against `current_step.allowed_tools` glob list.
-3. Mismatch → return a synthetic `LlmResponse` that says: "Tool `<name>` is not allowed for step `<id>`. Allowed: `[...]`. Either complete the current step (`mark_step_done`) or abandon the plan."
+1. Looks up `get_current_step_constraints(session_id)`.
+2. Pass-through cases: no plan, no in-progress step, empty `allowed_tools`.
+3. For everything else, `fnmatch`-match `tool.name` against `allowed_tools`.
+4. Mismatch → return `{"status": "error", "message": "Plan-step guardrail: tool `X` is not allowed for step Y (...). Allowed: [...]. Complete the current step (`complete_step`) or abandon the plan."}` — the agent sees this as a tool failure and adapts.
 
-Effect: the LLM physically cannot execute an off-plan tool while the plan is active. The model has to either continue the plan, call the step-completion tool, or abandon.
+Always-exempt tools (allowed regardless of constraints) — without these the agent deadlocks:
+- Plan lifecycle: `create_plan`, `get_next_step`, `complete_step`, `get_plan_status`, `abandon_plan`.
+- Working memory: `scratchpad_read`, `scratchpad_write`, `scratchpad_list`, `scratchpad_replace`, `scratchpad_clear`.
+- ADK primitive: `transfer_to_agent`.
 
-When `allowed_tools` is empty or absent on a step, enforcement falls back to today's soft behaviour — useful for free-form discovery steps where the agent legitimately needs latitude.
+Effect: the LLM cannot execute an off-plan tool while a constrained step is active. The model has to either complete the current step, abandon the plan, or work within the whitelist.
+
+When `allowed_tools` is empty or absent on a step, enforcement falls back to the soft behaviour — useful for free-form discovery steps where the agent legitimately needs latitude.
+
+### `complete_step` validation
+
+`complete_step` rejects empty / whitespace-only `result` strings with `{"status": "error", "message": "result must be a non-empty string. ..."}`. Empty results were a silent-drift vector — the agent would mark "done" without explaining what it did, breaking auditability.
 
 ---
 
