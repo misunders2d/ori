@@ -92,6 +92,12 @@ def trigger_rollback(tool_context: ToolContext) -> dict:
     If "reset" is ambiguous, ask which reset target the user means first.
     """
     _write_exit_signal(EXIT_CODE_ROLLBACK)
+    # Lazy import to avoid circular dependency at module load.
+    try:
+        from app.tools.evolution import _audit_actor, _evolution_audit
+        _evolution_audit("rollback", _audit_actor(tool_context), "ok")
+    except Exception:
+        pass
     return {"status": "success", "message": "Rollback signal dispatched. The system will shut down cleanly after this response is delivered."}
 
 def session_refresh(mode: str, tool_context: ToolContext) -> dict:

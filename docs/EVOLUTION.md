@@ -148,7 +148,7 @@ Tools:
 - `evolution_share(slug)` — package a bundle for A2A delivery.
 - `evolution_import(friend_nickname, slug)` — fetch a bundle from a friend; **does not apply** — drops it in the sandbox for verification.
 
-Today `evolutions/` contains only `.gitkeep`; populating it is part of Phase 5 of the hardening plan.
+`evolutions/README.md` documents the bundle layout. Orphan detection: directories lacking `EVOLUTION.md` are surfaced as warnings during every `scripts/gen_docs.py` run.
 
 ---
 
@@ -179,3 +179,37 @@ Today `evolutions/` contains only `.gitkeep`; populating it is part of Phase 5 o
 | Restart loop after commit | Container restarts but immediately exits again — usually a syntax error escaped verification. Use `trigger_rollback` from the supervisor (or `git revert <commit>` on the host). |
 | Marker stale (`> 24 h`) but sandbox still present | The cycle is considered abandoned. Next `evolution_stage_change` wipes it implicitly via `_sandbox_cycle_begin`. |
 | Sandbox dir got hand-edited | Run `evolution_discard_sandbox` to nuke + reset. Manual edits inside `data/sandbox/` won't survive the next stage anyway. |
+| "Where's the audit trail?" | `tail -n 200 data/evolution_audit.jsonl \| jq` — one JSON line per stage / verify / commit / discard / rollback event. |
+
+## 11. Audit log (Phase 5)
+
+`data/evolution_audit.jsonl` (append-only, JSONL). Every state-changing call writes one event:
+
+```jsonl
+{"ts":"2026-05-11T17:42:11.301Z","phase":"stage","actor":"misunders2d","status":"ok","files":["app/foo.py"]}
+{"ts":"2026-05-11T17:42:18.044Z","phase":"verify","actor":"misunders2d","status":"ok","check":"syntax"}
+{"ts":"2026-05-11T17:42:55.660Z","phase":"verify","actor":"misunders2d","status":"ok","check":"pytest","digest":"abc..."}
+{"ts":"2026-05-11T17:43:02.880Z","phase":"commit","actor":"misunders2d","status":"ok","files":["app/foo.py"],"digest":"abc...","mode":"remote","message":"fix(foo): off-by-one"}
+```
+
+| `phase` | When written | Useful fields |
+|---|---|---|
+| `stage` | After `evolution_stage_change` writes the file | `files` |
+| `verify` | After `evolution_verify_sandbox` finishes | `check`, `digest`, `error` |
+| `commit` | After `evolution_commit_and_push` completes | `files`, `deleted`, `digest`, `mode`, `message` |
+| `discard` | After `evolution_discard_sandbox` (or noop on empty sandbox) | none extra |
+| `rollback` | After `trigger_rollback` writes the exit signal | none extra |
+
+Failures land as `status: "fail"` with an `error` field (last 300 chars of stderr for verify, exception string for stage/commit). The writer itself swallows IO errors so a borked log never blocks an evolution.
+
+## 12. Don't run `tests/test_force_sync.py` from pytest discovery
+
+The legacy `tests/test_force_sync.py` hardcoded `git reset --hard origin/master` and `git clean -fd`. Marker-only isolation (`@pytest.mark.infra`) isn't enough — pytest tolerates unknown markers and runs them anyway. On 2026-05-11 a `pytest tests/` invocation swept it up and wiped a worktree mid-development.
+
+Phase 5 fixes:
+
+1. `pyproject.toml` registers `infra` as a known marker AND adds `--strict-markers` so unregistered markers fail loud rather than silently running.
+2. The test body is gated behind `ORI_ALLOW_DESTRUCTIVE_SYNC=1`. Without that env var, it `pytest.skip`s immediately.
+3. The body is now worktree-aware: it resolves the current branch + upstream via `git rev-parse` and resets to *that* upstream, never `origin/master`. A detached HEAD or branch without upstream is an explicit skip, not a silent disaster.
+
+When you legitimately need force-sync, the canonical incantation lives in the test's docstring — run the git commands directly from a shell, not via the test runner.

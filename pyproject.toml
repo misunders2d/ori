@@ -62,6 +62,16 @@ migration = [
     "pinecone[asyncio]>=7.0.0",
 ]
 
+[tool.pytest.ini_options]
+# `infra` was being treated as advisory because pytest tolerates unknown
+# markers by default — `test_force_sync` slipped through pytest tests/
+# discovery and wiped a worktree on 2026-05-11. Register the marker AND
+# fail on unknowns so the same footgun stays disarmed for future tests.
+markers = [
+    "infra: destructive or environment-sensitive — skipped from default runs",
+]
+addopts = "--strict-markers"
+
 [tool.ruff]
 line-length = 88
 target-version = "py310"

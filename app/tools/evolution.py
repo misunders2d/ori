@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 import os
 import shutil
@@ -6,7 +7,7 @@ import subprocess
 import sys
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from google.adk.tools.tool_context import ToolContext
@@ -111,6 +112,68 @@ def _sandbox_digest(sandbox_dir: str) -> str:
             for chunk in iter(lambda: f.read(1024 * 1024), b""):
                 digest.update(chunk)
     return digest.hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Audit log (Phase 5.1)
+# ---------------------------------------------------------------------------
+# Append-only JSONL at data/evolution_audit.jsonl. One line per
+# stage/verify/commit/discard/rollback event. JSONL keeps the log
+# greppable + tailable without a schema migration; failures swallow
+# (with a warning) so audit issues never block an evolution itself.
+
+_EVOLUTION_AUDIT_PATH = os.path.abspath("./data/evolution_audit.jsonl")
+
+
+def _evolution_audit(
+    phase: str,
+    actor: str,
+    status: str,
+    *,
+    files: list[str] | None = None,
+    digest: str | None = None,
+    error: str | None = None,
+    **extra,
+) -> None:
+    """Append one event to data/evolution_audit.jsonl.
+
+    `phase` ∈ {stage, verify, commit, discard, rollback}.
+    `status` ∈ {ok, fail, noop}.
+    """
+    event = {
+        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "phase": phase,
+        "actor": actor or "",
+        "status": status,
+    }
+    if files is not None:
+        event["files"] = files
+    if digest is not None:
+        event["digest"] = digest
+    if error is not None:
+        event["error"] = error
+    if extra:
+        event.update(extra)
+    try:
+        os.makedirs(os.path.dirname(_EVOLUTION_AUDIT_PATH), exist_ok=True)
+        with open(_EVOLUTION_AUDIT_PATH, "a") as f:
+            f.write(json.dumps(event, default=str) + "\n")
+    except Exception as e:
+        logger.warning("evolution_audit write failed (%s): %s", phase, e)
+
+
+def _audit_actor(tool_context: ToolContext | None) -> str:
+    """Best-effort actor extraction from the tool_context for audit logs."""
+    if not tool_context:
+        return ""
+    state = getattr(tool_context, "state", None)
+    if state is None:
+        return ""
+    try:
+        data = state.to_dict() if hasattr(state, "to_dict") else dict(state)
+    except Exception:
+        return ""
+    return str(data.get("user_id") or "")
 
 
 
@@ -227,11 +290,18 @@ def evolution_stage_change(
     try:
         with open(resolved, "w") as f:
             f.write(new_content)
+        _evolution_audit(
+            "stage", _audit_actor(tool_context), "ok", files=[file_path],
+        )
         return {
             "status": "success",
             "message": f"Staged changes for {file_path} in sandbox.",
         }
     except Exception as e:
+        _evolution_audit(
+            "stage", _audit_actor(tool_context), "fail",
+            files=[file_path], error=str(e),
+        )
         return {"status": "error", "message": str(e)}
 
 
@@ -252,6 +322,7 @@ def evolution_discard_sandbox(tool_context: ToolContext) -> dict:
     """
     sandbox_dir = os.path.abspath("./data/sandbox")
     if not os.path.exists(sandbox_dir):
+        _evolution_audit("discard", _audit_actor(tool_context), "noop")
         return {"status": "noop", "message": "No sandbox to discard."}
 
     _sandbox_cycle_end(sandbox_dir)
@@ -261,6 +332,7 @@ def evolution_discard_sandbox(tool_context: ToolContext) -> dict:
     except Exception:
         pass
 
+    _evolution_audit("discard", _audit_actor(tool_context), "ok")
     return {"status": "success", "message": "Sandbox cycle discarded. Staged files and marker removed."}
 
 
@@ -462,10 +534,14 @@ def evolution_verify_sandbox(
             return {"status": "error", "message": f"Unknown check type: '{check}'. Use 'syntax', 'pytest', or 'import'."}
 
         if result.returncode == 0:
+            digest = ""
             if check == "pytest":
-                tool_context.state["evolution_verified_digest"] = _sandbox_digest(
-                    sandbox_dir
-                )
+                digest = _sandbox_digest(sandbox_dir)
+                tool_context.state["evolution_verified_digest"] = digest
+            _evolution_audit(
+                "verify", _audit_actor(tool_context), "ok",
+                check=check, digest=digest or None,
+            )
             return {
                 "status": "success",
                 "message": f"Verification PASSED ({check}).",
@@ -473,14 +549,26 @@ def evolution_verify_sandbox(
             }
         else:
             combined = (result.stdout or "") + "\n" + (result.stderr or "")
+            _evolution_audit(
+                "verify", _audit_actor(tool_context), "fail",
+                check=check, error=combined[-300:],
+            )
             return {
                 "status": "error",
                 "message": f"Verification FAILED ({check}).",
                 "output": combined[-1000:],
             }
     except subprocess.TimeoutExpired:
+        _evolution_audit(
+            "verify", _audit_actor(tool_context), "fail",
+            check=check, error="timeout",
+        )
         return {"status": "error", "message": f"Verification timed out ({check})."}
     except Exception as e:
+        _evolution_audit(
+            "verify", _audit_actor(tool_context), "fail",
+            check=check, error=str(e),
+        )
         return {"status": "error", "message": f"Verification crashed: {e}"}
 
 
@@ -783,6 +871,13 @@ def evolution_commit_and_push(
         result = _evolution_commit_local(staged_files, delete_files, commit_message, skip_local_update)
 
     if result["status"] != "success":
+        _evolution_audit(
+            "commit", _audit_actor(tool_context), "fail",
+            files=[rel for _, rel in staged_files],
+            digest=staged_digest,
+            error=result.get("message", "unknown"),
+            mode=result.get("mode", "unknown"),
+        )
         return result
 
     # Clean up sandbox + cycle marker (disk-backed, see helpers at top of module)
@@ -796,6 +891,15 @@ def evolution_commit_and_push(
 
     mode = result.get("mode", "unknown")
     msg = f"Successfully {' and '.join(summary)} via {'remote push' if mode == 'remote' else 'local branch-merge'}."
+
+    _evolution_audit(
+        "commit", _audit_actor(tool_context), "ok",
+        files=[rel for _, rel in staged_files],
+        deleted=list(delete_files or []),
+        digest=staged_digest,
+        mode=mode,
+        message=commit_message[:200],
+    )
 
     # Auto-trigger reboot after successful commit — this is the final step of
     # the evolution cycle. The commit approval covers the reboot; no second

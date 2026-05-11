@@ -68,20 +68,20 @@ ClickUp task management tools — async, API key auth.
 - `inspect_secure_env` (line 30) — Lists environment variables with sensitive values redacted.
 
 ## `app/tools/evolution.py`
-- `evolution_read_file` (line 117) — Reads the content of a file from the current agent's source code.
-- `evolution_list_directory` (line 140) — Lists the files and folders inside a specific directory of the agent's source code.
-- `evolution_stage_change` (line 185) — Stages a code change in a protected sandbox environment.
-- `evolution_discard_sandbox` (line 239) — Abandons the current self-evolution cycle, wiping the sandbox.
-- `evolution_verify_sandbox` (line 268) — Runs verification checks on staged sandbox changes.
-- `evolution_commit_and_push` (line 681) — Commits verified changes. Uses GitHub if configured, otherwise commits locally.
-- `evolution_git_pull` (line 814) — Pulls the latest code from the GitHub remote repository into the current container and restarts.
-- `evolution_git_reset` (line 846) — Resets the local workspace to match the last commit, deleting untracked 'dangling' files.
-- `evolution_sync_local_to_upstream` (line 869) — Connects a detached local workspace to a remote GitHub repository and populates it.
-- `evolution_git_fetch` (line 924) — Fetches latest refs from a remote without merging anything.
-- `evolution_git_log` (line 948) — Shows compact commit history for a branch or ref.
-- `evolution_git_diff_summary` (line 978) — Shows a compact summary of changes between two refs (files changed, insertions, deletions).
-- `evolution_git_diff_file` (line 1020) — Shows the actual diff for a specific file between two refs.
-- `evolution_git_branches` (line 1060) — Lists all local and remote branches with their latest commit.
+- `evolution_read_file` (line 180) — Reads the content of a file from the current agent's source code.
+- `evolution_list_directory` (line 203) — Lists the files and folders inside a specific directory of the agent's source code.
+- `evolution_stage_change` (line 248) — Stages a code change in a protected sandbox environment.
+- `evolution_discard_sandbox` (line 309) — Abandons the current self-evolution cycle, wiping the sandbox.
+- `evolution_verify_sandbox` (line 340) — Runs verification checks on staged sandbox changes.
+- `evolution_commit_and_push` (line 769) — Commits verified changes. Uses GitHub if configured, otherwise commits locally.
+- `evolution_git_pull` (line 918) — Pulls the latest code from the GitHub remote repository into the current container and restarts.
+- `evolution_git_reset` (line 950) — Resets the local workspace to match the last commit, deleting untracked 'dangling' files.
+- `evolution_sync_local_to_upstream` (line 973) — Connects a detached local workspace to a remote GitHub repository and populates it.
+- `evolution_git_fetch` (line 1028) — Fetches latest refs from a remote without merging anything.
+- `evolution_git_log` (line 1052) — Shows compact commit history for a branch or ref.
+- `evolution_git_diff_summary` (line 1082) — Shows a compact summary of changes between two refs (files changed, insertions, deletions).
+- `evolution_git_diff_file` (line 1124) — Shows the actual diff for a specific file between two refs.
+- `evolution_git_branches` (line 1164) — Lists all local and remote branches with their latest commit.
 
 ## `app/tools/evolution_catalog.py`
 Evolution catalog — verified evolution library for sharing across instances.
@@ -341,9 +341,9 @@ Tool for spawning sibling agent containers.
 - `consume_exit_signal` (line 35) — Check and log exit signal. Returns True if shutdown should proceed.
 - `update_self` (line 63) — Real process restart/reboot via supervisor exit signal.
 - `trigger_rollback` (line 87) — Rollback code to previous commit and rebuild/restart.
-- `session_refresh` (line 97) — Conversation/session reset only; wipes or summarizes chat history.
-- `async set_planner_mode` (line 126) — Toggle deep thought.
-- `async execute_approved_action` (line 131)
+- `session_refresh` (line 103) — Conversation/session reset only; wipes or summarizes chat history.
+- `async set_planner_mode` (line 132) — Toggle deep thought.
+- `async execute_approved_action` (line 137)
 
 ## `app/tools/telegram.py`
 Telegram-specific agent tools.
