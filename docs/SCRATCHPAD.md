@@ -21,19 +21,21 @@ Used heavily by BigQuery, SP-API, Keepa bulk fetches, h10 analysis, and the spil
 
 ## 2. Storage
 
-`tmp/scratchpads/{session_id}/{name}.md` — Markdown files, one per scratchpad name, scoped to the session.
+`tmp/scratchpads/{session_id}/{owner}__{name}.md` — Markdown files, one per scratchpad name + owning agent, scoped to the session.
 
-Name sanitization: any character outside `[a-zA-Z0-9_-]` is replaced with `_` (`scratchpad.py:21`). So `bigquery results.csv` becomes `bigquery_results_csv.md`.
+`owner` is the agent that wrote the pad — auto-detected from `tool_context._invocation_context.agent.name`. Examples: `CoordinatorAgent`, `AmazonAgent`. Owner names are sanitized to `[a-zA-Z0-9_]` (spaces and dots collapse to underscores).
 
-Session_id resolution: `tool_context.session.session_id` (or `.id` if `session_id` is missing — old ADK API).
+Backward compatibility: pads written before owner tagging (legacy bare `{name}.md`) remain readable, writeable, and deletable. Read order is owner-tagged first → legacy bare. Writes go to the owner-tagged path if owner is detected, else to the legacy bare path.
 
-### Phase 7 ownership tagging
+Name sanitization: any character outside `[a-zA-Z0-9_-]` is replaced with `_`. So `bigquery results.csv` becomes `bigquery_results_csv.md`.
 
-After Phase 7 of the hardening plan, the path becomes `tmp/scratchpads/{session_id}/{owner}__{name}.md`. Owner = the agent that wrote it (Coordinator, AmazonAgent, etc). Lets us:
+Session_id resolution: `tool_context.session.session_id` (or `.id` if `session_id` is missing — older ADK API shape).
 
-- Filter reads by author (avoid cross-agent leakage when two sub-agents wrote pads with the same name).
-- Show clearer manifests in `scratchpad_list`.
-- Support reasoned cross-agent sharing (an agent can explicitly read another's pad by passing `owner=<name>`).
+### Cross-agent reads
+
+- Default `scratchpad_read(name)` finds the pad in priority order (this agent's owner, then legacy bare).
+- Explicit `scratchpad_read(name, owner="AmazonAgent")` reads a pad owned by a specific sub-agent — useful when Coordinator wants to inspect what Amazon agent wrote.
+- `scratchpad_list(owner="AmazonAgent")` filters the manifest to one agent's pads.
 
 ---
 
@@ -66,10 +68,11 @@ The spillover guardrail (`tool_output_spillover_guardrail`, `app/callbacks/guard
 |---|---|
 | `scratchpad_write` first call | Session dir created on demand |
 | `/reset session` | `cleanup_session_scratchpads(session_id)` wipes everything |
-| Container exit | No automatic cleanup; old session dirs accumulate |
-| Phase 7 sweeper | `tmp_sweeper.py` removes session dirs older than 7 days |
+| Bot startup | `sweep_scratchpad_sessions()` removes session dirs untouched for `SCRATCHPAD_SESSION_TTL_DAYS` (default 7) |
 
-Production note: until the sweeper lands (Phase 7), `tmp/scratchpads/` will grow unbounded. The current workaround on the deployed bot is a cron job that wipes session dirs older than 14 days; the sweeper formalizes this inside the bot itself.
+The startup sweep is dir-level: each session dir's mtime is refreshed on every write inside it, so an actively-used session is never reaped. Only dead sessions (no writes for 7+ days) get removed.
+
+Tune retention via the `SCRATCHPAD_SESSION_TTL_DAYS` vault key. Set to a large number to disable.
 
 ---
 

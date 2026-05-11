@@ -326,12 +326,12 @@ Tools for researching bugs, library docs, and package versions.
 ### `app/tools/scratchpad.py`
 Session-scoped scratchpad for multi-step research tasks.
 
-- `scratchpad_write` (line 29) — Append content to a named scratchpad. Creates it if it doesn't exist.
-- `scratchpad_read` (line 56) — Read the full contents of a named scratchpad.
-- `scratchpad_replace` (line 102) — Replace the entire contents of a scratchpad. Useful for rewriting with a summary.
-- `scratchpad_clear` (line 124) — Delete a scratchpad when the task is complete.
-- `scratchpad_list` (line 142) — List all active scratchpads for the current session.
-- `cleanup_session_scratchpads` (line 164) — Delete all scratchpads for a session. Called during session reset.
+- `scratchpad_write` (line 119) — Append content to a named scratchpad. Creates it if it doesn't exist.
+- `scratchpad_read` (line 165) — Read the full contents of a named scratchpad.
+- `scratchpad_replace` (line 216) — Replace the entire contents of a scratchpad. Useful for rewriting with a summary.
+- `scratchpad_clear` (line 249) — Delete a scratchpad when the task is complete.
+- `scratchpad_list` (line 271) — List active scratchpads for the current session.
+- `cleanup_session_scratchpads` (line 307) — Delete all scratchpads for a session. Called during session reset.
 
 ### `app/tools/slack.py`
 - `async slack_post_message` (line 18) — Sends a message to a Slack channel.

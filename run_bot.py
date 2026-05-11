@@ -205,8 +205,9 @@ async def main():
     logger.info("Initializing Autonomous Worker Daemon...")
     ensure_db_concurrency()
     try:
-        from app.app_utils.tmp_sweeper import sweep_tmp
+        from app.app_utils.tmp_sweeper import sweep_scratchpad_sessions, sweep_tmp
         sweep_tmp()
+        sweep_scratchpad_sessions()
     except Exception as exc:
         logger.warning("Startup tmp sweep failed: %s", exc)
     runner = get_runner()
