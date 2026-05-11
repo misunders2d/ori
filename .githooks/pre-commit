@@ -85,4 +85,40 @@ if command -v uv >/dev/null 2>&1; then
     fi
 fi
 
+# Design-doc check: behaviour-relevant code must ship with at least one
+# hand-written doc edit in the same commit. Auto-gen covers symbols;
+# hand-written docs cover WHY. Caught 2026-05-11 audit (rule 10).
+# Bypass for genuinely doc-irrelevant commits: ORI_SKIP_DOC_CHECK=1 git commit ...
+if [ "${ORI_SKIP_DOC_CHECK:-0}" != "1" ]; then
+    # ``|| true`` keeps the assignment safe when the hook is invoked
+    # outside a git repo (test harness copies the hook into a tmp dir).
+    STAGED=$(git diff --cached --name-only --diff-filter=ACMRT 2>/dev/null || true)
+    BEHAVIOUR_TOUCHED=$(echo "$STAGED" | grep -E '^(app/(callbacks|tools|toolsets|sub_agents|contracts)/|app/app_utils/models\.py$|app/agent\.py$)' || true)
+    if [ -n "$BEHAVIOUR_TOUCHED" ]; then
+        DOCS_TOUCHED=$(echo "$STAGED" | grep -E '^docs/.*\.md$' || true)
+        if [ -z "$DOCS_TOUCHED" ]; then
+            cat >&2 <<EOF
+
+❌  COMMIT BLOCKED — behaviour-relevant code staged with no docs/*.md change.
+
+Staged code (one or more):
+$(echo "$BEHAVIOUR_TOUCHED" | sed 's/^/    /')
+
+Per docs/AI_EDITS.md §10: every product change ships with the matching
+hand-written design doc in the same commit. Auto-gen covers SYMBOLS;
+A2A.md / HOT_SWAP.md / EVOLUTION.md / PLANS.md / SCRATCHPAD.md /
+CONTRACTS.md / RUNBOOK.md cover the WHY.
+
+To proceed:
+  1. Edit the matching doc with the design rationale + gotchas, OR
+  2. If the change is genuinely doc-irrelevant (typo / lint / dead-code
+     removal), bypass with:
+         ORI_SKIP_DOC_CHECK=1 git commit ...
+
+EOF
+            exit 1
+        fi
+    fi
+fi
+
 exit 0

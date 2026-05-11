@@ -254,3 +254,115 @@ def test_pre_commit_hook_blocks_with_stale_marker(tmp_path):
     result = subprocess.run([str(hook)], cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode != 0
     assert "stale" in result.stderr.lower()
+
+
+def _make_real_git_repo(tmp_path):
+    """Spin up a tiny git repo so the design-doc check (which uses
+    ``git diff --cached``) has something real to inspect."""
+    import shutil
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+
+    hook_src = os.path.abspath(".githooks/pre-commit")
+    hooks_dir = repo / ".git" / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    hook_dst = hooks_dir / "pre-commit"
+    shutil.copy(hook_src, hook_dst)
+    hook_dst.chmod(0o755)
+
+    # Fresh marker so the marker gate passes — we're testing the new
+    # docs-check, not the marker check.
+    (repo / ".docs_read_marker").write_text("ok")
+
+    return repo, hook_dst
+
+
+def test_pre_commit_blocks_when_behaviour_code_staged_without_docs(tmp_path):
+    """Staging ``app/callbacks/foo.py`` (a behaviour-relevant file) WITHOUT
+    any ``docs/*.md`` change must trip the docs-check and refuse the commit."""
+    import subprocess
+
+    repo, hook = _make_real_git_repo(tmp_path)
+
+    cb = repo / "app" / "callbacks"
+    cb.mkdir(parents=True)
+    (cb / "foo.py").write_text("# fake callback\n")
+    subprocess.run(["git", "add", "app/callbacks/foo.py"], cwd=repo, check=True)
+
+    result = subprocess.run([str(hook)], cwd=repo, capture_output=True, text=True)
+    assert result.returncode != 0, (
+        f"hook should have blocked but exited 0\nstdout: {result.stdout}\n"
+        f"stderr: {result.stderr}"
+    )
+    assert "behaviour-relevant code" in result.stderr.lower() or (
+        "docs" in result.stderr.lower() and "blocked" in result.stderr.lower()
+    )
+
+
+def test_pre_commit_allows_behaviour_code_with_docs_in_same_commit(tmp_path):
+    """Same code change, but a ``docs/*.md`` edit also staged → hook
+    passes. This is the green path for design-doc compliance."""
+    import subprocess
+
+    repo, hook = _make_real_git_repo(tmp_path)
+
+    cb = repo / "app" / "callbacks"
+    cb.mkdir(parents=True)
+    (cb / "foo.py").write_text("# fake callback\n")
+    docs = repo / "docs"
+    docs.mkdir(parents=True)
+    (docs / "CALLBACKS.md").write_text("# callbacks doc\nfake foo registered.\n")
+
+    subprocess.run(["git", "add", "app/callbacks/foo.py", "docs/CALLBACKS.md"], cwd=repo, check=True)
+
+    result = subprocess.run([str(hook)], cwd=repo, capture_output=True, text=True)
+    assert result.returncode == 0, (
+        f"hook should have passed but exited {result.returncode}\n"
+        f"stderr: {result.stderr}"
+    )
+
+
+def test_pre_commit_bypass_env_var_skips_docs_check(tmp_path):
+    """``ORI_SKIP_DOC_CHECK=1`` lets genuinely doc-irrelevant commits
+    (typo, lint, dead-code removal) through without forcing a doc
+    edit. Escape hatch for the rare legitimate case."""
+    import subprocess
+
+    repo, hook = _make_real_git_repo(tmp_path)
+
+    cb = repo / "app" / "callbacks"
+    cb.mkdir(parents=True)
+    (cb / "typofix.py").write_text("# typo fix only\n")
+    subprocess.run(["git", "add", "app/callbacks/typofix.py"], cwd=repo, check=True)
+
+    env = os.environ.copy()
+    env["ORI_SKIP_DOC_CHECK"] = "1"
+    result = subprocess.run(
+        [str(hook)], cwd=repo, capture_output=True, text=True, env=env
+    )
+    assert result.returncode == 0, (
+        f"bypass env var should have let commit through, got rc={result.returncode}\n"
+        f"stderr: {result.stderr}"
+    )
+
+
+def test_pre_commit_allows_pure_doc_change(tmp_path):
+    """A commit that only touches ``docs/*.md`` (no code) must not be
+    blocked by the docs-check — the check exists to FORCE docs alongside
+    code, not to require both directions."""
+    import subprocess
+
+    repo, hook = _make_real_git_repo(tmp_path)
+
+    docs = repo / "docs"
+    docs.mkdir(parents=True)
+    (docs / "RUNBOOK.md").write_text("# runbook update\nclarified deploy.\n")
+    subprocess.run(["git", "add", "docs/RUNBOOK.md"], cwd=repo, check=True)
+
+    result = subprocess.run([str(hook)], cwd=repo, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

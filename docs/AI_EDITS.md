@@ -66,47 +66,11 @@ Use `get_model(component)` from `app/app_utils/models.py`. Do not hardcode model
 
 Adding a new model component? Register it in `VALID_COMPONENTS` (`app/app_utils/models.py`) so `/models set` accepts it and the docs index picks it up.
 
-## 10. Every product change MUST land in the docs in the same commit
+## 10. Code changes ship with docs (enforced by the pre-commit hook)
 
-Docs are 2-tier. BOTH tiers are non-optional when you ship behavior.
+Two-tier docs. Auto-gen handles SYMBOLS (`gen_docs.py` regenerates INDEX/AGENTS_INVENTORY/TOOLS/TOOLSETS/CALLBACKS at commit time). Hand-written holds DESIGN (A2A, HOT_SWAP, EVOLUTION, PLANS, SCRATCHPAD, CONTRACTS, RUNBOOK).
 
-### 10a. Auto-generated docs (factual: which symbols exist)
-
-If you add or remove a sub-agent, tool, toolset, callback, or skill, run:
-
-```
-uv run python scripts/gen_docs.py
-```
-
-This regenerates `docs/INDEX.md`, `docs/AGENTS_INVENTORY.md`, `docs/TOOLS.md`, `docs/TOOLSETS.md`, and `docs/CALLBACKS.md` from an AST scan. The pre-commit hook auto-runs this and stages the resulting diffs, so a clean `git commit` keeps these in sync without you thinking about it. `evolution_verify_sandbox` runs the same script before pytest.
-
-### 10b. Hand-written docs (design intent: WHY the code is shaped this way)
-
-Auto-generation cannot write prose. The following docs hold the design rationale, usage patterns, gotchas, and incident history — they must be updated **by hand, in the same commit as the code change**, whenever you ship user-visible behaviour:
-
-| If you change… | Update |
-|---|---|
-| A2A protocol, friend / DNA flow, file transfer, SSRF guards | `docs/A2A.md` |
-| Model selection, provider routing, hot-swap, thinking config | `docs/HOT_SWAP.md` |
-| Self-evolution flow, sandbox lifecycle, supervisor contract | `docs/EVOLUTION.md` |
-| Plan schema, `plan_enforcer`, `plan_step_enforcer` | `docs/PLANS.md` |
-| Scratchpad shape, ownership, retention | `docs/SCRATCHPAD.md` |
-| Contract pipeline (`schedule_contract`, loaders, emit adapters) | `docs/CONTRACTS.md` |
-| Production deploy, rollback, recovery procedures | `docs/RUNBOOK.md` |
-| Any new hard rule for AI editors | `docs/AI_EDITS.md` (this file) |
-
-Triggers that ALWAYS require a hand-written doc update:
-
-- A new callback registered on any agent
-- A new env knob, threshold, or feature flag
-- A new failure mode or `on_failure` action
-- A new guardrail (after-tool / before-model behaviour change visible to the agent)
-- A schema change that affects what the agent or user can express
-- A new automatic side effect (auto-repair, auto-schedule, auto-attach, auto-anything)
-
-The rule is "would another agent reading this codebase later understand WHY this exists?". If the answer needs prose, that prose belongs in the matching hand-written doc, NOT just in a docstring or a commit message.
-
-This rule was added after the 2026-05-11 round of fixes (auto-repair, global thinking switch, file-attachment plumbing) shipped code without touching `docs/HOT_SWAP.md` or `docs/A2A.md` — the auto docs covered the symbols, but the design rationale silently went undocumented. Don't repeat that. The user spotted the gap; the rule prevents it next time.
+The pre-commit hook rejects any commit that touches behaviour-relevant code (`app/callbacks/`, `app/tools/`, `app/toolsets/`, `app/sub_agents/`, `app/contracts/`, `app/app_utils/models.py`, `app/agent.py`) without staging at least one `docs/*.md` change in the same commit. Trivial / mechanical changes (typos, comment edits, lint pass) bypass with `ORI_SKIP_DOC_CHECK=1 git commit ...`.
 
 ## 11. Run Python via `uv`, never directly
 
