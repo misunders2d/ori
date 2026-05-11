@@ -103,20 +103,20 @@ ClickUp task management tools — async, API key auth.
 - `inspect_secure_env` (line 30) — Lists environment variables with sensitive values redacted.
 
 ### `app/tools/evolution.py`
-- `evolution_read_file` (line 251) — Reads the content of a file from the current agent's source code.
-- `evolution_list_directory` (line 283) — Lists the files and folders inside a specific directory of the agent's source code.
-- `evolution_stage_change` (line 328) — Stages a code change in a protected sandbox environment.
-- `evolution_discard_sandbox` (line 406) — Abandons the current self-evolution cycle, wiping the sandbox.
-- `evolution_verify_sandbox` (line 437) — Runs verification checks on staged sandbox changes.
-- `evolution_commit_and_push` (line 866) — Commits verified changes. Uses GitHub if configured, otherwise commits locally.
-- `evolution_git_pull` (line 1015) — Pulls the latest code from the GitHub remote repository into the current container and restarts.
-- `evolution_git_reset` (line 1047) — Resets the local workspace to match the last commit, deleting untracked 'dangling' files.
-- `evolution_sync_local_to_upstream` (line 1070) — Connects a detached local workspace to a remote GitHub repository and populates it.
-- `evolution_git_fetch` (line 1125) — Fetches latest refs from a remote without merging anything.
-- `evolution_git_log` (line 1149) — Shows compact commit history for a branch or ref.
-- `evolution_git_diff_summary` (line 1179) — Shows a compact summary of changes between two refs (files changed, insertions, deletions).
-- `evolution_git_diff_file` (line 1221) — Shows the actual diff for a specific file between two refs.
-- `evolution_git_branches` (line 1261) — Lists all local and remote branches with their latest commit.
+- `evolution_read_file` (line 272) — Reads the content of a file from the current agent's source code.
+- `evolution_list_directory` (line 304) — Lists the files and folders inside a specific directory of the agent's source code.
+- `evolution_stage_change` (line 349) — Stages a code change in a protected sandbox environment.
+- `evolution_discard_sandbox` (line 427) — Abandons the current self-evolution cycle, wiping the sandbox.
+- `evolution_verify_sandbox` (line 458) — Runs verification checks on staged sandbox changes.
+- `evolution_commit_and_push` (line 887) — Commits verified changes. Uses GitHub if configured, otherwise commits locally.
+- `evolution_git_pull` (line 1045) — Pulls the latest code from the GitHub remote repository into the current container and restarts.
+- `evolution_git_reset` (line 1077) — Resets the local workspace to match the last commit, deleting untracked 'dangling' files.
+- `evolution_sync_local_to_upstream` (line 1100) — Connects a detached local workspace to a remote GitHub repository and populates it.
+- `evolution_git_fetch` (line 1155) — Fetches latest refs from a remote without merging anything.
+- `evolution_git_log` (line 1179) — Shows compact commit history for a branch or ref.
+- `evolution_git_diff_summary` (line 1209) — Shows a compact summary of changes between two refs (files changed, insertions, deletions).
+- `evolution_git_diff_file` (line 1251) — Shows the actual diff for a specific file between two refs.
+- `evolution_git_branches` (line 1291) — Lists all local and remote branches with their latest commit.
 
 ### `app/tools/evolution_catalog.py`
 Evolution catalog — verified evolution library for sharing across instances.

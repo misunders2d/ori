@@ -247,6 +247,27 @@ def _doc_read_gate_message(missing: list[str]) -> str:
     )
 
 
+def _write_docs_read_marker(actor: str = "") -> None:
+    """Write `.docs_read_marker` to satisfy the external pre-commit hook.
+
+    Called from `evolution_commit_and_push` once the internal session
+    gate has been satisfied — keeps the internal evolution path from
+    being blocked by its own external safety net. The marker is in
+    `.gitignore`, so it never crosses clones.
+    """
+    marker = os.path.join(PROJECT_ROOT, ".docs_read_marker")
+    try:
+        ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        with open(marker, "w") as f:
+            f.write(
+                f"# Doc-read marker — written {ts}\n"
+                f"# Source: evolution_commit_and_push (internal gate already verified)\n"
+                f"# Actor: {actor or 'unknown'}\n"
+            )
+    except OSError as e:
+        logger.warning("Failed to write .docs_read_marker: %s", e)
+
+
 
 def evolution_read_file(file_path: str, tool_context: ToolContext) -> dict:
     """Reads the content of a file from the current agent's source code.
@@ -895,6 +916,15 @@ def evolution_commit_and_push(
                 "verified changes back to the parent agent. The parent will commit and reboot."
             ),
         }
+
+    # Phase 8 — write the .docs_read_marker so the external pre-commit
+    # hook (which fires when our git subprocess commits) passes. Internal
+    # gate already proved the docs were read in this session — if they
+    # hadn't been, evolution_stage_change would have refused upstream
+    # and we wouldn't be here.
+    docs_read = _doc_read_state(tool_context)
+    if all(docs_read.get(d) for d in _DOC_READ_REQUIRED):
+        _write_docs_read_marker(actor=_audit_actor(tool_context))
 
     sandbox_dir = os.path.abspath("./data/sandbox")
     has_staged = os.path.exists(sandbox_dir) and any(

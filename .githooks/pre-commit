@@ -63,4 +63,26 @@ EOF
     exit 1
 fi
 
+# Auto-regenerate the symbol index before committing (Phase 8.1).
+# Picks up any new agent/tool/toolset/callback/skill the agent staged.
+# Auto-stages whatever changed so the commit ships in lockstep with the
+# code. Skipped silently when uv is unavailable (e.g. minimal container).
+if command -v uv >/dev/null 2>&1; then
+    if uv run python scripts/gen_docs.py >/dev/null 2>&1; then
+        # Re-stage whichever of the auto-generated docs gen_docs touched.
+        AUTO_DOCS="docs/INDEX.md docs/AGENTS_INVENTORY.md docs/TOOLS.md docs/TOOLSETS.md docs/CALLBACKS.md"
+        for f in $AUTO_DOCS; do
+            if [ -f "$f" ]; then
+                # `git diff --quiet` exits non-zero when the file has changes.
+                if ! git diff --quiet -- "$f" 2>/dev/null; then
+                    git add -- "$f"
+                    echo "ℹ️  pre-commit: regenerated + staged $f" >&2
+                fi
+            fi
+        done
+    else
+        echo "warning: gen_docs.py failed during pre-commit; INDEX may be stale" >&2
+    fi
+fi
+
 exit 0
