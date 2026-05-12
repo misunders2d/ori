@@ -150,6 +150,19 @@ Registered in `app/contracts/emit.py`.
 | `email` | 🚧 P7 | `to`, `subject`, `body` |
 | `memory_update` | 🚧 P7 | `title`, `summary`, optional `relations` |
 
+> **Adapter name ≠ tool name.** The Slack adapter is `slack_post`,
+> NOT `slack_post_message` (the latter is the underlying Python tool
+> function). Same split for `telegram_dm` vs `telegram_send_dm`.
+> Authoring tools (`contract_draft_validate`, `contract_dry_run`,
+> `contract_freeze`) and `contract_store.freeze` now hard-validate
+> every `emit[].adapter`, `emit[].gate.type`, and `inputs[].loader`
+> against the live registries via
+> `app/contracts/validation.py:validate_against_registries`. A bad
+> name fails AT AUTHORING TIME with a list of the known names —
+> never again at fire time. Production proof 2026-05-12: 5
+> `ai_pilot_*_v2` contracts authored with `adapter:
+> "slack_post_message"` FATALed silently every fire for weeks.
+
 ## Gates
 
 Pre-emit checks. The most common is `sheet_dedup` — read a tracking

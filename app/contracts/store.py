@@ -109,7 +109,16 @@ class ContractStore:
         successive freezes of the same canonical body produce identical
         hashes; the second freeze is a no-op that returns the existing
         record.
+
+        Refuses to freeze a contract that references unknown adapters /
+        gates / loaders. Defense-in-depth duplicate of the check in
+        ``app.tools.contracts._coerce_spec`` — covers direct-API callers
+        that bypass the tools layer (tests, scripts, future REST entry).
         """
+        # Lazy import to break the schema → emit → store cycle.
+        from app.contracts.validation import validate_against_registries
+        validate_against_registries(contract)
+
         frozen = contract.with_fresh_hash()
 
         with self._lock_for(frozen.id):

@@ -60,7 +60,16 @@ def _coerce_spec(spec: Any) -> Contract:
             "contract spec must be a dict (or JSON string parseable to one). "
             f"Got {type(spec).__name__}."
         )
-    return Contract.model_validate(spec)
+    contract = Contract.model_validate(spec)
+    # Semantic check on top of Pydantic shape: every adapter/gate/loader
+    # the contract references must actually be registered. Catches the
+    # 2026-05-12 class of bug where contracts referenced
+    # `slack_post_message` (the tool name) instead of `slack_post` (the
+    # registered emit adapter). Pydantic accepts any string here;
+    # validation makes the bot fail-loud at authoring time.
+    from app.contracts.validation import validate_against_registries
+    validate_against_registries(contract)
+    return contract
 
 
 # ---------------------------------------------------------------------------
