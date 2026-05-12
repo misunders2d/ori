@@ -16,6 +16,7 @@ from app.callbacks.guardrails import (
     plan_step_enforcer,
     prompt_injection_guardrail,
     state_setter,
+    strip_delivered_files_before_model,
     tool_output_injection_guardrail,
     tool_output_spillover_guardrail,
 )
@@ -174,7 +175,7 @@ root_agent = Agent(
         *_slack_tools,
     ],
     before_agent_callback=[state_setter],
-    before_model_callback=[prompt_injection_guardrail, plan_enforcer],
+    before_model_callback=[strip_delivered_files_before_model, prompt_injection_guardrail, plan_enforcer],
     # Ordering note: plan_step_enforcer runs FIRST so out-of-plan calls are
     # rejected before the admin/A2A guards do any work. admin_tool_guardrail
     # stays second — its ACT-token staging needs to see the call regardless

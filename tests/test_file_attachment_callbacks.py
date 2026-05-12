@@ -30,6 +30,7 @@ from app.callbacks.guardrails import (
     _PENDING_FILE_PARTS_KEY,
     file_attachment_capture,
     file_attachment_inject,
+    strip_delivered_files_before_model,
 )
 
 
@@ -239,6 +240,50 @@ def test_inject_emits_placeholder_on_missing_path(tmp_path):
     assert "file attach failed" in parts[1].text
     assert "path_that_vanished_42.png" in parts[1].text
     assert ctx.state.get(_PENDING_FILE_PARTS_KEY) == []
+
+
+def test_strip_replaces_marked_inline_data_in_history():
+    """server-injected inline_data Parts (with `__contract_file:` marker)
+    must be replaced with a text breadcrumb before the model call so
+    they don't re-feed multi-megabyte PNG bytes on every turn
+    (2026-05-12 telegram latency regression)."""
+    inline_part = types.Part(
+        inline_data=types.Blob(
+            mime_type="image/png",
+            data=b"\x89PNGfakebytes",
+            display_name=f"{_FILE_ATTACHMENT_MARKER}/abs/path/chart.png",
+        )
+    )
+    text_part = types.Part.from_text(text="Here is the chart:")
+    content = types.Content(role="model", parts=[text_part, inline_part])
+    llm_request = MagicMock()
+    llm_request.contents = [content]
+
+    strip_delivered_files_before_model(callback_context=None, llm_request=llm_request)
+
+    parts = llm_request.contents[0].parts
+    assert len(parts) == 2
+    assert parts[0].text == "Here is the chart:"
+    assert parts[1].inline_data is None
+    assert "delivered file: chart.png" in parts[1].text
+
+
+def test_strip_preserves_user_uploaded_images():
+    """User-uploaded inline_data Parts have NO marker — they must NOT
+    be stripped, otherwise the model loses the image the user actually
+    wants it to look at."""
+    user_image = types.Part(
+        inline_data=types.Blob(mime_type="image/png", data=b"\x89PNGuser")
+    )
+    content = types.Content(role="user", parts=[user_image])
+    llm_request = MagicMock()
+    llm_request.contents = [content]
+
+    strip_delivered_files_before_model(callback_context=None, llm_request=llm_request)
+
+    part = llm_request.contents[0].parts[0]
+    assert part.inline_data is not None
+    assert part.inline_data.data == b"\x89PNGuser"
 
 
 def test_inject_handles_empty_response_content(tmp_path):

@@ -23,6 +23,7 @@ from .attachments import (
     _PENDING_FILE_PARTS_KEY,
     file_attachment_capture,
     file_attachment_inject,
+    strip_delivered_files_before_model,
 )
 from .bouncer import (
     force_bounce_before_model,
@@ -52,6 +53,7 @@ __all__ = [
     "prompt_injection_guardrail",
     "reset_error_history_after_tool",
     "state_setter",
+    "strip_delivered_files_before_model",
     "tool_output_injection_guardrail",
     "tool_output_spillover_guardrail",
     "verify_retry_guardrail",

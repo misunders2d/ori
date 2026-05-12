@@ -42,6 +42,54 @@ _PENDING_FILE_PARTS_KEY = "__pending_file_parts__"
 _FILE_ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024  # 20 MB — match A2A_INBOUND cap
 
 
+def strip_delivered_files_before_model(callback_context, llm_request):
+    """Before-model callback. Remove server-injected inline_data Parts
+    (those carrying the ``__contract_file:`` display_name marker) from
+    ``llm_request.contents`` before the request hits the model.
+
+    Why: ``file_attachment_inject`` appends inline_data Parts (base64
+    PNG bytes for charts, exports, etc) so the transport layer can
+    ship them. ADK records the model response in session history, and
+    on every subsequent turn the LLM flow rebuilds context from that
+    history — re-feeding the same image bytes as multimodal input.
+    For a 200 KB chart that's ~67k input tokens per turn, repeating
+    forever. Result: latency creep + per-turn cost climb after the
+    first chart in a session (2026-05-12 Telegram regression).
+
+    The fix: those bytes have already been delivered to the user via
+    Telegram/Slack/A2A. The model doesn't need them in subsequent
+    context. We replace the Part with a small text breadcrumb so the
+    model still knows a file was attached (in case the user references
+    it: "show me the chart again" — model can re-call the tool).
+
+    User-uploaded images do NOT have the marker, so they're preserved.
+    """
+    contents = getattr(llm_request, "contents", None)
+    if not contents:
+        return None
+    stripped_any = False
+    for content in contents:
+        parts = getattr(content, "parts", None)
+        if not parts:
+            continue
+        new_parts = []
+        for part in parts:
+            inline = getattr(part, "inline_data", None)
+            display_name = getattr(inline, "display_name", "") if inline else ""
+            if inline and display_name and display_name.startswith(_FILE_ATTACHMENT_MARKER):
+                stripped_path = display_name[len(_FILE_ATTACHMENT_MARKER):]
+                breadcrumb = os.path.basename(stripped_path) or "attachment"
+                new_parts.append(
+                    types.Part(text=f"[delivered file: {breadcrumb}]")
+                )
+                stripped_any = True
+            else:
+                new_parts.append(part)
+        if stripped_any:
+            content.parts = new_parts
+    return None
+
+
 def file_attachment_capture(tool, args, tool_context, tool_response):
     """After-tool callback: stash a tool's emitted file_path so the next
     model response can inline it as an A2A-shippable Part.
