@@ -111,21 +111,86 @@ async def telegram_dm(args: dict[str, Any], state: dict[str, Any]) -> dict[str, 
 # ---------------------------------------------------------------------------
 
 
+def _contract_author(state: dict[str, Any]) -> str:
+    """Resolve the contract author's email from state for OAuth lookup."""
+    meta = state.get("__contract__") or {}
+    author = meta.get("author") or ""
+    if not author:
+        raise RuntimeError(
+            "contract author missing from state.__contract__; per-user "
+            "OAuth adapters cannot resolve credentials. Re-freeze the "
+            "contract with an author email."
+        )
+    return author
+
+
+async def _google_token_for_author(author_email: str) -> str:
+    """Fetch a valid Google access token for the contract's author.
+    Delegates to the same token-refresh path the agent tools use."""
+    from app.tools.google_drive import _get_valid_token
+    token = await _get_valid_token(author_email)
+    if not token:
+        raise RuntimeError(
+            f"Google not connected for author {author_email!r}. Author "
+            f"must run `google_connect` from chat to authorize the "
+            f"scopes used by this contract."
+        )
+    return token
+
+
 @register_adapter("sheet_append")
 async def sheet_append(args: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
-    """Append ``args.row`` (a list of cell values) to
+    """Append ``args.row`` (list of cell values) to
     ``args.spreadsheet_id``. ``args.range`` (e.g. ``"Sheet1"``) targets
-    the worksheet — defaults to the first sheet.
+    the worksheet; defaults to ``"Sheet1"``. Always appends to the
+    bottom — never overwrites existing rows.
 
-    Wired in P7 (the AI Pilot migration is the first real consumer).
+    Auth: contract author's stored OAuth (via state.__contract__.author).
     """
-    raise NotImplementedError(
-        "sheet_append emit adapter is wired in P7. Registry slot reserved."
-    )
+    import httpx
+
+    spreadsheet_id = args.get("spreadsheet_id") or args.get("source") or ""
+    row = args.get("row")
+    if not spreadsheet_id:
+        raise ValueError("sheet_append requires args.spreadsheet_id")
+    if not isinstance(row, list):
+        raise ValueError("sheet_append requires args.row to be a list of cell values")
+
+    # Accept URL or bare ID — server-side extraction prevents typo traps.
+    from app.tools.google_drive import _extract_drive_id
+    spreadsheet_id = _extract_drive_id(spreadsheet_id)
+
+    rng = args.get("range") or "Sheet1"
+    token = await _google_token_for_author(_contract_author(state))
+
+    api = f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{rng}:append"
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            api,
+            params={
+                "valueInputOption": "USER_ENTERED",
+                "insertDataOption": "INSERT_ROWS",
+            },
+            json={"values": [row]},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        if resp.status_code >= 400:
+            raise RuntimeError(
+                f"Sheets {resp.status_code} on values:append "
+                f"spreadsheet_id={spreadsheet_id!r} range={rng!r}: "
+                f"{resp.text[:300]}"
+            )
+        data = resp.json()
+    return {
+        "status": "ok",
+        "spreadsheet_id": spreadsheet_id,
+        "updated_range": data.get("updates", {}).get("updatedRange"),
+        "updated_rows": data.get("updates", {}).get("updatedRows"),
+    }
 
 
 # ---------------------------------------------------------------------------
-# drive_doc_fill — write content into a Google Doc template
+# drive_doc_fill — replace {{field}} placeholders in a Google Doc
 # ---------------------------------------------------------------------------
 
 
@@ -133,28 +198,70 @@ async def sheet_append(args: dict[str, Any], state: dict[str, Any]) -> dict[str,
 async def drive_doc_fill(
     args: dict[str, Any], state: dict[str, Any]
 ) -> dict[str, Any]:
-    """Replace ``{{field_name}}`` placeholders in a Google Doc template
-    with the values in ``args.fields``. Used by the 30-step ASIN audit
-    contract to fill out the final report doc.
+    """Replace ``{{field_name}}`` placeholders in a Google Doc with the
+    values in ``args.fields``. ``args.doc_id`` is the Doc ID OR URL.
 
-    Wired in P7 alongside the ASIN audit migration.
+    Auth: contract author's stored OAuth (Docs API).
+    Uses ``documents.batchUpdate`` with one ``replaceAllText`` request
+    per field. Matching is case-sensitive and matches the LITERAL
+    ``{{field}}`` token, not a regex.
     """
-    raise NotImplementedError(
-        "drive_doc_fill emit adapter is wired in P7. Registry slot reserved."
+    import httpx
+
+    doc_id_raw = args.get("doc_id") or args.get("document_id") or ""
+    fields = args.get("fields") or {}
+    if not doc_id_raw:
+        raise ValueError("drive_doc_fill requires args.doc_id")
+    if not isinstance(fields, dict) or not fields:
+        raise ValueError("drive_doc_fill requires args.fields as a non-empty {name: value} dict")
+
+    from app.tools.google_drive import _extract_drive_id
+    doc_id = _extract_drive_id(doc_id_raw)
+
+    token = await _google_token_for_author(_contract_author(state))
+    requests_body = [
+        {
+            "replaceAllText": {
+                "containsText": {"text": "{{" + str(name) + "}}", "matchCase": True},
+                "replaceText": "" if value is None else str(value),
+            },
+        }
+        for name, value in fields.items()
+    ]
+
+    api = f"https://docs.googleapis.com/v1/documents/{doc_id}:batchUpdate"
+    async with httpx.AsyncClient(timeout=20) as client:
+        resp = await client.post(
+            api,
+            json={"requests": requests_body},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        if resp.status_code >= 400:
+            raise RuntimeError(
+                f"Docs {resp.status_code} on batchUpdate doc_id={doc_id!r}: "
+                f"{resp.text[:300]}"
+            )
+        data = resp.json()
+    replies = data.get("replies", [])
+    replacements_made = sum(
+        r.get("replaceAllText", {}).get("occurrencesChanged", 0) for r in replies
     )
+    return {
+        "status": "ok",
+        "doc_id": doc_id,
+        "fields_attempted": len(fields),
+        "replacements_made": replacements_made,
+    }
 
 
 # ---------------------------------------------------------------------------
-# email — send an email via the bot's SMTP path
+# email — DEFERRED (requires gmail.send OAuth scope; current scope is
+# gmail.readonly only). Intentionally NOT registered so the validator
+# rejects any contract that tries to use it. To enable: add
+# 'https://www.googleapis.com/auth/gmail.send' to SCOPES in
+# app/tools/google_oauth/web_flow.py, prompt all users to re-auth,
+# then implement this adapter via the Gmail users.messages.send API.
 # ---------------------------------------------------------------------------
-
-
-@register_adapter("email")
-async def email(args: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
-    """Send an email. ``args.to``, ``args.subject``, ``args.body``."""
-    raise NotImplementedError(
-        "email emit adapter is wired in P7. Registry slot reserved."
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -166,13 +273,54 @@ async def email(args: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
 async def memory_update(
     args: dict[str, Any], state: dict[str, Any]
 ) -> dict[str, Any]:
-    """Persist a Memory node (and optional relations) produced by the
-    reasoning chain. Useful for contracts whose primary side effect is
-    "remember this audit's findings" rather than post anywhere.
+    """Persist a :Memory node produced by the reasoning chain.
+
+    Args:
+      - ``namespace`` (str): personal | professional | technical
+      - ``text`` (str): full record body (embedded for semantic search)
+      - ``short_description`` (str): brief title/summary
+      - ``category`` (str): one of the MEMORY_CATEGORIES (idea / memory /
+        knowledge / procedure / experiment / incident / project /
+        technical / strategy / communication_style / policy / operational)
+      - ``tags`` (list[str]): keyword tags (optional; defaults to [])
+      - ``related_memories``, ``related_people``, ``related_entities``:
+        same shapes as ``create_record``'s args
+      - ``force_create`` (bool): bypass dedup gate after explicit
+        confirmation (don't set True by default)
     """
-    raise NotImplementedError(
-        "memory_update emit adapter is wired in P7. Registry slot reserved."
+    from app.tools.memory_tools import create_record
+    from app.contracts._loader_context import LoaderContext
+
+    namespace = args.get("namespace")
+    text = args.get("text")
+    short_description = args.get("short_description")
+    category = args.get("category")
+    if not (namespace and text and short_description and category):
+        raise ValueError(
+            "memory_update requires args.namespace, args.text, "
+            "args.short_description, args.category"
+        )
+
+    result = await create_record(
+        namespace=namespace,
+        text=text,
+        short_description=short_description,
+        category=category,
+        tags=args.get("tags") or [],
+        related_people=args.get("related_people"),
+        related_memories=args.get("related_memories"),
+        related_entities=args.get("related_entities"),
+        author=_contract_author(state),
+        force_create=bool(args.get("force_create", False)),
+        reviewed_relatives=bool(args.get("reviewed_relatives", True)),
+        tool_context=LoaderContext(),
     )
+    if isinstance(result, dict) and result.get("status") not in ("success", "ok"):
+        raise RuntimeError(
+            f"memory_update create_record returned non-success: "
+            f"{result.get('status')!r} — {result.get('message', '')[:200]}"
+        )
+    return {"status": "ok", "record_id": result.get("record_id"), "create_result": result}
 
 
 # ---------------------------------------------------------------------------
@@ -182,18 +330,54 @@ async def memory_update(
 
 @register_gate("sheet_dedup")
 async def sheet_dedup(args: dict[str, Any], state: dict[str, Any]) -> bool:
-    """Return True if the emit is allowed to proceed (i.e. no
-    duplicate row exists for the current key).
+    """Return True if the emit is allowed to proceed (no duplicate row
+    exists for the current ``args.key`` in the first column of the
+    target sheet).
 
-    ``args.source`` is the spreadsheet id; ``args.key`` is the value to
-    look for in the first column. Common pattern: ``key`` is ``{today}``
-    so re-fires on the same day are no-ops.
+    Args:
+      - ``source`` (str): spreadsheet ID or URL
+      - ``key`` (str): value to search for in column A
+      - ``range`` (str, optional): worksheet range; defaults to ``"Sheet1!A:A"``
 
-    Wired in P7 alongside ``sheet_read``.
+    Auth: contract author's stored OAuth.
+    Common pattern: ``key`` is today's date → re-fires on the same day
+    are no-ops, late retries still post.
     """
-    raise NotImplementedError(
-        "sheet_dedup gate is wired in P7. Registry slot reserved."
-    )
+    import httpx
+
+    source_raw = args.get("source") or args.get("spreadsheet_id") or ""
+    key = args.get("key")
+    if not source_raw:
+        raise ValueError("sheet_dedup requires args.source (spreadsheet ID or URL)")
+    if key is None or key == "":
+        raise ValueError("sheet_dedup requires args.key (value to look for in column A)")
+
+    from app.tools.google_drive import _extract_drive_id
+    spreadsheet_id = _extract_drive_id(source_raw)
+    rng = args.get("range") or "Sheet1!A:A"
+
+    token = await _google_token_for_author(_contract_author(state))
+    api = f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{rng}"
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(
+            api, headers={"Authorization": f"Bearer {token}"}
+        )
+        if resp.status_code >= 400:
+            # Fail-closed: if we can't read the dedup column, refuse the
+            # emit (better to skip one fire than to double-post). Loud
+            # error so admin sees the cause.
+            raise RuntimeError(
+                f"sheet_dedup read failed {resp.status_code} on "
+                f"spreadsheet_id={spreadsheet_id!r} range={rng!r}: "
+                f"{resp.text[:300]}"
+            )
+        data = resp.json()
+    rows = data.get("values", []) or []
+    key_str = str(key)
+    for row in rows:
+        if row and str(row[0]) == key_str:
+            return False  # duplicate found → emit BLOCKED
+    return True  # no duplicate → emit ALLOWED
 
 
 @register_gate("always_pass")

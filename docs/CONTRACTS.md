@@ -130,12 +130,17 @@ Registered in `app/contracts/loaders.py`. Each loader is a coroutine
 | `web_search` | ✅ V1 (single URL) | `url` |
 | `graph_query` | ✅ live | `cypher`, optional `params` |
 | `memory_search` | ✅ live | `query`, optional `namespace`, `limit` |
-| `sheet_read` | 🚧 P7 | `spreadsheet_id`, `range` |
-| `drive_doc_read` | 🚧 P7 | `doc_id` |
-| `bigquery_query` | 🚧 P7 | `sql`, optional `params` |
-| `keepa_get_history` | 🚧 P7 | `asin`, `days` |
+| `sheet_read` | ✅ live (2026-05-12) | `spreadsheet_id` (ID or URL), optional `range` (default `"Sheet1"`). Returns list of rows. Per-author OAuth. |
+| `drive_doc_read` | ✅ live (2026-05-12) | `doc_id` (ID or URL). Exports as text/plain via Drive `files.export`. Per-author OAuth. |
+| `bigquery_query` | ✅ live (2026-05-12) | `sql`, optional `params` ({name: value}), optional `project_id`. Service-account auth (`BQ_GCP_SERVICE_ACCOUNT_INFO`). Returns list of dicts. |
+| `keepa_get_history` | ✅ live (2026-05-12) | `asin`, optional `domain` (default 1=US). Returns the cached lightweight summary from `keepa_fetch_product`. |
 
-🚧 = registered slot, raises `NotImplementedError`; lit up in follow-up.
+> Every P7 placeholder was lit up on 2026-05-12 — production AI-Pilot
+> contracts had been silently FATALing for weeks because they
+> referenced `sheet_append` / `slack_post_message` against
+> placeholder-only registrations. The bug class is gone:
+> implementations are real, validator rejects unknown names at
+> freeze, alerts route to ADMIN_USER_IDS even with empty `notify`.
 
 ## Emit adapters (EMIT)
 
@@ -145,10 +150,10 @@ Registered in `app/contracts/emit.py`.
 |---|---|---|
 | `slack_post` | ✅ live | `channel`, `content`, optional `thread_ts` |
 | `telegram_dm` | ✅ live | `user_id`, `text` |
-| `sheet_append` | 🚧 P7 | `spreadsheet_id`, `row` |
-| `drive_doc_fill` | 🚧 P7 | `doc_id`, `fields` |
-| `email` | 🚧 P7 | `to`, `subject`, `body` |
-| `memory_update` | 🚧 P7 | `title`, `summary`, optional `relations` |
+| `sheet_append` | ✅ live (2026-05-12) | `spreadsheet_id` (ID or URL), `row` (list), optional `range` (default `"Sheet1"`). Per-author OAuth. Always appends — never overwrites. |
+| `drive_doc_fill` | ✅ live (2026-05-12) | `doc_id` (ID or URL), `fields` ({name: value}). Replaces `{{name}}` placeholders literally. Per-author OAuth. |
+| `memory_update` | ✅ live (2026-05-12) | `namespace`, `text`, `short_description`, `category`, optional `tags`, `related_*`, `force_create`. Author = contract author. |
+| `email` | ❌ deferred | Requires adding `gmail.send` to OAuth scopes + user re-auth. Currently UNREGISTERED — validator rejects any contract using it. |
 
 > **Adapter name ≠ tool name.** The Slack adapter is `slack_post`,
 > NOT `slack_post_message` (the latter is the underlying Python tool
@@ -172,7 +177,7 @@ just that one emit, keep going).
 
 | Gate | Status | Purpose |
 |---|---|---|
-| `sheet_dedup` | 🚧 P7 | reject if row for `{key}` already in `{source}` sheet |
+| `sheet_dedup` | ✅ live (2026-05-12) | reject if `args.key` already in column A of `args.source` sheet. Per-author OAuth. Fails-closed: if the read errors, the gate refuses the emit. |
 | `always_pass` | ✅ | explicit "we chose no gating here" marker (testing) |
 | `always_fail` | ✅ | testing the abort path |
 

@@ -174,23 +174,55 @@ async def memory_search(args: dict[str, Any], state: dict[str, Any]) -> list[dic
 # ---------------------------------------------------------------------------
 
 
+def _contract_author(state: dict[str, Any]) -> str:
+    meta = state.get("__contract__") or {}
+    author = meta.get("author") or ""
+    if not author:
+        raise RuntimeError(
+            "contract author missing from state.__contract__; per-user "
+            "OAuth loaders cannot resolve credentials."
+        )
+    return author
+
+
 @register("sheet_read")
 async def sheet_read(args: dict[str, Any], state: dict[str, Any]) -> list[list]:
-    """Read a range from a Google Sheet. ``args.spreadsheet_id`` +
-    ``args.range`` (A1 notation, e.g. ``"Sheet1!A1:C100"``). Returns a
-    list of rows (each row a list of cell values).
+    """Read a range from a Google Sheet. ``args.spreadsheet_id`` (or
+    full URL) + ``args.range`` (A1 notation, e.g. ``"Sheet1!A1:C100"``;
+    defaults to ``"Sheet1"`` if omitted). Returns a list of rows (each
+    row a list of cell values).
 
-    Authenticates via the project's stored Google OAuth tokens (same
-    path as the agent-facing google_drive tools).
+    Auth: contract author's stored Google OAuth.
     """
-    # Wire into the existing sheets path. For now we surface a clear
-    # NotImplementedError so contracts that need this loader fail
-    # loudly during dry-run rather than silently returning empty.
-    raise NotImplementedError(
-        "sheet_read loader is wired in P7 (the AI Pilot migration uses "
-        "it). For P2 the registry slot is reserved; tests assert that "
-        "the loader name is known."
-    )
+    import httpx
+
+    spreadsheet_id_raw = args.get("spreadsheet_id") or args.get("source") or ""
+    if not spreadsheet_id_raw:
+        raise ValueError("sheet_read requires args.spreadsheet_id")
+
+    from app.tools.google_drive import _extract_drive_id, _get_valid_token
+    spreadsheet_id = _extract_drive_id(spreadsheet_id_raw)
+    rng = args.get("range") or "Sheet1"
+
+    author = _contract_author(state)
+    token = await _get_valid_token(author)
+    if not token:
+        raise RuntimeError(
+            f"Google not connected for author {author!r}. Author must "
+            f"run `google_connect` from chat to authorize."
+        )
+
+    api = f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{rng}"
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(api, headers={"Authorization": f"Bearer {token}"})
+        if resp.status_code >= 400:
+            raise RuntimeError(
+                f"Sheets {resp.status_code} on values:get "
+                f"spreadsheet_id={spreadsheet_id!r} range={rng!r}: "
+                f"{resp.text[:300]}"
+            )
+        data = resp.json()
+    return data.get("values", []) or []
 
 
 # ---------------------------------------------------------------------------
@@ -200,11 +232,43 @@ async def sheet_read(args: dict[str, Any], state: dict[str, Any]) -> list[list]:
 
 @register("drive_doc_read")
 async def drive_doc_read(args: dict[str, Any], state: dict[str, Any]) -> str:
-    """Download a Google Doc as plain text. ``args.doc_id`` required."""
-    raise NotImplementedError(
-        "drive_doc_read loader is wired in P7 (the 30-step ASIN audit "
-        "uses it). Registry slot reserved for P2."
-    )
+    """Download a Google Doc as plain text. ``args.doc_id`` accepts a
+    Doc ID OR full URL.
+
+    Auth: contract author's stored Google OAuth.
+    """
+    import httpx
+
+    doc_id_raw = args.get("doc_id") or args.get("document_id") or ""
+    if not doc_id_raw:
+        raise ValueError("drive_doc_read requires args.doc_id")
+
+    from app.tools.google_drive import _extract_drive_id, _get_valid_token
+    doc_id = _extract_drive_id(doc_id_raw)
+
+    author = _contract_author(state)
+    token = await _get_valid_token(author)
+    if not token:
+        raise RuntimeError(
+            f"Google not connected for author {author!r}. Author must "
+            f"run `google_connect` from chat to authorize."
+        )
+
+    # Use Drive `files.export` to text/plain — uniform path for Docs/Sheets/Slides.
+    api = f"https://www.googleapis.com/drive/v3/files/{doc_id}/export"
+    async with httpx.AsyncClient(timeout=20) as client:
+        resp = await client.get(
+            api,
+            params={"mimeType": "text/plain"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        if resp.status_code >= 400:
+            raise RuntimeError(
+                f"Drive {resp.status_code} on files.export "
+                f"doc_id={doc_id!r}: {resp.text[:300]}"
+            )
+        text = resp.text
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -216,13 +280,57 @@ async def drive_doc_read(args: dict[str, Any], state: dict[str, Any]) -> str:
 async def bigquery_query(args: dict[str, Any], state: dict[str, Any]) -> list[dict]:
     """Run BigQuery SQL and return rows as dicts.
 
-    Uses the project's configured BigQuery client (same credentials path
-    as ``BigQueryAgent``). ``args.sql`` is the query; optional
-    ``args.params`` for parameterised queries.
+    Args:
+      - ``sql`` (str, required): the query
+      - ``params`` (dict, optional): named query parameters
+      - ``project_id`` (str, optional): GCP project; defaults to the
+        env-configured project
+
+    Auth: service account from ``BQ_GCP_SERVICE_ACCOUNT_INFO`` env
+    (same credentials path the BigQueryAgent uses). No per-user OAuth.
     """
-    raise NotImplementedError(
-        "bigquery_query loader is wired in P7. Registry slot reserved."
-    )
+    import asyncio
+    import json
+    import os
+
+    sql = args.get("sql")
+    if not sql:
+        raise ValueError("bigquery_query requires args.sql")
+
+    try:
+        from google.cloud import bigquery
+        from google.oauth2 import service_account
+    except ImportError as e:
+        raise RuntimeError(f"google-cloud-bigquery not installed: {e}")
+
+    sa_info_raw = os.environ.get("BQ_GCP_SERVICE_ACCOUNT_INFO", "")
+    if not sa_info_raw:
+        raise RuntimeError(
+            "BQ_GCP_SERVICE_ACCOUNT_INFO env var not set — BigQuery loader "
+            "needs the same service-account credentials as BigQueryAgent."
+        )
+    try:
+        sa_info = json.loads(sa_info_raw)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"BQ_GCP_SERVICE_ACCOUNT_INFO is not valid JSON: {e}")
+
+    project_id = args.get("project_id") or sa_info.get("project_id") or ""
+    credentials = service_account.Credentials.from_service_account_info(sa_info)
+
+    def _run_query() -> list[dict]:
+        client = bigquery.Client(credentials=credentials, project=project_id)
+        params = args.get("params") or {}
+        job_config = None
+        if params:
+            query_params = [
+                bigquery.ScalarQueryParameter(name, "STRING", str(value))
+                for name, value in params.items()
+            ]
+            job_config = bigquery.QueryJobConfig(query_parameters=query_params)
+        result = client.query(sql, job_config=job_config).result()
+        return [dict(row.items()) for row in result]
+
+    return await asyncio.to_thread(_run_query)
 
 
 # ---------------------------------------------------------------------------
@@ -232,11 +340,36 @@ async def bigquery_query(args: dict[str, Any], state: dict[str, Any]) -> list[di
 
 @register("keepa_get_history")
 async def keepa_get_history(args: dict[str, Any], state: dict[str, Any]) -> dict:
-    """Pull Keepa price + BSR history for ``args.asin`` over the past
-    ``args.days`` (default 90). Returns a summary dict."""
-    raise NotImplementedError(
-        "keepa_get_history loader is wired in P7. Registry slot reserved."
+    """Pull Keepa price + BSR history for ``args.asin``.
+
+    Args:
+      - ``asin`` (str, required)
+      - ``domain`` (int, optional): Keepa domain id (default 1 = .com)
+
+    Auth: ``KEEPA_API_KEY`` env (no per-user auth). Result includes the
+    cached lightweight summary from the existing keepa_fetch_product
+    tool — extraction of specific history series is the caller's job
+    via additional reasoning steps.
+    """
+    from app.tools.keepa_api import keepa_fetch_product
+    from app.contracts._loader_context import LoaderContext
+
+    asin = args.get("asin")
+    if not asin:
+        raise ValueError("keepa_get_history requires args.asin")
+    domain = int(args.get("domain", 1))
+
+    result = await keepa_fetch_product(
+        asin=asin,
+        domain=domain,
+        tool_context=LoaderContext(),
     )
+    if isinstance(result, dict) and result.get("status") == "error":
+        raise RuntimeError(
+            f"keepa_get_history failed for asin={asin!r}: "
+            f"{result.get('message', '')[:300]}"
+        )
+    return result
 
 
 # ---------------------------------------------------------------------------

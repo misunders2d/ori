@@ -316,6 +316,10 @@ async def execute_contract(
         "hash": contract.hash,
         "fire_id": fire_id,
         "dry_run": dry_run,
+        # Author email — adapters that need per-user OAuth (Google
+        # Sheets/Docs/Drive) resolve their token via this address.
+        # The contract acts on behalf of whoever authored + froze it.
+        "author": contract.author,
     }
 
     _audit(
@@ -498,27 +502,75 @@ async def execute_contract(
 async def _on_failure(
     contract: Contract, audit_path: str, error: str
 ) -> dict[str, Any]:
-    """Apply ``contract.on_failure`` policy and return an error state dict."""
+    """Apply ``contract.on_failure`` policy and return an error state dict.
+
+    Fail-loud guarantee: every contract failure ALWAYS produces:
+      1. An `on_failure` line in the per-fire audit log
+      2. A `logger.critical(...)` line that lands in journalctl /
+         data/agent.log even if all transports below fail
+      3. A Telegram DM to (a) every `notify` user listed in the spec
+         AND (b) fallback to ADMIN_USER_IDS[0] when notify is empty
+         or when action == alert_admin. Production proof 2026-05-12:
+         the AI Pilot contracts had empty `notify`, so failures
+         (slack_post_message typo → emit_failed) never reached the
+         admin. Now they will.
+    """
+    import os
+
     cfg = contract.on_failure
     _audit(audit_path, {"phase": "on_failure", "action": cfg.action.value, "error": error})
 
-    if cfg.action.value == "alert_admin" and cfg.notify:
-        from app.contracts.emit import run_emit
+    # Always log at CRITICAL so journalctl picks it up regardless of
+    # transport delivery success. Cheap insurance against silent FATALs.
+    logger.critical(
+        "CONTRACT FAILURE %s v%s (action=%s): %s | audit=%s",
+        contract.id, contract.version, cfg.action.value, error, audit_path,
+    )
 
-        for user_id in cfg.notify:
+    if cfg.action.value == "alert_admin":
+        # Recipients = notify list (from spec) + ADMIN_USER_IDS fallback
+        # (from env). Deduped. Without the fallback, contracts authored
+        # without a `notify` field FATAL silently — which is exactly
+        # the 2026-05-12 failure mode.
+        recipients: list[str] = list(cfg.notify or [])
+        admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
+        admin_users = [u.strip() for u in admin_users_str.split(",") if u.strip()]
+        for admin in admin_users:
+            if admin and admin not in recipients:
+                recipients.append(admin)
+                break  # one admin fallback is enough — don't spam everyone
+
+        if not recipients:
+            logger.critical(
+                "CONTRACT FAILURE %s: no recipients (empty notify + empty "
+                "ADMIN_USER_IDS) — admin alert NOT delivered. Add notify "
+                "to the contract spec or set ADMIN_USER_IDS.",
+                contract.id,
+            )
+
+        from app.contracts.emit import run_emit
+        delivered = 0
+        for user_id in recipients:
             try:
                 await run_emit(
                     "telegram_dm",
                     {
                         "user_id": user_id,
                         "text": (
-                            f"Contract `{contract.id}` v{contract.version} failed:\n"
+                            f"⚠️ Contract `{contract.id}` v{contract.version} FAILED:\n"
                             f"{error}\n\nAudit: {audit_path}"
                         ),
                     },
                     {},
                 )
+                delivered += 1
             except Exception as e:
                 logger.warning("alert_admin failed to notify %s: %s", user_id, e)
+        if recipients and delivered == 0:
+            logger.critical(
+                "CONTRACT FAILURE %s: alert_admin reached 0/%d recipients. "
+                "All transports failed.",
+                contract.id, len(recipients),
+            )
 
     return {"__status__": "error", "__error__": error, "__audit__": audit_path}
