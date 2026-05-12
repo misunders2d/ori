@@ -27,17 +27,6 @@ Data analysis tool — run pandas code on uploaded files.
 
 - `analyze_data` (line 67) — Run Python/pandas analysis code on a data file and return the printed output.
 
-## `app/tools/auth.py`
-Universal OAuth2 tools for connecting any external platform.
-
-- `list_platforms` (line 13) — List all registered OAuth2 platforms and their connection status.
-- `async register_platform` (line 25) — Register a new OAuth2 platform for authentication. Supports any OAuth2-compliant provider.
-- `async connect_to_platform` (line 77) — Start OAuth2 authentication for a registered platform.
-- `async complete_auth_code` (line 177) — Complete an Authorization Code + PKCE flow by exchanging the code for tokens.
-- `async check_connection` (line 200) — Check if a platform is connected and has a valid (non-expired) token.
-- `async disconnect_platform` (line 225) — Disconnect from a platform by removing its stored tokens.
-- `async remove_platform_registration` (line 240) — Completely remove a platform registration and all its stored tokens and credentials.
-
 ## `app/tools/bigquery_data.py`
 BigQuery table metadata catalog — loaded from bigquery-skill.
 

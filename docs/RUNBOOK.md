@@ -145,6 +145,18 @@ Key things to grep for:
 | A2A connection issues | `a2a.*401\|a2a.*timeout` |
 | Neo4j connection | `neo4j.*Connection\|driver.*unavailable` |
 
+### From inside the chat — diagnostic tools (admin)
+
+Mounted on the CoordinatorAgent via `SystemToolset`. Use these when you don't have shell access (mobile, away from desk):
+
+| Tool | What it returns | Gating |
+|---|---|---|
+| `report_health` | Full system health: API connectivity, disk usage, git integrity. Calls `app/core/health.py:get_system_health`. | admin-only check |
+| `check_active_tasks` | List of background `ACTIVE_TASKS` (task_id, type, status, start_time, prompt). Useful for "what's running right now?" | admin-only check |
+| `inspect_secure_env` | Every env var with sensitive values redacted (`SECRET`/`TOKEN`/`KEY`/`PASSCODE` substrings → `xxx...xxx`). Useful for confirming a `.env` / vault key landed. | admin-only, no ACT (in `_ADMIN_ONLY_NO_STAGING` — env keys reveal system shape even when values are redacted) |
+
+These three were re-wired on 2026-05-12 — previously sat as orphan code in `app/tools/diagnostics.py` (never reachable from chat). Now callable directly.
+
 ---
 
 ## 7. Disaster recovery

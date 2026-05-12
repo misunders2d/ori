@@ -27,12 +27,20 @@ class SystemToolset(BaseToolset):
             set_thinking_mode,
             execute_approved_action,
         )
+        from app.tools.diagnostics import (
+            check_active_tasks,
+            report_health,
+            inspect_secure_env,
+        )
 
         tools = [
             FunctionTool(func=update_self),
             FunctionTool(func=session_refresh),
             FunctionTool(func=set_thinking_mode),
             FunctionTool(func=execute_approved_action),
+            FunctionTool(func=check_active_tasks),
+            FunctionTool(func=report_health),
+            FunctionTool(func=inspect_secure_env),
         ]
 
         if not _is_child_container():

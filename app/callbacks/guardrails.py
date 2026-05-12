@@ -140,7 +140,10 @@ def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
     # round-trip turned a one-prompt reboot into a 3-turn dance (provider
     # swap → reboot pain, 2026-05-12). Admin check remains; non-admins
     # are blocked below.
-    _ADMIN_ONLY_NO_STAGING = {"update_self"}
+    # `inspect_secure_env` exposes which env vars are set (values redacted).
+    # Useful for admin debugging; still revealing enough that non-admins
+    # must be blocked.
+    _ADMIN_ONLY_NO_STAGING = {"update_self", "inspect_secure_env"}
     if tool.name in _ADMIN_ONLY_NO_STAGING:
         current_state = tool_context.state.to_dict()
         user_id = current_state.get("user_id", "")
