@@ -148,11 +148,40 @@ async def _poll_download_and_deliver(
                     except Exception as doc_err:
                         error_details = f"(document fetch failed: {doc_err})"
 
-                detail_block = (
-                    f"Amazon error document:\n```{error_details}```\n"
-                    if error_details
-                    else "(No reportDocumentId attached — Amazon did not provide an error doc.)\n"
-                )
+                # Detect "report-type throttle": FATAL within 60s of
+                # processing start + no document. Per-report-type
+                # concurrency caps or post-FATAL cooldowns (often
+                # 5-30 min) trigger this. Distinct from retention.
+                likely_throttle = False
+                try:
+                    from datetime import datetime as _dt
+                    start_t = payload.get("processingStartTime") or payload.get("createdTime")
+                    end_t = payload.get("processingEndTime")
+                    if start_t and end_t and not doc_id:
+                        sdt = _dt.fromisoformat(str(start_t).replace("Z", "+00:00"))
+                        edt = _dt.fromisoformat(str(end_t).replace("Z", "+00:00"))
+                        likely_throttle = (edt - sdt).total_seconds() < 60
+                except Exception:
+                    pass
+
+                if error_details:
+                    detail_block = f"Amazon error document:\n```{error_details}```\n"
+                elif likely_throttle:
+                    detail_block = (
+                        "*Likely cause: report-type throttle.* FATAL within 60s + no "
+                        "error doc usually means Amazon's per-report-type concurrency cap "
+                        "or post-FATAL cooldown. Wait 5-30 minutes and retry, or check "
+                        "Seller Central UI directly. NOT necessarily a retention issue.\n"
+                    )
+                else:
+                    detail_block = (
+                        "(No reportDocumentId attached and processing was not "
+                        "suspiciously fast — Amazon did not expose an error doc. "
+                        "Likely causes: requested range outside Amazon's retention "
+                        "window (~90 days for most types), invalid report options, "
+                        "or data unavailable for the marketplace.)\n"
+                    )
+
                 failure_message = (
                     f"Report `{report_type}` failed with status: *{status}*.\n"
                     f"Report ID: `{report_id}`\n"
@@ -165,10 +194,11 @@ async def _poll_download_and_deliver(
                     session_message=(
                         f"{failure_message}\n\n"
                         "[Agent-only context: This background SP-API report failed. "
-                        "Inspect the Amazon error document above to surface the actual "
-                        "cause to the user. Common FATAL causes: requested date range "
-                        "outside Amazon's retention window (most types: ~90 days), "
-                        "invalid report options, or data unavailable for the marketplace.]"
+                        "If the detail_block above flags 'report-type throttle', do NOT "
+                        "auto-retry — Amazon's post-FATAL cooldown means immediate retry "
+                        "will FATAL again. Surface the throttle hint to the user and "
+                        "suggest waiting 5-30 min OR using Seller Central UI directly. "
+                        "Otherwise surface the actual cause from the error document.]"
                     ),
                 )
                 return

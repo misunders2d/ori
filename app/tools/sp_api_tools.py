@@ -533,16 +533,53 @@ async def sp_check_report(
                 error_details = f"(document fetch failed: {doc_result['error']})"
         response["error_details"] = error_details
         response["report_document_id"] = doc_id
-        response["message"] = (
-            f"Report ended with status {payload.get('processingStatus')}. "
-            + (
-                f"Amazon's error document is in `error_details`. "
-                if error_details
-                else "No reportDocumentId on this report — Amazon did not expose an error doc. "
+
+        # Distinguish "report-type throttle / concurrency cap" from
+        # "retention or true data issue". Symptom of throttle: FATAL
+        # within ~60s of processing start AND no reportDocumentId.
+        # Symptom of retention: FATAL after normal processing, same
+        # shape (no doc), but typically not while another report of
+        # the same type was just requested.
+        likely_throttle = False
+        try:
+            from datetime import datetime as _dt
+            start = payload.get("processingStartTime") or payload.get("createdTime")
+            end = payload.get("processingEndTime")
+            if start and end and not doc_id:
+                start_dt = _dt.fromisoformat(str(start).replace("Z", "+00:00"))
+                end_dt = _dt.fromisoformat(str(end).replace("Z", "+00:00"))
+                fast_fail = (end_dt - start_dt).total_seconds() < 60
+                likely_throttle = fast_fail
+        except Exception:
+            likely_throttle = False
+
+        response["likely_cause"] = (
+            "report_type_throttle" if likely_throttle
+            else ("amazon_error_doc" if error_details else "unknown_no_doc")
+        )
+
+        if likely_throttle:
+            cause_text = (
+                "FATAL within 60s of processing start + no reportDocumentId. "
+                "Most common cause: Amazon's per-report-type concurrency cap or "
+                "post-FATAL cooldown (often 5-30 minutes for the same type). "
+                "Do NOT retry immediately — wait 5-30 minutes, OR check Seller "
+                "Central UI directly. This is NOT proof the date range is outside "
+                "retention; same query may succeed minutes later."
             )
-            + "Common FATAL causes: requested date range outside Amazon's retention window "
-            "(reports older than ~90 days for most types), invalid report options, or "
-            "data unavailable for the requested marketplace."
+        elif error_details:
+            cause_text = "Amazon's error document is in `error_details`."
+        else:
+            cause_text = (
+                "No reportDocumentId on this report — Amazon did not expose an "
+                "error doc. Common causes: requested date range outside Amazon's "
+                "retention window (reports older than ~90 days for most types), "
+                "invalid report options, data unavailable for the marketplace, "
+                "or a transient report-type throttle (try again in 5-30 min)."
+            )
+
+        response["message"] = (
+            f"Report ended with status {payload.get('processingStatus')}. " + cause_text
         )
     else:
         response["message"] = f"Report status: {payload.get('processingStatus')}"

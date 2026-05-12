@@ -317,8 +317,8 @@ Session-scoped scratchpad for multi-step research tasks.
 ## `app/tools/sp_api_export.py`
 SP-API direct report-to-CSV pipeline — request, poll, download, convert in one call.
 
-- `async export_report_to_csv` (line 268) — Request an Amazon report and export it as a CSV file in the background.
-- `async data_to_csv` (line 354) — Convert structured data directly to a CSV file without code execution.
+- `async export_report_to_csv` (line 298) — Request an Amazon report and export it as a CSV file in the background.
+- `async data_to_csv` (line 384) — Convert structured data directly to a CSV file without code execution.
 
 ## `app/tools/sp_api_tools.py`
 Amazon Selling Partner API tools — product catalog, listings, pricing, reports.
@@ -332,9 +332,9 @@ Amazon Selling Partner API tools — product catalog, listings, pricing, reports
 - `async sp_get_inventory_summaries` (line 337) — Get live FBA inventory summaries (fulfillable, inbound, reserved).
 - `async sp_request_report` (line 409) — Request an Amazon report. Returns a report ID to check status with sp_check_report.
 - `async sp_check_report` (line 471) — Check the status of a requested report.
-- `async sp_download_report` (line 553) — Download a completed report by its document ID.
-- `async sp_get_account_health` (line 603) — Fetch the Seller Central Account Health digest — AHR, policy compliance,
-- `async sp_list_reports` (line 735) — List previously requested reports.
+- `async sp_download_report` (line 590) — Download a completed report by its document ID.
+- `async sp_get_account_health` (line 640) — Fetch the Seller Central Account Health digest — AHR, policy compliance,
+- `async sp_list_reports` (line 772) — List previously requested reports.
 
 ## `app/tools/spawn.py`
 Tool for spawning sibling agent containers.
