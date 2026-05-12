@@ -198,10 +198,26 @@ def _build_model(provider: str, model_name: str, **kwargs):
         if not has_openrouter_key:
             raise ValueError("OpenRouter models require OPENROUTER_API_KEY.")
         from google.adk.models.lite_llm import LiteLlm
+        lite_kwargs = _without_litellm_unsupported_kwargs(kwargs)
+        # Anthropic auto-prompt-caching via OpenRouter: a top-level
+        # `cache_control: {type: ephemeral}` field tells OpenRouter to
+        # mark the last cacheable block, which caches the entire prefix
+        # (system + tools + history). Anthropic charges 0.1× input on
+        # cache reads, 1.25× input on cache writes. Cuts cost on the
+        # static schema/system portion (~25-30K tokens for DeveloperAgent)
+        # by ~90% on every cache hit (5-min TTL). Min cacheable for
+        # Sonnet 4.6 = 2048 tokens, well below our usage.
+        # LiteLLM's openrouter handler forwards `extra_body` keys into
+        # the request body root; only enabled for Claude (Gemini caches
+        # automatically without a marker, others don't support it).
+        if "claude" in model_name.lower() or model_name.lower().startswith("anthropic/"):
+            extra = lite_kwargs.get("extra_body") or {}
+            extra.setdefault("cache_control", {"type": "ephemeral"})
+            lite_kwargs["extra_body"] = extra
         # LiteLLM routes correctly with "openrouter/" prefix
         return LiteLlm(
             model=f"openrouter/{model_name}",
-            **_without_litellm_unsupported_kwargs(kwargs),
+            **lite_kwargs,
         )
 
     raise ValueError(

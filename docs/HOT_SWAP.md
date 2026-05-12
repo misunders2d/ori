@@ -50,6 +50,21 @@ Supported providers (`PROVIDER_API_KEYS`):
 
 Provider routing happens inside `get_model(component)` — Google goes to ADK's native Gemini class, Anthropic via LiteLlm (or Vertex if Vertex mode is on), OpenRouter via LiteLlm with the `openrouter/` prefix.
 
+### 2.1 Anthropic prompt caching (OpenRouter)
+
+For any OpenRouter model containing `claude` in the name (case-insensitive), `_build_model` injects `extra_body={"cache_control": {"type": "ephemeral"}}`. LiteLLM's OpenRouter handler forwards `extra_body` keys into the request body root, and OpenRouter's auto-caching marks the last cacheable block — caching the entire prefix (system + tools + history) for 5 minutes.
+
+Anthropic pricing on cached prefixes:
+- Cache write: 1.25× input rate (one-time, ~$3.75/M for Sonnet 4.6)
+- Cache read: 0.1× input rate (~$0.30/M for Sonnet 4.6)
+- Min cacheable block: 2048 tokens (Sonnet 4.6), 4096 (Opus 4.7)
+
+DeveloperAgent has ~25-30K of stable system + tool schemas, well above min. Across a multi-turn flow, every turn after the first reads cache at 10% input cost — ~90% savings on the static portion.
+
+Verify in OpenRouter activity logs: `prompt_tokens_details.cached_tokens > 0` on second+ turns within 5 min.
+
+Caveat: Gemini caches automatically without a marker; we only inject for Claude. DeepSeek and others on OpenRouter handle caching server-side — no client config needed.
+
 ## 3. Resolution order
 
 `get_model_string(component)`:
