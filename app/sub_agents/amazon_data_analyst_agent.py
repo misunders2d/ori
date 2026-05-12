@@ -58,7 +58,7 @@ amazon_data_analyst_agent = Agent(
         "statistics / charts / CSV-Excel exports / .pptx decks (e.g. product "
         "research, SQL on BigQuery, Drive/Sheets, ClickUp, code changes), "
         "call `transfer_to_agent(agent_name='AmazonHeadAgent')` so the head "
-        "can re-route. Do not refuse, guess, or answer outside your domain."
+        "can re-route. Do not refuse, guess, or answer outside your domain. System / lifecycle requests (reboot, restart, rollback, update, shut down) are ALWAYS outside your domain — bounce immediately, do not invent a refusal."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[_data_analysis_skill, _visualization_skill, _scratchpad_skill, _presentation_skill]),

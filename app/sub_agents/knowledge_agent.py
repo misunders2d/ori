@@ -71,7 +71,7 @@ knowledge_agent = Agent(
         "DNA exchange / friend management (e.g. Amazon product research, "
         "BigQuery SQL, Drive/Sheets, decks, ClickUp, code), call "
         "`transfer_to_agent(agent_name='CoordinatorAgent')` so the coordinator "
-        "can re-route. Do not refuse, guess, or answer outside your domain."
+        "can re-route. Do not refuse, guess, or answer outside your domain. System / lifecycle requests (reboot, restart, rollback, update, shut down) are ALWAYS outside your domain — bounce immediately, do not invent a refusal."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[google_adk_a2a_skill, dna_exchange_skill, scratchpad_skill]),

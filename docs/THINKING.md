@@ -29,8 +29,8 @@ Thinking tokens are billed as **output** on Gemini ($3/M for Flash). Routing age
 
 | Component                  | Default   | Rationale                                |
 |----------------------------|-----------|------------------------------------------|
-| `CoordinatorAgent`         | `low`     | Top router. Routing = pattern match.     |
-| `AmazonHeadAgent`          | `low`     | Domain router.                           |
+| `CoordinatorAgent`         | `medium`  | Top router. Bumped from `low` 2026-05-12 — `low` was too shallow for explicit rule-following (bot hallucinated a self-reboot refusal). |
+| `AmazonHeadAgent`          | `medium`  | Domain router. Same rationale as Coordinator. |
 | `KnowledgeAgent`           | `low`     | A2A messaging.                           |
 | `AmazonAgent`              | `minimal` | Keepa/SP-API/H10 CRUD.                   |
 | `AmazonMemoryAgent`        | `minimal` | Neo4j CRUD.                              |

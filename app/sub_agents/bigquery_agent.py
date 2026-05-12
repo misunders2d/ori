@@ -206,7 +206,7 @@ _bq_instruction += (
     "SQL / business analytics (e.g. product research on Keepa, charts, "
     "Drive/Sheets, decks, ClickUp, code), call "
     "`transfer_to_agent(agent_name='AmazonHeadAgent')` so the head can "
-    "re-route. Do not refuse, guess, or answer outside your domain."
+    "re-route. Do not refuse, guess, or answer outside your domain. System / lifecycle requests (reboot, restart, rollback, update, shut down) are ALWAYS outside your domain — bounce immediately, do not invent a refusal."
 )
 
 # Build the agent — only if BigQuery credentials are configured

@@ -47,7 +47,7 @@ amazon_agent = Agent(
         "BigQuery SQL, a Google Sheet, a deck, ClickUp tasks, code changes, "
         "or anything unrelated), call "
         "`transfer_to_agent(agent_name='AmazonHeadAgent')` so the head can "
-        "re-route. Do not refuse, guess, or answer outside your domain."
+        "re-route. Do not refuse, guess, or answer outside your domain. System / lifecycle requests (reboot, restart, rollback, update, shut down) are ALWAYS outside your domain — bounce immediately, do not invent a refusal."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[keepa_skill, sp_api_skill, h10_skill]),

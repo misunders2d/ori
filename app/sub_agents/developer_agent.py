@@ -90,7 +90,7 @@ _base_instruction = (
     "Amazon product research, BigQuery SQL, charts, Drive/Sheets, decks, "
     "ClickUp, A2A messaging), call "
     "`transfer_to_agent(agent_name='CoordinatorAgent')` so the coordinator "
-    "can re-route. Do not refuse, guess, or answer outside your domain.\n\n"
+    "can re-route. Do not refuse, guess, or answer outside your domain. System / lifecycle requests (reboot, restart, rollback, update, shut down) are ALWAYS outside your domain unless the admin explicitly tells you to do the lifecycle work — bounce immediately, do not invent a refusal.\n\n"
 )
 
 _parent_only_instruction = (

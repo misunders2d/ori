@@ -68,7 +68,7 @@ amazon_head_agent = Agent(
         "operations (e.g. ClickUp tasks, A2A communication, self-evolution / "
         "code changes, AI image generation, scheduling / contracts), call "
         "`transfer_to_agent(agent_name='CoordinatorAgent')` so the coordinator "
-        "can re-route. Do not refuse, guess, or answer outside your domain."
+        "can re-route. Do not refuse, guess, or answer outside your domain. System / lifecycle requests (reboot, restart, rollback, update, shut down) are ALWAYS outside your domain — bounce immediately, do not invent a refusal."
     ),
     sub_agents=[
         amazon_agent,

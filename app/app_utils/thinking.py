@@ -50,8 +50,13 @@ VALID_LEVELS = ("minimal", "low", "medium", "high")
 # Sonnet defaults to `medium` (Anthropic budget 4096) — strong code
 # reasoning without paying for `high`-tier 8K thinking budget.
 THINKING_DEFAULTS: dict[str, str] = {
-    "CoordinatorAgent":         "low",
-    "AmazonHeadAgent":          "low",
+    # Coordinator + AmazonHead bumped from low to medium 2026-05-12:
+    # production proof that `low` was too shallow for explicit rule
+    # following — bot hallucinated a self-reboot refusal despite the
+    # REBOOT/RESTART rule in its instruction. Medium fixes that with
+    # only a modest thinking-token bump.
+    "CoordinatorAgent":         "medium",
+    "AmazonHeadAgent":          "medium",
     "KnowledgeAgent":           "low",
     "AmazonAgent":              "minimal",
     "AmazonMemoryAgent":        "minimal",
