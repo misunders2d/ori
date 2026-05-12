@@ -31,13 +31,17 @@ MODEL_DEFAULTS: dict[str, str] = {
     "BigQueryAgent":            "google/gemini-3-flash-preview",
     "youtube_summarizer":       "google/gemini-3-flash-preview",
 
-    # Self-evolution is irreversible code-modifying-code — pay for the
-    # safer answer by default. Opus 4.7 leads MCP-Atlas (multi-turn
-    # tool-calling) and cut multi-step task abandonment ~60% vs 4.6 in
-    # Anthropic's internal data. Routed via OpenRouter so a single
-    # OPENROUTER_API_KEY in vault covers it. Hot-swap is wired (see
-    # docs/HOT_SWAP.md) — switch back to Flash anytime with `/models set`.
-    "DeveloperAgent":           "openrouter/anthropic/claude-opus-4.7",
+    # Self-evolution = code-modifying-code. Want strong tool-use + code
+    # reasoning, but Opus 4.7 burned ~$3 on a single trivial model-name
+    # change (2026-05-12 incident: 11+ turns × ~35K input tokens × Opus
+    # input rate $15/M, no prompt-caching on the LiteLLM path). Sonnet 4.6
+    # is ~5× cheaper input, 5× cheaper output, near-equal tool-calling
+    # quality on code tasks. Routed via OpenRouter (single
+    # OPENROUTER_API_KEY in vault). Escalate to Opus manually with
+    # `/models set DeveloperAgent openrouter/anthropic/claude-opus-4.7`
+    # ONLY for hard multi-file refactors where Sonnet struggles. Hot-swap
+    # wired (see docs/HOT_SWAP.md); no restart needed.
+    "DeveloperAgent":           "openrouter/anthropic/claude-sonnet-4.6",
 
     # AmazonHeadAgent kept on Flash — it's the routing brain for every
     # Amazon query (decides which Amazon sub-agent handles the request).

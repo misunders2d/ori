@@ -15,7 +15,7 @@ A component is a named slot that resolves to a model string. There are 15 today 
 | Component | Default | Tier | Why |
 |---|---|---|---|
 | `CoordinatorAgent` | `google/gemini-3-flash-preview` | Flash | top router, judgment calls |
-| `DeveloperAgent` | `openrouter/anthropic/claude-opus-4.7` | Opus | writes its own code (irreversible) |
+| `DeveloperAgent` | `openrouter/anthropic/claude-sonnet-4.6` | Sonnet | writes its own code (irreversible); Opus 4.7 was default until 2026-05-12 when a single trivial model-name rename cost ~$3 (11+ turns × ~35K input tokens × \$15/M Opus input rate, no prompt-caching on LiteLLM path). Sonnet 4.6 is ~5× cheaper input + output, near-equal tool-calling quality on code. Escalate to Opus only for hard multi-file refactors: `/models set DeveloperAgent openrouter/anthropic/claude-opus-4.7`. |
 | `KnowledgeAgent` | `google/gemini-3-flash-preview` | Flash | research + summarisation |
 | `AmazonDataAnalystAgent` | `google/gemini-3-flash-preview` | Flash | matplotlib codegen + statistical analysis |
 | `BigQueryAgent` | `google/gemini-3-flash-preview` | Flash | SQL synthesis, business reasoning |
