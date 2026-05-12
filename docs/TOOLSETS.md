@@ -30,7 +30,7 @@
 ## GoogleWorkspaceToolset
 - File: `app/toolsets/google_workspace.py:6`
 - Google Drive, Sheets, Calendar, and Gmail tools with per-user OAuth2.
-- Bundled tools: `calendar_create_event`, `calendar_delete_event`, `calendar_list`, `calendar_list_events`, `calendar_update_event`, `drive_download_file`, `drive_list_files`, `gmail_download_attachment`, `gmail_get_message`, `gmail_get_thread`, `gmail_list_labels`, `gmail_list_messages`, `gmail_list_threads`, `google_connect`, `google_disconnect`, `sheets_create`, `sheets_read`, `sheets_write`
+- Bundled tools: `calendar_create_event`, `calendar_delete_event`, `calendar_list`, `calendar_list_events`, `calendar_update_event`, `drive_download_file`, `drive_list_files`, `gmail_download_attachment`, `gmail_get_message`, `gmail_get_thread`, `gmail_list_labels`, `gmail_list_messages`, `gmail_list_threads`, `google_connect`, `google_disconnect`, `sheets_create`, `sheets_list_tabs`, `sheets_read`, `sheets_write`
 
 ## GraphToolset
 - File: `app/toolsets/graph.py:5`

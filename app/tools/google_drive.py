@@ -7,6 +7,7 @@ retrieves their OAuth2 token, and makes authenticated API calls.
 import logging
 import mimetypes
 import os
+import re
 from typing import Optional
 
 import httpx
@@ -20,6 +21,68 @@ from app.tools.google_oauth.token_store import (
     get_token, save_token, delete_token,
     save_user_mapping, resolve_email, delete_user_mapping,
 )
+
+
+# ---------------------------------------------------------------------------
+# Drive ID extraction — accept URLs or bare IDs from the agent.
+# ---------------------------------------------------------------------------
+# Google Drive IDs are 25-80 char random strings (alphanum + `-_`). LLMs
+# hallucinate when retyping them: g→q, 9→0, etc. (production proof
+# 2026-05-12 — agent emitted `LQq…` for `LQg…` after the user pasted the
+# real URL one message earlier).
+#
+# Every ID-taking tool below accepts a URL too. Helper extracts the
+# canonical ID from any Google URL shape: Sheets, Docs, Slides,
+# Drawings, Forms, generic Drive files, folders, or the `?id=` open
+# URL. Bare IDs pass through. Anything else returns a structured error
+# with a usage hint.
+
+# Matches /<kind>/d/<id>, /folders/<id>, or `?id=<id>` / `&id=<id>`.
+_GOOGLE_URL_ID_RE = re.compile(
+    r"(?:"
+    r"/(?:spreadsheets|document|presentation|forms|drawings|file)/d/"
+    r"|/folders/"
+    r"|[?&]id="
+    r")([A-Za-z0-9_-]{20,80})"
+)
+# Bare ID — same charset, length range that real Drive IDs sit in.
+_BARE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{20,80}$")
+
+
+def _extract_drive_id(url_or_id: str) -> str:
+    """Return the canonical Drive ID from a URL or bare ID. Raises ValueError otherwise.
+
+    Accepts:
+      - Bare 25-80 char ID
+      - Sheets:        https://docs.google.com/spreadsheets/d/<ID>/edit?...
+      - Docs:          https://docs.google.com/document/d/<ID>/edit?...
+      - Slides:        https://docs.google.com/presentation/d/<ID>/edit?...
+      - Forms:         https://docs.google.com/forms/d/<ID>/edit?...
+      - Drawings:      https://docs.google.com/drawings/d/<ID>/edit?...
+      - Drive file:    https://drive.google.com/file/d/<ID>/view?...
+      - Drive folder:  https://drive.google.com/drive/folders/<ID>?...
+      - Open URL:      https://drive.google.com/open?id=<ID>
+      - URLs with `?pli=1`, `#gid=...`, `/u/0/`, etc. — trailing junk ignored
+    """
+    if not isinstance(url_or_id, str) or not url_or_id.strip():
+        raise ValueError("expected a Google Drive URL or file ID, got empty input")
+    s = url_or_id.strip()
+
+    # Cheap path — bare ID
+    if _BARE_ID_RE.fullmatch(s):
+        return s
+
+    # URL path
+    m = _GOOGLE_URL_ID_RE.search(s)
+    if m:
+        return m.group(1)
+
+    raise ValueError(
+        f"Could not extract a Google Drive ID from {s[:120]!r}. "
+        "Pass either a 25-80 char ID or a full Google URL "
+        "(spreadsheets/d/, document/d/, presentation/d/, drawings/d/, "
+        "forms/d/, file/d/, drive/folders/, or /open?id=)."
+    )
 
 # Gemini inline-data acceptance — mirrors the gate in load_artifacts_tool.
 _ARTIFACT_INLINE_PREFIXES = ("image/", "audio/", "video/")
@@ -140,7 +203,8 @@ async def drive_list_files(
     Args:
         query: Search query (e.g., 'name contains "report"', 'mimeType = "application/vnd.google-apps.spreadsheet"').
                Leave empty to list recent files.
-        folder_id: Optional folder ID to search within.
+        folder_id: Optional folder ID OR a Drive folder URL
+                   (https://drive.google.com/drive/folders/<ID> works too).
         max_results: Maximum number of results (default 20).
     """
     email = _get_user_email(tool_context)
@@ -148,11 +212,18 @@ async def drive_list_files(
     if not token:
         return {"status": "error", "message": f"Google not connected for {email}. Use google_connect first."}
 
+    resolved_folder_id = ""
+    if folder_id:
+        try:
+            resolved_folder_id = _extract_drive_id(folder_id)
+        except ValueError as e:
+            return {"status": "error", "message": str(e)}
+
     q_parts = []
     if query:
         q_parts.append(query)
-    if folder_id:
-        q_parts.append(f"'{folder_id}' in parents")
+    if resolved_folder_id:
+        q_parts.append(f"'{resolved_folder_id}' in parents")
     q_parts.append("trashed = false")
 
     params = {
@@ -216,8 +287,18 @@ async def drive_download_file(
     txt/md/json/yaml) also populate `extracted_text`.
 
     Args:
-        file_id: The Google Drive file ID.
+        file_id: The Google Drive file ID OR any Drive file URL
+                 (https://docs.google.com/document/d/<ID>/edit,
+                 https://drive.google.com/file/d/<ID>/view, etc.).
+                 URL is preferred — pass the user's link directly, do not
+                 retype the ID from memory (LLM hallucination risk on
+                 44-char random strings).
     """
+    try:
+        file_id = _extract_drive_id(file_id)
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+
     email = _get_user_email(tool_context)
     token = await _get_valid_token(email)
     if not token:
@@ -295,15 +376,26 @@ async def drive_download_file(
 
 async def sheets_read(
     spreadsheet_id: str,
-    range: str = "Sheet1",
+    range: str = "",
     tool_context: ToolContext = None,
 ) -> dict:
     """Read data from a Google Spreadsheet.
 
     Args:
-        spreadsheet_id: The spreadsheet ID (from the URL).
-        range: Cell range in A1 notation (e.g., 'Sheet1!A1:D10', 'Sheet1').
+        spreadsheet_id: Spreadsheet ID OR full Sheets URL
+            (https://docs.google.com/spreadsheets/d/<ID>/edit?...).
+            URL is preferred — pass the user's link directly, do NOT
+            retype the ID from memory (LLM hallucination risk).
+        range: Cell range in A1 notation (e.g., 'Sheet1!A1:D10',
+            'My Tab Name'). Leave empty to auto-select the first tab
+            (recommended when the tab name is unknown — Sheet1 is
+            often missing on real-world spreadsheets).
     """
+    try:
+        spreadsheet_id = _extract_drive_id(spreadsheet_id)
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+
     email = _get_user_email(tool_context)
     token = await _get_valid_token(email)
     if not token:
@@ -311,16 +403,86 @@ async def sheets_read(
 
     try:
         async with httpx.AsyncClient(timeout=15) as client:
+            # Auto-resolve range when none given: fetch first tab title.
+            if not range:
+                meta = await client.get(
+                    f"{_SHEETS_API}/{spreadsheet_id}",
+                    params={"fields": "sheets.properties.title"},
+                    headers=_auth_headers(token),
+                )
+                if meta.status_code == 200:
+                    sheets = meta.json().get("sheets", [])
+                    titles = [
+                        s.get("properties", {}).get("title")
+                        for s in sheets
+                        if s.get("properties", {}).get("title")
+                    ]
+                    if titles:
+                        range = titles[0]
+                    else:
+                        range = "Sheet1"
+                elif meta.status_code == 404:
+                    return {
+                        "status": "error",
+                        "message": (
+                            f"Spreadsheet not found (404). spreadsheet_id={spreadsheet_id!r}. "
+                            "Verify the ID matches the URL exactly. The user may have shared "
+                            "a different ID — re-paste the full URL and pass it directly."
+                        ),
+                    }
+                else:
+                    range = "Sheet1"
+
             resp = await client.get(
                 f"{_SHEETS_API}/{spreadsheet_id}/values/{range}",
                 headers=_auth_headers(token),
             )
+            if resp.status_code == 404:
+                return {
+                    "status": "error",
+                    "message": (
+                        f"Sheets 404 for spreadsheet_id={spreadsheet_id!r}, range={range!r}. "
+                        "Verify the ID matches the URL exactly — re-paste the full URL."
+                    ),
+                }
+            if resp.status_code == 400:
+                # Likely bad range — list real tabs so the agent can pick one.
+                tabs_resp = await client.get(
+                    f"{_SHEETS_API}/{spreadsheet_id}",
+                    params={"fields": "sheets.properties.title"},
+                    headers=_auth_headers(token),
+                )
+                tab_titles = []
+                if tabs_resp.status_code == 200:
+                    tab_titles = [
+                        s.get("properties", {}).get("title")
+                        for s in tabs_resp.json().get("sheets", [])
+                        if s.get("properties", {}).get("title")
+                    ]
+                hint = (
+                    f"Available tabs: {tab_titles}. Pass one as `range`."
+                    if tab_titles
+                    else "Could not list tabs either — check spreadsheet access."
+                )
+                return {
+                    "status": "error",
+                    "message": (
+                        f"Sheets 400 for spreadsheet_id={spreadsheet_id!r}, "
+                        f"range={range!r}: {resp.text[:200]}. {hint}"
+                    ),
+                }
             resp.raise_for_status()
             data = resp.json()
             values = data.get("values", [])
             return {"status": "success", "range": data.get("range"), "rows": len(values), "values": values}
     except Exception as e:
-        return {"status": "error", "message": f"Sheets API error: {e}"}
+        return {
+            "status": "error",
+            "message": (
+                f"Sheets API error for spreadsheet_id={spreadsheet_id!r}, "
+                f"range={range!r}: {e}"
+            ),
+        }
 
 
 async def sheets_write(
@@ -332,10 +494,15 @@ async def sheets_write(
     """Write data to a Google Spreadsheet.
 
     Args:
-        spreadsheet_id: The spreadsheet ID.
+        spreadsheet_id: Spreadsheet ID OR full Sheets URL. URL preferred.
         range: Cell range in A1 notation (e.g., 'Sheet1!A1').
         values: 2D list of values to write (e.g., [["Name", "Sales"], ["Product A", 100]]).
     """
+    try:
+        spreadsheet_id = _extract_drive_id(spreadsheet_id)
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+
     email = _get_user_email(tool_context)
     token = await _get_valid_token(email)
     if not token:
@@ -349,11 +516,88 @@ async def sheets_write(
                 json={"values": values},
                 headers=_auth_headers(token),
             )
+            if resp.status_code in (400, 404):
+                return {
+                    "status": "error",
+                    "message": (
+                        f"Sheets {resp.status_code} for spreadsheet_id={spreadsheet_id!r}, "
+                        f"range={range!r}: {resp.text[:200]}. "
+                        "Verify the URL matches the user's link and the tab name is correct."
+                    ),
+                }
             resp.raise_for_status()
             data = resp.json()
             return {"status": "success", "updated_range": data.get("updatedRange"), "updated_cells": data.get("updatedCells")}
     except Exception as e:
-        return {"status": "error", "message": f"Sheets API error: {e}"}
+        return {
+            "status": "error",
+            "message": (
+                f"Sheets API error for spreadsheet_id={spreadsheet_id!r}, "
+                f"range={range!r}: {e}"
+            ),
+        }
+
+
+async def sheets_list_tabs(
+    spreadsheet_id: str,
+    tool_context: ToolContext = None,
+) -> dict:
+    """List every tab (worksheet) in a Google Spreadsheet.
+
+    Use BEFORE `sheets_read` when the tab name is unknown — many real
+    spreadsheets do NOT have a tab named 'Sheet1', so the default range
+    fails with a 400.
+
+    Args:
+        spreadsheet_id: Spreadsheet ID OR full Sheets URL. URL preferred.
+
+    Returns:
+        dict with `tabs`: list of tab titles (in sheet order), plus
+        `spreadsheet_id` of the resolved sheet.
+    """
+    try:
+        spreadsheet_id = _extract_drive_id(spreadsheet_id)
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+
+    email = _get_user_email(tool_context)
+    token = await _get_valid_token(email)
+    if not token:
+        return {"status": "error", "message": f"Google not connected for {email}. Use google_connect first."}
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{_SHEETS_API}/{spreadsheet_id}",
+                params={"fields": "sheets.properties.title,properties.title"},
+                headers=_auth_headers(token),
+            )
+            if resp.status_code == 404:
+                return {
+                    "status": "error",
+                    "message": (
+                        f"Spreadsheet not found (404). spreadsheet_id={spreadsheet_id!r}. "
+                        "Verify the ID matches the URL exactly — re-paste the full URL."
+                    ),
+                }
+            resp.raise_for_status()
+            data = resp.json()
+            tabs = [
+                s.get("properties", {}).get("title")
+                for s in data.get("sheets", [])
+                if s.get("properties", {}).get("title")
+            ]
+            return {
+                "status": "success",
+                "spreadsheet_id": spreadsheet_id,
+                "title": data.get("properties", {}).get("title", ""),
+                "tabs": tabs,
+            }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Sheets API error for spreadsheet_id={spreadsheet_id!r}: {e}",
+        }
 
 
 async def sheets_create(

@@ -125,13 +125,14 @@ Google Calendar tools — per-user OAuth2 access.
 ## `app/tools/google_drive.py`
 Google Drive and Sheets tools — per-user OAuth2 access.
 
-- `async google_connect` (line 84) — Start Google authorization for the current user (Drive/Sheets/Calendar/Gmail).
-- `async google_disconnect` (line 111) — Disconnect Google Drive/Sheets for the current user. Removes stored tokens and mapping.
-- `async drive_list_files` (line 132) — List or search files in Google Drive.
-- `async drive_download_file` (line 206) — Download the content of a file from Google Drive.
-- `async sheets_read` (line 296) — Read data from a Google Spreadsheet.
-- `async sheets_write` (line 326) — Write data to a Google Spreadsheet.
-- `async sheets_create` (line 359) — Create a new Google Spreadsheet.
+- `async google_connect` (line 147) — Start Google authorization for the current user (Drive/Sheets/Calendar/Gmail).
+- `async google_disconnect` (line 174) — Disconnect Google Drive/Sheets for the current user. Removes stored tokens and mapping.
+- `async drive_list_files` (line 195) — List or search files in Google Drive.
+- `async drive_download_file` (line 277) — Download the content of a file from Google Drive.
+- `async sheets_read` (line 377) — Read data from a Google Spreadsheet.
+- `async sheets_write` (line 488) — Write data to a Google Spreadsheet.
+- `async sheets_list_tabs` (line 541) — List every tab (worksheet) in a Google Spreadsheet.
+- `async sheets_create` (line 603) — Create a new Google Spreadsheet.
 
 ## `app/tools/google_gmail.py`
 Gmail read-only tools — per-user OAuth2 access.

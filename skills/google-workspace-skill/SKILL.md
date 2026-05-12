@@ -28,15 +28,30 @@ One connection grants access to Drive, Sheets, Calendar, AND Gmail. No need to c
 ### Drive
 | Tool | Purpose |
 |------|---------|
-| `drive_list_files(query, folder_id)` | Search/list files. Query uses Drive API syntax. |
-| `drive_download_file(file_id)` | Download a file. Google Docs export as PDF, Sheets as CSV. |
+| `drive_list_files(query, folder_id)` | Search/list files. Query uses Drive API syntax. `folder_id` accepts a bare ID OR a folder URL. |
+| `drive_download_file(file_id)` | Download a file. `file_id` accepts a bare ID OR any Drive/Docs/Slides/Sheets URL. Docs/Slides export as text/plain, Sheets as CSV, Drawings as PNG. |
 
 ### Sheets
 | Tool | Purpose |
 |------|---------|
-| `sheets_read(spreadsheet_id, range)` | Read data from a range (A1 notation) |
-| `sheets_write(spreadsheet_id, range, values)` | Write data to a range |
-| `sheets_create(title)` | Create a new spreadsheet |
+| `sheets_read(spreadsheet_id, range="")` | Read data. `spreadsheet_id` accepts a bare ID OR a Sheets URL. Empty `range` auto-selects the first tab. |
+| `sheets_write(spreadsheet_id, range, values)` | Write data. Same URL-or-ID input. |
+| `sheets_create(title)` | Create a NEW spreadsheet. DO NOT call this as a fallback when `sheets_read` fails — report the read error instead. |
+| `sheets_list_tabs(spreadsheet_id)` | List every tab name. Call BEFORE `sheets_read` when the tab name is unknown. Many real spreadsheets do NOT have a tab called "Sheet1". |
+
+### URL-or-ID rule (ALL Drive tools)
+
+Every ID-taking tool accepts a URL too. **Pass the user's URL directly — never retype the ID.** Google Drive IDs are 25-80 random characters; LLMs typo them reliably (g↔q, 9↔0 confusion). Production failure 2026-05-12: bot emitted `LQq…` after user pasted URL with `LQg…` one message earlier. Tools extract the canonical ID server-side from any of these shapes:
+
+- `https://docs.google.com/spreadsheets/d/<ID>/edit?...`
+- `https://docs.google.com/document/d/<ID>/edit?...`
+- `https://docs.google.com/presentation/d/<ID>/edit?...`
+- `https://docs.google.com/forms/d/<ID>/...`
+- `https://docs.google.com/drawings/d/<ID>/...`
+- `https://drive.google.com/file/d/<ID>/view?...`
+- `https://drive.google.com/drive/folders/<ID>?...`
+- `https://drive.google.com/open?id=<ID>`
+- Bare 25-80 char ID
 
 ### Calendar
 | Tool | Purpose |
@@ -93,7 +108,7 @@ Create a calendar event only when the user explicitly says "add to my calendar",
 - **User must connect first.** All tools return "not connected" if the user hasn't authorized. Don't retry — tell them to run the connect flow.
 - **Per-user access.** Each user sees only their own files and calendars. Tokens are stored per-email.
 - **Existing users must reconnect** after the OAuth flow migrated from device-flow to web-flow (so Gmail scopes are supported). If any Google tool fails with permission or invalid-grant errors, tell the user to run `google_connect` again.
-- **Spreadsheet ID is in the URL.** `https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit` — extract the ID between `/d/` and `/edit`.
+- **Spreadsheet ID is in the URL.** `https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit` — but you do NOT need to extract it. Pass the FULL URL to `sheets_read` / `sheets_write` / `sheets_list_tabs`; the tool extracts the ID server-side. Manual extraction is a typo trap.
 - **Range format.** Use A1 notation: `Sheet1!A1:D10`, `Sheet1`, `A1:B5`. Sheet name is optional if there's only one sheet.
 - **Tokens auto-refresh.** Access tokens expire after 1 hour but refresh automatically. If refresh fails, the user needs to reconnect.
 - **OAuth client must be configured.** Needs `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, and `OAUTH_BASE_URL` (the public URL of the bot's A2A Starlette server, e.g. `https://bezosapp.uk`) in vault. Set via `/init`. The OAuth client in Google Cloud Console must be type "Web application" with `{OAUTH_BASE_URL}/oauth/google/callback` as an authorized redirect URI.

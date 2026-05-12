@@ -39,7 +39,7 @@ Read this **before** adding new code — most things you'd build already exist.
 
 - **KnowledgeAgent** (Agent) — `app/sub_agents/knowledge_agent.py:30`
 
-## Tools (230 public functions across 40 files)
+## Tools (231 public functions across 40 files)
 
 
 ### `app/tools/a2a.py`
@@ -160,13 +160,14 @@ Google Calendar tools — per-user OAuth2 access.
 ### `app/tools/google_drive.py`
 Google Drive and Sheets tools — per-user OAuth2 access.
 
-- `async google_connect` (line 84) — Start Google authorization for the current user (Drive/Sheets/Calendar/Gmail).
-- `async google_disconnect` (line 111) — Disconnect Google Drive/Sheets for the current user. Removes stored tokens and mapping.
-- `async drive_list_files` (line 132) — List or search files in Google Drive.
-- `async drive_download_file` (line 206) — Download the content of a file from Google Drive.
-- `async sheets_read` (line 296) — Read data from a Google Spreadsheet.
-- `async sheets_write` (line 326) — Write data to a Google Spreadsheet.
-- `async sheets_create` (line 359) — Create a new Google Spreadsheet.
+- `async google_connect` (line 147) — Start Google authorization for the current user (Drive/Sheets/Calendar/Gmail).
+- `async google_disconnect` (line 174) — Disconnect Google Drive/Sheets for the current user. Removes stored tokens and mapping.
+- `async drive_list_files` (line 195) — List or search files in Google Drive.
+- `async drive_download_file` (line 277) — Download the content of a file from Google Drive.
+- `async sheets_read` (line 377) — Read data from a Google Spreadsheet.
+- `async sheets_write` (line 488) — Write data to a Google Spreadsheet.
+- `async sheets_list_tabs` (line 541) — List every tab (worksheet) in a Google Spreadsheet.
+- `async sheets_create` (line 603) — Create a new Google Spreadsheet.
 
 ### `app/tools/google_gmail.py`
 Gmail read-only tools — per-user OAuth2 access.
@@ -435,7 +436,7 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
 
 - **GoogleWorkspaceToolset** — `app/toolsets/google_workspace.py:6`
   - Google Drive, Sheets, Calendar, and Gmail tools with per-user OAuth2.
-  - tools: `calendar_create_event`, `calendar_delete_event`, `calendar_list`, `calendar_list_events`, `calendar_update_event`, `drive_download_file`, `drive_list_files`, `gmail_download_attachment`, `gmail_get_message`, `gmail_get_thread`, `gmail_list_labels`, `gmail_list_messages`, `gmail_list_threads`, `google_connect`, `google_disconnect`, `sheets_create`, `sheets_read`, `sheets_write`
+  - tools: `calendar_create_event`, `calendar_delete_event`, `calendar_list`, `calendar_list_events`, `calendar_update_event`, `drive_download_file`, `drive_list_files`, `gmail_download_attachment`, `gmail_get_message`, `gmail_get_thread`, `gmail_list_labels`, `gmail_list_messages`, `gmail_list_threads`, `google_connect`, `google_disconnect`, `sheets_create`, `sheets_list_tabs`, `sheets_read`, `sheets_write`
 
 - **GraphToolset** — `app/toolsets/graph.py:5`
   - Neo4j knowledge graph — entity tracking, relationships, and graph queries.

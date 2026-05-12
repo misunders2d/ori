@@ -15,6 +15,7 @@ class GoogleWorkspaceToolset(BaseToolset):
             sheets_read,
             sheets_write,
             sheets_create,
+            sheets_list_tabs,
         )
         from app.tools.google_calendar import (
             calendar_list,
@@ -40,6 +41,7 @@ class GoogleWorkspaceToolset(BaseToolset):
             FunctionTool(func=sheets_read),
             FunctionTool(func=sheets_write),
             FunctionTool(func=sheets_create),
+            FunctionTool(func=sheets_list_tabs),
             FunctionTool(func=calendar_list),
             FunctionTool(func=calendar_list_events),
             FunctionTool(func=calendar_create_event),
