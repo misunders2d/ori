@@ -91,7 +91,13 @@ The deployment may be a **worktree**, not a single checkout. `git worktree list`
 
 ## 4. Restart
 
-### Clean restart
+### Clean restart from inside the chat (preferred — no shell access needed)
+
+Admin says `reboot`, `restart`, `restart the bot`, or `call update_self` in Telegram/Slack. Coordinator calls `update_self` → writes `data/.exit_signal=100` → supervisor reads it after the response is delivered, then re-launches the bot. The reboot is **admin-only but NOT ACT/TOTP gated** (process restart is non-destructive — no code or secret writes — supervisor brings it back). Use this immediately after a `/models set` provider swap so the new model takes effect.
+
+Pain history: until 2026-05-12, `update_self` was on the ACT-staging list, forcing a 3-turn dance (reboot → stage → "Approve ACT-xxx 123456" → finally restart). Removed because the protection didn't match the blast radius. ACT remains on `trigger_rollback`, `evolution_*`, and integration writes.
+
+### Clean restart from the host
 
 ```
 ./deploy/start.sh    # or `systemctl --user restart ori`

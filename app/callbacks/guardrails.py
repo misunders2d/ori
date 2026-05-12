@@ -134,13 +134,32 @@ def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
     if tool.name == "reembed_entities" and args.get("dry_run", True):
         return None
 
+    # Admin-only, no ACT-token staging required.
+    # `update_self` is a clean process restart — supervisor brings the bot
+    # back, no code or secret writes, fully reversible. ACT-token + TOTP
+    # round-trip turned a one-prompt reboot into a 3-turn dance (provider
+    # swap → reboot pain, 2026-05-12). Admin check remains; non-admins
+    # are blocked below.
+    _ADMIN_ONLY_NO_STAGING = {"update_self"}
+    if tool.name in _ADMIN_ONLY_NO_STAGING:
+        current_state = tool_context.state.to_dict()
+        user_id = current_state.get("user_id", "")
+        admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
+        admin_users = [u.strip() for u in admin_users_str.split(",") if u.strip()]
+        is_a2a = user_id.startswith("A2A_USER_")
+        if not is_a2a and (not admin_users or user_id not in admin_users):
+            return {
+                "status": "error",
+                "message": f"Guardrail Intervention: Only Admin/Master users can invoke `{tool.name}`. Your user_id ({user_id}) is unauthorized.",
+            }
+        return None
+
     if tool.name in [
         "configure_integration",
         "remove_integration",
         "schedule_system_task",
         "schedule_recurring_system_task",
         "run_system_task_now",
-        "update_self",
         "trigger_rollback",
         "evolution_commit_and_push",
         "evolution_git_pull",
