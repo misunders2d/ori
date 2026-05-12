@@ -24,7 +24,7 @@ uv run python scripts/install_hooks.py
 
 ## Reading order before any edit
 
-1. **[docs/AI_EDITS.md](docs/AI_EDITS.md)** — 12 hard rules. The most important is rule 1: search `docs/INDEX.md` for what you're about to build; it almost certainly already exists.
+1. **[docs/AI_EDITS.md](docs/AI_EDITS.md)** — 13 hard rules. Rule 1: search `docs/INDEX.md` for what you're about to build; it almost certainly already exists. Rule 13: nothing fails silently — every error path must reach logs / agent / admin channel.
 2. **[docs/INDEX.md](docs/INDEX.md)** — auto-generated map of every sub-agent, tool, toolset, callback, skill (with `file:line` refs).
 3. **[AGENTS.md](AGENTS.md)** — the constitutional manifesto (philosophy, immutable laws, architectural ethos).
 

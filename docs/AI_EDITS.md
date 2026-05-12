@@ -95,6 +95,26 @@ When telling the user how to update production, the answer is almost always **`g
 
 If you genuinely need to force a re-sync (e.g. corrupt `.venv`), the documented escape hatch is `echo > data/.deps_hash && ./deploy/start.sh` — invalidate the fingerprint, let the supervisor handle the rest.
 
+## 13. Nothing fails silently (architectural axiom)
+
+Every error path MUST reach at least one of three observable destinations:
+
+1. **Logs.** `logger.error(...)` minimum; `logger.critical(...)` for FATALs that warrant operator action. Lands in `journalctl` / `data/agent.log`.
+2. **Agent.** Tool returns `{"status": "error", "message": "..."}` that the calling agent surfaces VERBATIM to the user. LLMs MUST NOT swallow error responses or summarize a failed call as "task complete".
+3. **Admin channel.** Telegram DM to `ADMIN_USER_IDS[0]` (or the equivalent Slack admin channel) for any **background-fired** failure where no agent is in the loop to surface the error directly. Scheduled tasks, contract fires, async workers, supervisor restarts, hook failures — all route here.
+
+Forbidden patterns:
+
+- `except: pass` or `except Exception: pass` — always at minimum log; usually re-raise or return an error status.
+- `try/except` that returns a fake success on failure (`return {"status": "success"}` in an except block).
+- "Fallback" paths that quietly substitute fake/empty data for a failed call. If a fallback CAN'T avoid degrading silently, it MUST emit a CRITICAL log at the moment it engages.
+- Bot/agent rephrasing a tool's `status: error` message as "task complete" or "done". The exact error text must reach the user.
+- A failure-handler that itself fails silently (e.g. `alert_admin` with empty `notify` list, swallowed delivery errors). The failure of the failure-handler MUST also be logged CRITICAL.
+
+When writing new code: ask "if this raises / returns error, who finds out and how?" before writing the except block. If the answer is "no one", you have a Law 6 violation.
+
+Production proof (2026-05-12): 5 AI Pilot contracts FATALed daily for ~2 weeks because the emit adapter referenced an unknown name → silently caught by `on_failure` → `alert_admin` had empty `notify` → delivered to nobody → no journal CRITICAL line. Three layers of silence stacked. The fix wired (a) freeze-time registry validation, (b) `ADMIN_USER_IDS` fallback in `on_failure`, (c) `logger.critical` on every contract failure. See `app/contracts/worker.py:_on_failure` for the canonical pattern.
+
 ---
 
 ## When the rules don't fit

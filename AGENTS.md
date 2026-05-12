@@ -116,3 +116,13 @@ The vault (`data/vault/credentials.json`) must NEVER be modified by an AI. Read-
 
 ### Law 5: Asynchronous Discipline
 The entire codebase is `asyncio`. Never introduce synchronous blocking I/O (e.g., `httpx.Client`, synchronous `open()`). Use `httpx.AsyncClient` and existing async utilities.
+
+### Law 6: Nothing Fails Silently
+Every error MUST reach at least one of three observable destinations:
+1. **Logs** — `logger.error(...)` minimum; `logger.critical(...)` for FATALs that warrant operator action. Lands in journal / `data/agent.log`.
+2. **Agent** — tool returns `{"status": "error", "message": "..."}` that the calling agent surfaces VERBATIM to the user. LLMs MUST NOT swallow error responses or summarize them as "task complete".
+3. **Admin channel** — Telegram DM to `ADMIN_USER_IDS[0]` (or Slack admin channel) for any background-fired failure (scheduled tasks, contract fires, async workers) where no agent is in the loop to surface the error directly.
+
+Swallowing exceptions, `except: pass`, ignored return values, and "fallback" paths that quietly substitute fake data for failed calls are all violations. If a fallback CAN'T avoid degrading silently, it MUST emit a CRITICAL log at the moment it engages.
+
+Production proof (2026-05-12): 5 AI Pilot contracts FATALed daily for 2 weeks because: (a) emit adapter name was unknown → caught by `on_failure`, (b) `on_failure: alert_admin` had empty `notify` → admin alert silently delivered to no one, (c) no journal CRITICAL line. Three layers of silence. The fix (contracts: `validate_against_registries` + `ADMIN_USER_IDS` fallback + `logger.critical` on every failure) became this Law.
