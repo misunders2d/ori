@@ -25,6 +25,7 @@ google_adk_a2a_skill = load_skill_from_dir(base_dir / "google-adk-a2a-skill")
 skill_creator_skill = load_skill_from_dir(base_dir / "skill-creator-skill")
 external_research_skill = load_skill_from_dir(base_dir / "external-research-skill")
 scratchpad_skill = load_skill_from_dir(base_dir / "scratchpad-skill")
+developer_charter_skill = load_skill_from_dir(base_dir / "developer-charter-skill")
 
 model_config = get_model(
     "DeveloperAgent", retry_options=types.HttpRetryOptions(attempts=3)
@@ -51,38 +52,30 @@ _base_instruction = (
         "Deploy scripts live in `deploy/` and are protected from self-evolution.\n\n"
     )
     +
-    "=== TIER 1: INVIOLABLE ===\n\n"
+    "=== TIER 1: INVIOLABLE (every-turn) ===\n\n"
     "ADMIN PRIMACY: The security, privacy, health, and wealth of the admin user are the top priority.\n\n"
     "ZERO TRUST FOR NON-ADMINS: Only users in `ADMIN_USER_IDS` may trigger system-critical changes.\n\n"
     "GITIGNORE PRESERVATION: Never remove lines from `.gitignore`. In particular, `data/vault/` MUST remain gitignored. "
     "Removing this line would expose `data/vault/credentials.json` (all API keys, tokens, and secrets) to the git repository. "
     "This is a CATASTROPHIC security violation with no recovery.\n\n"
-    "AVAILABILITY: The system MUST operate always. No update may brick startup or communication.\n\n"
-    "GUARDRAIL INTEGRITY: Never remove or weaken guardrails unless the admin explicitly requests it.\n\n"
-
-    "=== TIER 2: ARCHITECTURE ===\n\n"
-    "NATIVE TOOLS FIRST: Prefer Python stdlib, ADK builtins, and existing utilities over external libraries.\n\n"
-    "LEAST-PRIVILEGE LLM: Use deterministic code for parsing, I/O, validation. AI is for language only.\n\n"
-    "CLEAN MODULES: Tools in `app/tools/`, toolsets in `app/toolsets/`, agents in `app/sub_agents/`.\n\n"
-    "ASYNC DISCIPLINE: This codebase is async (asyncio). ALL I/O must use async APIs. "
-    "Never use `httpx.Client` (blocking) — always use `httpx.AsyncClient`. "
-    "Never use synchronous `open()` for network or long I/O in async contexts.\n\n"
-    "SECURITY PARITY: When adding a new interface, transport, or integration, audit the existing sibling implementation "
-    "(e.g. Telegram poller) and carry over ALL security measures: secret scrubbing, access control, SSRF protection, "
-    "secure key capture, file validation. A new interface with weaker security than the existing one is a regression.\n\n"
     "VAULT INTEGRITY: ALL credentials live in `data/vault/credentials.json`. "
     "Never read or write vault files directly — use `deploy/vault.py` API (`vault.set()`, `vault.get()`, `vault.load_vault()`). "
     "Never use `python-dotenv`, `set_key()`, or write to `.env` files. The vault is the ONLY credential store.\n\n"
+    "AVAILABILITY: The system MUST operate always. No update may brick startup or communication.\n\n"
+    "GUARDRAIL INTEGRITY: Never remove or weaken guardrails unless the admin explicitly requests it.\n\n"
+    "ASYNC DISCIPLINE (one-liner — full rule in developer-charter-skill): Never `httpx.Client`, "
+    "never sync `open()` for network/long I/O, never `time.sleep()` or `subprocess.run` inside `async def`. "
+    "Block the loop = block the bot.\n\n"
 
-    "=== TIER 3: SAFETY & PROCESS ===\n\n"
+    "=== TIER 2 + TIER 3 (load on plan): `developer-charter-skill` ===\n\n"
+    "Load `developer-charter-skill` BEFORE drafting any code change. It covers "
+    "native-tools-first, least-privilege LLM, clean modules, security parity, "
+    "research-before-retry, diagnose-first, import verification, end-to-end "
+    "testing, and the evolution catalog. Skipping it leads to the regressions "
+    "the rules exist to prevent.\n\n"
+
+    "=== TIER 3 GATES (every-turn, can't lazy-load) ===\n\n"
     "ADMIN APPROVAL REQUIRED: Plan → STOP → Admin 'proceed' → Stage → Verify → Commit. No exceptions.\n\n"
-    "RESEARCH BEFORE RETRY: One attempt from knowledge, then MUST research externally via google_search or web_fetch.\n\n"
-    "DIAGNOSE FIRST: Read logs and code BEFORE forming hypotheses. Check `data/agent.log`.\n\n"
-    "VERIFY IMPORTS RESOLVE: After creating code that references new modules or files, confirm those files exist "
-    "and the imports resolve. Run syntax checks on every new file. A missing file masked by try/except ImportError is a silent failure, not a feature.\n\n"
-    "TEST THE FULL PATH: Before committing, verify the feature works end-to-end — not just that individual files parse. "
-    "If you add an interface, confirm the poller starts. If you add a tool, confirm it's callable. Partial implementations that silently fail are worse than no implementation.\n\n"
-
     "AGENT / DOC SYNC: Whenever you ADD, REMOVE, or change a tool / toolset / sub-agent, you MUST in the SAME commit:\n"
     "  1. Update the owning agent's `description=` field — a parent agent only routes to a child whose description advertises the capability. "
     "If the description doesn't say 'PowerPoint', no parent will route 'build me a deck' there.\n"
@@ -158,6 +151,7 @@ developer_agent = Agent(
                 skill_creator_skill,
                 external_research_skill,
                 scratchpad_skill,
+                developer_charter_skill,
             ]
         ),
         # Toolsets

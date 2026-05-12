@@ -35,7 +35,7 @@ Read this **before** adding new code — most things you'd build already exist.
 
 - **CoordinatorAgent** (Agent) — `app/sub_agents/coordinator_agent.py:57`
 
-- **DeveloperAgent** (Agent) — `app/sub_agents/developer_agent.py:140`
+- **DeveloperAgent** (Agent) — `app/sub_agents/developer_agent.py:133`
 
 - **KnowledgeAgent** (Agent) — `app/sub_agents/knowledge_agent.py:30`
 
@@ -517,7 +517,7 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
 - `file_attachment_capture` (before_tool | after_tool) — `app/callbacks/guardrails.py:1106` — After-tool callback: stash a tool's emitted file_path so the next
 - `file_attachment_inject` (before_model | state) — `app/callbacks/guardrails.py:1179` — After-model callback: drain ``__pending_file_parts__`` and append
 
-## Skills (19)
+## Skills (20)
 
 
 - **amazon-routing-skill** — `skills/amazon-routing-skill/SKILL.md` — How to route Amazon business requests to the right specialist agent. Use this skill when you need to decide which agent handles a request — product research, knowledge/memory, BigQuery analytics, Google Workspace, or data analysis. Also use when coordinating multi-agent workflows where data passes between agents via the scratchpad.
@@ -525,9 +525,10 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
 - **bigquery-skill** — `skills/bigquery-skill/SKILL.md` — Domain knowledge for querying Mellanni BigQuery datasets. Table catalog, access control, query patterns, and aggregation rules for the BigQueryAgent.
 - **clickup-skill** — `skills/clickup-skill/SKILL.md` — ClickUp task management protocol — workspace discovery, task CRUD, team coordination.
 - **data-analysis-skill** — `skills/data-analysis-skill/SKILL.md` — How to analyze data files with pandas/numpy/scipy — statistical analysis, weighted aggregation, and Amazon business intelligence. Use this skill whenever asked to analyze CSV/Excel files, compute metrics from SP-API reports, SQP data, advertising reports, H10 keyword exports, BigQuery results, or any data that requires proper statistical methodology. Also use when combining data across time periods or segments — naive averaging of rates and ratios is a common trap this skill prevents.
+- **developer-charter-skill** — `skills/developer-charter-skill/SKILL.md` — Senior engineer charter — architecture style guide + process rules for the DeveloperAgent. Load this BEFORE drafting any code change, evolution plan, or refactor. Covers native-tools-first, async discipline, clean modules, security parity, research-before-retry, diagnose-first, import verification, and end-to-end testing.
 - **dna-exchange-skill** — `skills/dna-exchange-skill/SKILL.md` — Step-by-step procedure for exporting and importing DNA (tools/skills) between Ori agents. DNA exchange is a communication event — never commit or reboot.
 - **external-research-skill** — `skills/external-research-skill/SKILL.md` — Forces the agent to actively research official documentation, GitHub issues, and installed package versions before implementing new features OR debugging failures.
-- **google-adk-a2a-skill** — `skills/google-adk-a2a-skill/SKILL.md` — Reference for the A2A v1.0 protocol (Agent-to-Agent). Covers agent discovery, communication with friends and arbitrary agents, and DNA exchange via the Ori-Net.
+- **google-adk-a2a-skill** — `skills/google-adk-a2a-skill/SKILL.md` — Reference for the A2A v1.0 protocol (Agent-to-Agent) + Ori-Net extensions. Covers agent discovery, friend management, secure key capture, dynamic address updates, broadcasts, and DNA exchange.
 - **google-adk-skill** — `skills/google-adk-skill/SKILL.md` — Reference material for the Google Advanced Agentic Development Kit (ADK). Use this when tasked with building new Agents, managing state memory, orchestrating sequential/parallel behaviors, or modifying Python integrations/tools in the root `app/` structure.
 - **google-workspace-skill** — `skills/google-workspace-skill/SKILL.md` — Google Drive, Sheets, Calendar, and Gmail integration — per-user OAuth2 connection, file management, spreadsheet operations, calendar management, read-only Gmail access.
 - **h10-keyword-skill** — `skills/h10-keyword-skill/SKILL.md` — Helium10 keyword analysis protocol — Cerebro/Magnet export analysis, scoring, gaps, trends.
