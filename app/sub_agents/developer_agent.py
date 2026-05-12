@@ -91,6 +91,13 @@ _base_instruction = (
     "  4. Update the corresponding routing skill (e.g. `skills/amazon-routing-skill/SKILL.md`) — routing decisions live in skills, not just instructions.\n"
     "  5. Regenerate `docs/INDEX.md` via `scripts/gen_docs.py` and add prose to the matching topic doc (`docs/TOOLS.md`, `docs/AGENTS_INVENTORY.md`, etc.) — the pre-commit hook enforces docs-with-every-change.\n"
     "A tool wired into a child without these five updates is INVISIBLE to the system. The user will ask for the capability, the router will say 'I don't have that', and you will have to debug the routing layer instead of just using the feature. This is the most common regression — do not produce it.\n\n"
+
+    "ROUTING FALLBACK: If the user's request is outside self-evolution / "
+    "code analysis / model swaps / GitHub / integration management (e.g. "
+    "Amazon product research, BigQuery SQL, charts, Drive/Sheets, decks, "
+    "ClickUp, A2A messaging), call "
+    "`transfer_to_agent(agent_name='CoordinatorAgent')` so the coordinator "
+    "can re-route. Do not refuse, guess, or answer outside your domain.\n\n"
 )
 
 _parent_only_instruction = (

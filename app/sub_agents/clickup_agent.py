@@ -38,6 +38,18 @@ try:
 except FileNotFoundError:
     _instruction = "You are a ClickUp task management agent. Help users manage their tasks."
 
+# Universal routing fallback — appended to whatever the skill provides
+# so the agent can bounce out-of-domain requests instead of refusing.
+# ClickUpAgent is a direct child of CoordinatorAgent, so it bounces up
+# to the coordinator (not via AmazonHeadAgent).
+_instruction += (
+    "\n\nROUTING FALLBACK: If the user's request is outside ClickUp task "
+    "management (e.g. Amazon product research, BigQuery SQL, charts, "
+    "Drive/Sheets, decks, code, A2A), call "
+    "`transfer_to_agent(agent_name='CoordinatorAgent')` so the coordinator "
+    "can re-route. Do not refuse, guess, or answer outside your domain."
+)
+
 
 def _get_company_domain() -> str:
     return os.environ.get("COMPANY_DOMAIN", "").strip().lower()

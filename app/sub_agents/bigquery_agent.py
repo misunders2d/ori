@@ -199,6 +199,16 @@ try:
 except FileNotFoundError:
     _bq_instruction = "You are a BigQuery data science agent. Query data to answer business questions."
 
+# Universal routing fallback — appended to whatever the skill provides
+# so the agent can bounce out-of-domain requests instead of refusing.
+_bq_instruction += (
+    "\n\nROUTING FALLBACK: If the user's request is outside BigQuery / "
+    "SQL / business analytics (e.g. product research on Keepa, charts, "
+    "Drive/Sheets, decks, ClickUp, code), call "
+    "`transfer_to_agent(agent_name='AmazonHeadAgent')` so the head can "
+    "re-route. Do not refuse, guess, or answer outside your domain."
+)
+
 # Build the agent — only if BigQuery credentials are configured
 _bq_toolset = create_bigquery_toolset()
 

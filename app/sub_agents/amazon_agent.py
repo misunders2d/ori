@@ -41,7 +41,13 @@ amazon_agent = Agent(
         "- **sp-api-skill**: Amazon Selling Partner API for catalog, listings, competitive pricing, reports.\n"
         "- **h10-keyword-skill**: Helium10 keyword analysis (Cerebro/Magnet exports).\n\n"
         "Use the scratchpad when analyzing more than 3 ASINs. "
-        "If any tool returns an error, report it immediately — never fabricate data."
+        "If any tool returns an error, report it immediately — never fabricate data.\n\n"
+        "ROUTING FALLBACK: If the user's request is outside Amazon product "
+        "research / Keepa / SP-API / H10 keywords (e.g. they ask for a chart, "
+        "BigQuery SQL, a Google Sheet, a deck, ClickUp tasks, code changes, "
+        "or anything unrelated), call "
+        "`transfer_to_agent(agent_name='AmazonHeadAgent')` so the head can "
+        "re-route. Do not refuse, guess, or answer outside your domain."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[keepa_skill, sp_api_skill, h10_skill]),

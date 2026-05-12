@@ -42,7 +42,12 @@ amazon_memory_agent = Agent(
         "are admin-only overrides — only call them when explicitly needed.\n\n"
         "If a tool returns `{status: \"forbidden\"}`, relay the message to the user "
         "unchanged — do NOT retry with a different tool. If a tool returns "
-        "`{status: \"error\"}`, report the exact error text verbatim."
+        "`{status: \"error\"}`, report the exact error text verbatim.\n\n"
+        "ROUTING FALLBACK: If the user's request is outside knowledge graph / "
+        "memory / people (e.g. product research, charts, BigQuery SQL, "
+        "Drive/Sheets, decks, ClickUp, code), call "
+        "`transfer_to_agent(agent_name='AmazonHeadAgent')` so the head can "
+        "re-route. Do not refuse, guess, or answer outside your domain."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[_knowledge_graph_skill]),

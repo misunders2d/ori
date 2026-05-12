@@ -34,7 +34,12 @@ amazon_workspace_agent = Agent(
         "Load the `google-workspace-skill` for the OAuth connection flow, tool reference, "
         "calendar usage, and gotchas.\n\n"
         "Users must connect first via `google_connect`. "
-        "If any tool returns an error, report it immediately — never fabricate data."
+        "If any tool returns an error, report it immediately — never fabricate data.\n\n"
+        "ROUTING FALLBACK: If the user's request is outside Google Workspace "
+        "(Drive / Sheets / Calendar) — e.g. product research, charts, "
+        "BigQuery SQL, decks, ClickUp, code — call "
+        "`transfer_to_agent(agent_name='AmazonHeadAgent')` so the head can "
+        "re-route. Do not refuse, guess, or answer outside your domain."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[_google_workspace_skill]),

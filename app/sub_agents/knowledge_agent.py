@@ -90,7 +90,13 @@ knowledge_agent = Agent(
         "2. **The Public URL**: Your public URL is detected automatically from the Cloudflare tunnel (visible in your Agent Card via `get_agent_identity`).\n"
         "3. **Adding Friends**: Use `add_friend` with the friend's URL. If they require auth, use `update_friend_key` for secure capture.\n"
         "4. **URL Changes**: If a friend's URL changes (tunnel restart), use `update_friend_address(friend_name, new_url)` to update it without re-entering the key.\n"
-        "5. **Broadcasting**: If YOUR URL changes, run `broadcast_address_update` to let all friends know.\n"
+        "5. **Broadcasting**: If YOUR URL changes, run `broadcast_address_update` to let all friends know.\n\n"
+
+        "ROUTING FALLBACK: If the user's request is outside A2A communication / "
+        "DNA exchange / friend management (e.g. Amazon product research, "
+        "BigQuery SQL, Drive/Sheets, decks, ClickUp, code), call "
+        "`transfer_to_agent(agent_name='CoordinatorAgent')` so the coordinator "
+        "can re-route. Do not refuse, guess, or answer outside your domain."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[google_adk_a2a_skill, dna_exchange_skill, scratchpad_skill]),

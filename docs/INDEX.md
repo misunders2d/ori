@@ -27,15 +27,15 @@ Read this **before** adding new code — most things you'd build already exist.
 - **AmazonWorkspaceAgent** (Agent) — `app/sub_agents/amazon_workspace_agent.py:24`
   - Amazon Workspace sub-agent — Google Drive, Sheets, and Calendar.
 
-- **BigQueryAgent** (Agent) — `app/sub_agents/bigquery_agent.py:206`
+- **BigQueryAgent** (Agent) — `app/sub_agents/bigquery_agent.py:216`
   - BigQuery sub-agent with per-table access control.
 
-- **ClickUpAgent** (Agent) — `app/sub_agents/clickup_agent.py:89`
+- **ClickUpAgent** (Agent) — `app/sub_agents/clickup_agent.py:101`
   - ClickUp task management sub-agent.
 
 - **CoordinatorAgent** (Agent) — `app/sub_agents/coordinator_agent.py:57`
 
-- **DeveloperAgent** (Agent) — `app/sub_agents/developer_agent.py:133`
+- **DeveloperAgent** (Agent) — `app/sub_agents/developer_agent.py:140`
 
 - **KnowledgeAgent** (Agent) — `app/sub_agents/knowledge_agent.py:30`
 

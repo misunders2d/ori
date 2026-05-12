@@ -53,7 +53,12 @@ amazon_data_analyst_agent = Agent(
         "For rate/ratio metrics, ALWAYS use weighted aggregation — never arithmetic averages. "
         "Write results to scratchpad for other agents to consume. "
         "When asked to build a presentation, call `generate_presentation(title, slides, ...)`; "
-        "do NOT upload to Drive unless the user explicitly asks."
+        "do NOT upload to Drive unless the user explicitly asks.\n\n"
+        "ROUTING FALLBACK: If the user's request is outside data analysis / "
+        "statistics / charts / CSV-Excel exports / .pptx decks (e.g. product "
+        "research, SQL on BigQuery, Drive/Sheets, ClickUp, code changes), "
+        "call `transfer_to_agent(agent_name='AmazonHeadAgent')` so the head "
+        "can re-route. Do not refuse, guess, or answer outside your domain."
     ),
     tools=[
         skill_toolset.SkillToolset(skills=[_data_analysis_skill, _visualization_skill, _scratchpad_skill, _presentation_skill]),

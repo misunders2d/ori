@@ -63,7 +63,12 @@ amazon_head_agent = Agent(
         "- 'Today' / 'yesterday' / any naked day reference means Pacific (America/Los_Angeles) "
         "unless the user specifies otherwise.\n\n"
         "For simple tasks, delegate directly to the right agent. "
-        "For multi-step tasks, use the scratchpad as shared state between agents."
+        "For multi-step tasks, use the scratchpad as shared state between agents.\n\n"
+        "ROUTING FALLBACK: If the user's request is outside Amazon business "
+        "operations (e.g. ClickUp tasks, A2A communication, self-evolution / "
+        "code changes, AI image generation, scheduling / contracts), call "
+        "`transfer_to_agent(agent_name='CoordinatorAgent')` so the coordinator "
+        "can re-route. Do not refuse, guess, or answer outside your domain."
     ),
     sub_agents=[
         amazon_agent,

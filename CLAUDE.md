@@ -32,7 +32,7 @@ For the area you're touching, read the matching topic doc:
 
 | If you're editing... | Read |
 |---|---|
-| A sub-agent | `docs/AGENTS_INVENTORY.md` |
+| A sub-agent | `docs/AGENTS_INVENTORY.md`, `docs/ROUTING.md` (fallback pattern) |
 | A tool / toolset | `docs/TOOLS.md`, `docs/TOOLSETS.md` |
 | A callback / guardrail | `docs/CALLBACKS.md` |
 | A2A protocol | `docs/A2A.md` |
