@@ -58,6 +58,44 @@ _TOKEN_PATTERNS = re.compile(
 )
 
 
+# Matches `http(s)://...` until whitespace, brackets, parens, backticks,
+# or angle brackets (which mark markdown boundaries). Trailing punctuation
+# like `.,;:!?` is handled in the replacement function below.
+_URL_RE = re.compile(r"https?://[^\s<>\[\]\(\)`]+")
+# Trailing punctuation that's almost never part of a real URL.
+_URL_TAIL_PUNCT = ".,;:!?"
+
+
+def _escape_urls_for_telegram_md(text: str) -> str:
+    """Escape underscores/asterisks/backticks INSIDE detected URLs so legacy
+    Telegram Markdown doesn't mangle URL params as italic/bold/code.
+
+    Production failure 2026-05-12: Google OAuth URL came through with
+    `client_id=...&redirect_uri=...&code_challenge=...`; Telegram's
+    legacy Markdown parser saw `_text_` between underscores and emitted
+    italic, stripping the underscores from the rendered link. Result:
+    Google returned `Error 400: Required parameter is missing: response_type`.
+
+    Only mutates substrings the URL regex matches. Other markdown
+    formatting in the message body stays untouched. `\\_` etc render as
+    a literal underscore in Telegram legacy Markdown, so URLs stay
+    auto-clickable AND correct.
+    """
+    def _replace(m: re.Match) -> str:
+        url = m.group(0)
+        trail = ""
+        while url and url[-1] in _URL_TAIL_PUNCT:
+            trail = url[-1] + trail
+            url = url[:-1]
+        # Escape only the legacy-Markdown markers that can appear in URLs
+        # (Telegram URL chars don't include `*` / `` ` `` legitimately,
+        # but cover them defensively).
+        safe = url.replace("\\", "\\\\").replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
+        return safe + trail
+
+    return _URL_RE.sub(_replace, text)
+
+
 def _scrub_secrets(text: str) -> str:
     """Redact known secret values and common token patterns from outgoing text."""
     # Layer 1: Redact actual configured secret values from env
@@ -109,6 +147,14 @@ class TelegramAdapter(TransportAdapter):
 
         # SECURITY: Scrub any leaked secrets before they reach the user
         text = _scrub_secrets(text)
+
+        # Markdown-safe URLs: legacy Telegram Markdown treats `_text_` as
+        # italic and strips underscores from URL params (production proof
+        # 2026-05-12: Google OAuth URL rendered with `clientid` / `responsetype`
+        # instead of `client_id` / `response_type`). Escape `_`/`*`/`` ` ``
+        # inside URL substrings only — leaves the rest of the markdown
+        # formatting intact.
+        text = _escape_urls_for_telegram_md(text)
 
         # Safe chunking to handle the 4096 character limit
         limit = 4000
