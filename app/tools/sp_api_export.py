@@ -129,12 +129,35 @@ async def _poll_download_and_deliver(
                 document_id = payload.get("reportDocumentId")
                 break
             elif status in ("CANCELLED", "FATAL"):
+                # Amazon writes the actual error reason to the report
+                # DOCUMENT for FATAL reports — not to the get_report
+                # metadata. Fetch the doc so the user sees the real cause.
+                doc_id = payload.get("reportDocumentId")
+                error_details = ""
+                if doc_id:
+                    try:
+                        doc_payload = await _sp_call(
+                            reports.get_report_document,
+                            reportDocumentId=doc_id,
+                            download=True,
+                        )
+                        raw = doc_payload.get("document", "")
+                        if isinstance(raw, (bytes, bytearray)):
+                            raw = raw.decode("utf-8", errors="replace")
+                        error_details = str(raw or "")[:1500]
+                    except Exception as doc_err:
+                        error_details = f"(document fetch failed: {doc_err})"
+
+                detail_block = (
+                    f"Amazon error document:\n```{error_details}```\n"
+                    if error_details
+                    else "(No reportDocumentId attached — Amazon did not provide an error doc.)\n"
+                )
                 failure_message = (
                     f"Report `{report_type}` failed with status: *{status}*.\n"
                     f"Report ID: `{report_id}`\n"
-                    f"Amazon response: ```{json.dumps(payload, default=str)[:1500]}```\n"
-                    "If no detailed reason appears above, Amazon did not expose one "
-                    "through get_report."
+                    f"{detail_block}"
+                    f"Report metadata: ```{json.dumps(payload, default=str)[:800]}```"
                 )
                 await _notify(
                     notify,
@@ -142,8 +165,10 @@ async def _poll_download_and_deliver(
                     session_message=(
                         f"{failure_message}\n\n"
                         "[Agent-only context: This background SP-API report failed. "
-                        "If user asks why, use raw metadata above. Do not claim a "
-                        "specific root cause unless Amazon exposed it.]"
+                        "Inspect the Amazon error document above to surface the actual "
+                        "cause to the user. Common FATAL causes: requested date range "
+                        "outside Amazon's retention window (most types: ~90 days), "
+                        "invalid report options, or data unavailable for the marketplace.]"
                     ),
                 )
                 return

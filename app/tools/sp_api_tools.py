@@ -506,10 +506,43 @@ async def sp_check_report(
         response["message"] = "Report still processing. Check again in 30-60 seconds."
     elif payload.get("processingStatus") in ("CANCELLED", "FATAL"):
         response["raw_report"] = payload
+        # Amazon writes the real error reason to the report DOCUMENT for
+        # FATAL reports, NOT to the get_report metadata. Fetch the doc
+        # and inline its contents so the agent sees the actual cause.
+        doc_id = payload.get("reportDocumentId")
+        error_details = None
+        if doc_id:
+            doc_result = await _call_with_retry(
+                reports.get_report_document,
+                reportDocumentId=doc_id,
+                download=True,
+            )
+            if doc_result["ok"]:
+                doc_text = doc_result["payload"].get("document", "")
+                if isinstance(doc_text, (bytes, bytearray)):
+                    doc_text = doc_text.decode("utf-8", errors="replace")
+                doc_text = str(doc_text or "")[:4000]
+                if doc_text.strip():
+                    # Try to parse JSON (Amazon usually returns {"errorDetails": "..."}).
+                    try:
+                        parsed = json.loads(doc_text)
+                        error_details = parsed
+                    except (JSONDecodeError, TypeError, ValueError):
+                        error_details = doc_text
+            else:
+                error_details = f"(document fetch failed: {doc_result['error']})"
+        response["error_details"] = error_details
+        response["report_document_id"] = doc_id
         response["message"] = (
             f"Report ended with status {payload.get('processingStatus')}. "
-            "Raw report metadata is included in raw_report. If it contains no "
-            "error detail, Amazon did not expose a specific failure reason via get_report."
+            + (
+                f"Amazon's error document is in `error_details`. "
+                if error_details
+                else "No reportDocumentId on this report — Amazon did not expose an error doc. "
+            )
+            + "Common FATAL causes: requested date range outside Amazon's retention window "
+            "(reports older than ~90 days for most types), invalid report options, or "
+            "data unavailable for the requested marketplace."
         )
     else:
         response["message"] = f"Report status: {payload.get('processingStatus')}"
