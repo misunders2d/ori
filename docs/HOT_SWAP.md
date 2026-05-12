@@ -19,15 +19,15 @@ A component is a named slot that resolves to a model string. There are 15 today 
 | `KnowledgeAgent` | `google/gemini-3-flash-preview` | Flash | research + summarisation |
 | `AmazonDataAnalystAgent` | `google/gemini-3-flash-preview` | Flash | matplotlib codegen + statistical analysis |
 | `BigQueryAgent` | `google/gemini-3-flash-preview` | Flash | SQL synthesis, business reasoning |
-| `youtube_summarizer` | `google/gemini-3.1-flash-lite-preview` | Flash-Lite | one-shot transcript summarisation, bulk input + short output; moved off Flash 2026-05-12 (~3× cheaper, quality parity on long transcripts) |
+| `youtube_summarizer` | `google/gemini-3.1-flash-lite` | Flash-Lite | one-shot transcript summarisation, bulk input + short output; moved off Flash 2026-05-12 (~3× cheaper, quality parity on long transcripts) |
 | `AmazonHeadAgent` | `google/gemini-3-flash-preview` | Flash | routes every Amazon request; Lite mis-routed in production (2026-05-11) so kept on Flash |
-| `AmazonAgent` | `google/gemini-3.1-flash-lite-preview` | Flash-Lite | Keepa / SP-API / H10 tool execution |
-| `AmazonMemoryAgent` | `google/gemini-3.1-flash-lite-preview` | Flash-Lite | graph CRUD + memory queries |
-| `AmazonWorkspaceAgent` | `google/gemini-3.1-flash-lite-preview` | Flash-Lite | Drive / Sheets / Calendar CRUD |
-| `ClickUpAgent` | `google/gemini-3.1-flash-lite-preview` | Flash-Lite | task CRUD |
-| `google_search` | `google/gemini-3.1-flash-lite-preview` | Flash-Lite | search-query generation |
-| `summarizer` | `google/gemini-3.1-flash-lite-preview` | Flash-Lite | context compaction |
-| `session_summarizer` | `google/gemini-3.1-flash-lite-preview` | Flash-Lite | session compaction |
+| `AmazonAgent` | `google/gemini-3.1-flash-lite` | Flash-Lite | Keepa / SP-API / H10 tool execution |
+| `AmazonMemoryAgent` | `google/gemini-3.1-flash-lite` | Flash-Lite | graph CRUD + memory queries |
+| `AmazonWorkspaceAgent` | `google/gemini-3.1-flash-lite` | Flash-Lite | Drive / Sheets / Calendar CRUD |
+| `ClickUpAgent` | `google/gemini-3.1-flash-lite` | Flash-Lite | task CRUD |
+| `google_search` | `google/gemini-3.1-flash-lite` | Flash-Lite | search-query generation |
+| `summarizer` | `google/gemini-3.1-flash-lite` | Flash-Lite | context compaction |
+| `session_summarizer` | `google/gemini-3.1-flash-lite` | Flash-Lite | session compaction |
 | `embedding` | `google/gemini-embedding-001` | Embedding | semantic search vectors |
 
 Cost-saving rationale: Flash-Lite is ~50% of Flash on Google direct pricing. The Lite components do tool-routing and CRUD where deep reasoning isn't needed — `plan_step_enforcer` hard-blocks any out-of-step tool call so a weaker model can't wander off-plan. Components that DO need reasoning (CoordinatorAgent's top routing, DeveloperAgent's self-modifying code, BigQueryAgent's SQL, DataAnalyst's matplotlib codegen, KnowledgeAgent's research, YouTube transcript summarisation) stay on Flash.

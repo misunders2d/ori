@@ -33,7 +33,7 @@ MODEL_DEFAULTS: dict[str, str] = {
     # output. Lite handles it fine (~3× cheaper than Flash). Quality
     # difference negligible on long transcripts. Hot-swap back if a
     # specific transcript hits a Lite quality wall.
-    "youtube_summarizer":       "google/gemini-3.1-flash-lite-preview",
+    "youtube_summarizer":       "google/gemini-3.1-flash-lite",
 
     # Self-evolution = code-modifying-code. Want strong tool-use + code
     # reasoning, but Opus 4.7 burned ~$3 on a single trivial model-name
@@ -62,15 +62,15 @@ MODEL_DEFAULTS: dict[str, str] = {
     # (which hard-blocks rogue tool calls anyway). Hot-swap any of
     # these back with `/models set <Agent> google/gemini-3-flash-preview`
     # (no restart needed) if quality drops on a specific one.
-    "AmazonAgent":              "google/gemini-3.1-flash-lite-preview",
-    "AmazonMemoryAgent":        "google/gemini-3.1-flash-lite-preview",
-    "AmazonWorkspaceAgent":     "google/gemini-3.1-flash-lite-preview",
-    "ClickUpAgent":             "google/gemini-3.1-flash-lite-preview",
-    "google_search":            "google/gemini-3.1-flash-lite-preview",
+    "AmazonAgent":              "google/gemini-3.1-flash-lite",
+    "AmazonMemoryAgent":        "google/gemini-3.1-flash-lite",
+    "AmazonWorkspaceAgent":     "google/gemini-3.1-flash-lite",
+    "ClickUpAgent":             "google/gemini-3.1-flash-lite",
+    "google_search":            "google/gemini-3.1-flash-lite",
 
     # Compaction + embedding — already cheap.
-    "summarizer":               "google/gemini-3.1-flash-lite-preview",
-    "session_summarizer":       "google/gemini-3.1-flash-lite-preview",
+    "summarizer":               "google/gemini-3.1-flash-lite",
+    "session_summarizer":       "google/gemini-3.1-flash-lite",
     "embedding":                "google/gemini-embedding-001",
 }
 
