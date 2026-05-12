@@ -19,7 +19,7 @@ A component is a named slot that resolves to a model string. There are 15 today 
 | `KnowledgeAgent` | `google/gemini-3-flash-preview` | Flash | research + summarisation |
 | `AmazonDataAnalystAgent` | `google/gemini-3-flash-preview` | Flash | matplotlib codegen + statistical analysis |
 | `BigQueryAgent` | `google/gemini-3-flash-preview` | Flash | SQL synthesis, business reasoning |
-| `youtube_summarizer` | `google/gemini-3-flash-preview` | Flash | one-shot transcript summarisation |
+| `youtube_summarizer` | `google/gemini-3.1-flash-lite-preview` | Flash-Lite | one-shot transcript summarisation, bulk input + short output; moved off Flash 2026-05-12 (~3× cheaper, quality parity on long transcripts) |
 | `AmazonHeadAgent` | `google/gemini-3-flash-preview` | Flash | routes every Amazon request; Lite mis-routed in production (2026-05-11) so kept on Flash |
 | `AmazonAgent` | `google/gemini-3.1-flash-lite-preview` | Flash-Lite | Keepa / SP-API / H10 tool execution |
 | `AmazonMemoryAgent` | `google/gemini-3.1-flash-lite-preview` | Flash-Lite | graph CRUD + memory queries |
@@ -53,6 +53,8 @@ Provider routing happens inside `get_model(component)` — Google goes to ADK's 
 ### 2.1 Anthropic prompt caching (OpenRouter)
 
 For any OpenRouter model containing `claude` in the name (case-insensitive), `_build_model` injects `extra_body={"cache_control": {"type": "ephemeral"}}`. LiteLLM's OpenRouter handler forwards `extra_body` keys into the request body root, and OpenRouter's auto-caching marks the last cacheable block — caching the entire prefix (system + tools + history) for 5 minutes.
+
+**Anthropic-direct path:** `anthropic/claude-*` does NOT get caching wired (LiteLLM's anthropic handler needs per-message `cache_control` injection, which would require a 50-LOC `LiteLlm` subclass to mutate messages pre-call). To prevent silent ~5-10× cost regressions, `_build_model` auto-redirects `anthropic/claude-*` through OpenRouter when `OPENROUTER_API_KEY` is set, logging the redirect at INFO level. If only `ANTHROPIC_API_KEY` is set, the request goes direct with a WARNING log noting the missing cache wiring.
 
 Anthropic pricing on cached prefixes:
 - Cache write: 1.25× input rate (one-time, ~$3.75/M for Sonnet 4.6)

@@ -29,7 +29,11 @@ MODEL_DEFAULTS: dict[str, str] = {
     "KnowledgeAgent":           "google/gemini-3-flash-preview",
     "AmazonDataAnalystAgent":   "google/gemini-3-flash-preview",
     "BigQueryAgent":            "google/gemini-3-flash-preview",
-    "youtube_summarizer":       "google/gemini-3-flash-preview",
+    # YouTube transcript summarisation is one-shot, bulk input, short
+    # output. Lite handles it fine (~3× cheaper than Flash). Quality
+    # difference negligible on long transcripts. Hot-swap back if a
+    # specific transcript hits a Lite quality wall.
+    "youtube_summarizer":       "google/gemini-3.1-flash-lite-preview",
 
     # Self-evolution = code-modifying-code. Want strong tool-use + code
     # reasoning, but Opus 4.7 burned ~$3 on a single trivial model-name
@@ -176,7 +180,31 @@ def _build_model(provider: str, model_name: str, **kwargs):
         # Prefer direct Anthropic API (via LiteLlm) when API key is available.
         # Only use Vertex AI Claude class when explicitly in Vertex mode AND no direct key.
         has_anthropic_key = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
+        has_openrouter_key = bool(os.environ.get("OPENROUTER_API_KEY", "").strip())
+        # Prompt caching is wired on the OpenRouter path only (top-level
+        # `extra_body.cache_control` forwarded by LiteLLM's openrouter
+        # handler). LiteLLM's anthropic-direct path needs per-message
+        # cache_control injection — not yet wired. To avoid silently
+        # losing ~90% of input-cost savings, redirect Claude models
+        # through OpenRouter when OPENROUTER_API_KEY is available. Falls
+        # back to anthropic-direct if only ANTHROPIC_API_KEY is set.
+        is_claude = "claude" in model_name.lower()
+        if is_claude and has_openrouter_key:
+            logger.info(
+                "anthropic/%s routed via OpenRouter for prompt-caching "
+                "(billed to OPENROUTER_API_KEY, not ANTHROPIC_API_KEY)",
+                model_name,
+            )
+            return _build_model("openrouter", f"anthropic/{model_name}", **kwargs)
         if has_anthropic_key:
+            if is_claude:
+                logger.warning(
+                    "anthropic/%s using direct API (no OpenRouter key) — "
+                    "prompt-caching NOT wired on this path; expect ~5-10× "
+                    "higher input cost vs cached. Set OPENROUTER_API_KEY "
+                    "or migrate caching to anthropic-direct path.",
+                    model_name,
+                )
             from google.adk.models.lite_llm import LiteLlm
             return LiteLlm(
                 model=f"anthropic/{model_name}",
