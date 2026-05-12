@@ -39,7 +39,7 @@ Read this **before** adding new code — most things you'd build already exist.
 
 - **KnowledgeAgent** (Agent) — `app/sub_agents/knowledge_agent.py:30`
 
-## Tools (227 public functions across 40 files)
+## Tools (230 public functions across 40 files)
 
 
 ### `app/tools/a2a.py`
@@ -383,9 +383,12 @@ Tool for spawning sibling agent containers.
 - `update_self` (line 63) — Real process restart/reboot via supervisor exit signal.
 - `trigger_rollback` (line 87) — Rollback code to previous commit and rebuild/restart.
 - `session_refresh` (line 103) — Conversation/session reset only; wipes or summarizes chat history.
-- `async set_thinking_mode` (line 132) — Toggle extended thinking globally across every sub-agent.
-- `async set_planner_mode` (line 191) — Deprecated alias for ``set_thinking_mode``. Use that instead.
-- `async execute_approved_action` (line 195)
+- `async set_thinking_level` (line 132) — Set the thinking level for one Ori component.
+- `async reset_thinking_level` (line 193) — Clear a component's thinking override, reverting to its default.
+- `list_thinking_levels` (line 235) — Return the current effective thinking level for every component.
+- `async set_thinking_mode` (line 246) — Deprecated. Use `set_thinking_level(component, level)` instead.
+- `async set_planner_mode` (line 285) — Deprecated alias for `set_thinking_mode`. Prefer `set_thinking_level`.
+- `async execute_approved_action` (line 289)
 
 ### `app/tools/telegram.py`
 Telegram-specific agent tools.
@@ -480,7 +483,7 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
 
 - **SystemToolset** — `app/toolsets/system.py:19`
   - Core system lifecycle tools.
-  - tools: `check_active_tasks`, `execute_approved_action`, `inspect_secure_env`, `list_spawned_agents`, `report_health`, `session_refresh`, `set_thinking_mode`, `spawn_agent`, `stop_spawned_agent`, `trigger_rollback`, `update_self`
+  - tools: `check_active_tasks`, `execute_approved_action`, `inspect_secure_env`, `list_spawned_agents`, `list_thinking_levels`, `report_health`, `reset_thinking_level`, `session_refresh`, `set_thinking_level`, `set_thinking_mode`, `spawn_agent`, `stop_spawned_agent`, `trigger_rollback`, `update_self`
 
 - **VisualizationToolset** — `app/toolsets/visualization.py:5`
   - Data visualization and file export — charts, CSVs, Excel, PDFs.
@@ -498,10 +501,10 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
 - `file_attachment_capture` (before_tool | after_tool) — `app/callbacks/guardrails/attachments.py:45` — After-tool callback: stash a tool's emitted file_path so the next
 - `file_attachment_inject` (before_model | state) — `app/callbacks/guardrails/attachments.py:118` — After-model callback: drain ``__pending_file_parts__`` and append
 - `async prompt_injection_guardrail` (before_model | state) — `app/callbacks/guardrails/core.py:189` — Runtime Guardrail: Inspects the LLM request before hitting the model.
-- `tool_output_injection_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails/core.py:385` — After-tool callback: scan high-risk tool outputs for prompt injection.
-- `verify_retry_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails/core.py:467` — After-tool callback: counts evolution_verify_sandbox failures in session state.
-- `tool_output_spillover_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails/core.py:568` — After-tool callback: spill oversized outputs to scratchpad.
-- `async state_setter` (before_model | state) — `app/callbacks/guardrails/core.py:658` — Sets initial fundamental session state keys to prevent KeyErrors during prompt evaluation.
+- `tool_output_injection_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails/core.py:392` — After-tool callback: scan high-risk tool outputs for prompt injection.
+- `verify_retry_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails/core.py:474` — After-tool callback: counts evolution_verify_sandbox failures in session state.
+- `tool_output_spillover_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails/core.py:575` — After-tool callback: spill oversized outputs to scratchpad.
+- `async state_setter` (before_model | state) — `app/callbacks/guardrails/core.py:665` — Sets initial fundamental session state keys to prevent KeyErrors during prompt evaluation.
 - `plan_enforcer` (before_model | state) — `app/callbacks/guardrails/plan.py:28` — Injects active plan context into the model prompt to enforce step-by-step execution.
 - `plan_step_enforcer` (before_tool | after_tool) — `app/callbacks/guardrails/plan.py:82` — before_tool guard: block tool calls outside the active step's allowed_tools.
 - `a2a_privacy_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails/privacy.py:23` — Deterministic secret-matching guardrail for A2A tools.

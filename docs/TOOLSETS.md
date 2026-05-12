@@ -90,7 +90,7 @@
 ## SystemToolset
 - File: `app/toolsets/system.py:19`
 - Core system lifecycle tools.
-- Bundled tools: `check_active_tasks`, `execute_approved_action`, `inspect_secure_env`, `list_spawned_agents`, `report_health`, `session_refresh`, `set_thinking_mode`, `spawn_agent`, `stop_spawned_agent`, `trigger_rollback`, `update_self`
+- Bundled tools: `check_active_tasks`, `execute_approved_action`, `inspect_secure_env`, `list_spawned_agents`, `list_thinking_levels`, `report_health`, `reset_thinking_level`, `session_refresh`, `set_thinking_level`, `set_thinking_mode`, `spawn_agent`, `stop_spawned_agent`, `trigger_rollback`, `update_self`
 
 ## VisualizationToolset
 - File: `app/toolsets/visualization.py:5`

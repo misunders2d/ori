@@ -265,27 +265,34 @@ async def prompt_injection_guardrail(
                     "Reply using Slack mrkdwn (*bold*, _italics_, `code`, <url|label>), not GitHub Markdown."
                 ]
             )
-    # Global thinking switch — provider-agnostic. The on/off flag lives in
-    # data/thinking_config.json; ``app.app_utils.thinking`` caches it with
-    # mtime invalidation so this branch doesn't hit disk every turn.
-    # Gemini's thinking lives on the per-call request, so we toggle it
-    # here. LiteLlm-backed agents (Anthropic via OpenRouter etc.) are
-    # toggled when the flag flips (``apply_to_agent_tree`` mutates each
-    # model's ``_additional_args``), not per turn.
+    # Per-agent thinking level — Gemini 3 vocabulary (minimal | low |
+    # medium | high). Levels per agent live in `app/app_utils/thinking.py`
+    # `THINKING_DEFAULTS`, with overrides persisted in
+    # `data/thinking_config.json`. Cached with mtime invalidation so
+    # this branch doesn't hit disk every turn.
+    #
+    # Why explicit per-agent: Gemini 3 Flash/Pro default to `high`
+    # thinking. Setting `thinking_config=None` does NOT disable thinking
+    # — it leaves the model on its default. Routing agents (Coord,
+    # AmazonHead) burn output tokens on `high` thinking for pattern-
+    # match decisions that don't need it. Explicit `low` cuts that.
+    #
+    # LiteLlm-backed agents (Anthropic via OpenRouter) are handled
+    # by `apply_to_agent_tree` at boot/swap-time (Anthropic uses
+    # `thinking={"type":"enabled","budget_tokens":N}` as a long-lived
+    # completion kwarg, not a per-call request field).
     if getattr(llm_request, "config", None) and hasattr(
         llm_request.config, "thinking_config"
     ):
         from app.app_utils import thinking as _thinking
 
-        cfg = _thinking.load()
-        if not cfg["enabled"]:
-            llm_request.config.thinking_config = None
-        else:
-            # Leave thinking_config alone — Gemini will use whatever the
-            # model defaults to (or whatever the caller pre-set). We avoid
-            # constructing a ThinkingConfig here so the import stays out
-            # of the callback hot path; the default-on behaviour is fine.
-            pass
+        agent_name = getattr(callback_context, "agent_name", "") or ""
+        level = _thinking.load_level(agent_name) if agent_name else "low"
+        # ThinkingConfig: thinking_level and thinking_budget are mutually
+        # exclusive per Google docs. Use thinking_level (Gemini 3 native).
+        llm_request.config.thinking_config = types.ThinkingConfig(
+            thinking_level=level,
+        )
 
     # Hot-swap model override from session state
     model_key = f"model:{callback_context.agent_name}"

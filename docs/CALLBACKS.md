@@ -12,10 +12,10 @@ Module-level callbacks. Hook is inferred from the function signature.
 - `file_attachment_capture` (before_tool | after_tool) — `app/callbacks/guardrails/attachments.py:45` — After-tool callback: stash a tool's emitted file_path so the next
 - `file_attachment_inject` (before_model | state) — `app/callbacks/guardrails/attachments.py:118` — After-model callback: drain ``__pending_file_parts__`` and append
 - `async prompt_injection_guardrail` (before_model | state) — `app/callbacks/guardrails/core.py:189` — Runtime Guardrail: Inspects the LLM request before hitting the model.
-- `tool_output_injection_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails/core.py:385` — After-tool callback: scan high-risk tool outputs for prompt injection.
-- `verify_retry_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails/core.py:467` — After-tool callback: counts evolution_verify_sandbox failures in session state.
-- `tool_output_spillover_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails/core.py:568` — After-tool callback: spill oversized outputs to scratchpad.
-- `async state_setter` (before_model | state) — `app/callbacks/guardrails/core.py:658` — Sets initial fundamental session state keys to prevent KeyErrors during prompt evaluation.
+- `tool_output_injection_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails/core.py:392` — After-tool callback: scan high-risk tool outputs for prompt injection.
+- `verify_retry_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails/core.py:474` — After-tool callback: counts evolution_verify_sandbox failures in session state.
+- `tool_output_spillover_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails/core.py:575` — After-tool callback: spill oversized outputs to scratchpad.
+- `async state_setter` (before_model | state) — `app/callbacks/guardrails/core.py:665` — Sets initial fundamental session state keys to prevent KeyErrors during prompt evaluation.
 - `plan_enforcer` (before_model | state) — `app/callbacks/guardrails/plan.py:28` — Injects active plan context into the model prompt to enforce step-by-step execution.
 - `plan_step_enforcer` (before_tool | after_tool) — `app/callbacks/guardrails/plan.py:82` — before_tool guard: block tool calls outside the active step's allowed_tools.
 - `a2a_privacy_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails/privacy.py:23` — Deterministic secret-matching guardrail for A2A tools.

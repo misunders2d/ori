@@ -38,6 +38,7 @@ For the area you're touching, read the matching topic doc:
 | A2A protocol | `docs/A2A.md` |
 | Self-evolution flow | `docs/EVOLUTION.md` |
 | Model assignments | `docs/HOT_SWAP.md` |
+| Per-component thinking levels | `docs/THINKING.md` |
 | Plan / scheduler | `docs/PLANS.md` |
 | Scheduled tasks (contracts) | `docs/CONTRACTS.md` |
 | Scratchpad | `docs/SCRATCHPAD.md` |

@@ -25,6 +25,9 @@ class SystemToolset(BaseToolset):
             session_refresh,
             trigger_rollback,
             set_thinking_mode,
+            set_thinking_level,
+            reset_thinking_level,
+            list_thinking_levels,
             execute_approved_action,
         )
         from app.tools.diagnostics import (
@@ -36,7 +39,10 @@ class SystemToolset(BaseToolset):
         tools = [
             FunctionTool(func=update_self),
             FunctionTool(func=session_refresh),
-            FunctionTool(func=set_thinking_mode),
+            FunctionTool(func=set_thinking_level),
+            FunctionTool(func=reset_thinking_level),
+            FunctionTool(func=list_thinking_levels),
+            FunctionTool(func=set_thinking_mode),  # deprecated, kept for back-compat
             FunctionTool(func=execute_approved_action),
             FunctionTool(func=check_active_tasks),
             FunctionTool(func=report_health),

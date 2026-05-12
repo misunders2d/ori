@@ -348,9 +348,12 @@ Tool for spawning sibling agent containers.
 - `update_self` (line 63) — Real process restart/reboot via supervisor exit signal.
 - `trigger_rollback` (line 87) — Rollback code to previous commit and rebuild/restart.
 - `session_refresh` (line 103) — Conversation/session reset only; wipes or summarizes chat history.
-- `async set_thinking_mode` (line 132) — Toggle extended thinking globally across every sub-agent.
-- `async set_planner_mode` (line 191) — Deprecated alias for ``set_thinking_mode``. Use that instead.
-- `async execute_approved_action` (line 195)
+- `async set_thinking_level` (line 132) — Set the thinking level for one Ori component.
+- `async reset_thinking_level` (line 193) — Clear a component's thinking override, reverting to its default.
+- `list_thinking_levels` (line 235) — Return the current effective thinking level for every component.
+- `async set_thinking_mode` (line 246) — Deprecated. Use `set_thinking_level(component, level)` instead.
+- `async set_planner_mode` (line 285) — Deprecated alias for `set_thinking_mode`. Prefer `set_thinking_level`.
+- `async execute_approved_action` (line 289)
 
 ## `app/tools/telegram.py`
 Telegram-specific agent tools.

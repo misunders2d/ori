@@ -129,46 +129,144 @@ def session_refresh(mode: str, tool_context: ToolContext) -> dict:
     request_refresh(session_id, mode)
     return {"status": "success", "message": f"Session refresh ({mode}) scheduled. It will take effect after this response."}
 
+async def set_thinking_level(
+    component: str,
+    level: str,
+    tool_context: ToolContext,
+) -> dict:
+    """Set the thinking level for one Ori component.
+
+    Gemini 3 supports four levels: `minimal` (no thinking), `low`
+    (minimum latency + cost), `medium` (balanced — codegen / SQL synth),
+    `high` (maximum reasoning depth). Anthropic-backed agents map the
+    same levels to budget_tokens (minimal/low → off; medium → 4096;
+    high → 8192).
+
+    Persisted to `data/thinking_config.json` (survives restart). Applied
+    to the live agent tree immediately — Gemini agents pick up per-turn,
+    LiteLlm-backed agents (Anthropic via OpenRouter) re-armed via
+    `apply_to_agent_tree`.
+
+    Defaults per component (see `app/app_utils/thinking.py:THINKING_DEFAULTS`):
+    Coordinator / AmazonHead / Knowledge = `low`. CRUD leaves
+    (AmazonAgent, AmazonMemory, AmazonWorkspace, ClickUp, google_search)
+    = `minimal`. Code/SQL synth (DataAnalyst, BigQuery, DeveloperAgent)
+    = `medium`. Summarizers = `minimal`.
+
+    Args:
+        component: Component name (e.g. 'CoordinatorAgent', 'AmazonAgent',
+            'DeveloperAgent'). Must be in `THINKING_DEFAULTS`.
+        level: One of 'minimal', 'low', 'medium', 'high'.
+
+    Returns:
+        dict with the new effective level for the component + how many
+        live agents were updated.
+    """
+    from app.app_utils import thinking
+
+    try:
+        overrides = thinking.save_level(component, level)
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+
+    # Apply to live tree so the next turn picks up the new level.
+    counts = {"inspected": 0, "mutated": 0}
+    try:
+        from app.agent import root_agent
+        counts = thinking.apply_to_agent_tree(root_agent)
+    except Exception as e:
+        logger.warning("apply_to_agent_tree failed in set_thinking_level: %s", e)
+
+    return {
+        "status": "success",
+        "message": (
+            f"Thinking level for {component} set to '{level}'. "
+            f"Re-armed {counts['mutated']}/{counts['inspected']} LiteLlm agents; "
+            "Gemini agents pick up per-turn."
+        ),
+        "component": component,
+        "level": level,
+        "overrides": overrides,
+    }
+
+
+async def reset_thinking_level(
+    component: str,
+    tool_context: ToolContext,
+) -> dict:
+    """Clear a component's thinking override, reverting to its default.
+
+    Args:
+        component: Component name.
+    Returns:
+        dict with status + whether anything was cleared.
+    """
+    from app.app_utils import thinking
+
+    try:
+        cleared = thinking.reset_level(component)
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+
+    default_level = thinking.THINKING_DEFAULTS.get(component, "low")
+
+    # Re-arm live tree if Anthropic-backed (Gemini picks up per-turn).
+    try:
+        from app.agent import root_agent
+        thinking.apply_to_agent_tree(root_agent)
+    except Exception as e:
+        logger.warning("apply_to_agent_tree failed in reset_thinking_level: %s", e)
+
+    if cleared:
+        return {
+            "status": "success",
+            "message": f"Override cleared. {component} reverted to default level '{default_level}'.",
+            "component": component,
+            "level": default_level,
+        }
+    return {
+        "status": "success",
+        "message": f"No override set for {component}. Default '{default_level}' already in effect.",
+        "component": component,
+        "level": default_level,
+    }
+
+
+def list_thinking_levels(tool_context: ToolContext) -> dict:
+    """Return the current effective thinking level for every component."""
+    from app.app_utils import thinking
+    levels = thinking.load_all_levels()
+    return {"status": "success", "levels": levels}
+
+
+# Backward-compat: older sessions/skills may still call set_thinking_mode.
+# Delegates to the new per-component API by applying a blanket policy:
+# enabled=True → all components on `medium` (or `high` if budget >= 8192);
+# enabled=False → all components on `low`.
 async def set_thinking_mode(
     enabled: bool,
     tool_context: ToolContext,
     budget_tokens: int = 4096,
 ) -> dict:
-    """Toggle extended thinking globally across every sub-agent.
+    """Deprecated. Use `set_thinking_level(component, level)` instead.
 
-    Provider-agnostic: applies to Gemini (per-turn ``thinking_config`` set
-    in the ``state_setter`` callback) and to LiteLlm-backed agents like
-    Anthropic Opus 4.7 via OpenRouter (``thinking={"type":"enabled",...}``
-    injected into each LiteLlm instance's completion kwargs).
-
-    Persisted to ``data/thinking_config.json`` so the setting survives
-    restart. The flag is process-global — one call, one effect, all
-    agents — there is no per-session override.
-
-    Thoughts themselves never reach Slack/Telegram/A2A. ``extract_agent_response``
-    filters ``Part(thought=True)`` regardless of this flag — turning
-    thinking on lets the model reason internally without polluting chat.
-
-    Args:
-        enabled: True to allow models to think before answering. False to
-            forbid it.
-        budget_tokens: How many thinking tokens Anthropic is allowed per
-            response when enabled. Ignored when disabled. Default 4096.
-
-    Returns:
-        dict with the new persisted config + a count of agents updated.
+    Kept as a compatibility shim that applies a blanket policy across
+    every component. The fine-grained tool is strongly preferred.
     """
     from app.app_utils import thinking
 
-    cfg = thinking.save(enabled, budget_tokens=budget_tokens)
+    blanket = "low"
+    if enabled:
+        blanket = "high" if budget_tokens >= 8192 else "medium"
+    for component in thinking.THINKING_DEFAULTS:
+        try:
+            thinking.save_level(component, blanket)
+        except ValueError:
+            pass
 
-    # Apply to the live agent tree so the next turn already uses the new
-    # setting. Without this, LiteLlm-backed agents would only pick up the
-    # change on the next process restart.
     counts = {"inspected": 0, "mutated": 0}
     try:
         from app.agent import root_agent
-
         counts = thinking.apply_to_agent_tree(root_agent)
     except Exception as e:
         logger.warning("apply_to_agent_tree failed in set_thinking_mode: %s", e)
@@ -176,20 +274,16 @@ async def set_thinking_mode(
     return {
         "status": "success",
         "message": (
-            f"Thinking {'enabled' if enabled else 'disabled'} globally "
-            f"(budget={budget_tokens} tokens). "
-            f"Applied to {counts['mutated']}/{counts['inspected']} LiteLlm agents; "
-            "Gemini agents pick up per-turn."
+            f"DEPRECATED: blanket policy applied — every component set to '{blanket}'. "
+            f"Use `set_thinking_level(component, level)` for per-agent control. "
+            f"Re-armed {counts['mutated']}/{counts['inspected']} LiteLlm agents."
         ),
-        "config": cfg,
+        "config": thinking.load(),
     }
 
 
-# Backward-compat alias: older sessions/skills may still call
-# ``set_planner_mode``. Delegates to the new global toggle so behaviour
-# converges on a single source of truth.
 async def set_planner_mode(enabled: bool, tool_context: ToolContext) -> dict:
-    """Deprecated alias for ``set_thinking_mode``. Use that instead."""
+    """Deprecated alias for `set_thinking_mode`. Prefer `set_thinking_level`."""
     return await set_thinking_mode(enabled, tool_context)
 
 async def execute_approved_action(token: str, totp_code: str = "", tool_context: ToolContext = None) -> dict:
