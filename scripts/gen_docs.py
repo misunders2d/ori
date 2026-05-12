@@ -179,7 +179,10 @@ def scan_callbacks() -> list[dict]:
     items: list[dict] = []
     if not CALLBACKS_DIR.is_dir():
         return items
-    for path in sorted(CALLBACKS_DIR.glob("*.py")):
+    # rglob recurses into packages — `guardrails/` was split into a
+    # subpackage on 2026-05-12 (admin/plan/privacy/attachments/core).
+    # __init__.py is a re-export shim with no defs; skip it.
+    for path in sorted(CALLBACKS_DIR.rglob("*.py")):
         if path.name.startswith("_"):
             continue
         tree = ast.parse(path.read_text(), filename=str(path))

@@ -1,3 +1,32 @@
+"""Core callbacks — prompt-side guardrails, output ops, session state.
+
+Contents (grouped by concern):
+
+1. Provider helpers (`_initialized_model_provider`, `_initialized_model_is_litellm`) —
+   inspect the live BaseLlm on the agent at callback time.
+2. Per-container request throttle (`_RequestThrottle` + `_throttle` singleton).
+3. Semantic injection scanner state (`_CACHED_VECTORS` + `_get_cached_vectors`
+   + `_cosine_similarity`).
+4. Token-budget pre-flight (`_TOKEN_LIMIT`, `_CHARS_PER_TOKEN`, `_estimate_tokens`).
+5. `prompt_injection_guardrail` (before_model): the big one — token gate,
+   throttle, system-directive injection, thinking toggle, model hot-swap,
+   semantic injection scan.
+6. `tool_output_injection_guardrail` (after_tool): two-stage regex+embedding
+   scan of high-risk tool outputs (web_fetch, evolution_read_file).
+7. `verify_retry_guardrail` (after_tool): caps `evolution_verify_sandbox`
+   retry storms at `_MAX_VERIFY_FAILURES`.
+8. `tool_output_spillover_guardrail` (after_tool): spills oversized tool
+   outputs to the scratchpad to keep context under the LLM's limit.
+9. `state_setter` (before_agent): seeds session state with admin list,
+   user_id, bot_name, current_model, and resolves the real caller from
+   `[__caller_id:X__]` tags in group chats.
+
+`admin_tool_guardrail` / `admin_only_guardrail` → `.admin`
+`plan_enforcer` / `plan_step_enforcer`           → `.plan`
+`a2a_privacy_guardrail`                          → `.privacy`
+`file_attachment_capture` / `file_attachment_inject` → `.attachments`
+"""
+
 import asyncio
 import json
 import logging
@@ -90,157 +119,9 @@ class _RequestThrottle:
 _throttle = _RequestThrottle()
 
 
-def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
-    """
-    Runtime Guardrail: Intercepts highly privileged tool calls before execution.
-    For Admin users, it stages the intent and requires a follow-up token approval.
-    For non-Admin users, it blocks execution entirely.
-    """
-    if not tool or not tool_context:
-        return None
-
-    # Whitelist-based transfer guard: non-admins can only transfer to explicitly safe agents.
-    # New sub-agents are blocked by default until added here.
-    if tool.name == "transfer_to_agent":
-        _NONADMIN_ALLOWED_AGENTS = {  # Agents with their own access control
-            "ClickUpAgent",
-            "BigQueryAgent",
-            "AmazonHeadAgent",
-            "AmazonAgent",
-            "AmazonMemoryAgent",
-            "AmazonWorkspaceAgent",
-            "AmazonDataAnalystAgent",
-        }
-        agent_target = args.get("agent_name", "").strip()
-
-        if agent_target.lower() not in {a.lower() for a in _NONADMIN_ALLOWED_AGENTS}:
-            current_state = tool_context.state.to_dict()
-            user_id = current_state.get("user_id", "")
-
-            admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
-            admin_users = [u.strip() for u in admin_users_str.split(",") if u.strip()]
-
-            is_a2a = user_id.startswith("A2A_USER_")
-            if not is_a2a and (not admin_users or user_id not in admin_users):
-                return {
-                    "status": "error",
-                    "message": f"Guardrail Intervention: Only Admin/Master users can transfer to `{agent_target}`. Your user_id ({user_id}) is unauthorized.",
-                }
-        return None
-
-    # `reembed_entities` only stages when it would actually write. The
-    # dry_run preview is cheap, read-only, and stating costs the admin
-    # an extra TOTP round-trip for no real work.
-    if tool.name == "reembed_entities" and args.get("dry_run", True):
-        return None
-
-    # Admin-only, no ACT-token staging required.
-    # `update_self` is a clean process restart — supervisor brings the bot
-    # back, no code or secret writes, fully reversible. ACT-token + TOTP
-    # round-trip turned a one-prompt reboot into a 3-turn dance (provider
-    # swap → reboot pain, 2026-05-12). Admin check remains; non-admins
-    # are blocked below.
-    # `inspect_secure_env` exposes which env vars are set (values redacted).
-    # Useful for admin debugging; still revealing enough that non-admins
-    # must be blocked.
-    _ADMIN_ONLY_NO_STAGING = {"update_self", "inspect_secure_env"}
-    if tool.name in _ADMIN_ONLY_NO_STAGING:
-        current_state = tool_context.state.to_dict()
-        user_id = current_state.get("user_id", "")
-        admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
-        admin_users = [u.strip() for u in admin_users_str.split(",") if u.strip()]
-        is_a2a = user_id.startswith("A2A_USER_")
-        if not is_a2a and (not admin_users or user_id not in admin_users):
-            return {
-                "status": "error",
-                "message": f"Guardrail Intervention: Only Admin/Master users can invoke `{tool.name}`. Your user_id ({user_id}) is unauthorized.",
-            }
-        return None
-
-    if tool.name in [
-        "configure_integration",
-        "remove_integration",
-        "schedule_system_task",
-        "schedule_recurring_system_task",
-        "run_system_task_now",
-        "trigger_rollback",
-        "evolution_commit_and_push",
-        "evolution_git_pull",
-        "evolution_git_reset",
-        "evolution_sync_local_to_upstream",
-        "get_my_a2a_key",
-        "reembed_entities",
-    ]:
-        current_state = tool_context.state.to_dict()
-        user_id = current_state.get("user_id", "")
-        session_id = current_state.get("session_id", "")
-        if not session_id:
-            session = getattr(tool_context, "session", None)
-            session_id = (
-                getattr(session, "session_id", None)
-                or getattr(session, "id", None)
-                or ""
-            )
-
-        logger.info(
-            f"DEBUG: admin_tool_guardrail(tool={tool.name}) - user_id='{user_id}'"
-        )
-
-        admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
-        admin_users = [u.strip() for u in admin_users_str.split(",") if u.strip()]
-
-        # A2A callers with validated API keys are trusted
-        is_a2a = user_id.startswith("A2A_USER_")
-        if not is_a2a and (not admin_users or user_id not in admin_users):
-            return {
-                "status": "error",
-                "message": f"Guardrail Intervention: Only Admin/Master users can invoke `{tool.name}`. Your user_id ({user_id}) is unauthorized.",
-            }
-
-        # FOR ADMINS: Stage the intent if not already approved
-        # This replaces the framework-level confirmation UI with a messenger-agnostic token protocol.
-        try:
-            from app.core.pending_actions import stage_action
-
-            token = stage_action(tool.name, args, user_id, session_id)
-
-            logger.info(f"Admin Guardrail: Staged {tool.name} for {user_id} -> {token}")
-
-            totp_secret = os.environ.get("ADMIN_TOTP_SECRET")
-            # 2FA Requirement: Required if ADMIN_TOTP_SECRET is set AND REQUIRE_2FA is true (default)
-            require_2fa = os.environ.get("REQUIRE_2FA", "true").lower() == "true"
-
-            if totp_secret and require_2fa:
-                return {
-                    "status": "error",  # Abort current execution
-                    "message": (
-                        f"**CRITICAL ACTION STAGED**\n\n"
-                        f"To protect the system, the `{tool.name}` command requires explicit admin confirmation.\n\n"
-                        f"Please reply with your token and 2FA code:\n"
-                        f"`Approve {token} <your-6-digit-code>`\n\n"
-                        f"_Note: This token expires in 15 minutes and is single-use._"
-                    ),
-                }
-            else:
-                return {
-                    "status": "error",  # Abort current execution
-                    "message": (
-                        f"**CRITICAL ACTION STAGED**\n\n"
-                        f"To protect the system, the `{tool.name}` command requires explicit admin confirmation.\n\n"
-                        f"Please reply with:\n"
-                        f"`Approve {token}`\n\n"
-                        f"_Note: This token expires in 15 minutes and is single-use._"
-                    ),
-                }
-        except Exception as e:
-            logger.error(f"Failed to stage action in guardrail: {e}")
-            return {
-                "status": "error",
-                "message": "Guardrail Error: Failed to stage your action for approval. Please check the logs.",
-            }
-
-    return None
-
+# ---------------------------------------------------------------------------
+# Semantic injection scanner — load cached embedding vectors once
+# ---------------------------------------------------------------------------
 
 _CACHED_VECTORS = None
 
@@ -250,10 +131,12 @@ def _get_cached_vectors():
     if _CACHED_VECTORS is not None:
         return _CACHED_VECTORS
 
-    import os
-
+    # Embeddings file sits alongside the original guardrails module.
+    # After the 2026-05-12 split, this file lives in
+    # ``app/callbacks/guardrails/core.py``; the embeddings file is one
+    # level up at ``app/callbacks/guardrail_embeddings.json``.
     path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "guardrail_embeddings.json")
+        os.path.join(os.path.dirname(__file__), "..", "guardrail_embeddings.json")
     )
     if not os.path.exists(path):
         _CACHED_VECTORS = []
@@ -471,44 +354,6 @@ async def prompt_injection_guardrail(
                                 )
                     except Exception:
                         pass
-    return None
-
-
-def admin_only_guardrail(callback_context: CallbackContext) -> types.Content | None:
-    """
-    Runtime Guardrail: Checks if the user is explicitly set in ADMIN_USER_IDS setup.
-    If not, it preemptively returns Content to halt execution of the agent.
-    """
-    import os
-
-    current_state = callback_context.state.to_dict()
-    user_id = current_state.get("user_id", "")
-
-    admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
-    admin_users = [u.strip() for u in admin_users_str.split(",") if u.strip()]
-
-    if not admin_users:
-        return types.Content(
-            parts=[
-                types.Part(
-                    text=f"Guardrail Intervention: ADMIN_USER_IDS is not configured in settings. Wait... Were you trying to find your ID to set this up? Here it is: `{user_id}`"
-                )
-            ]
-        )
-
-    # A2A callers with validated API keys are trusted (key was checked by a2a_server)
-    if user_id.startswith("A2A_USER_"):
-        return None  # Allow — authenticated A2A caller
-
-    if user_id not in admin_users:
-        return types.Content(
-            parts=[
-                types.Part(
-                    text=f"Guardrail Intervention: Only Admin/Master users can invoke this agent. Your user_id (`{user_id}`) is unauthorized.\n\nTo add this ID to the admin list, run `update_self` from an already authorized platform and modify `ADMIN_USER_IDS`."
-                )
-            ]
-        )
-
     return None
 
 
@@ -803,120 +648,9 @@ def tool_output_spillover_guardrail(tool, args, tool_context, tool_response):
     }
 
 
-def plan_enforcer(
-    callback_context: CallbackContext, llm_request: LlmRequest
-) -> LlmResponse | None:
-    """Injects active plan context into the model prompt to enforce step-by-step execution."""
-    from app.tools.planner import get_active_plan_context
-
-    session = (
-        getattr(callback_context, "session", None)
-        if hasattr(callback_context, "session")
-        else None
-    )
-    if not session:
-        return None
-    session_id = getattr(session, "session_id", None) or getattr(session, "id", None)
-    if not session_id:
-        return None
-
-    context = get_active_plan_context(session_id)
-    if context and llm_request.contents:
-        llm_request.append_instructions([context])
-
-    return None
-
-
-# Tools that are always allowed regardless of the active step's
-# allowed_tools list — they manage the plan itself, control transport
-# (the agent must be able to ask the user for confirmation / acknowledge
-# completion), or are inherent to ADK's delegation primitives. Without
-# this allow-list a hard-enforced plan would deadlock the agent.
-_PLAN_EXEMPT_TOOLS = frozenset(
-    {
-        # Plan lifecycle
-        "create_plan",
-        "get_next_step",
-        "complete_step",
-        "get_plan_status",
-        "abandon_plan",
-        # Working memory the agent always needs access to
-        "scratchpad_read",
-        "scratchpad_write",
-        "scratchpad_list",
-        "scratchpad_replace",
-        "scratchpad_clear",
-        # ADK primitives + reflection
-        "transfer_to_agent",
-    }
-)
-
-
-def _glob_match(name: str, patterns: list[str]) -> bool:
-    """True if `name` matches any glob pattern (fnmatch syntax)."""
-    import fnmatch
-    return any(fnmatch.fnmatchcase(name, p) for p in patterns)
-
-
-def plan_step_enforcer(tool, args, tool_context, **kwargs) -> dict | None:
-    """before_tool guard: block tool calls outside the active step's allowed_tools.
-
-    When the current step has an `allowed_tools` whitelist, only tool
-    names that match one of those globs (or are in `_PLAN_EXEMPT_TOOLS`)
-    are permitted through. Everything else returns a synthetic error
-    response that tells the LLM what's allowed for this step, prompting
-    it to either complete the step or abandon the plan.
-
-    No active plan / no constraints / no in-progress step → pass through.
-    This is layered on top of `plan_enforcer` (which still injects the
-    prompt context) — the soft fence stays as guidance for the LLM, the
-    hard fence here catches deviations the LLM tries anyway.
-    """
-    if not tool or not tool_context:
-        return None
-
-    tool_name = getattr(tool, "name", "") or ""
-    if tool_name in _PLAN_EXEMPT_TOOLS:
-        return None
-
-    session = getattr(tool_context, "session", None)
-    session_id = (
-        getattr(session, "session_id", None)
-        or getattr(session, "id", None)
-        if session is not None
-        else None
-    )
-    if not session_id:
-        return None
-
-    try:
-        from app.tools.planner import get_current_step_constraints
-        constraints = get_current_step_constraints(session_id)
-    except Exception as e:
-        logger.warning("plan_step_enforcer: planner unreachable (%s) — pass-through", e)
-        return None
-
-    if not constraints:
-        return None  # no plan / no in-progress step / unconstrained step
-
-    allowed = constraints.get("allowed_tools") or []
-    if not allowed:
-        return None  # only must_call set — let it through
-
-    if _glob_match(tool_name, allowed):
-        return None
-
-    return {
-        "status": "error",
-        "message": (
-            f"Plan-step guardrail: tool `{tool_name}` is not allowed for step "
-            f"{constraints['step_id']} ({constraints['description']!r}). "
-            f"Allowed for this step: {allowed}. "
-            "Complete the current step (`complete_step`) or abandon the plan (`abandon_plan`) "
-            "before calling other tools."
-        ),
-    }
-
+# ---------------------------------------------------------------------------
+# Session state seeder
+# ---------------------------------------------------------------------------
 
 _CALLER_ID_RE = re.compile(r"\[__caller_id:([^\]]+)__\]")
 
@@ -928,8 +662,6 @@ async def state_setter(
     Sets initial fundamental session state keys to prevent KeyErrors during prompt evaluation.
     Extracts the real caller ID from message tags (for multi-user group chats).
     """
-    import os
-
     current_state = callback_context.state.to_dict()
     current_user = callback_context.user_id
 
@@ -982,277 +714,3 @@ async def state_setter(
             callback_context.state[f"model:{component}"] = effective_model
 
     return None
-
-
-# ---------------------------------------------------------------------------
-# A2A Privacy Guardrail: Prevent credential leaks in outbound calls/DNA
-# ---------------------------------------------------------------------------
-
-
-def a2a_privacy_guardrail(tool, args, tool_context, tool_response=None):
-    """
-    Deterministic secret-matching guardrail for A2A tools.
-    Blocks any tool call or response that contains sensitive environment variables.
-    """
-    import os
-
-    from app.app_utils.config import ALLOWED_CONFIG_KEYS
-
-    # Get tool name
-    tool_name = getattr(tool, "name", "") or (tool.__name__ if callable(tool) else "")
-
-    _A2A_RISK_TOOLS = {
-        "call_friend",
-        "call_agent",
-        "export_dna",
-        "add_friend",
-        "web_fetch",
-    }
-    if tool_name not in _A2A_RISK_TOOLS:
-        return None
-
-    # Safe keys that are publicly known or not sensitive enough to block DNA exports
-    _SAFE_KEYS = {
-        "BOT_NAME",
-        "GITHUB_REPO",
-        "APP_NAME",
-    }
-
-    # Load all current secrets dynamically to support future evolution
-    secrets = []
-    for key in ALLOWED_CONFIG_KEYS:
-        if key in _SAFE_KEYS:
-            continue
-
-        val = os.environ.get(key)
-        # We only match secrets that are long enough to be unique/dangerous (e.g., > 6 chars)
-        if val and len(str(val)) > 6:
-            secrets.append(str(val))
-
-    # Also catch the admin passcode and TOTP secret
-    for extra_key in ["ADMIN_PASSCODE", "ADMIN_TOTP_SECRET"]:
-        val = os.environ.get(extra_key)
-        if val and len(str(val)) > 6:
-            secrets.append(str(val))
-
-    # 1. Check Arguments (Preventing leak via query/URL)
-    args_json = json.dumps(args)
-    for secret in secrets:
-        if secret in args_json:
-            logger.error(
-                "A2A PRIVACY VIOLATION: Secret detected in arguments for %s", tool_name
-            )
-            return {
-                "status": "error",
-                "message": (
-                    f"Guardrail Intervention: Outbound A2A tool call `{tool_name}` was blocked "
-                    f"because it contains a sensitive system credential (API Key/Token). "
-                    f"Privacy mandate: Technical DNA only. Never share credentials."
-                ),
-            }
-
-    # 2. Check Response (Preventing leak via DNA packaging or fetching)
-    if tool_response is not None:
-        resp_json = json.dumps(tool_response)
-        for secret in secrets:
-            if secret in resp_json:
-                logger.error(
-                    "A2A PRIVACY VIOLATION: Secret detected in output of %s", tool_name
-                )
-                return {
-                    "status": "error",
-                    "message": (
-                        f"Guardrail Intervention: Technical DNA from `{tool_name}` was blocked. "
-                        f"A system secret was found in the generated package. DNA exchange cancelled."
-                    ),
-                }
-
-    return None
-
-
-# ---------------------------------------------------------------------------
-# File-attachment plumbing — inline tool-generated files into the agent's
-# response so the A2A converter ships them as FileParts.
-# ---------------------------------------------------------------------------
-#
-# Background: tools like ``generate_chart`` and ``generate_image`` save bytes
-# to disk and return ``{"status": "success", "file_path": "..."}``. The
-# Slack / Telegram pollers call ``extract_agent_response`` which scans
-# function_response parts for ``file_path`` and reads the bytes directly,
-# attaching them to ``AgentResponse.media_items``.
-#
-# The A2A path is different: ``to_a2a()`` wraps the runner and translates
-# event parts via ``convert_genai_part_to_a2a_part``. Function-response
-# parts become A2A ``DataPart`` (JSON metadata only) — NEVER ``FilePart``.
-# Only ``Part(inline_data=Blob(...))`` becomes an A2A ``FilePart`` carrying
-# base64 bytes. Without an inline_data part in the event stream, the chart
-# never reaches a Streamlit / A2A peer; the agent ends up claiming
-# "attached" while the bytes stayed on the server.
-#
-# Fix: capture file paths emitted by tools (``file_attachment_capture``,
-# after_tool), then attach them as inline_data parts to the agent's model
-# response (``file_attachment_inject``, after_model). The A2A converter
-# picks them up natively. For Slack / Telegram, ``extract_agent_response``
-# is modified to dedupe via a path marker on the inline_data so the file
-# isn't attached twice.
-#
-# Marker convention: ``Part.inline_data.display_name`` is set to
-# ``f"{_FILE_ATTACHMENT_MARKER}{file_path}"``. The dedupe layer matches
-# on the prefix and removes the path from the function-response branch
-# at attachment time. Other consumers ignore the marker.
-
-_FILE_ATTACHMENT_MARKER = "__contract_file:"
-_PENDING_FILE_PARTS_KEY = "__pending_file_parts__"
-_FILE_ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024  # 20 MB — match A2A_INBOUND cap
-
-
-def file_attachment_capture(tool, args, tool_context, tool_response):
-    """After-tool callback: stash a tool's emitted file_path so the next
-    model response can inline it as an A2A-shippable Part.
-
-    Runs AFTER ``tool_output_spillover_guardrail``: when spillover
-    replaces a large response, the replacement carries ``file_payloads``
-    instead of a top-level ``file_path``. We check both shapes — the
-    common case is just ``file_path`` (small dicts, no spill).
-    """
-    if not isinstance(tool_response, dict):
-        return None
-
-    candidates: list[str] = []
-    fp = tool_response.get("file_path")
-    if isinstance(fp, str) and fp:
-        candidates.append(fp)
-
-    # Spillover-friendly: also grab file_path entries from file_payloads
-    # metadata (the spilled response keeps the path even after bytes are
-    # redacted into the scratchpad).
-    payloads = tool_response.get("file_payloads")
-    if isinstance(payloads, list):
-        for p in payloads:
-            if isinstance(p, dict):
-                pp = p.get("filename") or p.get("file_path") or p.get("path")
-                if isinstance(pp, str) and pp:
-                    candidates.append(pp)
-
-    if not candidates:
-        return None
-
-    # Read the existing pending list via direct ``.get`` to avoid the
-    # full ``to_dict()`` copy on every tool call. State can grow large
-    # in long-running sessions; ``to_dict`` snapshots the whole thing,
-    # which makes the after-tool chain quietly expensive when only one
-    # key matters.
-    try:
-        pending_raw = (
-            tool_context.state.get(_PENDING_FILE_PARTS_KEY, []) if tool_context else []
-        )
-    except Exception:
-        pending_raw = []
-    pending = list(pending_raw or [])
-
-    changed = False
-    for fp in candidates:
-        try:
-            abs_fp = os.path.abspath(fp)
-        except Exception:
-            continue
-        if abs_fp in pending:
-            continue
-        if not os.path.isfile(abs_fp):
-            continue
-        if os.path.getsize(abs_fp) > _FILE_ATTACHMENT_MAX_BYTES:
-            logger.warning(
-                "file_attachment_capture: %s exceeds %d bytes — skipping inline",
-                abs_fp,
-                _FILE_ATTACHMENT_MAX_BYTES,
-            )
-            continue
-        pending.append(abs_fp)
-        changed = True
-
-    if changed and tool_context is not None:
-        try:
-            tool_context.state[_PENDING_FILE_PARTS_KEY] = pending
-        except Exception as e:
-            logger.warning("file_attachment_capture: state write failed: %s", e)
-
-    return None  # pass-through; don't mutate the tool response
-
-
-def file_attachment_inject(callback_context, llm_response):
-    """After-model callback: drain ``__pending_file_parts__`` and append
-    each as an inline_data Part on the model's response.
-
-    Runs once per model turn. Each successfully-attached path is
-    removed from state so subsequent model responses don't re-attach
-    the same file. Failures (missing file, oversized, IO error) are
-    logged and the entry is dropped from the pending list — better
-    than blocking the turn forever on a stale path.
-    """
-    # Fast-path: read the pending list via direct ``.get`` so we don't
-    # pay for a full ``state.to_dict()`` copy on every model turn. On
-    # large sessions that copy is the slow part — most turns have no
-    # pending files and can early-exit in O(1).
-    try:
-        pending_raw = (
-            callback_context.state.get(_PENDING_FILE_PARTS_KEY, [])
-            if callback_context
-            else []
-        )
-    except Exception:
-        return None
-
-    pending = list(pending_raw or [])
-    if not pending:
-        return None
-
-    response_content = getattr(llm_response, "content", None)
-    if response_content is None or response_content.parts is None:
-        # No response shape to attach to. Clear pending so we don't
-        # ride this forever on a malformed turn.
-        try:
-            callback_context.state[_PENDING_FILE_PARTS_KEY] = []
-        except Exception:
-            pass
-        return None
-
-    appended_any = False
-    remaining: list[str] = []
-    import mimetypes as _mimetypes
-
-    for fp in pending:
-        if not os.path.isfile(fp):
-            logger.info("file_attachment_inject: %s no longer present — dropping", fp)
-            continue
-        try:
-            size = os.path.getsize(fp)
-            if size > _FILE_ATTACHMENT_MAX_BYTES:
-                logger.warning(
-                    "file_attachment_inject: %s grew past %d bytes — dropping",
-                    fp,
-                    _FILE_ATTACHMENT_MAX_BYTES,
-                )
-                continue
-            mime, _ = _mimetypes.guess_type(fp)
-            with open(fp, "rb") as f:
-                data = f.read()
-            part = types.Part(
-                inline_data=types.Blob(
-                    mime_type=mime or "application/octet-stream",
-                    data=data,
-                    display_name=f"{_FILE_ATTACHMENT_MARKER}{fp}",
-                )
-            )
-            response_content.parts.append(part)
-            appended_any = True
-        except Exception as e:
-            logger.warning(
-                "file_attachment_inject: failed to attach %s: %s", fp, e
-            )
-
-    try:
-        callback_context.state[_PENDING_FILE_PARTS_KEY] = remaining
-    except Exception:
-        pass
-
-    return llm_response if appended_any else None
