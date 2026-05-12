@@ -12,6 +12,7 @@ from google.adk.tools import skill_toolset
 from app.app_utils.models import get_model
 from app.callbacks.guardrails import (
     file_attachment_capture,
+    file_attachment_inject,
     prompt_injection_guardrail,
     tool_output_spillover_guardrail,
 )
@@ -58,4 +59,5 @@ amazon_agent = Agent(
     ],
     before_model_callback=prompt_injection_guardrail,
     after_tool_callback=[tool_output_spillover_guardrail, file_attachment_capture],
+    after_model_callback=[file_attachment_inject],
 )

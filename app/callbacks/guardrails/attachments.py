@@ -155,9 +155,31 @@ def file_attachment_inject(callback_context, llm_response):
     appended_any = False
     remaining: list[str] = []
 
+    def _emit_failure_placeholder(fp: str, reason: str) -> None:
+        """Surface attach failures to the user via a text Part. Law 6:
+        nothing fails silently. Logs already cover the operator side;
+        this puts the failure on the wire so the agent's "attached"
+        claim is contradicted in-band instead of the user wondering why
+        nothing showed up."""
+        nonlocal appended_any
+        try:
+            response_content.parts.append(
+                types.Part(
+                    text=f"\n\n[file attach failed — {os.path.basename(fp) or fp}: {reason}]"
+                )
+            )
+            appended_any = True
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(
+                "file_attachment_inject: could not append failure placeholder for %s: %s",
+                fp,
+                e,
+            )
+
     for fp in pending:
         if not os.path.isfile(fp):
             logger.info("file_attachment_inject: %s no longer present — dropping", fp)
+            _emit_failure_placeholder(fp, "file missing at delivery time")
             continue
         try:
             size = os.path.getsize(fp)
@@ -166,6 +188,10 @@ def file_attachment_inject(callback_context, llm_response):
                     "file_attachment_inject: %s grew past %d bytes — dropping",
                     fp,
                     _FILE_ATTACHMENT_MAX_BYTES,
+                )
+                _emit_failure_placeholder(
+                    fp,
+                    f"file exceeds inline cap ({size} > {_FILE_ATTACHMENT_MAX_BYTES} bytes)",
                 )
                 continue
             mime, _ = mimetypes.guess_type(fp)
@@ -184,6 +210,7 @@ def file_attachment_inject(callback_context, llm_response):
             logger.warning(
                 "file_attachment_inject: failed to attach %s: %s", fp, e
             )
+            _emit_failure_placeholder(fp, f"read failed: {e}")
 
     try:
         callback_context.state[_PENDING_FILE_PARTS_KEY] = remaining

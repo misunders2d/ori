@@ -12,19 +12,19 @@ Read this **before** adding new code — most things you'd build already exist.
 ## Sub-agents (10)
 
 
-- **AmazonAgent** (Agent) — `app/sub_agents/amazon_agent.py:27`
+- **AmazonAgent** (Agent) — `app/sub_agents/amazon_agent.py:28`
   - Amazon Manager sub-agent — product research, pricing, competitors, listing management.
 
-- **AmazonDataAnalystAgent** (Agent) — `app/sub_agents/amazon_data_analyst_agent.py:29`
+- **AmazonDataAnalystAgent** (Agent) — `app/sub_agents/amazon_data_analyst_agent.py:30`
   - Amazon Data Analyst sub-agent — statistical analysis, visualization, and data processing.
 
-- **AmazonHeadAgent** (Agent) — `app/sub_agents/amazon_head_agent.py:38`
+- **AmazonHeadAgent** (Agent) — `app/sub_agents/amazon_head_agent.py:39`
   - Amazon Head Agent — domain router for all Amazon business operations.
 
 - **AmazonMemoryAgent** (Agent) — `app/sub_agents/amazon_memory_agent.py:24`
   - Amazon Memory sub-agent — Neo4j knowledge base with native vector search.
 
-- **AmazonWorkspaceAgent** (Agent) — `app/sub_agents/amazon_workspace_agent.py:24`
+- **AmazonWorkspaceAgent** (Agent) — `app/sub_agents/amazon_workspace_agent.py:25`
   - Amazon Workspace sub-agent — Google Drive, Sheets, and Calendar.
 
 - **BigQueryAgent** (Agent) — `app/sub_agents/bigquery_agent.py:216`

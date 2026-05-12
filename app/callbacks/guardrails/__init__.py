@@ -18,7 +18,12 @@ created once on import, shared across all callbacks that need it.
 """
 
 from .admin import admin_only_guardrail, admin_tool_guardrail
-from .attachments import file_attachment_capture, file_attachment_inject
+from .attachments import (
+    _FILE_ATTACHMENT_MARKER,
+    _PENDING_FILE_PARTS_KEY,
+    file_attachment_capture,
+    file_attachment_inject,
+)
 from .core import (
     prompt_injection_guardrail,
     state_setter,

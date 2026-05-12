@@ -10,17 +10,17 @@ Augment by hand for fields the AST cannot infer (parent_agent, when_to_use, etc)
 
 
 ## AmazonAgent
-- File: `app/sub_agents/amazon_agent.py:27` (Agent)
+- File: `app/sub_agents/amazon_agent.py:28` (Agent)
 - Module variable: `amazon_agent`
 - Module doc: Amazon Manager sub-agent — product research, pricing, competitors, listing management.
 
 ## AmazonDataAnalystAgent
-- File: `app/sub_agents/amazon_data_analyst_agent.py:29` (Agent)
+- File: `app/sub_agents/amazon_data_analyst_agent.py:30` (Agent)
 - Module variable: `amazon_data_analyst_agent`
 - Module doc: Amazon Data Analyst sub-agent — statistical analysis, visualization, and data processing.
 
 ## AmazonHeadAgent
-- File: `app/sub_agents/amazon_head_agent.py:38` (Agent)
+- File: `app/sub_agents/amazon_head_agent.py:39` (Agent)
 - Module variable: `amazon_head_agent`
 - Module doc: Amazon Head Agent — domain router for all Amazon business operations.
 
@@ -30,7 +30,7 @@ Augment by hand for fields the AST cannot infer (parent_agent, when_to_use, etc)
 - Module doc: Amazon Memory sub-agent — Neo4j knowledge base with native vector search.
 
 ## AmazonWorkspaceAgent
-- File: `app/sub_agents/amazon_workspace_agent.py:24` (Agent)
+- File: `app/sub_agents/amazon_workspace_agent.py:25` (Agent)
 - Module variable: `amazon_workspace_agent`
 - Module doc: Amazon Workspace sub-agent — Google Drive, Sheets, and Calendar.
 

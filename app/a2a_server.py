@@ -2,12 +2,36 @@ import ipaddress
 import json
 import logging
 import os
+from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
+from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, FileResponse, Response
 
-from google.adk.a2a.utils.agent_to_a2a import to_a2a
+# Manual A2A wiring (replaces `to_a2a`) so we can plug a custom
+# `gen_ai_part_converter` that strips the `__contract_file:` display_name
+# marker from FileParts on the wire. The marker is load-bearing on the
+# server-internal genai side (extract_agent_response uses it to dedupe
+# Slack/Telegram attachments against the function_response.file_path
+# branch). Without the strip, remote A2A peers (Streamlit, other Ori
+# instances) see filenames like `__contract_file:/abs/.../chart.png`.
+from a2a.server.apps import A2AStarletteApplication
+from a2a.server.request_handlers import DefaultRequestHandler
+from a2a.server.tasks import InMemoryPushNotificationConfigStore, InMemoryTaskStore
+from a2a.types import AgentCard, FilePart as A2AFilePart, FileWithBytes
+from google.adk.a2a.converters.part_converter import convert_genai_part_to_a2a_part
+from google.adk.a2a.executor.a2a_agent_executor import A2aAgentExecutor
+from google.adk.a2a.executor.config import A2aAgentExecutorConfig
+from google.adk.artifacts.in_memory_artifact_service import InMemoryArtifactService
+from google.adk.auth.credential_service.in_memory_credential_service import (
+    InMemoryCredentialService,
+)
+from google.adk.memory.in_memory_memory_service import InMemoryMemoryService
+from google.adk.runners import Runner
+from google.adk.sessions.in_memory_session_service import InMemorySessionService
+
+from app.callbacks.guardrails.attachments import _FILE_ATTACHMENT_MARKER
 from app.sub_agents.coordinator_agent import root_agent
 
 logger = logging.getLogger(__name__)
@@ -356,6 +380,28 @@ def refresh_agent_card():
         logger.error("Failed to refresh Agent Card: %s", e)
 
 
+def _ori_gen_ai_part_converter(part):
+    """A2A-side wrapper around ADK's default part converter that strips
+    the ``__contract_file:`` marker from inline_data display_name on the
+    way out. The marker lives on the server-internal genai Part so
+    ``extract_agent_response`` can dedupe a captured file against the
+    function_response.file_path branch (Slack/Telegram path). Remote A2A
+    peers don't see that branch, only the FilePart, and the marker would
+    leak into the user-visible filename — so we replace it with the
+    basename here.
+    """
+    a2a_part = convert_genai_part_to_a2a_part(part)
+    if a2a_part is None:
+        return a2a_part
+    root = getattr(a2a_part, "root", None)
+    if isinstance(root, A2AFilePart) and isinstance(root.file, FileWithBytes):
+        name = root.file.name or ""
+        if name.startswith(_FILE_ATTACHMENT_MARKER):
+            stripped = name[len(_FILE_ATTACHMENT_MARKER):]
+            root.file.name = os.path.basename(stripped) or "attachment"
+    return a2a_part
+
+
 def create_a2a_app():
     """Initialize the A2A server with a v1.0-compliant Agent Card and optional API key auth."""
     logger.info("Initializing A2A Server application...")
@@ -373,15 +419,51 @@ def create_a2a_app():
         logger.error("Failed to write Agent Card: %s", e)
 
     port = int(os.environ.get("A2A_PORT", 8000))
-    logger.info("Wrapping root_agent with to_a2a (host=0.0.0.0, port=%d)...", port)
+    logger.info("Building A2A app (host=0.0.0.0, port=%d) with custom part converter...", port)
 
     try:
-        app = to_a2a(
-            agent=root_agent,
-            host="0.0.0.0",
-            port=port,
-            agent_card=agent_card_path,
+        # Load the agent card we just wrote so we can pass an AgentCard
+        # instance into A2AStarletteApplication.
+        with open(agent_card_path, "r", encoding="utf-8") as f:
+            final_card = AgentCard(**json.load(f))
+
+        async def _create_runner() -> Runner:
+            # Mirrors `to_a2a`'s default — in-memory services. Ori's
+            # persistent sessions live elsewhere (Slack/Telegram poller);
+            # the A2A peer surface intentionally stays ephemeral so a
+            # restart doesn't expose persisted state to external callers.
+            return Runner(
+                app_name=root_agent.name or "ori",
+                agent=root_agent,
+                artifact_service=InMemoryArtifactService(),
+                session_service=InMemorySessionService(),
+                memory_service=InMemoryMemoryService(),
+                credential_service=InMemoryCredentialService(),
+            )
+
+        executor_config = A2aAgentExecutorConfig(
+            gen_ai_part_converter=_ori_gen_ai_part_converter,
         )
+        agent_executor = A2aAgentExecutor(
+            runner=_create_runner,
+            config=executor_config,
+        )
+        request_handler = DefaultRequestHandler(
+            agent_executor=agent_executor,
+            task_store=InMemoryTaskStore(),
+            push_config_store=InMemoryPushNotificationConfigStore(),
+        )
+
+        @asynccontextmanager
+        async def _lifespan(app_):
+            a2a_inner = A2AStarletteApplication(
+                agent_card=final_card,
+                http_handler=request_handler,
+            )
+            a2a_inner.add_routes_to_app(app_)
+            yield
+
+        app = Starlette(lifespan=_lifespan)
 
         # Layer API key middleware if configured
         api_key = os.environ.get("A2A_API_KEY")
@@ -392,7 +474,7 @@ def create_a2a_app():
                 "to secure your agent from unauthorized internet access and quota drain."
             )
             return None
-            
+
         app = A2AApiKeyMiddleware(app, api_key)
         logger.info("A2A API key authentication strictly enforced.")
 

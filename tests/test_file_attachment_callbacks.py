@@ -163,7 +163,7 @@ def test_capture_no_file_path_passes_through(tmp_path):
 def test_capture_skips_oversized_file(tmp_path, monkeypatch):
     """Files larger than the inline cap (20 MB default) are skipped so
     we don't blow up the A2A response budget."""
-    import app.callbacks.guardrails as gr
+    from app.callbacks.guardrails import attachments as gr
 
     monkeypatch.setattr(gr, "_FILE_ATTACHMENT_MAX_BYTES", 10)
     f = tmp_path / "big.png"
@@ -223,18 +223,21 @@ def test_inject_no_pending_returns_none(tmp_path):
     assert out is None  # nothing to do
 
 
-def test_inject_drops_missing_path_quietly(tmp_path):
+def test_inject_emits_placeholder_on_missing_path(tmp_path):
     """If the file disappeared between capture and inject (e.g. tmp
-    cleanup ran), the entry is silently dropped — better than aborting
-    the model turn."""
+    cleanup ran), inject MUST surface the failure as a text Part on the
+    response — Law 6: nothing fails silently. The user must see why the
+    promised attachment didn't materialise instead of just text."""
     ctx = _make_state_ctx(
         {_PENDING_FILE_PARTS_KEY: ["/tmp/path_that_vanished_42.png"]}
     )
     response = _make_llm_response_with_text()
     out = file_attachment_inject(callback_context=ctx, llm_response=response)
-    # Nothing attached — original llm_response untouched, function
-    # returns None (no-op signal).
-    assert out is None
+    assert out is response  # mutated response returned
+    parts = out.content.parts
+    assert len(parts) == 2
+    assert "file attach failed" in parts[1].text
+    assert "path_that_vanished_42.png" in parts[1].text
     assert ctx.state.get(_PENDING_FILE_PARTS_KEY) == []
 
 
