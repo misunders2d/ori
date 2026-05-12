@@ -8,7 +8,10 @@ from google.genai import types
 from app.app_utils.models import get_model
 from app.callbacks.guardrails import (
     admin_tool_guardrail,
+    force_bounce_before_model,
+    on_tool_error_bouncer,
     prompt_injection_guardrail,
+    reset_error_history_after_tool,
     tool_output_injection_guardrail,
     tool_output_spillover_guardrail,
     verify_retry_guardrail,
@@ -167,7 +170,8 @@ developer_agent = Agent(
         get_llm_provider,
         switch_llm_provider,
     ],
-    before_model_callback=prompt_injection_guardrail,
+    before_model_callback=[force_bounce_before_model, prompt_injection_guardrail],
     before_tool_callback=admin_tool_guardrail,
-    after_tool_callback=[tool_output_injection_guardrail, tool_output_spillover_guardrail, verify_retry_guardrail],
+    after_tool_callback=[tool_output_injection_guardrail, tool_output_spillover_guardrail, verify_retry_guardrail, reset_error_history_after_tool],
+    on_tool_error_callback=on_tool_error_bouncer,
 )

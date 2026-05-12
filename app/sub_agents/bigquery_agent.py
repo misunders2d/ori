@@ -17,7 +17,13 @@ from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.tool_context import ToolContext
 
 from app.app_utils.models import get_model
-from app.callbacks.guardrails import prompt_injection_guardrail, tool_output_spillover_guardrail
+from app.callbacks.guardrails import (
+    force_bounce_before_model,
+    on_tool_error_bouncer,
+    prompt_injection_guardrail,
+    reset_error_history_after_tool,
+    tool_output_spillover_guardrail,
+)
 from app.tools.bigquery_data import get_table_data, table_data
 from app.tools.bigquery_tools import create_bigquery_toolset
 from app.toolsets import ScratchpadToolset
@@ -227,9 +233,10 @@ if _bq_toolset:
             FunctionTool(func=get_table_data),
             ScratchpadToolset(),
         ],
-        before_model_callback=prompt_injection_guardrail,
-        after_tool_callback=tool_output_spillover_guardrail,
+        before_model_callback=[force_bounce_before_model, prompt_injection_guardrail],
+        after_tool_callback=[tool_output_spillover_guardrail, reset_error_history_after_tool],
         before_tool_callback=before_bq_callback,
+        on_tool_error_callback=on_tool_error_bouncer,
     )
 else:
     bigquery_agent = None

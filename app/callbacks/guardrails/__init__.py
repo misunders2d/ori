@@ -24,6 +24,11 @@ from .attachments import (
     file_attachment_capture,
     file_attachment_inject,
 )
+from .bouncer import (
+    force_bounce_before_model,
+    on_tool_error_bouncer,
+    reset_error_history_after_tool,
+)
 from .core import (
     prompt_injection_guardrail,
     state_setter,
@@ -40,9 +45,12 @@ __all__ = [
     "a2a_privacy_guardrail",
     "file_attachment_capture",
     "file_attachment_inject",
+    "force_bounce_before_model",
+    "on_tool_error_bouncer",
     "plan_enforcer",
     "plan_step_enforcer",
     "prompt_injection_guardrail",
+    "reset_error_history_after_tool",
     "state_setter",
     "tool_output_injection_guardrail",
     "tool_output_spillover_guardrail",
