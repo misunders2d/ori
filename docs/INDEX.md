@@ -253,33 +253,33 @@ Tools for interacting with Ori's local long-term memory (LanceDB).
 ### `app/tools/memory_tools.py`
 Consolidated memory + knowledge-graph tool surface — Neo4j only.
 
-- `async search_knowledge` (line 553) — Search the knowledge base using natural language.
-- `async get_records` (line 613) — Fetch specific records by their IDs.
-- `async list_records` (line 660) — List all record IDs and short descriptions in a namespace.
-- `async create_record` (line 701) — Create a new knowledge record.
-- `async update_record` (line 901) — Update a record. Only the creator (via `author_user_id`) or admins can modify.
-- `async update_any_record` (line 1003) — Admin-only: update a record bypassing the `author_user_id` creator gate.
-- `async delete_record` (line 1077) — Delete a record. Only the creator (via `author_user_id`) or admins can delete.
-- `async create_person` (line 1195) — Create a new person record.
-- `async search_people` (line 1372) — Search people by natural language description, scoped.
-- `async update_person` (line 1432) — Update a person record. Only the creator (via `author_user_id`) or admins can modify.
-- `async update_any_person` (line 1525) — Admin-only: update a person record bypassing the `author_user_id` creator gate.
-- `async promote_person` (line 1602) — Admin-only: add a scope label to an existing person.
-- `async delete_person` (line 1646) — Delete a person. Only the creator (via `author_user_id`) or admins can delete.
-- `async delete_any_person` (line 1747) — Admin-only: delete a person bypassing the `author_user_id` creator gate.
-- `async merge_persons` (line 1782) — Admin-only: merge a duplicate :Person node into a canonical one.
-- `async relate_persons` (line 1984) — Create or reaffirm a typed directional relationship between two existing people.
-- `async create_entity` (line 2113) — Create a referable :Entity node (brand, company, department, product, etc.).
-- `async search_entities` (line 2277) — Semantic search across :Entity nodes, optionally filtered by entity_type.
-- `async update_entity` (line 2348) — Update an :Entity. Only the creator (via `author_user_id`) or admins can modify.
-- `async delete_entity` (line 2444) — Delete an :Entity. Only the creator (via `author_user_id`) or admins.
-- `async relate_entities` (line 2543) — Create or reaffirm a typed edge (:Entity)-[:<REL>]->(:Entity). Idempotent.
-- `async relate_person_to_entity` (line 2719) — Create or reaffirm a typed edge (:Person)-[:<REL>]->(:Entity). Idempotent.
-- `async relate_entity_to_person` (line 2784) — Create or reaffirm a typed edge (:Entity)-[:<REL>]->(:Person). Idempotent.
-- `async relate_memory_to_person` (line 2848) — Create or reaffirm a typed edge (:Memory)-[:<REL>]->(:Person). Idempotent.
-- `async relate_memory_to_entity` (line 2915) — Create or reaffirm a typed edge (:Memory)-[:<REL>]->(:Entity). Idempotent.
-- `async relate_memories` (line 2979) — Create or reaffirm a typed edge between two existing memories. Idempotent.
-- `async reembed_entities` (line 3260) — Admin-only: refresh stored embeddings on a scope of nodes.
+- `async search_knowledge` (line 614) — Search the knowledge base using natural language.
+- `async get_records` (line 674) — Fetch specific records by their IDs.
+- `async list_records` (line 721) — List all record IDs and short descriptions in a namespace.
+- `async create_record` (line 762) — Create a new knowledge record.
+- `async update_record` (line 1019) — Update a record. Only the creator (via `author_user_id`) or admins can modify.
+- `async update_any_record` (line 1121) — Admin-only: update a record bypassing the `author_user_id` creator gate.
+- `async delete_record` (line 1195) — Delete a record. Only the creator (via `author_user_id`) or admins can delete.
+- `async create_person` (line 1313) — Create a new person record.
+- `async search_people` (line 1490) — Search people by natural language description, scoped.
+- `async update_person` (line 1550) — Update a person record. Only the creator (via `author_user_id`) or admins can modify.
+- `async update_any_person` (line 1643) — Admin-only: update a person record bypassing the `author_user_id` creator gate.
+- `async promote_person` (line 1720) — Admin-only: add a scope label to an existing person.
+- `async delete_person` (line 1764) — Delete a person. Only the creator (via `author_user_id`) or admins can delete.
+- `async delete_any_person` (line 1865) — Admin-only: delete a person bypassing the `author_user_id` creator gate.
+- `async merge_persons` (line 1900) — Admin-only: merge a duplicate :Person node into a canonical one.
+- `async relate_persons` (line 2102) — Create or reaffirm a typed directional relationship between two existing people.
+- `async create_entity` (line 2231) — Create a referable :Entity node (brand, company, department, product, etc.).
+- `async search_entities` (line 2395) — Semantic search across :Entity nodes, optionally filtered by entity_type.
+- `async update_entity` (line 2466) — Update an :Entity. Only the creator (via `author_user_id`) or admins can modify.
+- `async delete_entity` (line 2562) — Delete an :Entity. Only the creator (via `author_user_id`) or admins.
+- `async relate_entities` (line 2661) — Create or reaffirm a typed edge (:Entity)-[:<REL>]->(:Entity). Idempotent.
+- `async relate_person_to_entity` (line 2837) — Create or reaffirm a typed edge (:Person)-[:<REL>]->(:Entity). Idempotent.
+- `async relate_entity_to_person` (line 2902) — Create or reaffirm a typed edge (:Entity)-[:<REL>]->(:Person). Idempotent.
+- `async relate_memory_to_person` (line 2966) — Create or reaffirm a typed edge (:Memory)-[:<REL>]->(:Person). Idempotent.
+- `async relate_memory_to_entity` (line 3033) — Create or reaffirm a typed edge (:Memory)-[:<REL>]->(:Entity). Idempotent.
+- `async relate_memories` (line 3097) — Create or reaffirm a typed edge between two existing memories. Idempotent.
+- `async reembed_entities` (line 3378) — Admin-only: refresh stored embeddings on a scope of nodes.
 
 ### `app/tools/model_tools.py`
 Tools for runtime model discovery, hot-swapping, and provider switching.

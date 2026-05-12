@@ -504,6 +504,67 @@ async def _find_semantic_duplicate_memory(
         return []
 
 
+# Memory semantic-relatives threshold. Cosine band BELOW the duplicate
+# threshold but high enough that two records likely belong on the same
+# graph subtree (same incident, same project, same evolving decision).
+# 0.75 picked as a balance: catches obvious follow-ups (post-meeting
+# notes referring back to the meeting record, deal-status updates
+# referring back to the initial deal record) without false-positive
+# triggering on every memory that shares a few keywords.
+# Tune in tandem with _MEMORY_DUPLICATE_THRESHOLD if observed.
+_MEMORY_RELATIVES_THRESHOLD = 0.75
+_MEMORY_RELATIVES_TOP_K = 5
+
+
+async def _find_semantic_relatives_memory(
+    driver, text: str, namespace: str, openai_key: str,
+    lower: float = _MEMORY_RELATIVES_THRESHOLD,
+    upper: float = _MEMORY_DUPLICATE_THRESHOLD,
+    top_k: int = _MEMORY_RELATIVES_TOP_K,
+) -> list[dict]:
+    """Return memories in `namespace` whose embedding falls in [lower, upper).
+
+    Used by the `create_record` relatives gate: the duplicate gate handles
+    `score >= upper`; this helper finds the "topically related but not the
+    same record" band so the agent must explicitly review and decide
+    whether to link them via `related_memories` before creating.
+
+    Fail-open: returns an empty list on any error (the gate is a quality
+    nudge, not a safety gate — infra hiccup must not block writes).
+    """
+    index_name = _MEMORY_INDEX_BY_NAMESPACE[namespace]
+    # queryNodes returns top-K by score; we filter the band in Cypher so
+    # the dedup gate (which uses the same index with score >= upper) and
+    # this helper don't double-surface the same record.
+    query = (
+        "WITH genai.vector.encode($text, 'OpenAI', "
+        "{token: $openai_key, model: 'text-embedding-3-small'}) AS vec "
+        f"CALL db.index.vector.queryNodes('{index_name}', $top_k, vec) "
+        "YIELD node, score "
+        "WHERE score >= $lower AND score < $upper "
+        "RETURN node.record_id AS record_id, "
+        "       node.short_description AS short_description, "
+        "       substring(coalesce(node.text, ''), 0, 200) AS text_preview, "
+        "       toString(node.created_at) AS created_at, "
+        "       score "
+        "ORDER BY score DESC"
+    )
+    try:
+        async with driver.session() as session:
+            result = await session.run(
+                query, text=text, openai_key=openai_key,
+                lower=lower, upper=upper, top_k=top_k,
+            )
+            return [dict(r) async for r in result]
+    except Exception:
+        logger.warning(
+            "Semantic relatives check failed in namespace %r; proceeding without "
+            "the relatives gate.",
+            namespace, exc_info=True,
+        )
+        return []
+
+
 _ENTITY_DUPLICATE_THRESHOLD = 0.92
 
 
@@ -709,9 +770,29 @@ async def create_record(
     related_entities: list[str] = None,
     author: str = "",
     force_create: bool = False,
+    reviewed_relatives: bool = False,
     tool_context: ToolContext = None,
 ) -> dict:
     """Create a new knowledge record.
+
+    Two pre-create gates run in order before the write:
+
+    1. **Duplicate gate** (cosine >= 0.92): if a near-paraphrase already
+       exists, return `possible_duplicate` and refuse to create. Bypass
+       only after explicit user confirmation via `force_create=True`.
+
+    2. **Relatives gate** (0.75 <= cosine < 0.92): if topically-related
+       prior records exist (same incident / decision / project), return
+       `review_relatives` with up to 5 matches and refuse to create.
+       The agent MUST inspect the matches and retry with either:
+       - `related_memories=[{"memory_id": "...", "relation_type": "..."}, ...]`
+         to link them (typed relation: `follows_up`, `corrects`,
+         `supersedes`, `references`, or bare ID for default `RELATED_TO`).
+       - `reviewed_relatives=True` with `related_memories=[]` to
+         explicitly create an unlinked record.
+       Either path proves the agent SAW the matches. The gate is
+       skipped automatically if `related_memories` is already populated
+       (caller already provided IDs — search would duplicate work).
 
     Args:
         namespace: One of: personal, professional, technical.
@@ -733,7 +814,8 @@ async def create_record(
                           shapes; default edge type is `:RELATED_TO`. Dict form
                           accepts `memory_id`, `record_id`, or `id` as the key.
                           Useful types: `supersedes`, `follows_up`, `corrects`,
-                          `references`.
+                          `references`. Passing a non-empty list also SKIPS the
+                          relatives gate (the caller already provided links).
         related_entities: Optional list of entity IDs this memory is about.
                           Same two shapes; default edge type is `:ABOUT`. Use
                           when the memory references a brand / company /
@@ -747,6 +829,11 @@ async def create_record(
                 pre-create dedup check is a different record. Default False.
                 Do not set True pre-emptively to bypass the check — the whole
                 point is user confirmation on near-matches.
+        reviewed_relatives: Set to True after the relatives gate has surfaced
+                matches and the agent has either decided to link them (via
+                `related_memories`) or explicitly decided to create an unlinked
+                record. Default False, which triggers the gate. Do not set
+                True pre-emptively to bypass.
     """
     # Intentionally unused — authorship is derived from the caller, not the arg.
     del author
@@ -804,6 +891,37 @@ async def create_record(
                     f"- If the user (with explicit confirmation) says this is a "
                     f"different record despite the similarity, retry `create_record` "
                     f"with `force_create=true`."
+                ),
+            }
+
+    # Semantic relatives gate — runs only when the caller hasn't already
+    # provided `related_memories` (meaning: agent skipped the search step).
+    # Surfaces topically-related prior records in the [0.75, 0.92) band so
+    # the agent must explicitly decide to link them or proceed unlinked.
+    # The gate is fail-open: any infra error logs + skips, preserving write
+    # availability (matches the dedup gate's posture).
+    if not reviewed_relatives and not related_memories:
+        rel_matches = await _find_semantic_relatives_memory(
+            driver, text, namespace, openai_key,
+        )
+        if rel_matches:
+            return {
+                "status": "review_relatives",
+                "matches": rel_matches,
+                "threshold_lower": _MEMORY_RELATIVES_THRESHOLD,
+                "threshold_upper": _MEMORY_DUPLICATE_THRESHOLD,
+                "message": (
+                    f"Found {len(rel_matches)} existing record(s) in {namespace} "
+                    f"topically related (cosine in [{_MEMORY_RELATIVES_THRESHOLD}, "
+                    f"{_MEMORY_DUPLICATE_THRESHOLD})) to the proposed text. "
+                    f"Review them, then retry `create_record` with EITHER:\n"
+                    f"- `related_memories=[{{\"memory_id\": \"<id>\", \"relation_type\": "
+                    f"\"<verb>\"}}, ...]` to link the relevant ones (typed verbs: "
+                    f"`follows_up`, `corrects`, `supersedes`, `references`; bare IDs "
+                    f"default to `RELATED_TO`).\n"
+                    f"- `reviewed_relatives=true` (with `related_memories=[]`) to "
+                    f"explicitly create an unlinked record after confirming none of "
+                    f"the matches are relevant."
                 ),
             }
 

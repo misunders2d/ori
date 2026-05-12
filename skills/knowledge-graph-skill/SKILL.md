@@ -52,7 +52,7 @@ Handling a `needs_identity` response:
 | `search_knowledge(search_query, namespace, top_k)` | Semantic vector search in one namespace |
 | `get_records(record_ids, namespace)` | Fetch specific records by ID |
 | `list_records(namespace)` | Enumerate records in a namespace |
-| `create_record(namespace, text, short_description, category, tags, related_people?, related_memories?, related_entities?, force_create?)` | Store a memory, idea, incident, etc. `related_entities=["ent_..."]` creates `(:Memory)-[:ABOUT]->(:Entity)` edges — use when the memory references a brand/company/department/product/tool. Returns `{"status": "possible_duplicate"}` if a semantically similar record already exists (cosine ≥ 0.92). Pass `force_create=true` only after the user confirms it's a different record. |
+| `create_record(namespace, text, short_description, category, tags, related_people?, related_memories?, related_entities?, force_create?, reviewed_relatives?)` | Store a memory, idea, incident, etc. `related_entities=["ent_..."]` creates `(:Memory)-[:ABOUT]->(:Entity)` edges — use when the memory references a brand/company/department/product/tool. Two pre-write gates fire in order: (1) **duplicate gate** at cosine ≥ 0.92 returns `{"status": "possible_duplicate"}` — pass `force_create=true` only after user confirms different record; (2) **relatives gate** at cosine in [0.75, 0.92) returns `{"status": "review_relatives"}` with up to 5 matches — retry with `related_memories=[...]` to link them OR `reviewed_relatives=true` with `related_memories=[]` to create unlinked. See `docs/MEMORY.md` for full gate semantics. |
 | `update_record(record_id, namespace, updates)` | Creator-only update |
 | `delete_record(record_id, namespace)` | Creator-only delete |
 | `update_any_record(record_id, namespace, updates)` | **Admin-only** override — bypasses the creator gate |
@@ -144,11 +144,18 @@ Examples of correct behavior:
 
 The knowledge graph has three kinds of nodes and a specific edge vocabulary — if the user's request doesn't map, the right move is to surface the mismatch, not paper over it. You're a janitor of the graph; keep it clean.
 
-### Linking follow-up and related memories (IMPORTANT)
+### Linking follow-up and related memories (IMPORTANT — code-enforced)
 
 A knowledge graph with no relationships is just a list. Whenever you create a memory that **builds on, corrects, supersedes, or references prior knowledge**, link it — don't let related records drift apart.
 
-Proactive workflow when saving a memory that seems to relate to something existing:
+**This is now enforced at the tool level.** `create_record` runs a *relatives gate* in the [0.75, 0.92) cosine band: if topically-related prior records exist and the caller didn't pre-supply `related_memories`, the tool refuses to write and returns `{"status": "review_relatives", "matches": [...]}` with up to 5 hits. You CANNOT skip the search step. Retry with either:
+
+- `related_memories=[{"memory_id": "<id>", "relation_type": "<verb>"}, ...]` to link the relevant ones (typed verb: `follows_up`, `corrects`, `supersedes`, `references`; bare ID → `RELATED_TO`).
+- `reviewed_relatives=true` with `related_memories=[]` to explicitly create an unlinked record after confirming none of the matches are relevant.
+
+Either path proves the agent SAW the matches. The gate skips automatically when `related_memories` is already non-empty (pre-supplied IDs mean the caller did the search). See `docs/MEMORY.md` for the full state machine.
+
+Proactive workflow when you anticipate linkage (skips the gate's round-trip):
 
 1. Before calling `create_record`, use `search_knowledge(search_query=<key terms from the new content>, namespace=<same>, top_k=3)` to find plausibly-related prior records.
 2. Review the results. For each match that is genuinely related (a follow-up, an update about the same topic, a clarification, a reference), collect its `record_id`.
