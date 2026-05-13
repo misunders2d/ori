@@ -376,6 +376,6 @@ Data visualization tool — executes plotting code in a restricted scope.
 - `async list_access_control` (line 36) — List all whitelisted and blacklisted IDs, including those from environment variables.
 
 ## `app/tools/youtube.py`
-Multimodal YouTube summarization tool using Gemini 2.0+.
+Multimodal YouTube summarization tool using Gemini 3.
 
-- `async youtube_summary` (line 11) — Answer questions about a specific YouTube video, focusing on a specific query.
+- `async youtube_summary` (line 14) — Answer questions about a specific YouTube video, focusing on a specific query.

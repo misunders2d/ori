@@ -39,8 +39,11 @@ logger = logging.getLogger(__name__)
 # Discovery paths that remain publicly accessible (no auth required)
 _PUBLIC_PATHS = {"/.well-known/agent.json", "/.well-known/agent-card.json"}
 
-# OAuth callback path — intercepted by the middleware itself (never reaches the agent).
+# OAuth callback paths — intercepted by the middleware itself (never reach
+# the agent). Each upstream provider that issues a refresh token to us gets
+# its own path; the middleware dispatches to the right handler by the path.
 _OAUTH_CALLBACK_PATH = "/oauth/google/callback"
+_OAUTH_ADS_CALLBACK_PATH = "/oauth/ads/callback"
 
 DNA_EXPORTS_DIR = os.path.abspath("data/dna_exports")
 
@@ -87,9 +90,11 @@ class A2AApiKeyMiddleware(BaseHTTPMiddleware):
                     status_code=413,
                 )
 
-        # OAuth callback — handled here, no API key, never reaches the agent
+        # OAuth callbacks — handled here, no API key, never reach the agent
         if request.url.path == _OAUTH_CALLBACK_PATH:
             return await _handle_oauth_callback(request)
+        if request.url.path == _OAUTH_ADS_CALLBACK_PATH:
+            return await _handle_ads_oauth_callback(request)
 
         provided = request.headers.get("x-a2a-api-key", "")
         if provided != self.api_key:
@@ -170,6 +175,183 @@ async def _handle_oauth_callback(request):
         "Connected!",
         f"Google account <strong>{email}</strong> is now connected. You can close this tab and return to the chat.",
     ))
+
+
+_ADS_TOKEN_URL = "https://api.amazon.com/auth/o2/token"
+_ADS_STATE_HMAC_LEN = 32  # hex chars of the truncated HMAC tag
+
+
+def _ads_oauth_secret() -> bytes:
+    """Secret used to HMAC-sign the OAuth state nonce.
+
+    Reused from ``A2A_API_KEY`` so we don't introduce a new vault key
+    just for this. The bot already refuses to start without
+    ``A2A_API_KEY``, so this never falls back to empty in production.
+    """
+    return os.environ.get("A2A_API_KEY", "").encode()
+
+
+def _ads_oauth_state_is_valid(state: str) -> bool:
+    """Verify an HMAC-signed state token issued by ``ads_oauth_helper``.
+
+    Format: ``<nonce_hex>.<mac_hex_truncated>``. Both halves are
+    URL-safe. The MAC is a SHA-256 over the nonce keyed by the bot's
+    A2A API key, truncated to 32 hex chars. Truncation is fine for a
+    single-use 5-minute CSRF defense — birthday-bound at 2^64.
+    """
+    import hashlib
+    import hmac
+
+    if not state or "." not in state:
+        return False
+    nonce, mac = state.split(".", 1)
+    secret = _ads_oauth_secret()
+    if not secret:
+        return False
+    expected = hmac.new(secret, nonce.encode(), hashlib.sha256).hexdigest()[
+        :_ADS_STATE_HMAC_LEN
+    ]
+    return hmac.compare_digest(expected, mac)
+
+
+async def _handle_ads_oauth_callback(request):
+    """Handle the Amazon Ads OAuth redirect.
+
+    URL shape: ``/oauth/ads/callback?code=...&state=...``
+    (or ``?error=access_denied&state=...`` on denial).
+
+    Flow:
+      1. Verify the HMAC ``state`` token issued by the helper (CSRF guard).
+      2. POST the authorization ``code`` to ``api.amazon.com/auth/o2/token``
+         along with the LWA ``client_id`` + ``client_secret`` and the
+         exact ``redirect_uri`` the authorize step used.
+      3. On success, persist ``ADS_API_REFRESH_TOKEN`` to the vault and
+         return a success HTML page. Refresh tokens don't expire (unless
+         the user revokes), so this consent grant is permanent.
+
+    Law 6: any failure path returns a visible error page AND logs
+    ``logger.error`` — no silent drops.
+    """
+    from starlette.responses import HTMLResponse
+
+    params = request.query_params
+    state = params.get("state", "")
+    code = params.get("code", "")
+    error = params.get("error", "")
+    error_desc = params.get("error_description", "")
+
+    if error:
+        msg = f"Amazon returned: {error}{(' — ' + error_desc) if error_desc else ''}"
+        logger.error("Ads OAuth denial: %s", msg)
+        return HTMLResponse(_oauth_page("Authorization denied", msg), status_code=400)
+
+    if not state or not code:
+        logger.error("Ads OAuth callback missing state or code")
+        return HTMLResponse(
+            _oauth_page("Invalid callback", "Missing state or code parameter."),
+            status_code=400,
+        )
+
+    if not _ads_oauth_state_is_valid(state):
+        logger.error("Ads OAuth state failed HMAC verification")
+        return HTMLResponse(
+            _oauth_page(
+                "State mismatch",
+                "The CSRF state token did not verify. Ask the operator for a "
+                "fresh consent link and try again.",
+            ),
+            status_code=400,
+        )
+
+    client_id = os.environ.get("ADS_API_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("ADS_API_CLIENT_SECRET", "").strip()
+    if not client_id or not client_secret:
+        logger.error("Ads OAuth callback fired but vault missing ADS_API_CLIENT_ID / SECRET")
+        return HTMLResponse(
+            _oauth_page(
+                "Server misconfigured",
+                "The bot is missing the Amazon Ads client credentials in its "
+                "vault. Operator needs to populate ADS_API_CLIENT_ID and "
+                "ADS_API_CLIENT_SECRET, then redeploy.",
+            ),
+            status_code=500,
+        )
+
+    base = os.environ.get("A2A_BASE_URL", "https://bezosapp.uk").rstrip("/")
+    redirect_uri = f"{base}{_OAUTH_ADS_CALLBACK_PATH}"
+
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                _ADS_TOKEN_URL,
+                data={
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "redirect_uri": redirect_uri,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                },
+            )
+        if resp.status_code != 200:
+            logger.error(
+                "Ads OAuth token swap failed: HTTP %d — %s",
+                resp.status_code,
+                resp.text,
+            )
+            return HTMLResponse(
+                _oauth_page(
+                    "Token swap failed",
+                    f"Amazon returned HTTP {resp.status_code}. Check the bot "
+                    f"logs and try again with a fresh consent link.",
+                ),
+                status_code=500,
+            )
+        payload = resp.json()
+    except Exception as exc:
+        logger.error("Ads OAuth token swap raised: %s", exc)
+        return HTMLResponse(
+            _oauth_page(
+                "Network failure",
+                f"Could not reach Amazon to complete the token swap: {exc}",
+            ),
+            status_code=500,
+        )
+
+    refresh_token = payload.get("refresh_token")
+    if not refresh_token:
+        logger.error("Ads OAuth token swap returned no refresh_token: %s", payload)
+        return HTMLResponse(
+            _oauth_page(
+                "Missing refresh token",
+                "Amazon's token response did not include a refresh token. "
+                "Re-run consent with a fresh link.",
+            ),
+            status_code=500,
+        )
+
+    try:
+        from deploy.vault import set as vault_set
+
+        vault_set("ADS_API_REFRESH_TOKEN", refresh_token)
+        logger.info("ADS_API_REFRESH_TOKEN written to vault via OAuth callback.")
+    except Exception as exc:
+        logger.error("Failed to persist ADS_API_REFRESH_TOKEN to vault: %s", exc)
+        return HTMLResponse(
+            _oauth_page(
+                "Storage failed",
+                f"Could not save the refresh token to the vault: {exc}",
+            ),
+            status_code=500,
+        )
+
+    return HTMLResponse(
+        _oauth_page(
+            "Connected!",
+            "Amazon Ads access is now granted. You can close this tab.",
+        )
+    )
 
 
 def _oauth_page(title: str, body_html: str) -> str:
