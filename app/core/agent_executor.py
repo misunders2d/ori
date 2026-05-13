@@ -17,7 +17,11 @@ from app.session_signals import get_pending_refresh
 
 
 def _inject_metadata_header(
-    text: str, timestamp: datetime, platform: str, state: dict | None = None
+    text: str,
+    timestamp: datetime,
+    platform: str,
+    state: dict | None = None,
+    thread_id: str | None = None,
 ) -> str:
     """Build a metadata-prefixed message string, converting to user timezone if available.
 
@@ -27,6 +31,12 @@ def _inject_metadata_header(
         platform: Platform identifier (e.g. 'telegram', 'cli').
         state: Optional session state dict; may contain 'user_preferences' with a
                'Timezone: Region/City' line for local time conversion.
+        thread_id: Optional thread identifier. For Slack this is the
+            ``thread_ts`` (parent message timestamp). When supplied,
+            the agent sees ``Thread: <ts>`` in the metadata header,
+            so it can reason about which thread it's responding in
+            and pass the same value to ``slack_post_message`` /
+            ``slack_read_replies`` calls.
 
     Returns:
         The message text prefixed with a ``[Metadata: ...]`` header line.
@@ -54,7 +64,10 @@ def _inject_metadata_header(
                 break
 
     ts_str = display_ts.strftime(f"%Y-%m-%d %H:%M:%S {tz_label}")
-    header = f"[Metadata: {ts_str} | Platform: {platform}]"
+    parts = [f"Metadata: {ts_str}", f"Platform: {platform}"]
+    if thread_id:
+        parts.append(f"Thread: {thread_id}")
+    header = "[" + " | ".join(parts) + "]"
     return f"{header}\n{text}"
 
 

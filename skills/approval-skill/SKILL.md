@@ -44,7 +44,37 @@ If they forget the code, the approval is rejected — ask for both again.
 - Don't auto-approve. Ever. The user typing "approve" or similar is required.
 - Don't try to bypass by re-invoking the original tool — `AdminGatePlugin` will just issue another token.
 - Don't suppress the summary. The summary is the user's only window into what they're approving.
-- Tokens expire (default 10 min) — if the user takes too long, ask them to re-issue the request.
+- Tokens expire (default 15 min) — if the user takes too long, ask them to re-issue the request.
+
+## Pre-LLM intercept (2026-05-13)
+
+When the user types `Approve ACT-XXXXXX [123456]`, the Slack and
+Telegram pollers detect the pattern via
+`app/core/approval_intercept.py:parse_approval_text` and call
+`handle_approval(...)` directly, BEFORE the agent runs. The agent
+never sees the approval message. The intercept:
+
+1. Validates the token belongs to the requesting user.
+2. Enforces TOTP if `ADMIN_TOTP_SECRET` is set and `REQUIRE_2FA=true`.
+3. Pops the staged action from `data/pending_actions.db` (single-use).
+4. Calls the staged tool with a synthetic `ApprovalContext` shim.
+5. Posts the tool's reply back to the chat (Slack: in the same thread).
+
+This eliminates the 2026-05-13 loop where the LLM, on seeing
+`Approve ACT-XXXXXX`, would re-invoke the original gated tool and
+the admin guardrail would stage a fresh token each turn —
+effectively un-consumable.
+
+The skill instructions above still apply when the LLM is the one
+calling `execute_approved_action` (for example, on a platform
+without a deterministic intercept, or when staging is announced
+mid-conversation). The intercept is a deterministic short-circuit,
+not a replacement.
+
+`stage_action` is also idempotent: a re-invocation with identical
+`(tool, user, session, args)` returns the SAME pending token (until
+expiry), so even if the LLM re-fires the original tool, the user's
+earlier approval still matches the latest staged record.
 
 ## Cancellation
 

@@ -589,10 +589,59 @@ async def poll_slack(get_runner_fn, process_init_fn):
         if not text and not file_parts:
             return
 
+        # --- DETERMINISTIC APPROVAL INTERCEPT ---
+        # The LLM repeatedly failed the approve→consume handshake
+        # (it kept re-invoking the originally-gated tool, which the
+        # admin guardrail re-staged as a fresh token). This regex
+        # match runs PRE-LLM: if the user typed `Approve ACT-XXXXXX
+        # [123456]`, we execute the staged action directly and post
+        # the result back, bypassing the agent. The LLM never sees
+        # the approval message, so it can't loop.
+        from app.core.approval_intercept import (
+            handle_approval,
+            parse_approval_text,
+        )
+
+        parsed_approval = parse_approval_text(text)
+        if parsed_approval:
+            approval_token, approval_totp = parsed_approval
+            reply_thread_ts_for_approval = event.get("thread_ts") or ts
+            try:
+                reply_text = await handle_approval(
+                    token=approval_token,
+                    totp_code=approval_totp,
+                    user_id=user_id,
+                    session_id=session_id,
+                )
+            except Exception as e:  # defensive — handle_approval is supposed to never raise
+                logger.exception("approval intercept crashed")
+                reply_text = (
+                    f"Approval `{approval_token}` could not be processed: {e}"
+                )
+            try:
+                await adapter.send_message(
+                    channel_id, reply_text, thread_ts=reply_thread_ts_for_approval
+                )
+            except Exception:
+                logger.exception(
+                    "failed to deliver approval result to %s", channel_id
+                )
+            return  # short-circuit; the agent is NOT invoked for approvals
+
         # --- BUILD MESSAGE CONTENT ---
+        # Inject ``thread_ts`` into the metadata header so the agent
+        # is aware which Slack thread (if any) this message belongs
+        # to. ``event.thread_ts`` is set only when the inbound
+        # message is itself a reply in an existing thread; for a
+        # top-level channel message it's absent and the bot will
+        # start a NEW thread anchored at this message's ``ts`` (see
+        # ``reply_thread_ts`` below).
+        slack_thread_id = event.get("thread_ts") or ""
         raw_text = f"Message from {display_name} ({user_id}): {text} {file_info_text}".strip()
         enriched_text = _prepend_slack_formatting_note(
-            _inject_metadata_header(raw_text, msg_timestamp, "slack")
+            _inject_metadata_header(
+                raw_text, msg_timestamp, "slack", thread_id=slack_thread_id or None
+            )
         )
 
         message_content = types.Content(role="user", parts=[])

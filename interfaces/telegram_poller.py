@@ -562,6 +562,43 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                     if not text and not file_id and not file_info_text:
                         continue
 
+                    # --- DETERMINISTIC APPROVAL INTERCEPT ---
+                    # Pre-LLM short-circuit: ``Approve ACT-XXXXXX
+                    # [123456]`` from the user executes the staged
+                    # action directly. Bypasses the agent so the LLM
+                    # can't re-loop the approval gate by re-invoking
+                    # the original gated tool. See
+                    # ``app/core/approval_intercept.py``.
+                    from app.core.approval_intercept import (
+                        handle_approval,
+                        parse_approval_text,
+                    )
+
+                    parsed_approval = parse_approval_text(text)
+                    if parsed_approval:
+                        approval_token, approval_totp = parsed_approval
+                        try:
+                            reply_text = await handle_approval(
+                                token=approval_token,
+                                totp_code=approval_totp,
+                                user_id=user_id,
+                                session_id=session_id,
+                            )
+                        except Exception as e:
+                            logger.exception("approval intercept crashed")
+                            reply_text = (
+                                f"Approval `{approval_token}` could not "
+                                f"be processed: {e}"
+                            )
+                        try:
+                            await adapter.send_message(chat_id, reply_text)
+                        except Exception:
+                            logger.exception(
+                                "failed to deliver approval result to chat %s",
+                                chat_id,
+                            )
+                        continue  # skip agent for this update
+
                     # Construct normalized text with metadata header
                     mg_id = msg.get("media_group_id")
                     if mg_id and not text:
