@@ -112,6 +112,122 @@ async def test_telegram_dm_returns_dict_on_success(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_worker_rejects_un_awaited_coroutine_return(
+    monkeypatch, tmp_path
+):
+    """Direct repro of the 2026-05-13 ``linux_mastery_30_days_v2``
+    silent no-op. The adapter ``return``s an inner async call WITHOUT
+    awaiting it. Worker must detect the coroutine and raise — not
+    record fake success."""
+    from app.contracts import worker as worker_mod
+    from app.contracts.emit import EMIT_ADAPTERS
+    from app.contracts.schema import (
+        Contract,
+        EmitStep,
+        EnforcementMode,
+        FailureAction,
+        FailureActionType,
+        InputSpec,
+        OnDemandTrigger,
+    )
+    from app.contracts.store import ContractStore
+
+    store = ContractStore(root=str(tmp_path / "contracts"))
+    monkeypatch.setattr("app.contracts.worker.contract_store", store)
+    monkeypatch.setattr(
+        "app.contracts.worker._AUDIT_DIR", str(tmp_path / "audit")
+    )
+
+    async def _inner():
+        return {"status": "success"}
+
+    async def adapter_that_forgot_await(args, state):
+        # The bug: returns an UN-AWAITED coroutine. The Python runtime
+        # would emit a RuntimeWarning at gc, but in production the
+        # warning is filtered and the audit silently shows ok=true.
+        return _inner()
+
+    EMIT_ADAPTERS["unawaited_test_adapter"] = adapter_that_forgot_await
+    try:
+        c = Contract(
+            id="unawaited_test",
+            description="Pin worker coroutine guard.",
+            author="t",
+            trigger=OnDemandTrigger(),
+            inputs=[InputSpec(id="g", loader="static_param", args={"value": "x"})],
+            emit=[EmitStep(adapter="unawaited_test_adapter", args={"target": "x"})],
+            on_failure=FailureAction(
+                action=FailureActionType.ABORT_SILENT, abort=True
+            ),
+            enforcement=EnforcementMode.STRICT,
+        ).with_fresh_hash()
+        store.freeze(c)
+
+        out = await worker_mod.execute_contract(c)
+
+        assert out["__status__"] == "error", out
+        assert "un-awaited coroutine" in out["__error__"], out
+    finally:
+        EMIT_ADAPTERS.pop("unawaited_test_adapter", None)
+
+
+@pytest.mark.asyncio
+async def test_worker_audit_logs_result_type_and_repr_on_success(
+    monkeypatch, tmp_path
+):
+    """Audit must capture ``result_type`` + truncated ``result_repr``
+    on every emit success. Lets us spot phantom successes (None,
+    coroutine, str, ...) post-hoc without touching live state."""
+    import json
+    import pathlib
+
+    from app.contracts import worker as worker_mod
+    from app.contracts.emit import EMIT_ADAPTERS
+    from app.contracts.schema import (
+        Contract,
+        EmitStep,
+        EnforcementMode,
+        InputSpec,
+        OnDemandTrigger,
+    )
+    from app.contracts.store import ContractStore
+
+    store = ContractStore(root=str(tmp_path / "contracts"))
+    monkeypatch.setattr("app.contracts.worker.contract_store", store)
+    audit_dir = tmp_path / "audit"
+    monkeypatch.setattr("app.contracts.worker._AUDIT_DIR", str(audit_dir))
+
+    async def ok_adapter(args, state):
+        return {"status": "success", "ts": "1700000000.0", "channel": "C012"}
+
+    EMIT_ADAPTERS["repr_test_adapter"] = ok_adapter
+    try:
+        c = Contract(
+            id="repr_test",
+            description="Pin emit audit enrichment.",
+            author="t",
+            trigger=OnDemandTrigger(),
+            inputs=[InputSpec(id="g", loader="static_param", args={"value": "x"})],
+            emit=[EmitStep(adapter="repr_test_adapter", args={"target": "x"})],
+            enforcement=EnforcementMode.STRICT,
+        ).with_fresh_hash()
+        store.freeze(c)
+
+        await worker_mod.execute_contract(c)
+
+        files = list(pathlib.Path(audit_dir / "repr_test").glob("*.jsonl"))
+        assert files, "audit dir empty"
+        events = [json.loads(line) for line in files[0].read_text().splitlines()]
+        emit_event = next(e for e in events if e.get("phase") == "emit")
+        assert emit_event["ok"] is True
+        assert emit_event["result_type"] == "dict"
+        assert "status" in emit_event["result_repr"]
+        assert "success" in emit_event["result_repr"]
+    finally:
+        EMIT_ADAPTERS.pop("repr_test_adapter", None)
+
+
+@pytest.mark.asyncio
 async def test_worker_rejects_emit_with_error_status_even_when_adapter_didnt_raise(
     monkeypatch, tmp_path
 ):

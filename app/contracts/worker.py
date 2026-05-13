@@ -480,17 +480,51 @@ async def execute_contract(
 
             try:
                 result = await run_emit(emit.adapter, emit.args, state)
-                # Defense-in-depth: an adapter that returns a dict
-                # with ``status: "error"`` (or any non-success status
-                # value) MUST be treated as a failure even when it
-                # didn't raise. Pre-2026-05-13 the worker recorded
-                # ``ok: True`` whenever the adapter coroutine
-                # completed, regardless of the returned status —
-                # which let ``slack_post`` silently no-op for every
-                # contract that used a bad channel ID. Adapters
-                # written from now on should raise on failure (see
-                # ``slack_post`` / ``telegram_dm``), but this check
-                # catches the older style too.
+                # ------------------------------------------------------------
+                # Defense-in-depth: three orthogonal checks that close
+                # different ways a silent no-op can sneak past.
+                #
+                # (a) Coroutine guard. An adapter that ``return``s an
+                #     un-awaited inner coroutine (the 2026-05-13
+                #     ``slack_post`` bug — ``return slack_post_message(...)``
+                #     without ``await``) hands the worker a coroutine
+                #     object that's truthy but never executes its HTTP
+                #     call. Slack receives no traffic, audit records
+                #     fake success, admin sees nothing. Catching the
+                #     type explicitly is cheap and rules out the entire
+                #     class of bug for any future adapter.
+                # (b) Status-dict guard. Adapters that delegate to async
+                #     tools sometimes return ``{"status": "error", ...}``
+                #     INSTEAD of raising (the legacy ``telegram_send_dm``
+                #     does this for not_found / ambiguous). Treat any
+                #     status in the failure set as if the adapter had
+                #     raised, so ``_on_failure`` runs and admins are
+                #     notified.
+                # (c) Audit enrichment. Even when the emit succeeds we
+                #     stamp the returned value's type + short repr into
+                #     the audit JSONL. Lets us grep for "phantom
+                #     successes" historically — coroutine returns,
+                #     None returns, anything that doesn't look like
+                #     real adapter output — without touching live state.
+                # ------------------------------------------------------------
+                import inspect as _inspect
+
+                if _inspect.iscoroutine(result) or _inspect.isawaitable(result):
+                    # Try to close the un-awaited coroutine before
+                    # raising so the GC warning doesn't pollute the
+                    # logs for an issue we're already surfacing loud.
+                    try:
+                        result.close()  # type: ignore[union-attr]
+                    except Exception:
+                        pass
+                    raise RuntimeError(
+                        f"emit adapter {emit.adapter!r} returned an un-awaited "
+                        f"coroutine ({type(result).__name__}). The adapter "
+                        "likely forgot to ``await`` an async call inside its "
+                        "body. The side effect did NOT fire — production "
+                        "alert."
+                    )
+
                 if isinstance(result, dict) and result.get("status") in (
                     "error",
                     "failed",
@@ -501,10 +535,28 @@ async def execute_contract(
                         f"emit adapter {emit.adapter!r} returned non-success "
                         f"status {result.get('status')!r}: {result!r}"
                     )
+
                 emit_results.append({"id": emit.id, "adapter": emit.adapter, "result": result})
+
+                # Truncated repr lands in audit alongside ``ok: True``.
+                # Limit to ~200 chars so a verbose adapter return
+                # doesn't bloat the per-fire JSONL.
+                try:
+                    _repr = repr(result)
+                    if len(_repr) > 200:
+                        _repr = _repr[:197] + "..."
+                except Exception:
+                    _repr = f"<unrepr-able {type(result).__name__}>"
                 _audit(
                     audit_path,
-                    {"phase": "emit", "emit": emit.id, "adapter": emit.adapter, "ok": True},
+                    {
+                        "phase": "emit",
+                        "emit": emit.id,
+                        "adapter": emit.adapter,
+                        "ok": True,
+                        "result_type": type(result).__name__,
+                        "result_repr": _repr,
+                    },
                 )
 
                 # Mirror the emit's rendered content back into the

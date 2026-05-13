@@ -326,6 +326,28 @@ in the grace window would land in a broken-transport error path
 that admins couldn't see. With the paused-start change, every
 overdue job's first delivery attempt finds its adapter.
 
+### Worker defense layers around emit results
+
+The worker now applies three orthogonal checks to every adapter
+return value BEFORE recording the emit as successful:
+
+  1. **Coroutine guard**. ``inspect.iscoroutine(result)`` rejects an
+     adapter that returned an un-awaited inner coroutine (the
+     2026-05-13 ``slack_post`` original sin). The coroutine is
+     closed to suppress the GC RuntimeWarning, and a
+     ``RuntimeError`` is raised so the worker's ``emit_failed``
+     branch fires.
+  2. **Status-dict guard**. Any returned dict whose ``status`` is
+     in ``{"error", "failed", "not_found", "ambiguous"}`` is
+     treated as if the adapter had raised. Backstops adapters that
+     forget to raise on tool-side errors.
+  3. **Audit enrichment**. Successful emits log ``result_type``
+     (e.g. ``"dict"``, ``"NoneType"``, ``"coroutine"`` —
+     should never appear given check 1) and a 200-char
+     ``result_repr``. Lets operators grep historical audit JSONL
+     for phantom successes (None returns, surprising shapes)
+     without needing to re-fire the contract.
+
 ### Adapter status discipline (2026-05-13 silent no-op)
 
 `linux_mastery_30_days_v2` fired at 20:10 Kyiv on 2026-05-13 with
