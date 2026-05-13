@@ -26,6 +26,7 @@ from app.callbacks.guardrails import (
     on_tool_error_bouncer,
     prompt_injection_guardrail,
     reset_error_history_after_tool,
+    surface_error_loudly_after_tool,
     tool_output_spillover_guardrail,
 )
 
@@ -97,7 +98,7 @@ knowledge_agent = Agent(
         update_friend_address,
     ],
     before_tool_callback=a2a_privacy_guardrail,
-    after_tool_callback=[tool_output_spillover_guardrail, a2a_privacy_guardrail, reset_error_history_after_tool],
+    after_tool_callback=[tool_output_spillover_guardrail, a2a_privacy_guardrail, surface_error_loudly_after_tool, reset_error_history_after_tool],
     before_model_callback=[force_bounce_before_model, prompt_injection_guardrail],
     on_tool_error_callback=on_tool_error_bouncer,
 )

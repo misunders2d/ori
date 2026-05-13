@@ -26,9 +26,11 @@ from app.callbacks.guardrails.bouncer import (
     _ERROR_HIST_KEY,
     _FORCE_BOUNCE_KEY,
     _MAX_REPEATED_ERRORS,
+    _TOOL_FAILURE_PREFIX,
     force_bounce_before_model,
     on_tool_error_bouncer,
     reset_error_history_after_tool,
+    surface_error_loudly_after_tool,
 )
 
 
@@ -131,6 +133,74 @@ def test_reset_clears_history_on_success():
         tool_response={"status": "success", "data": "ok"},
     )
     assert ctx.state.get(_ERROR_HIST_KEY) == {}
+
+
+def test_surface_wraps_error_message_with_directive():
+    """Any tool returning ``status: error`` gets its message wrapped
+    with the loud-failure prefix and an explicit agent_directive so
+    the LLM can't fabricate a success turn (2026-05-13 incident:
+    ``analyze_data`` ParserError swallowed, agent exported empty CSV)."""
+    ctx = _make_state_ctx()
+    out = surface_error_loudly_after_tool(
+        tool=_make_tool("sp_get_catalog_item"),
+        args={},
+        tool_context=ctx,
+        tool_response={"status": "error", "message": "ASIN not found"},
+    )
+    assert out is not None
+    assert out["message"].startswith(_TOOL_FAILURE_PREFIX)
+    assert "ASIN not found" in out["message"]
+    assert "agent_directive" in out
+    # Non-terminal tool — bounce flag NOT armed.
+    assert ctx.state.get(_FORCE_BOUNCE_KEY) is not True
+
+
+def test_surface_arms_bounce_for_terminal_tools():
+    """Terminal tools (analyze_data, generate_chart, …) have no
+    recoverable retry — first error arms the bounce so Coordinator
+    surfaces the wrapped message instead of the leaf inventing a
+    happy path."""
+    ctx = _make_state_ctx()
+    out = surface_error_loudly_after_tool(
+        tool=_make_tool("analyze_data"),
+        args={},
+        tool_context=ctx,
+        tool_response={"status": "error", "message": "ParserError: bad delim"},
+    )
+    assert out["message"].startswith(_TOOL_FAILURE_PREFIX)
+    assert ctx.state.get(_FORCE_BOUNCE_KEY) is True
+
+
+def test_surface_passes_through_success():
+    ctx = _make_state_ctx()
+    out = surface_error_loudly_after_tool(
+        tool=_make_tool("x"),
+        args={},
+        tool_context=ctx,
+        tool_response={"status": "success", "data": "ok"},
+    )
+    assert out is None
+    assert ctx.state.get(_FORCE_BOUNCE_KEY) is not True
+
+
+def test_surface_idempotent_no_double_wrap():
+    """If two after_tool callback chains funnel the same response
+    through surface (e.g. nested toolset paths), don't double-prefix
+    the message."""
+    ctx = _make_state_ctx()
+    already_wrapped = {
+        "status": "error",
+        "message": f"{_TOOL_FAILURE_PREFIX}original error",
+    }
+    out = surface_error_loudly_after_tool(
+        tool=_make_tool("sp_get_catalog_item"),
+        args={},
+        tool_context=ctx,
+        tool_response=already_wrapped,
+    )
+    # Returns the existing dict unchanged.
+    assert out is already_wrapped
+    assert out["message"].count(_TOOL_FAILURE_PREFIX) == 1
 
 
 def test_reset_preserves_history_on_error():

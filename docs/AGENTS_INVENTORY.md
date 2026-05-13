@@ -10,37 +10,37 @@ Augment by hand for fields the AST cannot infer (parent_agent, when_to_use, etc)
 
 
 ## AmazonAgent
-- File: `app/sub_agents/amazon_agent.py:32` (Agent)
+- File: `app/sub_agents/amazon_agent.py:33` (Agent)
 - Module variable: `amazon_agent`
 - Module doc: Amazon Manager sub-agent — product research, pricing, competitors, listing management.
 
 ## AmazonDataAnalystAgent
-- File: `app/sub_agents/amazon_data_analyst_agent.py:34` (Agent)
+- File: `app/sub_agents/amazon_data_analyst_agent.py:35` (Agent)
 - Module variable: `amazon_data_analyst_agent`
 - Module doc: Amazon Data Analyst sub-agent — statistical analysis, visualization, and data processing.
 
 ## AmazonHeadAgent
-- File: `app/sub_agents/amazon_head_agent.py:43` (Agent)
+- File: `app/sub_agents/amazon_head_agent.py:44` (Agent)
 - Module variable: `amazon_head_agent`
 - Module doc: Amazon Head Agent — domain router for all Amazon business operations.
 
 ## AmazonMemoryAgent
-- File: `app/sub_agents/amazon_memory_agent.py:30` (Agent)
+- File: `app/sub_agents/amazon_memory_agent.py:31` (Agent)
 - Module variable: `amazon_memory_agent`
 - Module doc: Amazon Memory sub-agent — Neo4j knowledge base with native vector search.
 
 ## AmazonWorkspaceAgent
-- File: `app/sub_agents/amazon_workspace_agent.py:29` (Agent)
+- File: `app/sub_agents/amazon_workspace_agent.py:30` (Agent)
 - Module variable: `amazon_workspace_agent`
 - Module doc: Amazon Workspace sub-agent — Google Drive, Sheets, and Calendar.
 
 ## BigQueryAgent
-- File: `app/sub_agents/bigquery_agent.py:222` (Agent)
+- File: `app/sub_agents/bigquery_agent.py:223` (Agent)
 - Module variable: `bigquery_agent`
 - Module doc: BigQuery sub-agent with per-table access control.
 
 ## ClickUpAgent
-- File: `app/sub_agents/clickup_agent.py:107` (Agent)
+- File: `app/sub_agents/clickup_agent.py:108` (Agent)
 - Module variable: `clickup_agent`
 - Module doc: ClickUp task management sub-agent.
 
@@ -49,9 +49,9 @@ Augment by hand for fields the AST cannot infer (parent_agent, when_to_use, etc)
 - Module variable: `root_agent`
 
 ## DeveloperAgent
-- File: `app/sub_agents/developer_agent.py:136` (Agent)
+- File: `app/sub_agents/developer_agent.py:137` (Agent)
 - Module variable: `developer_agent`
 
 ## KnowledgeAgent
-- File: `app/sub_agents/knowledge_agent.py:37` (Agent)
+- File: `app/sub_agents/knowledge_agent.py:38` (Agent)
 - Module variable: `knowledge_agent`

@@ -29,6 +29,7 @@ from .bouncer import (
     force_bounce_before_model,
     on_tool_error_bouncer,
     reset_error_history_after_tool,
+    surface_error_loudly_after_tool,
 )
 from .core import (
     prompt_injection_guardrail,
@@ -54,6 +55,7 @@ __all__ = [
     "reset_error_history_after_tool",
     "state_setter",
     "strip_delivered_files_before_model",
+    "surface_error_loudly_after_tool",
     "tool_output_injection_guardrail",
     "tool_output_spillover_guardrail",
     "verify_retry_guardrail",

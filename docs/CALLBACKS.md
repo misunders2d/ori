@@ -12,9 +12,10 @@ Module-level callbacks. Hook is inferred from the function signature.
 - `strip_delivered_files_before_model` (before_model | state) — `app/callbacks/guardrails/attachments.py:45` — Before-model callback. Remove server-injected inline_data Parts
 - `file_attachment_capture` (before_tool | after_tool) — `app/callbacks/guardrails/attachments.py:93` — After-tool callback: stash a tool's emitted file_path so the next
 - `file_attachment_inject` (before_model | state) — `app/callbacks/guardrails/attachments.py:166` — After-model callback: drain ``__pending_file_parts__`` and append
-- `on_tool_error_bouncer` (before_tool | after_tool) — `app/callbacks/guardrails/bouncer.py:63` — ADK ``on_tool_error_callback``. Detects hallucinated tool calls
-- `force_bounce_before_model` (before_model | state) — `app/callbacks/guardrails/bouncer.py:112` — Before-model callback. If a previous tool error armed the
-- `reset_error_history_after_tool` (before_tool | after_tool) — `app/callbacks/guardrails/bouncer.py:150` — After-tool callback. Zero the consecutive-error counter on any
+- `on_tool_error_bouncer` (before_tool | after_tool) — `app/callbacks/guardrails/bouncer.py:84` — ADK ``on_tool_error_callback``. Detects hallucinated tool calls
+- `force_bounce_before_model` (before_model | state) — `app/callbacks/guardrails/bouncer.py:133` — Before-model callback. If a previous tool error armed the
+- `reset_error_history_after_tool` (before_tool | after_tool) — `app/callbacks/guardrails/bouncer.py:171` — After-tool callback. Zero the consecutive-error counter on any
+- `surface_error_loudly_after_tool` (before_tool | after_tool) — `app/callbacks/guardrails/bouncer.py:187` — After-tool callback. When a tool returns ``{"status": "error",
 - `async prompt_injection_guardrail` (before_model | state) — `app/callbacks/guardrails/core.py:189` — Runtime Guardrail: Inspects the LLM request before hitting the model.
 - `tool_output_injection_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails/core.py:392` — After-tool callback: scan high-risk tool outputs for prompt injection.
 - `verify_retry_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails/core.py:474` — After-tool callback: counts evolution_verify_sandbox failures in session state.

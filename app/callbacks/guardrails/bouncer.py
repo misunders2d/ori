@@ -54,6 +54,27 @@ _ERROR_HIST_KEY = "__consecutive_tool_errors__"
 _BOUNCE_TARGET = "CoordinatorAgent"
 _MAX_REPEATED_ERRORS = 2
 
+# Tools whose ``status: error`` response is terminal — no recoverable
+# retry semantics, no graceful continuation possible from the same call.
+# A single failure here means the agent should surface the error to the
+# user, not silently move on. To enforce that, we bounce to Coordinator
+# on the FIRST error from these tools (versus the standard threshold of
+# 2 consecutive errors for tools that may legitimately retry, e.g. an
+# SP-API call hitting a 429).
+_TERMINAL_ERROR_TOOLS = frozenset({
+    "analyze_data",
+    "generate_chart",
+    "generate_file",
+    "generate_image",
+    "generate_presentation",
+})
+
+# Sentinel that ``surface_error_loudly_after_tool`` prepends to every
+# ``status: error`` message so the LLM can't summarise it as a
+# successful turn. Anchored as a constant so tests / inspection paths
+# can match on it without fuzzy string comparison.
+_TOOL_FAILURE_PREFIX = "[TOOL FAILURE — RELAY VERBATIM TO USER, DO NOT FABRICATE SUCCESS]: "
+
 
 def _is_tool_not_found(error: Exception) -> bool:
     msg = str(error or "")
@@ -161,3 +182,65 @@ def reset_error_history_after_tool(tool, args, tool_context, tool_response):
     except Exception:
         pass
     return None
+
+
+def surface_error_loudly_after_tool(tool, args, tool_context, tool_response):
+    """After-tool callback. When a tool returns ``{"status": "error",
+    ...}`` (i.e. it caught its own exception and surfaced it as a dict,
+    so ``on_tool_error_bouncer`` never fires), do two things:
+
+    1. Wrap the ``message`` field with a hard directive prefix and
+       add an explicit ``agent_directive`` key. Both signals are
+       designed to make swallowing the error visibly inconsistent —
+       the LLM would have to actively suppress the prefix to pretend
+       success.
+    2. If the tool is in ``_TERMINAL_ERROR_TOOLS`` (no recoverable
+       retry semantics), arm the bounce flag so the next turn
+       transfers to Coordinator. Coordinator then surfaces the wrapped
+       error verbatim instead of letting the leaf invent a happy path
+       (2026-05-13 incident: ``analyze_data`` ParserError swallowed,
+       agent exported a 20-byte empty CSV claiming success).
+
+    Non-terminal tools (SP-API, Keepa, Drive, etc.) skip the bounce —
+    transient failures (429, network) may legitimately succeed on
+    retry. They still get the message-wrap so they can't be silently
+    swallowed either.
+    """
+    if not isinstance(tool_response, dict):
+        return None
+    if tool_response.get("status") != "error":
+        return None
+
+    original = tool_response.get("message")
+    if not isinstance(original, str):
+        return None
+
+    # Avoid double-wrap when multiple after_tool callbacks pass the
+    # response through this hook in sequence (e.g. spillover already
+    # ran, the wrapped response goes through us again on retry).
+    if original.startswith(_TOOL_FAILURE_PREFIX):
+        wrapped = tool_response
+    else:
+        wrapped = dict(tool_response)
+        wrapped["message"] = f"{_TOOL_FAILURE_PREFIX}{original}"
+        wrapped["agent_directive"] = (
+            "Surface the error message above to the user verbatim. "
+            "Do not export empty files. Do not pretend the task succeeded. "
+            "Do not summarise this turn as 'done' or 'complete'. You may "
+            "retry only if the error is clearly transient (rate limit, "
+            "network blip)."
+        )
+
+    tool_name = getattr(tool, "name", "") or ""
+    if tool_name in _TERMINAL_ERROR_TOOLS:
+        try:
+            tool_context.state[_FORCE_BOUNCE_KEY] = True
+            logger.warning(
+                "bouncer: terminal tool '%s' failed — arming bounce to %s",
+                tool_name,
+                _BOUNCE_TARGET,
+            )
+        except Exception:
+            pass
+
+    return wrapped

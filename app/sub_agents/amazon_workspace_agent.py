@@ -19,6 +19,7 @@ from app.callbacks.guardrails import (
     prompt_injection_guardrail,
     reset_error_history_after_tool,
     strip_delivered_files_before_model,
+    surface_error_loudly_after_tool,
     tool_output_spillover_guardrail,
 )
 from app.toolsets import GoogleWorkspaceToolset, ScratchpadToolset
@@ -73,7 +74,7 @@ amazon_workspace_agent = Agent(
         ScratchpadToolset(),
     ],
     before_model_callback=[force_bounce_before_model, strip_delivered_files_before_model, prompt_injection_guardrail],
-    after_tool_callback=[tool_output_spillover_guardrail, file_attachment_capture, reset_error_history_after_tool],
+    after_tool_callback=[tool_output_spillover_guardrail, file_attachment_capture, surface_error_loudly_after_tool, reset_error_history_after_tool],
     after_model_callback=[file_attachment_inject],
     on_tool_error_callback=on_tool_error_bouncer,
 )

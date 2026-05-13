@@ -12,32 +12,32 @@ Read this **before** adding new code — most things you'd build already exist.
 ## Sub-agents (10)
 
 
-- **AmazonAgent** (Agent) — `app/sub_agents/amazon_agent.py:32`
+- **AmazonAgent** (Agent) — `app/sub_agents/amazon_agent.py:33`
   - Amazon Manager sub-agent — product research, pricing, competitors, listing management.
 
-- **AmazonDataAnalystAgent** (Agent) — `app/sub_agents/amazon_data_analyst_agent.py:34`
+- **AmazonDataAnalystAgent** (Agent) — `app/sub_agents/amazon_data_analyst_agent.py:35`
   - Amazon Data Analyst sub-agent — statistical analysis, visualization, and data processing.
 
-- **AmazonHeadAgent** (Agent) — `app/sub_agents/amazon_head_agent.py:43`
+- **AmazonHeadAgent** (Agent) — `app/sub_agents/amazon_head_agent.py:44`
   - Amazon Head Agent — domain router for all Amazon business operations.
 
-- **AmazonMemoryAgent** (Agent) — `app/sub_agents/amazon_memory_agent.py:30`
+- **AmazonMemoryAgent** (Agent) — `app/sub_agents/amazon_memory_agent.py:31`
   - Amazon Memory sub-agent — Neo4j knowledge base with native vector search.
 
-- **AmazonWorkspaceAgent** (Agent) — `app/sub_agents/amazon_workspace_agent.py:29`
+- **AmazonWorkspaceAgent** (Agent) — `app/sub_agents/amazon_workspace_agent.py:30`
   - Amazon Workspace sub-agent — Google Drive, Sheets, and Calendar.
 
-- **BigQueryAgent** (Agent) — `app/sub_agents/bigquery_agent.py:222`
+- **BigQueryAgent** (Agent) — `app/sub_agents/bigquery_agent.py:223`
   - BigQuery sub-agent with per-table access control.
 
-- **ClickUpAgent** (Agent) — `app/sub_agents/clickup_agent.py:107`
+- **ClickUpAgent** (Agent) — `app/sub_agents/clickup_agent.py:108`
   - ClickUp task management sub-agent.
 
 - **CoordinatorAgent** (Agent) — `app/sub_agents/coordinator_agent.py:58`
 
-- **DeveloperAgent** (Agent) — `app/sub_agents/developer_agent.py:136`
+- **DeveloperAgent** (Agent) — `app/sub_agents/developer_agent.py:137`
 
-- **KnowledgeAgent** (Agent) — `app/sub_agents/knowledge_agent.py:37`
+- **KnowledgeAgent** (Agent) — `app/sub_agents/knowledge_agent.py:38`
 
 ## Tools (231 public functions across 40 files)
 
@@ -494,7 +494,7 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
   - AI image generation and editing — text-to-image, image-to-image, prompt enhancement.
   - tools: `enhance_image_prompt`, `generate_image`
 
-## Callbacks (16)
+## Callbacks (17)
 
 
 - `admin_tool_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails/admin.py:24` — Runtime Guardrail: Intercepts highly privileged tool calls before execution.
@@ -502,9 +502,10 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
 - `strip_delivered_files_before_model` (before_model | state) — `app/callbacks/guardrails/attachments.py:45` — Before-model callback. Remove server-injected inline_data Parts
 - `file_attachment_capture` (before_tool | after_tool) — `app/callbacks/guardrails/attachments.py:93` — After-tool callback: stash a tool's emitted file_path so the next
 - `file_attachment_inject` (before_model | state) — `app/callbacks/guardrails/attachments.py:166` — After-model callback: drain ``__pending_file_parts__`` and append
-- `on_tool_error_bouncer` (before_tool | after_tool) — `app/callbacks/guardrails/bouncer.py:63` — ADK ``on_tool_error_callback``. Detects hallucinated tool calls
-- `force_bounce_before_model` (before_model | state) — `app/callbacks/guardrails/bouncer.py:112` — Before-model callback. If a previous tool error armed the
-- `reset_error_history_after_tool` (before_tool | after_tool) — `app/callbacks/guardrails/bouncer.py:150` — After-tool callback. Zero the consecutive-error counter on any
+- `on_tool_error_bouncer` (before_tool | after_tool) — `app/callbacks/guardrails/bouncer.py:84` — ADK ``on_tool_error_callback``. Detects hallucinated tool calls
+- `force_bounce_before_model` (before_model | state) — `app/callbacks/guardrails/bouncer.py:133` — Before-model callback. If a previous tool error armed the
+- `reset_error_history_after_tool` (before_tool | after_tool) — `app/callbacks/guardrails/bouncer.py:171` — After-tool callback. Zero the consecutive-error counter on any
+- `surface_error_loudly_after_tool` (before_tool | after_tool) — `app/callbacks/guardrails/bouncer.py:187` — After-tool callback. When a tool returns ``{"status": "error",
 - `async prompt_injection_guardrail` (before_model | state) — `app/callbacks/guardrails/core.py:189` — Runtime Guardrail: Inspects the LLM request before hitting the model.
 - `tool_output_injection_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails/core.py:392` — After-tool callback: scan high-risk tool outputs for prompt injection.
 - `verify_retry_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails/core.py:474` — After-tool callback: counts evolution_verify_sandbox failures in session state.
