@@ -47,17 +47,74 @@ def run_contract_fire(contract_id: str, hash_: str) -> None:
     didn't authorise. If the hash on disk no longer matches, the
     worker raises ``ContractFireError`` and the job continues to be
     scheduled (admin must investigate).
+
+    Any exception escaping this function — store load failure, worker
+    crash, hash mismatch raised before ``_on_failure`` was wired —
+    routes through ``notify_admins`` so the failure is BOTH durably
+    written to ``data/contract_failures.jsonl`` AND DM'd to admins.
+    Pre-2026-05-13 these paths only ``logger.error/exception``-ed,
+    which left silent gaps for hash-drift and non-STRICT contracts
+    (``worker.py:306`` / ``:316-320`` raise before reaching
+    ``_on_failure``).
     """
     try:
         contract = contract_store.load(contract_id, hash_)
     except Exception as e:
         logger.error("contract fire failed to load %s@%s: %s", contract_id, hash_, e)
+        _alert_boundary_failure(
+            contract_id=contract_id,
+            phase="load_failed",
+            error=f"failed to load contract@{hash_[:12]}: {e!r}",
+        )
         return
 
     try:
         asyncio.run(execute_contract(contract))
     except Exception as e:
         logger.exception("contract %s fire crashed: %s", contract_id, e)
+        _alert_boundary_failure(
+            contract_id=contract_id,
+            phase="fire_crashed",
+            error=f"worker raised before _on_failure: {e!r}",
+        )
+
+
+def _alert_boundary_failure(
+    *, contract_id: str, phase: str, error: str
+) -> None:
+    """Synchronous bridge from APScheduler's job runner into the async
+    ``notify_admins`` helper. We're called from the top-level
+    ``run_contract_fire`` which itself is sync (APScheduler requirement),
+    so we spin up our own event loop just long enough to fire the
+    alert. The disk-persistence layer of ``notify_admins`` doesn't
+    need the loop, but the Telegram POST does.
+    """
+    from app.contracts.admin_alert import notify_admins
+
+    message = (
+        f"⚠️ Contract {contract_id} boundary failure at {phase}.\n"
+        f"Error: {error}\n"
+        f"(Pre-execute path — _on_failure on the contract did not run.)"
+    )
+    try:
+        asyncio.run(
+            notify_admins(
+                message,
+                contract_id=contract_id,
+                phase=phase,
+                error=error,
+            )
+        )
+    except Exception as alert_err:
+        # Last-resort: even the alert path crashed. Persist the
+        # alert disk row by hand (the admin_alert helper would have
+        # done this for us but we never reached it).
+        logger.critical(
+            "alert boundary failure: notify_admins crashed for %s/%s: %s",
+            contract_id,
+            phase,
+            alert_err,
+        )
 
 
 # ---------------------------------------------------------------------------

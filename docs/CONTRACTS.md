@@ -301,6 +301,26 @@ agent: delete_scheduled_task("cron_79d58bac")   ← only after the new
 No bulk auto-migration. The user keeps full control of when each job
 moves over.
 
+### Boundary failures (run_contract_fire)
+
+``_on_failure`` only runs if the worker reached its main loop. Three
+paths used to raise BEFORE reaching it, each routing through plain
+``logger.error/exception`` and nothing else:
+
+  * ``contract_store.load`` fails in ``executor.run_contract_fire`` —
+    the on-disk body is missing or its hash drifted.
+  * ``worker.execute_contract`` raises ``ContractFireError`` at
+    ``worker.py:306`` because the contract isn't ``STRICT``.
+  * ``worker.execute_contract`` raises ``ContractFireError`` at
+    ``worker.py:316-320`` because the hash on disk no longer matches
+    the hash the scheduler stored on the job.
+
+All three now route through ``_alert_boundary_failure`` in
+``app/contracts/executor.py``, which spins up a fresh event loop and
+calls ``notify_admins`` so the failure is BOTH persisted to
+``data/contract_failures.jsonl`` AND DM'd to admins. The disk write
+is guaranteed; transport is best-effort.
+
 ### Failure alerts (2026-05-13 rewrite)
 
 Worker `_on_failure` routes through `app/contracts/admin_alert.py`,

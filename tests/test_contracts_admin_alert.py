@@ -330,6 +330,87 @@ async def test_notify_admins_unresolvable_user_reports_failure(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Boundary failures (run_contract_fire wrapper)
+# ---------------------------------------------------------------------------
+
+
+def test_run_contract_fire_alerts_on_load_failure(alert_env, monkeypatch):
+    """``contract_store.load`` raising must reach ``_alert_boundary_failure``
+    with phase=load_failed. Pre-2026-05-13 this path only logged at
+    error level and admin saw nothing."""
+    from app.contracts import executor as executor_mod
+
+    monkeypatch.setattr(
+        executor_mod.contract_store,
+        "load",
+        lambda cid, h: (_ for _ in ()).throw(ValueError("hash drift between load and execute")),
+    )
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        executor_mod,
+        "_alert_boundary_failure",
+        lambda **kw: calls.append(kw),
+    )
+
+    executor_mod.run_contract_fire("ai_pilot_wed_v3", "deadbeef" * 8)
+
+    assert len(calls) == 1
+    assert calls[0]["contract_id"] == "ai_pilot_wed_v3"
+    assert calls[0]["phase"] == "load_failed"
+    assert "hash drift" in calls[0]["error"]
+
+
+def test_run_contract_fire_alerts_on_worker_crash(alert_env, monkeypatch):
+    """Worker raising (e.g. ``ContractFireError`` for non-STRICT or
+    hash mismatch raised BEFORE ``_on_failure``) must reach
+    ``_alert_boundary_failure`` with phase=fire_crashed."""
+    from app.contracts import executor as executor_mod
+
+    fake_contract = object()  # opaque — executor doesn't introspect it
+    monkeypatch.setattr(executor_mod.contract_store, "load", lambda cid, h: fake_contract)
+
+    async def _boom(contract):
+        raise RuntimeError("contract integrity check failed: drift")
+
+    monkeypatch.setattr(executor_mod, "execute_contract", _boom)
+
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        executor_mod,
+        "_alert_boundary_failure",
+        lambda **kw: calls.append(kw),
+    )
+
+    executor_mod.run_contract_fire("ai_pilot_wed_v3", "deadbeef" * 8)
+
+    assert len(calls) == 1
+    assert calls[0]["phase"] == "fire_crashed"
+    assert "integrity check failed" in calls[0]["error"]
+
+
+def test_alert_boundary_failure_persists_to_disk(alert_env, monkeypatch):
+    """The boundary alert helper runs ``notify_admins`` in a fresh
+    event loop. With no ADMIN_USER_IDS, transport is skipped but the
+    failure record still lands on disk — that's the whole point of
+    persisting BEFORE transport."""
+    from app.contracts import executor as executor_mod
+
+    monkeypatch.delenv("ADMIN_USER_IDS", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+
+    executor_mod._alert_boundary_failure(
+        contract_id="x_test", phase="load_failed", error="bang"
+    )
+
+    rows = _read_jsonl(alert_env)
+    phases = [r.get("phase") for r in rows]
+    assert "load_failed" in phases
+    record = next(r for r in rows if r.get("phase") == "load_failed")
+    assert record["contract_id"] == "x_test"
+    assert record["error"] == "bang"
+
+
 @pytest.mark.asyncio
 async def test_regression_numeric_admin_id_delivered_via_numeric_fallback(
     alert_env, monkeypatch
