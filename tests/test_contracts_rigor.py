@@ -838,6 +838,67 @@ def test_telegram_dm_with_slack_prefix_user_id_rejected():
         validate_adapter_arg_shapes(c)
 
 
+def test_slack_post_channel_from_reasoning_step_rejected():
+    """Hard architectural NO: LLM cannot choose the delivery target.
+    A ``slack_post.args.channel`` that templates from a reasoning
+    step ID MUST be rejected at freeze."""
+    sales_step = _good_json_step(
+        id_="pick_channel",
+        user_template="Use {sales_30d}",
+    )
+    emit = EmitStep(
+        adapter="slack_post",
+        args={"channel": "{pick_channel.channel_id}", "content": "hi"},
+    )
+    c = _full_contract(reasoning=[sales_step], emit=[emit])
+
+    with pytest.raises(AdapterArgShapeError) as ei:
+        validate_adapter_arg_shapes(c)
+    msg = str(ei.value)
+    assert "Delivery targets must be deterministic" in msg
+    assert "pick_channel" in msg
+
+
+def test_slack_post_channel_from_loader_passes():
+    """Loader outputs are deterministic — channel via a static_param
+    (or any other loader) is fine."""
+    c = Contract(
+        id="channel_from_loader",
+        description="Channel from loader.",
+        author="sergey",
+        trigger=OnDemandTrigger(),
+        inputs=[
+            InputSpec(
+                id="channel_input",
+                loader="static_param",
+                args={"value": "C012ABCDE"},
+            )
+        ],
+        emit=[
+            EmitStep(
+                adapter="slack_post",
+                args={"channel": "{channel_input}", "content": "hi"},
+            )
+        ],
+    )
+    validate_adapter_arg_shapes(c)
+
+
+def test_telegram_dm_user_id_from_reasoning_step_rejected():
+    step = _good_json_step(
+        id_="pick_recipient",
+        user_template="Use {sales_30d}",
+    )
+    emit = EmitStep(
+        adapter="telegram_dm",
+        args={"user_id": "{pick_recipient.id}", "text": "hi"},
+    )
+    c = _full_contract(reasoning=[step], emit=[emit])
+
+    with pytest.raises(AdapterArgShapeError, match="Delivery targets must be deterministic"):
+        validate_adapter_arg_shapes(c)
+
+
 def test_drive_doc_fill_accepts_document_id_alias():
     """drive_doc_fill accepts ``document_id`` as an alias for ``doc_id``."""
     c = Contract(

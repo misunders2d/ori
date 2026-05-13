@@ -326,6 +326,23 @@ in the grace window would land in a broken-transport error path
 that admins couldn't see. With the paused-start change, every
 overdue job's first delivery attempt finds its adapter.
 
+### Deterministic delivery target (LLM may never pick where)
+
+``slack_post.args.channel`` and ``telegram_dm.args.user_id`` may be:
+
+  * a **literal** string (``"C012ABCDE"``, ``"#general"``,
+    ``"330959414"``), or
+  * a ``{placeholder}`` that resolves to a **loader output** —
+    ``static_param``, ``sheet_read``, ``bigquery_query``, etc.
+
+They MAY NOT reference a reasoning-step output. The validator
+rejects ``args.channel = "{some_reasoning_step.channel_id}"`` at
+freeze. Why: a reasoning step is the LLM. Letting the model pick
+the delivery target at fire time means the same authoring intent
+could post to a different channel on a different fire — exactly
+the drift the contract architecture was built to prevent. Loaders
+are deterministic; the LLM is not.
+
 ### Session-prefix block for channel / user_id args
 
 ``sl_<id>`` is the internal ADK session id ``SlackAdapter.make_session_id``

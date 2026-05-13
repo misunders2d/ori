@@ -163,6 +163,39 @@ def validate_against_registries(contract: Contract) -> None:
         )
 
 
+def _check_deterministic_target(
+    value: str,
+    declared_inputs: set[str],
+    declared_reasoning: set[str],
+    label: str,
+) -> list[str]:
+    """Reject delivery-target values whose placeholder roots reference
+    a reasoning-step (LLM) output. Loader outputs and literals are
+    fine; anything an LLM produced at fire time is NOT.
+
+    Why: the delivery target is the contract's externally-observable
+    output. If the LLM can choose it, the same authoring-time intent
+    can post to different channels on different fires — exactly the
+    drift the contract architecture was built to prevent. Loaders
+    (BigQuery, sheet_read, static_param) are deterministic; reasoning
+    steps are not.
+
+    Returns a list of error messages (empty = OK).
+    """
+    errs: list[str] = []
+    for ph in _placeholder_ids(value):
+        if ph in declared_reasoning and ph not in declared_inputs:
+            errs.append(
+                f"{label}: references {{{ph}.*}} which is a reasoning "
+                "step output. Delivery targets must be deterministic — "
+                "they may come from a literal or a loader output, but "
+                "NEVER from an LLM-produced reasoning step. Resolve "
+                "the channel/user_id via a loader (static_param, "
+                "sheet_read, ...) instead, or hardcode it."
+            )
+    return errs
+
+
 def validate_step_rigor(contract: Contract) -> None:
     """Reject contract specs that would let the LLM deviate at fire time.
 
@@ -225,7 +258,7 @@ def validate_step_rigor(contract: Contract) -> None:
         )
 
     declared_inputs: set[str] = {inp.id for inp in contract.inputs}
-    declared_steps_so_far: set[str] = set()
+    declared_reasoning: set[str] = set()
 
     for i, step in enumerate(contract.reasoning):
         prefix = f"reasoning[{i}] (id={step.id!r})"
@@ -299,7 +332,7 @@ def validate_step_rigor(contract: Contract) -> None:
             )
 
         # ---- Placeholder resolution ----
-        visible_here = declared_inputs | declared_steps_so_far
+        visible_here = declared_inputs | declared_reasoning
         for ph in _placeholder_ids(user_template):
             if ph not in visible_here:
                 errors.append(
@@ -309,11 +342,11 @@ def validate_step_rigor(contract: Contract) -> None:
                     f"{sorted(visible_here) or '(none)'}."
                 )
 
-        declared_steps_so_far.add(step.id)
+        declared_reasoning.add(step.id)
 
     # Emit / acceptance / gates can see every declared input and every
     # reasoning step (reasoning is complete before any emit fires).
-    visible_all: set[str] = declared_inputs | declared_steps_so_far
+    visible_all: set[str] = declared_inputs | declared_reasoning
 
     for i, inp in enumerate(contract.inputs):
         for s in _walk_string_values(inp.args):
@@ -467,6 +500,12 @@ def validate_adapter_arg_shapes(contract: Contract) -> None:
 
     errors: list[str] = []
 
+    # Pre-compute the identifier sets we need for the deterministic-
+    # target check below. Loaders are deterministic; reasoning steps
+    # are LLM-driven.
+    declared_inputs: set[str] = {inp.id for inp in contract.inputs}
+    declared_reasoning: set[str] = {step.id for step in contract.reasoning}
+
     for i, inp in enumerate(contract.inputs):
         schema = LOADER_ARG_SCHEMAS.get(inp.loader)
         if schema is None:
@@ -499,6 +538,21 @@ def validate_adapter_arg_shapes(contract: Contract) -> None:
                     "literal '#channel-name'. Templated values "
                     "(`{X.Y}`) are allowed and skipped here."
                 ) if not (ch.startswith("{") and ch.endswith("}")) else None
+            # Deterministic-target rule: if the channel IS templated,
+            # the placeholder must resolve to a loader output, NEVER
+            # a reasoning-step output. Letting the LLM pick the
+            # destination at fire time is a hard architectural NO —
+            # it turns "where did the bot post" into a non-replayable
+            # decision and re-introduces drift between authoring and
+            # execution.
+            errors.extend(
+                _check_deterministic_target(
+                    ch,
+                    declared_inputs,
+                    declared_reasoning,
+                    f"emit[{i}] (slack_post).args.channel",
+                )
+            )
         if emit.adapter == "telegram_dm":
             uid = str(emit.args.get("user_id", "")).strip()
             if uid.startswith("sl_"):
@@ -508,6 +562,14 @@ def validate_adapter_arg_shapes(contract: Contract) -> None:
                     "not a Telegram user id. Use a numeric Telegram id "
                     "(e.g. '330959414') or the 'tg_<id>' platform form."
                 ) if not (uid.startswith("{") and uid.endswith("}")) else None
+            errors.extend(
+                _check_deterministic_target(
+                    uid,
+                    declared_inputs,
+                    declared_reasoning,
+                    f"emit[{i}] (telegram_dm).args.user_id",
+                )
+            )
 
         if emit.gate is not None:
             gate_schema = GATE_ARG_SCHEMAS.get(emit.gate.type)
