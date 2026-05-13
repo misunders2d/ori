@@ -480,6 +480,27 @@ async def execute_contract(
 
             try:
                 result = await run_emit(emit.adapter, emit.args, state)
+                # Defense-in-depth: an adapter that returns a dict
+                # with ``status: "error"`` (or any non-success status
+                # value) MUST be treated as a failure even when it
+                # didn't raise. Pre-2026-05-13 the worker recorded
+                # ``ok: True`` whenever the adapter coroutine
+                # completed, regardless of the returned status —
+                # which let ``slack_post`` silently no-op for every
+                # contract that used a bad channel ID. Adapters
+                # written from now on should raise on failure (see
+                # ``slack_post`` / ``telegram_dm``), but this check
+                # catches the older style too.
+                if isinstance(result, dict) and result.get("status") in (
+                    "error",
+                    "failed",
+                    "not_found",
+                    "ambiguous",
+                ):
+                    raise RuntimeError(
+                        f"emit adapter {emit.adapter!r} returned non-success "
+                        f"status {result.get('status')!r}: {result!r}"
+                    )
                 emit_results.append({"id": emit.id, "adapter": emit.adapter, "result": result})
                 _audit(
                     audit_path,

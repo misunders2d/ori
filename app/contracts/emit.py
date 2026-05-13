@@ -132,12 +132,35 @@ async def slack_post(args: dict[str, Any], state: dict[str, Any]) -> dict[str, A
     if "channel" not in args or "content" not in args:
         raise ValueError("slack_post requires args.channel and args.content")
 
-    return slack_post_message(
+    # ``slack_post_message`` is async. The pre-2026-05-14 adapter did
+    # ``return slack_post_message(...)`` WITHOUT awaiting — so the
+    # worker awaited the outer adapter coroutine, got an un-awaited
+    # inner coroutine back as ``result``, and recorded
+    # ``{"phase": "emit", "ok": True}`` while the HTTP request to Slack
+    # NEVER FIRED. Every slack_post emit since the adapter was written
+    # was a silent no-op. Sergey caught it on 2026-05-13 when
+    # ``linux_mastery_30_days_v2`` "succeeded" with emit_count=1 but
+    # nothing landed in Slack.
+    result = await slack_post_message(
         channel=args["channel"],
         text=args["content"],
         thread_ts=args.get("thread_ts"),
         tool_context=LoaderContext(),
     )
+
+    # Status check: the underlying tool returns
+    # ``{"status": "error", "message": "<slack-api-error>"}`` for any
+    # Slack-side failure (channel_not_found, not_in_channel, rate
+    # limited, ...). Worker decides ``ok`` from whether the adapter
+    # RAISED, not from the return dict, so we must raise here to
+    # surface the failure. Otherwise the same silent ``ok: True``
+    # bug recurs at a layer above this one.
+    if not isinstance(result, dict) or result.get("status") != "success":
+        raise RuntimeError(
+            f"slack_post: Slack rejected the message "
+            f"(channel={args['channel']!r}, result={result!r})"
+        )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -159,11 +182,25 @@ async def telegram_dm(args: dict[str, Any], state: dict[str, Any]) -> dict[str, 
     if "user_id" not in args or "text" not in args:
         raise ValueError("telegram_dm requires args.user_id and args.text")
 
-    return await telegram_send_dm(
+    result = await telegram_send_dm(
         user_id=str(args["user_id"]),
         text=args["text"],
         tool_context=LoaderContext(),
     )
+
+    # Status check — ``telegram_send_dm`` does a roster name lookup
+    # internally and returns ``{"status": "not_found"|"ambiguous"|"error"}``
+    # on any failure. The pre-2026-05-13 worker treated any non-raising
+    # return as success, so a not_found drop landed in audit as
+    # ``ok: True`` and the admin alert path silently swallowed every
+    # contract failure. Raise here so the worker's
+    # ``except Exception`` branch catches it.
+    if not isinstance(result, dict) or result.get("status") != "success":
+        raise RuntimeError(
+            f"telegram_dm: send rejected "
+            f"(user_id={args['user_id']!r}, result={result!r})"
+        )
+    return result
 
 
 # ---------------------------------------------------------------------------

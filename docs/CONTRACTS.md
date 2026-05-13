@@ -326,6 +326,38 @@ in the grace window would land in a broken-transport error path
 that admins couldn't see. With the paused-start change, every
 overdue job's first delivery attempt finds its adapter.
 
+### Adapter status discipline (2026-05-13 silent no-op)
+
+`linux_mastery_30_days_v2` fired at 20:10 Kyiv on 2026-05-13 with
+``emit_count: 1`` and ``ok: true`` in the audit — but nothing landed
+in Slack. Root cause was two compounding bugs:
+
+  1. The ``slack_post`` adapter did ``return slack_post_message(...)``
+     without ``await``. ``slack_post_message`` is async, so the
+     return value was the un-awaited inner coroutine. The worker
+     awaited the OUTER adapter coroutine, got the un-awaited inner
+     coroutine back, attached it to ``emit_results``, and the
+     coroutine was garbage-collected without ever firing the HTTP
+     request. Slack received zero traffic.
+  2. The worker's emit-success branch wrote ``ok: true`` purely on
+     "the adapter coroutine completed without raising". It never
+     inspected the returned dict's ``status``. So even an adapter
+     that returned ``{"status": "error", "message": "..."}`` was
+     recorded as a successful emit.
+
+Two changes pin this class of bug:
+
+  * Every adapter that delegates to an async tool MUST ``await`` it
+    AND must raise on ``status != "success"``. ``slack_post`` and
+    ``telegram_dm`` were updated; new adapters should follow the
+    same pattern. The inner ``RuntimeError`` cause routes through
+    the worker's ``emit_failed`` branch and into
+    ``_on_failure`` → ``notify_admins``.
+  * The worker also inspects the returned dict and treats any
+    ``status`` in ``{"error", "failed", "not_found", "ambiguous"}``
+    as a raise. Defense-in-depth — catches the same pattern for any
+    adapter that forgets the explicit raise.
+
 ### Boundary failures (run_contract_fire)
 
 ``_on_failure`` only runs if the worker reached its main loop. Three
