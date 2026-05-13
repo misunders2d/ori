@@ -485,6 +485,42 @@ async def execute_contract(
                     audit_path,
                     {"phase": "emit", "emit": emit.id, "adapter": emit.adapter, "ok": True},
                 )
+
+                # Mirror the emit's rendered content back into the
+                # receiving channel's chat session, so the bot's next
+                # turn in that channel sees its own scheduled post as
+                # part of the conversation history. The slack/telegram
+                # pollers drop bot-message events (otherwise the bot
+                # would loop on its own output), so without this hook
+                # contract posts are invisible to the bot at follow-up
+                # time. See app/contracts/audit_mirror.py.
+                try:
+                    from app.contracts.audit_mirror import mirror_emit_to_session
+
+                    rendered_args = render(emit.args, state)
+                    mirror_text = (
+                        rendered_args.get("content")
+                        or rendered_args.get("text")
+                        or rendered_args.get("body")
+                        or ""
+                    )
+                    if mirror_text:
+                        await mirror_emit_to_session(
+                            emit.adapter,
+                            rendered_args,
+                            str(mirror_text),
+                            contract_id=contract.id,
+                        )
+                except Exception as me:
+                    # Mirror failures are advisory — log and continue.
+                    # Contract fire already succeeded as far as the
+                    # outside world is concerned.
+                    logger.warning(
+                        "audit_mirror hook failed for %s/%s: %s",
+                        contract.id,
+                        emit.adapter,
+                        me,
+                    )
             except Exception as ee:
                 _audit(
                     audit_path,

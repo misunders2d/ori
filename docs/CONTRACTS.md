@@ -338,6 +338,39 @@ into "looks like nothing failed."
 the admin set, never replacing it. Spec authors can't accidentally
 silence admin alerts by setting `notify=[]`.
 
+### Bot context after a contract fire (audit mirror)
+
+The Slack and Telegram pollers ingest human posts into a
+channel-scoped ADK session (``sl_<channel>`` / ``tg_<chat>``). The
+pollers DROP bot-message subtype events to avoid mirror loops on
+their own output (``slack_poller.py:277-278``). Legacy scheduled
+tasks worked around this by calling ``tasks._inject_into_session``
+post-delivery. Contracts skipped the workaround entirely, so the
+bot had no record of its own scheduled posts and would honestly
+answer "I haven't posted anything" when the user asked a follow-up
+five minutes after a contract fire.
+
+The worker now calls ``app/contracts/audit_mirror.py:mirror_emit_to_session``
+after every successful emit. It:
+
+  * Resolves the emit's target to a session id via the same
+    ``make_session_id`` convention the pollers use (``slack_post``
+    channel ``C012`` → ``sl_C012``; ``telegram_dm`` user ``330959414``
+    → ``tg_330959414``).
+  * Appends a model-role event with ``author="contract_runner"`` so
+    the bot can distinguish contract-driven turns from human turns
+    or its own interactive replies.
+  * No-ops cleanly when there's no resolvable target, no runner, no
+    pre-existing session, or ADK raises — contract fires must not
+    fail because of a mirror miss.
+
+Slack ``#name`` channel references (rather than raw IDs) return
+None from the resolver because mapping a name → id needs a Slack
+API call, and the bot's interactive ingest path will pick up
+follow-ups on that channel anyway. Persistent-store adapters
+(``sheet_append``, ``drive_doc_fill``, ``memory_update``) also
+return None — they have no chat session to mirror into.
+
 ## Failure modes + alerts
 
 `on_failure` defaults to `alert_admin` + `abort=true`:
