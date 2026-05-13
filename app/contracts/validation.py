@@ -48,6 +48,17 @@ class RigorValidationError(ValueError):
     pass
 
 
+class AdapterArgShapeError(ValueError):
+    """Raised when a contract's emit / gate / loader args don't satisfy
+    the registered adapter's declared schema — e.g. ``slack_post``
+    given ``args.text`` instead of ``args.content`` (2026-05-13
+    ``ai_pilot_wed_v3`` incident), or a required key missing entirely.
+    See ``validate_adapter_arg_shapes``.
+    """
+
+    pass
+
+
 # Match ``{id}`` and ``{id.path.like.this}``. The root id must be
 # snake_case (matches ``InputSpec.id`` / ``ReasoningStep.id`` patterns).
 _PLACEHOLDER_RE = re.compile(r"\{([a-z][a-z0-9_]*)(?:\.[^}]+)?\}")
@@ -349,5 +360,138 @@ def validate_step_rigor(contract: Contract) -> None:
     if errors:
         raise RigorValidationError(
             "Contract failed rigor validation:\n  - "
+            + "\n  - ".join(errors)
+        )
+
+
+def _check_args_against_schema(
+    args: dict[str, Any],
+    schema: dict[str, Any],
+    label: str,
+) -> list[str]:
+    """Compare ``args`` against a registered adapter / gate / loader
+    schema. Returns a list of error messages (empty = OK).
+
+    Schema shape (populated by the ``register_adapter`` / ``register_gate``
+    / loaders ``register`` decorators):
+      ``{"required": [...], "optional": [...], "aliases": {canonical: [alias_a, ...]}}``
+
+    Rules:
+      - For each required key: either the canonical name OR any of its
+        aliases must be present in ``args``. Missing = error.
+      - For each key in ``args``: must be one of the declared canonical
+        keys (required ∪ optional) OR an alias for one of them.
+        Unknown keys are errors — they catch typos (``text`` vs
+        ``content``, ``spreadsheet`` vs ``spreadsheet_id``).
+
+    Unknown-key errors include a "did you mean X" hint via difflib.
+    """
+    import difflib
+
+    errors: list[str] = []
+    required = list(schema.get("required") or [])
+    optional = list(schema.get("optional") or [])
+    aliases: dict[str, list[str]] = schema.get("aliases") or {}
+
+    # Every recognised key, flattened.
+    canonical_keys = set(required) | set(optional)
+    all_known: set[str] = set(canonical_keys)
+    for canonical, alts in aliases.items():
+        all_known.update(alts)
+
+    # Required-args check (canonical or any alias satisfies).
+    for r in required:
+        valid_names = {r} | set(aliases.get(r, []))
+        if not any(name in args for name in valid_names):
+            if aliases.get(r):
+                errors.append(
+                    f"{label}: missing required arg {r!r} "
+                    f"(aliases: {sorted(aliases[r])!r})"
+                )
+            else:
+                errors.append(f"{label}: missing required arg {r!r}")
+
+    # Unknown-key check (only for adapters that declared a non-empty
+    # schema; if ``all_known`` is empty the schema is effectively
+    # "accept anything" and we skip).
+    if all_known:
+        for k in args.keys():
+            if k in all_known:
+                continue
+            candidates = sorted(all_known)
+            hint = difflib.get_close_matches(k, candidates, n=1, cutoff=0.6)
+            if hint:
+                errors.append(
+                    f"{label}: unknown arg {k!r}. Known: {candidates!r}. "
+                    f"Did you mean {hint[0]!r}?"
+                )
+            else:
+                errors.append(
+                    f"{label}: unknown arg {k!r}. Known: {candidates!r}."
+                )
+
+    return errors
+
+
+def validate_adapter_arg_shapes(contract: Contract) -> None:
+    """Verify every emit / gate / loader's ``args`` satisfies the
+    schema the corresponding adapter declared at registration time.
+
+    Why this exists: the registry validator
+    (``validate_against_registries``) catches typos in the ADAPTER
+    NAME (``slack_post_message`` vs ``slack_post`` — 2026-05-12). It
+    does NOT catch typos in the ADAPTER ARG NAMES — and that's what
+    silently broke ``ai_pilot_wed_v3`` on 2026-05-13: the contract
+    used ``args.text`` where ``slack_post`` requires ``args.content``,
+    every scheduled fire raised ``slack_post requires args.channel
+    and args.content``, ``emit_count`` ended at 0, and the
+    per-contract ``notify=[]`` meant the alert went nowhere.
+
+    Called from the AUTHORING path only (``_coerce_spec`` and
+    ``contract_store.freeze``) so old frozen contracts remain
+    loadable for inspection. They'll FATAL at fire time with the
+    adapter's own ValueError — but newly authored / revised contracts
+    can't ship with the same gap.
+
+    Adapters / loaders / gates that didn't declare a schema (no
+    ``required`` / ``optional`` / ``aliases`` on their decorator) are
+    treated as "no constraints" and skipped. Authoring new ones
+    without schema kwargs is allowed but discouraged.
+
+    Raises ``AdapterArgShapeError`` listing every issue.
+    """
+    # Lazy import: emit / loaders register on import and we want the
+    # cycle (schema → emit → store) to stay broken.
+    from app.contracts.emit import EMIT_ADAPTER_SCHEMAS, GATE_ARG_SCHEMAS
+    from app.contracts.loaders import LOADER_ARG_SCHEMAS
+
+    errors: list[str] = []
+
+    for i, inp in enumerate(contract.inputs):
+        schema = LOADER_ARG_SCHEMAS.get(inp.loader)
+        if schema is None:
+            continue
+        label = f"inputs[{i}] (loader={inp.loader!r})"
+        errors.extend(_check_args_against_schema(inp.args, schema, label))
+
+    for i, emit in enumerate(contract.emit):
+        schema = EMIT_ADAPTER_SCHEMAS.get(emit.adapter)
+        if schema is not None:
+            label = f"emit[{i}] (adapter={emit.adapter!r})"
+            errors.extend(_check_args_against_schema(emit.args, schema, label))
+
+        if emit.gate is not None:
+            gate_schema = GATE_ARG_SCHEMAS.get(emit.gate.type)
+            if gate_schema is not None:
+                label = (
+                    f"emit[{i}].gate (type={emit.gate.type!r})"
+                )
+                errors.extend(
+                    _check_args_against_schema(emit.gate.args, gate_schema, label)
+                )
+
+    if errors:
+        raise AdapterArgShapeError(
+            "Contract failed adapter-arg shape validation:\n  - "
             + "\n  - ".join(errors)
         )

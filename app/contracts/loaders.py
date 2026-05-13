@@ -34,14 +34,45 @@ Loader = Callable[[dict[str, Any], dict[str, Any]], Awaitable[Any]]
 
 LOADERS: dict[str, Loader] = {}
 
+# Per-loader argument contract. Populated by ``register`` when given
+# schema kwargs. Consumed by
+# ``app.contracts.validation.validate_adapter_arg_shapes`` at author
+# time. Required-arg check accepts either the canonical key or any of
+# its aliases; optional keys are allowed but never required; unknown
+# keys are rejected so typos get caught at freeze.
+LOADER_ARG_SCHEMAS: dict[str, dict[str, Any]] = {}
 
-def register(name: str):
-    """Decorator-style loader registration."""
+
+def register(
+    name: str,
+    *,
+    required: list[str] | None = None,
+    optional: list[str] | None = None,
+    aliases: dict[str, list[str]] | None = None,
+):
+    """Decorator-style loader registration.
+
+    Schema kwargs (all optional):
+      - ``required``: arg keys that MUST appear in ``inputs[].args``
+        (or one of their aliases).
+      - ``optional``: arg keys that MAY appear. Listed so the validator
+        rejects unknown keys (typos).
+      - ``aliases``: ``{canonical_key: [alias_a, alias_b]}``.
+
+    Loaders without schema kwargs declare no contract — author-time
+    validator skips them. New loaders should always declare.
+    """
 
     def _wrap(fn: Loader) -> Loader:
         if name in LOADERS:
             raise ValueError(f"loader {name!r} already registered")
         LOADERS[name] = fn
+        if required or optional or aliases:
+            LOADER_ARG_SCHEMAS[name] = {
+                "required": list(required or []),
+                "optional": list(optional or []),
+                "aliases": {k: list(v) for k, v in (aliases or {}).items()},
+            }
         return fn
 
     return _wrap
@@ -52,7 +83,7 @@ def register(name: str):
 # ---------------------------------------------------------------------------
 
 
-@register("static_param")
+@register("static_param", required=["value"])
 async def static_param(args: dict[str, Any], state: dict[str, Any]) -> Any:
     """Return ``args["value"]`` verbatim.
 
@@ -71,7 +102,7 @@ async def static_param(args: dict[str, Any], state: dict[str, Any]) -> Any:
 # ---------------------------------------------------------------------------
 
 
-@register("web_search")
+@register("web_search", required=["url"])
 async def web_search(args: dict[str, Any], state: dict[str, Any]) -> list[dict]:
     """Search the web and return up to ``limit`` results.
 
@@ -109,7 +140,7 @@ async def web_search(args: dict[str, Any], state: dict[str, Any]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-@register("graph_query")
+@register("graph_query", required=["cypher"], optional=["params"])
 async def graph_query(args: dict[str, Any], state: dict[str, Any]) -> list[dict]:
     """Run a parameterised Cypher query against the project Neo4j
     instance and return all rows as dicts.
@@ -143,7 +174,7 @@ async def graph_query(args: dict[str, Any], state: dict[str, Any]) -> list[dict]
 # ---------------------------------------------------------------------------
 
 
-@register("memory_search")
+@register("memory_search", required=["query"], optional=["namespace", "limit"])
 async def memory_search(args: dict[str, Any], state: dict[str, Any]) -> list[dict]:
     """Semantic search across Memory nodes. Returns ``args.limit`` results
     (default 10). ``args.query`` is the search text; ``args.namespace``
@@ -185,7 +216,12 @@ def _contract_author(state: dict[str, Any]) -> str:
     return author
 
 
-@register("sheet_read")
+@register(
+    "sheet_read",
+    required=["spreadsheet_id"],
+    optional=["range"],
+    aliases={"spreadsheet_id": ["source"]},
+)
 async def sheet_read(args: dict[str, Any], state: dict[str, Any]) -> list[list]:
     """Read a range from a Google Sheet. ``args.spreadsheet_id`` (or
     full URL) + ``args.range`` (A1 notation, e.g. ``"Sheet1!A1:C100"``;
@@ -230,7 +266,11 @@ async def sheet_read(args: dict[str, Any], state: dict[str, Any]) -> list[list]:
 # ---------------------------------------------------------------------------
 
 
-@register("drive_doc_read")
+@register(
+    "drive_doc_read",
+    required=["doc_id"],
+    aliases={"doc_id": ["document_id"]},
+)
 async def drive_doc_read(args: dict[str, Any], state: dict[str, Any]) -> str:
     """Download a Google Doc as plain text. ``args.doc_id`` accepts a
     Doc ID OR full URL.
@@ -276,7 +316,11 @@ async def drive_doc_read(args: dict[str, Any], state: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 
-@register("bigquery_query")
+@register(
+    "bigquery_query",
+    required=["sql"],
+    optional=["params", "project_id"],
+)
 async def bigquery_query(args: dict[str, Any], state: dict[str, Any]) -> list[dict]:
     """Run BigQuery SQL and return rows as dicts.
 
@@ -338,7 +382,7 @@ async def bigquery_query(args: dict[str, Any], state: dict[str, Any]) -> list[di
 # ---------------------------------------------------------------------------
 
 
-@register("keepa_get_history")
+@register("keepa_get_history", required=["asin"], optional=["domain"])
 async def keepa_get_history(args: dict[str, Any], state: dict[str, Any]) -> dict:
     """Pull Keepa price + BSR history for ``args.asin``.
 

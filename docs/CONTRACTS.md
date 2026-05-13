@@ -168,6 +168,21 @@ Registered in `app/contracts/emit.py`.
 > `ai_pilot_*_v2` contracts authored with `adapter:
 > "slack_post_message"` FATALed silently every fire for weeks.
 
+> **Adapter ARG names are validated too.** As of 2026-05-13 every
+> `@register_adapter` / `@register_gate` / loader `@register` call
+> publishes a schema (`required`, `optional`, `aliases`) the author
+> validator enforces. Missing required args → reject. Unknown args
+> → reject with a `Did you mean X` hint when a close match exists.
+> Aliases honour adapter-side flexibility (`sheet_append` accepts
+> `spreadsheet_id` OR `source`). See
+> `app/contracts/validation.py:validate_adapter_arg_shapes`.
+> Production proof 2026-05-13: `ai_pilot_wed_v3` was frozen with
+> `args.text` (a Slack tool kwarg name) where `slack_post` requires
+> `args.content`. The contract scheduled, fired, failed with
+> `slack_post requires args.channel and args.content`, emit_count
+> ended at 0, and the per-contract `notify=[]` meant no admin saw
+> the alert. The new validator catches this class at freeze.
+
 ## Gates
 
 Pre-emit checks. The most common is `sheet_dedup` — read a tracking

@@ -33,22 +33,75 @@ GateFn = Callable[[dict[str, Any], dict[str, Any]], Awaitable[bool]]
 EMIT_ADAPTERS: dict[str, Adapter] = {}
 GATES: dict[str, GateFn] = {}
 
+# Per-adapter / per-gate argument contracts. Populated by the
+# ``register_adapter`` / ``register_gate`` decorators when they're
+# given schema kwargs. Consumed by
+# ``app.contracts.validation.validate_adapter_arg_shapes`` at author
+# time. Required-arg check accepts either the canonical key or any of
+# its aliases; optional keys are allowed but never required; unknown
+# keys are rejected so typos like ``text`` vs ``content`` (2026-05-13
+# AI Pilot fire) get caught at freeze, not in production at fire time.
+EMIT_ADAPTER_SCHEMAS: dict[str, dict[str, Any]] = {}
+GATE_ARG_SCHEMAS: dict[str, dict[str, Any]] = {}
 
-def register_adapter(name: str):
+
+def register_adapter(
+    name: str,
+    *,
+    required: list[str] | None = None,
+    optional: list[str] | None = None,
+    aliases: dict[str, list[str]] | None = None,
+):
+    """Register a contract emit adapter.
+
+    Schema kwargs (all optional):
+      - ``required``: arg keys that MUST appear in ``emit.args`` (or one
+        of their aliases). Author-time validator rejects freeze
+        otherwise.
+      - ``optional``: arg keys that MAY appear. Listed so the validator
+        can reject *unknown* keys (typos) without false positives.
+      - ``aliases``: ``{canonical_key: [alias_a, alias_b]}``. An alias
+        satisfies the required-key check AND counts as a known key.
+
+    Adapters without any of these kwargs declare no contract — the
+    validator skips them. New adapters should always declare.
+    """
+
     def _wrap(fn: Adapter) -> Adapter:
         if name in EMIT_ADAPTERS:
             raise ValueError(f"emit adapter {name!r} already registered")
         EMIT_ADAPTERS[name] = fn
+        if required or optional or aliases:
+            EMIT_ADAPTER_SCHEMAS[name] = {
+                "required": list(required or []),
+                "optional": list(optional or []),
+                "aliases": {k: list(v) for k, v in (aliases or {}).items()},
+            }
         return fn
 
     return _wrap
 
 
-def register_gate(name: str):
+def register_gate(
+    name: str,
+    *,
+    required: list[str] | None = None,
+    optional: list[str] | None = None,
+    aliases: dict[str, list[str]] | None = None,
+):
+    """Register a contract pre-emit gate. Schema kwargs match
+    ``register_adapter``."""
+
     def _wrap(fn: GateFn) -> GateFn:
         if name in GATES:
             raise ValueError(f"gate {name!r} already registered")
         GATES[name] = fn
+        if required or optional or aliases:
+            GATE_ARG_SCHEMAS[name] = {
+                "required": list(required or []),
+                "optional": list(optional or []),
+                "aliases": {k: list(v) for k, v in (aliases or {}).items()},
+            }
         return fn
 
     return _wrap
@@ -59,7 +112,11 @@ def register_gate(name: str):
 # ---------------------------------------------------------------------------
 
 
-@register_adapter("slack_post")
+@register_adapter(
+    "slack_post",
+    required=["channel", "content"],
+    optional=["thread_ts"],
+)
 async def slack_post(args: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
     """Post ``args.content`` to ``args.channel`` via the Slack tool path.
 
@@ -88,7 +145,10 @@ async def slack_post(args: dict[str, Any], state: dict[str, Any]) -> dict[str, A
 # ---------------------------------------------------------------------------
 
 
-@register_adapter("telegram_dm")
+@register_adapter(
+    "telegram_dm",
+    required=["user_id", "text"],
+)
 async def telegram_dm(args: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
     """Send ``args.text`` to ``args.user_id`` via Telegram. Used for
     admin alerts (``on_failure`` notifications) and personal reminders.
@@ -138,7 +198,12 @@ async def _google_token_for_author(author_email: str) -> str:
     return token
 
 
-@register_adapter("sheet_append")
+@register_adapter(
+    "sheet_append",
+    required=["spreadsheet_id", "row"],
+    optional=["range"],
+    aliases={"spreadsheet_id": ["source"]},
+)
 async def sheet_append(args: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
     """Append ``args.row`` (list of cell values) to
     ``args.spreadsheet_id``. ``args.range`` (e.g. ``"Sheet1"``) targets
@@ -194,7 +259,11 @@ async def sheet_append(args: dict[str, Any], state: dict[str, Any]) -> dict[str,
 # ---------------------------------------------------------------------------
 
 
-@register_adapter("drive_doc_fill")
+@register_adapter(
+    "drive_doc_fill",
+    required=["doc_id", "fields"],
+    aliases={"doc_id": ["document_id"]},
+)
 async def drive_doc_fill(
     args: dict[str, Any], state: dict[str, Any]
 ) -> dict[str, Any]:
@@ -269,7 +338,18 @@ async def drive_doc_fill(
 # ---------------------------------------------------------------------------
 
 
-@register_adapter("memory_update")
+@register_adapter(
+    "memory_update",
+    required=["namespace", "text", "short_description", "category"],
+    optional=[
+        "tags",
+        "related_memories",
+        "related_people",
+        "related_entities",
+        "force_create",
+        "reviewed_relatives",
+    ],
+)
 async def memory_update(
     args: dict[str, Any], state: dict[str, Any]
 ) -> dict[str, Any]:
@@ -328,7 +408,12 @@ async def memory_update(
 # ---------------------------------------------------------------------------
 
 
-@register_gate("sheet_dedup")
+@register_gate(
+    "sheet_dedup",
+    required=["source", "key"],
+    optional=["range"],
+    aliases={"source": ["spreadsheet_id"]},
+)
 async def sheet_dedup(args: dict[str, Any], state: dict[str, Any]) -> bool:
     """Return True if the emit is allowed to proceed (no duplicate row
     exists for the current ``args.key`` in the first column of the

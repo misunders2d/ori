@@ -22,7 +22,9 @@ from app.contracts.schema import (
     ReasoningStep,
 )
 from app.contracts.validation import (
+    AdapterArgShapeError,
     RigorValidationError,
+    validate_adapter_arg_shapes,
     validate_step_rigor,
 )
 
@@ -529,3 +531,259 @@ async def test_dry_run_handles_existing_versions_on_disk(tmp_path, monkeypatch):
             EMIT_ADAPTERS.pop("record_dryrun", None)
         else:
             EMIT_ADAPTERS["record_dryrun"] = prior
+
+
+# ---------------------------------------------------------------------------
+# Adapter / gate / loader arg shape validation
+# ---------------------------------------------------------------------------
+
+
+def _ai_pilot_shape_contract(slack_args: dict) -> Contract:
+    """A static AI-Pilot-style contract (no inputs, no reasoning) used
+    to pin slack_post arg-shape behaviour. Lets the negative tests
+    drive the slack_post emit args while leaving everything else
+    valid."""
+    return Contract(
+        id="shape_test",
+        description="AI Pilot shape test.",
+        author="sergey",
+        trigger=CronTrigger(cron="0 18 * * WED", timezone="Europe/Kyiv"),
+        emit=[EmitStep(adapter="slack_post", args=slack_args)],
+    )
+
+
+def test_slack_post_with_text_instead_of_content_rejected():
+    """Direct repro of the 2026-05-13 ai_pilot_wed_v3 incident: the
+    contract used ``args.text`` where ``slack_post`` requires
+    ``args.content``, slipped past every author-time check, and only
+    failed at fire time inside APScheduler. The validator must catch
+    this at author time and surface BOTH:
+      * the missing canonical key (``content``)
+      * the unknown key that was supplied (``text``) alongside the
+        known-keys list
+    Together they make the typo obvious in the error message even
+    when difflib doesn't propose ``content`` as a close match
+    (``text`` and ``content`` share only one letter)."""
+    c = _ai_pilot_shape_contract(
+        {"channel": "C0B2LJRS8D8", "text": "*AI Pilot* …"}
+    )
+    with pytest.raises(AdapterArgShapeError) as ei:
+        validate_adapter_arg_shapes(c)
+    msg = str(ei.value)
+    assert "slack_post" in msg
+    assert "missing required arg 'content'" in msg
+    assert "unknown arg 'text'" in msg
+    assert "'content'" in msg  # appears in the Known: list of the unknown-arg error
+
+
+def test_slack_post_with_correct_args_passes():
+    c = _ai_pilot_shape_contract(
+        {"channel": "C0B2LJRS8D8", "content": "*AI Pilot* …"}
+    )
+    validate_adapter_arg_shapes(c)
+
+
+def test_slack_post_with_thread_ts_optional_passes():
+    c = _ai_pilot_shape_contract(
+        {
+            "channel": "C0B2LJRS8D8",
+            "content": "reply",
+            "thread_ts": "1700000000.000100",
+        }
+    )
+    validate_adapter_arg_shapes(c)
+
+
+def test_slack_post_missing_channel_rejected():
+    c = _ai_pilot_shape_contract({"content": "*AI Pilot* …"})
+    with pytest.raises(AdapterArgShapeError, match="missing required arg 'channel'"):
+        validate_adapter_arg_shapes(c)
+
+
+def test_sheet_append_accepts_canonical_id():
+    c = Contract(
+        id="sheet_test",
+        description="Sheet append test.",
+        author="sergey",
+        trigger=OnDemandTrigger(),
+        emit=[
+            EmitStep(
+                adapter="sheet_append",
+                args={
+                    "spreadsheet_id": "10cSeLaioaJXRN8eKitDTDIu_7iYZGkhnhGsUyF4PO-w",
+                    "row": ["2026-05-13", "AI Pilot post"],
+                    "range": "Sheet1",
+                },
+            )
+        ],
+    )
+    validate_adapter_arg_shapes(c)
+
+
+def test_sheet_append_accepts_source_alias():
+    """``sheet_append`` historically accepts ``source`` as an alias for
+    ``spreadsheet_id`` (the adapter checks either). Validator must
+    honour the alias so old contracts using the alternate name don't
+    falsely fail."""
+    c = Contract(
+        id="sheet_test",
+        description="Sheet append test.",
+        author="sergey",
+        trigger=OnDemandTrigger(),
+        emit=[
+            EmitStep(
+                adapter="sheet_append",
+                args={
+                    "source": "10cSeLaioaJXRN8eKitDTDIu_7iYZGkhnhGsUyF4PO-w",
+                    "row": ["x", "y"],
+                },
+            )
+        ],
+    )
+    validate_adapter_arg_shapes(c)
+
+
+def test_sheet_append_missing_row_rejected():
+    c = Contract(
+        id="sheet_test",
+        description="Sheet append test.",
+        author="sergey",
+        trigger=OnDemandTrigger(),
+        emit=[
+            EmitStep(
+                adapter="sheet_append",
+                args={"spreadsheet_id": "10cSeLaioaJXRN8eKitDTDIu"},
+            )
+        ],
+    )
+    with pytest.raises(AdapterArgShapeError, match="missing required arg 'row'"):
+        validate_adapter_arg_shapes(c)
+
+
+def test_sheet_dedup_gate_with_typo_rejected():
+    """Gates carry their own arg schemas too — same validator, same
+    rules. Confirms gates aren't a back door past arg-shape checks."""
+    c = Contract(
+        id="gate_test",
+        description="Gate shape test.",
+        author="sergey",
+        trigger=OnDemandTrigger(),
+        emit=[
+            EmitStep(
+                adapter="sheet_append",
+                args={"spreadsheet_id": "abc", "row": [1]},
+                gate=Gate(
+                    type="sheet_dedup",
+                    args={"sheet": "abc", "key": "2026-05-13"},
+                ),
+            )
+        ],
+    )
+    with pytest.raises(AdapterArgShapeError) as ei:
+        validate_adapter_arg_shapes(c)
+    msg = str(ei.value)
+    assert "sheet_dedup" in msg
+    assert "missing required arg 'source'" in msg
+    assert "unknown arg 'sheet'" in msg
+
+
+def test_loader_bigquery_with_missing_sql_rejected():
+    c = Contract(
+        id="bq_test",
+        description="BigQuery loader test.",
+        author="sergey",
+        trigger=OnDemandTrigger(),
+        inputs=[InputSpec(id="x", loader="bigquery_query", args={})],
+        emit=[
+            EmitStep(adapter="slack_post", args={"channel": "C", "content": "ok"})
+        ],
+    )
+    with pytest.raises(AdapterArgShapeError, match="missing required arg 'sql'"):
+        validate_adapter_arg_shapes(c)
+
+
+def test_loader_static_param_passes():
+    c = Contract(
+        id="static_test",
+        description="Static loader test.",
+        author="sergey",
+        trigger=OnDemandTrigger(),
+        inputs=[InputSpec(id="x", loader="static_param", args={"value": "hi"})],
+        emit=[
+            EmitStep(adapter="slack_post", args={"channel": "C", "content": "{x}"})
+        ],
+    )
+    validate_adapter_arg_shapes(c)
+
+
+def test_loader_with_typo_rejected_with_hint():
+    """Typo in a loader arg name → reject with a hint pointing at the
+    canonical key. Verifies the difflib-based 'did you mean' path
+    works through the loader code path, not just emit adapters."""
+    c = Contract(
+        id="bq_test",
+        description="BigQuery loader test.",
+        author="sergey",
+        trigger=OnDemandTrigger(),
+        inputs=[
+            InputSpec(
+                id="x",
+                loader="bigquery_query",
+                args={"sqll": "select 1"},  # typo: sqll vs sql
+            )
+        ],
+        emit=[
+            EmitStep(adapter="slack_post", args={"channel": "C", "content": "ok"})
+        ],
+    )
+    with pytest.raises(AdapterArgShapeError) as ei:
+        validate_adapter_arg_shapes(c)
+    msg = str(ei.value)
+    assert "unknown arg 'sqll'" in msg
+    assert "Did you mean 'sql'" in msg
+
+
+def test_unknown_arg_without_close_match_still_rejected():
+    """An unknown arg with no obvious typo neighbour should still be
+    rejected, just without a 'did you mean' hint."""
+    c = _ai_pilot_shape_contract(
+        {
+            "channel": "C0B2LJRS8D8",
+            "content": "ok",
+            "unrelated_garbage_field": "?",
+        }
+    )
+    with pytest.raises(AdapterArgShapeError, match="unknown arg 'unrelated_garbage_field'"):
+        validate_adapter_arg_shapes(c)
+
+
+def test_telegram_dm_missing_text_rejected():
+    c = Contract(
+        id="tg_test",
+        description="Telegram test.",
+        author="sergey",
+        trigger=OnDemandTrigger(),
+        emit=[EmitStep(adapter="telegram_dm", args={"user_id": "12345"})],
+    )
+    with pytest.raises(AdapterArgShapeError, match="missing required arg 'text'"):
+        validate_adapter_arg_shapes(c)
+
+
+def test_drive_doc_fill_accepts_document_id_alias():
+    """drive_doc_fill accepts ``document_id`` as an alias for ``doc_id``."""
+    c = Contract(
+        id="doc_test",
+        description="Drive doc test.",
+        author="sergey",
+        trigger=OnDemandTrigger(),
+        emit=[
+            EmitStep(
+                adapter="drive_doc_fill",
+                args={
+                    "document_id": "1abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG",
+                    "fields": {"name": "value"},
+                },
+            )
+        ],
+    )
+    validate_adapter_arg_shapes(c)

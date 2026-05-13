@@ -117,11 +117,13 @@ class ContractStore:
         """
         # Lazy import to break the schema → emit → store cycle.
         from app.contracts.validation import (
+            validate_adapter_arg_shapes,
             validate_against_registries,
             validate_step_rigor,
         )
         validate_against_registries(contract)
         validate_step_rigor(contract)
+        validate_adapter_arg_shapes(contract)
 
         frozen = contract.with_fresh_hash()
 

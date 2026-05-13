@@ -68,6 +68,7 @@ def _coerce_spec(spec: Any) -> Contract:
     # registered emit adapter). Pydantic accepts any string here;
     # validation makes the bot fail-loud at authoring time.
     from app.contracts.validation import (
+        validate_adapter_arg_shapes,
         validate_against_registries,
         validate_step_rigor,
     )
@@ -77,6 +78,12 @@ def _coerce_spec(spec: Any) -> Contract:
     # schema, multi-substep prompt, unresolved placeholders,
     # enforcement='permissive'). See validation.validate_step_rigor.
     validate_step_rigor(contract)
+    # Adapter arg shapes: rejects emit / gate / loader args that don't
+    # satisfy the registered adapter's declared schema. Catches
+    # typos like ``text`` vs ``content`` for slack_post (2026-05-13
+    # ai_pilot_wed_v3 incident). See
+    # validation.validate_adapter_arg_shapes.
+    validate_adapter_arg_shapes(contract)
     return contract
 
 
