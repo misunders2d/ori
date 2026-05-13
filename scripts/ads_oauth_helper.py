@@ -316,35 +316,10 @@ def _run_public_mode(client_id: str, _client_secret_unused: str) -> int:
     print(f"Authorize URL: {authorize_url}")
     print(f"Redirect URI:  {_PUBLIC_REDIRECT_URI}")
     print()
-
-    # Build the PDF inline so the operator has one artifact to forward
-    # to the account owner. reportlab is auto-installed via uv if not
-    # already present.
-    try:
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        try:
-            import gen_ads_refresh_pdf  # type: ignore
-        except ImportError:
-            import subprocess
-
-            logger.info("Installing reportlab to build the PDF...")
-            subprocess.run(
-                ["uv", "pip", "install", "--quiet", "reportlab>=4.0.0"],
-                check=True,
-            )
-            import gen_ads_refresh_pdf  # type: ignore  # noqa: F811
-
-        gen_ads_refresh_pdf.build(authorize_url)
-        print()
-        print("PDF ready — send ads_refresh_token.pdf to the account owner.")
-    except Exception as exc:
-        print(f"PDF generation failed: {exc}", file=sys.stderr)
-        print(
-            "Authorize URL above is still valid; share it directly with "
-            "the owner if the PDF build cannot be repaired.",
-            file=sys.stderr,
-        )
-        return 1
+    print(
+        "Send the authorize URL to the account owner. Once they click it "
+        "and approve, the bot writes ADS_API_REFRESH_TOKEN to its vault."
+    )
     return 0
 
 
