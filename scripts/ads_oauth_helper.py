@@ -314,21 +314,59 @@ def _run_public_mode(client_id: str, _client_secret_unused: str) -> int:
 
     print()
     print("=" * 78)
-    print("PUBLIC OAUTH — send the URL below to the Amazon account owner")
+    print("PUBLIC OAUTH — send the PDF below to the Amazon account owner")
     print("=" * 78)
     print()
     print(f"Redirect URI in use (must already be in the LWA app's")
     print(f"Allowed Return URLs): {_PUBLIC_REDIRECT_URI}")
     print()
-    print("Authorize URL:")
+    print("Authorize URL (also embedded in the PDF below):")
     print()
     print(authorize_url)
     print()
-    print("The owner clicks it once, signs in, clicks Allow, and sees a")
-    print("'Connected!' page. The bot captures the code, swaps it for a")
-    print("refresh token, and writes ADS_API_REFRESH_TOKEN to the vault")
-    print("on the host where it runs. Nothing for the owner to copy back.")
+
+    # Regenerate the owner-facing PDF inline so the operator doesn't have
+    # to run a second command. reportlab is an `ops` extra (not part of
+    # the core bot deps); auto-install ephemerally via uv if it's not on
+    # PYTHONPATH so the operator never has to think about it.
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        try:
+            import gen_ads_refresh_pdf  # type: ignore
+        except ImportError:
+            import subprocess
+
+            logger.info("Installing reportlab on the fly for PDF generation...")
+            subprocess.run(
+                ["uv", "pip", "install", "--quiet", "reportlab>=4.0.0"],
+                check=True,
+            )
+            import gen_ads_refresh_pdf  # type: ignore  # noqa: F811
+
+        gen_ads_refresh_pdf.build(authorize_url)
+        print()
+        print(
+            "Send the PDF above to the account owner. The authorize URL is "
+            "already inlined in Step 2."
+        )
+    except Exception as exc:
+        print(f"WARNING: PDF generation failed: {exc}", file=sys.stderr)
+        print(
+            "Authorize URL above is still valid — share it with the owner "
+            "directly or regenerate the PDF manually with:\n"
+            f"  uv run --with reportlab python scripts/gen_ads_refresh_pdf.py "
+            f'--url "{authorize_url}"',
+            file=sys.stderr,
+        )
+
     print()
+    print(
+        "Flow: owner adds the redirect URI to Allowed Return URLs, clicks "
+        "the link, signs in, clicks Allow, sees 'Connected!'. The bot's "
+        "callback handler swaps the code and writes "
+        "ADS_API_REFRESH_TOKEN to the vault. Nothing for the owner to "
+        "copy back."
+    )
     return 0
 
 
