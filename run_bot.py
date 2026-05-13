@@ -220,7 +220,16 @@ async def main():
     except Exception as exc:
         logger.warning("Startup hook install skipped: %s", exc)
     runner = get_runner()
-    scheduler.start()
+    # Start the scheduler PAUSED. With the SQLAlchemyJobStore + a
+    # 1-hour misfire_grace_time, persisted jobs whose next_run_time
+    # has already passed during downtime will fire AS SOON AS the
+    # scheduler starts — and if we start it before the Slack /
+    # Telegram pollers register their adapters, those overdue fires
+    # try to deliver via ``get_adapter("slack" | "telegram")`` and
+    # silently fail (or hit broken-channel error paths). Resume the
+    # scheduler at the bottom of this function, after every transport
+    # has had a chance to ``register_adapter`` itself.
+    scheduler.start(paused=True)
     tasks = []
     
     # 1. A2A Native Server
@@ -339,6 +348,24 @@ async def main():
         logger.info("Bot is active and listening on configured channels.")
     else:
         logger.warning("No messaging interfaces active. Bot is effectively silent.")
+
+    # Give the just-started pollers a moment to call ``register_adapter``
+    # (slack_poller / telegram_poller each register their adapter as
+    # the first thing they do). Then resume the scheduler so any
+    # overdue jobs that fire immediately on resume can find their
+    # transport. 1.5 s is empirically enough for both pollers; longer
+    # delays bridge slow imports without meaningfully delaying boot.
+    async def _resume_scheduler_when_transports_ready():
+        await asyncio.sleep(1.5)
+        try:
+            scheduler.resume()
+            logger.info(
+                "Scheduler resumed — overdue jobs (within "
+                "misfire_grace_time) may now fire."
+            )
+        except Exception as e:
+            logger.warning("Failed to resume scheduler: %s", e)
+    tasks.append(asyncio.create_task(_resume_scheduler_when_transports_ready()))
 
     try:
         # Wait for tasks, cancelling all when an exit signal is detected.

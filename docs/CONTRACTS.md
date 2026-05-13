@@ -301,6 +301,21 @@ agent: delete_scheduled_task("cron_79d58bac")   ← only after the new
 No bulk auto-migration. The user keeps full control of when each job
 moves over.
 
+### Boot order: scheduler resume after transports
+
+``run_bot.main`` now calls ``scheduler.start(paused=True)`` and
+schedules a 1.5 s coroutine that calls ``scheduler.resume()`` after
+the Slack / Telegram pollers have had time to ``register_adapter``.
+Without that pause, an overdue contract / legacy job whose
+``next_run_time`` had already passed during downtime would fire AS
+SOON AS the scheduler started (driven by the SQLAlchemyJobStore +
+``misfire_grace_time=3600``) and try to deliver via
+``get_adapter("slack" | "telegram")`` before either poller had
+registered. Net effect: a pre-2026-05-14 startup with a missed fire
+in the grace window would land in a broken-transport error path
+that admins couldn't see. With the paused-start change, every
+overdue job's first delivery attempt finds its adapter.
+
 ### Boundary failures (run_contract_fire)
 
 ``_on_failure`` only runs if the worker reached its main loop. Three
