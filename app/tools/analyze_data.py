@@ -44,6 +44,39 @@ def _get_module(name: str):
     return None
 
 
+def _sniff_delimiter(abs_path: str) -> str:
+    """Sniff the delimiter from the file's first KB. Falls back to comma
+    if csv.Sniffer can't decide (e.g. single-column CSV with no separator
+    in the sample)."""
+    import csv as _csv
+
+    try:
+        with open(abs_path, "rb") as fh:
+            sample = fh.read(8192).decode("utf-8", errors="replace")
+    except Exception:
+        return ","
+    if not sample.strip():
+        return ","
+    try:
+        dialect = _csv.Sniffer().sniff(sample, delimiters=",\t;|")
+        return dialect.delimiter
+    except _csv.Error:
+        # Manual fallback: pick whichever delimiter splits the first
+        # non-empty line into the most columns.
+        first_line = next((ln for ln in sample.splitlines() if ln.strip()), "")
+        counts = {d: first_line.count(d) for d in (",", "\t", ";", "|")}
+        best = max(counts, key=counts.get)
+        return best if counts[best] > 0 else ","
+
+
+def _read_delimited(pd, abs_path: str):
+    """Load a delimited text file into a DataFrame after sniffing the
+    delimiter. Pinned to the C engine for speed once the separator is
+    known."""
+    sep = _sniff_delimiter(abs_path)
+    return pd.read_csv(abs_path, sep=sep)
+
+
 def _restricted_import(name, globals=None, locals=None, fromlist=(), level=0):
     mod = _get_module(name)
     if mod is None:
@@ -164,11 +197,18 @@ def analyze_data(
             # Default df = first sheet
             first_sheet = next(iter(sheets.values()))
             scope["df"] = first_sheet
-        elif ext == ".csv":
-            scope["df"] = pd.read_csv(abs_path)
+        elif ext in (".csv", ".tsv", ".txt"):
+            # SP-API flat-file reports are tab-delimited but get saved with
+            # `.csv` extension by `sp_api_export.export_report_to_csv`, and
+            # the agent sometimes routes the raw `.txt` from
+            # `sp_download_report` through `export_file` which preserves
+            # whatever delimiter the agent's code used. Sniff a sample so
+            # the wrong extension/delimiter combo doesn't blow up with
+            # "Expected 1 fields, saw 6" (2026-05-13 incident).
+            scope["df"] = _read_delimited(pd, abs_path)
             scope["sheets"] = None
         else:
-            return {"status": "error", "message": f"Unsupported file type: {ext}. Supported: .xlsx, .xls, .csv"}
+            return {"status": "error", "message": f"Unsupported file type: {ext}. Supported: .xlsx, .xls, .csv, .tsv, .txt"}
 
         exec(code, scope)
 

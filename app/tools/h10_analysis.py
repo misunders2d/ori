@@ -39,6 +39,28 @@ _COLUMN_MAP = {
 }
 
 
+def _sniff_h10_delimiter(abs_path: str) -> str:
+    """Sniff the delimiter from the file's first KB. Mirrors the helper
+    in ``analyze_data`` — kept local to avoid a cross-tool import cycle."""
+    import csv as _csv
+
+    try:
+        with open(abs_path, "rb") as fh:
+            sample = fh.read(8192).decode("utf-8", errors="replace")
+    except Exception:
+        return ","
+    if not sample.strip():
+        return ","
+    try:
+        dialect = _csv.Sniffer().sniff(sample, delimiters=",\t;|")
+        return dialect.delimiter
+    except _csv.Error:
+        first_line = next((ln for ln in sample.splitlines() if ln.strip()), "")
+        counts = {d: first_line.count(d) for d in (",", "\t", ";", "|")}
+        best = max(counts, key=counts.get)
+        return best if counts[best] > 0 else ","
+
+
 def _load_h10_file(file_path: str) -> tuple[pd.DataFrame | None, str | None]:
     """Load and normalize an H10 export file."""
     abs_path = os.path.abspath(file_path)
@@ -51,10 +73,15 @@ def _load_h10_file(file_path: str) -> tuple[pd.DataFrame | None, str | None]:
     try:
         if ext in (".xlsx", ".xls"):
             df = pd.read_excel(abs_path, engine="openpyxl")
-        elif ext == ".csv":
-            df = pd.read_csv(abs_path)
+        elif ext in (".csv", ".tsv", ".txt"):
+            # Sniff delimiter — H10 exports are usually comma, but some
+            # versions export tab-delimited. Same defensive shape as
+            # `analyze_data._read_delimited` (kept inline to avoid a
+            # cross-tool import cycle).
+            sep = _sniff_h10_delimiter(abs_path)
+            df = pd.read_csv(abs_path, sep=sep)
         else:
-            return None, f"Unsupported file type: {ext}. Use .csv or .xlsx."
+            return None, f"Unsupported file type: {ext}. Use .csv, .tsv, .txt, or .xlsx."
     except Exception as e:
         return None, f"Failed to read file: {e}"
 

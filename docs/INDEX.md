@@ -60,7 +60,7 @@ Read this **before** adding new code — most things you'd build already exist.
 ### `app/tools/analyze_data.py`
 Data analysis tool — run pandas code on uploaded files.
 
-- `analyze_data` (line 67) — Run Python/pandas analysis code on a data file and return the printed output.
+- `analyze_data` (line 100) — Run Python/pandas analysis code on a data file and return the printed output.
 
 ### `app/tools/bigquery_data.py`
 BigQuery table metadata catalog — loaded from bigquery-skill.
@@ -211,12 +211,12 @@ Graph memory tools — entity and relationship management via Neo4j.
 ### `app/tools/h10_analysis.py`
 Helium10 keyword analysis tools — analyze Cerebro and Magnet CSV/XLSX exports.
 
-- `analyze_keywords` (line 102) — Analyze a Helium10 Cerebro or Magnet CSV/XLSX export for power keywords.
-- `find_keyword_gaps` (line 171) — Find keywords where competitors rank well but you don't (keyword gaps).
-- `find_trending_keywords` (line 260) — Find keywords with rising search volume trends.
-- `find_long_tail_opportunities` (line 301) — Find long-tail keyword opportunities — lower volume, less competition, higher conversion.
-- `keyword_score_report` (line 355) — Generate a scored report of ALL keywords with placement recommendations.
-- `keyword_summary` (line 410) — Get a quick overview of an H10 keyword export — column detection, stats, and top keywords.
+- `analyze_keywords` (line 129) — Analyze a Helium10 Cerebro or Magnet CSV/XLSX export for power keywords.
+- `find_keyword_gaps` (line 198) — Find keywords where competitors rank well but you don't (keyword gaps).
+- `find_trending_keywords` (line 287) — Find keywords with rising search volume trends.
+- `find_long_tail_opportunities` (line 328) — Find long-tail keyword opportunities — lower volume, less competition, higher conversion.
+- `keyword_score_report` (line 382) — Generate a scored report of ALL keywords with placement recommendations.
+- `keyword_summary` (line 437) — Get a quick overview of an H10 keyword export — column detection, stats, and top keywords.
 
 ### `app/tools/integrations.py`
 - `configure_integration` (line 13) — Initiates secure configuration of an integration key.
