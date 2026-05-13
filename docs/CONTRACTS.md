@@ -301,6 +301,43 @@ agent: delete_scheduled_task("cron_79d58bac")   ← only after the new
 No bulk auto-migration. The user keeps full control of when each job
 moves over.
 
+### Failure alerts (2026-05-13 rewrite)
+
+Worker `_on_failure` routes through `app/contracts/admin_alert.py`,
+not the broken `run_emit("telegram_dm", ...)` adapter chain. Why:
+the legacy adapter delegated to `telegram_send_dm(person=...)` which
+did a **name lookup** against the roster — a numeric `user_id` like
+`"330959414"` never matched a name, so `status="not_found"` came
+back, the worker didn't inspect the status, and counted the alert
+as delivered. Result: `ai_pilot_wed_v3` failed at 18:00 Kyiv on
+2026-05-13 and no admin was notified.
+
+The new path has three independent guarantees:
+
+  1. **Disk-first persistence.** Every alert is appended to
+     `data/contract_failures.jsonl` BEFORE any transport. A
+     transport-broken environment can't hide the event — `tail -f`
+     surfaces it.
+  2. **Direct Telegram send.** `_send_via_telegram_direct(chat_id,
+     text)` POSTs to `api.telegram.org/bot<TOKEN>/sendMessage`
+     directly. Only counts as `delivered` on **HTTP 200 + ok=true**.
+  3. **Multi-strategy chat_id resolution.** `_resolve_chat_id` tries
+     the canonical roster key (`tg_<id>`), the raw form, and finally
+     falls back to interpreting a bare numeric id as a chat_id
+     (Telegram private chats: chat_id == user_id). The 2026-05-13
+     bug specifically triggered the fallback path — admins whose
+     roster entry was stale still get the DM.
+
+When 0/N admins receive an alert, a second JSONL line marked
+`alert_transport_failed` is written so disk alone explains why no
+human saw the alert. Without this line, broken transports cascade
+into "looks like nothing failed."
+
+`on_failure.notify` recipients listed on the contract spec are
+**additive**: they go through the same direct Telegram path AFTER
+the admin set, never replacing it. Spec authors can't accidentally
+silence admin alerts by setting `notify=[]`.
+
 ## Failure modes + alerts
 
 `on_failure` defaults to `alert_admin` + `abort=true`:

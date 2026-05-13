@@ -519,72 +519,84 @@ async def _on_failure(
     """Apply ``contract.on_failure`` policy and return an error state dict.
 
     Fail-loud guarantee: every contract failure ALWAYS produces:
-      1. An `on_failure` line in the per-fire audit log
-      2. A `logger.critical(...)` line that lands in journalctl /
-         data/agent.log even if all transports below fail
-      3. A Telegram DM to (a) every `notify` user listed in the spec
-         AND (b) fallback to ADMIN_USER_IDS[0] when notify is empty
-         or when action == alert_admin. Production proof 2026-05-12:
-         the AI Pilot contracts had empty `notify`, so failures
-         (slack_post_message typo → emit_failed) never reached the
-         admin. Now they will.
+      1. An ``on_failure`` line in the per-fire audit log.
+      2. A row in ``data/contract_failures.jsonl`` — written before
+         any transport, so a broken transport can't silently hide the
+         alert.
+      3. A ``logger.critical`` line for journalctl / agent.log.
+      4. A direct Telegram DM to every ``ADMIN_USER_IDS`` (via
+         ``app.contracts.admin_alert.notify_admins`` — bypasses the
+         broken ``telegram_dm`` adapter chain which silently dropped
+         numeric ids on the 2026-05-13 incident).
+
+    The legacy ``run_emit("telegram_dm", ...)`` path was REMOVED —
+    that adapter's underlying ``telegram_send_dm(person=...)`` did a
+    NAME lookup against the roster, and a numeric ``user_id`` never
+    matched a name, so ``status="not_found"`` came back, the worker
+    didn't check the status, and counted the alert as delivered.
     """
-    import os
+    from app.contracts.admin_alert import notify_admins
 
     cfg = contract.on_failure
-    _audit(audit_path, {"phase": "on_failure", "action": cfg.action.value, "error": error})
+    _audit(
+        audit_path,
+        {"phase": "on_failure", "action": cfg.action.value, "error": error},
+    )
 
     # Always log at CRITICAL so journalctl picks it up regardless of
     # transport delivery success. Cheap insurance against silent FATALs.
     logger.critical(
         "CONTRACT FAILURE %s v%s (action=%s): %s | audit=%s",
-        contract.id, contract.version, cfg.action.value, error, audit_path,
+        contract.id,
+        contract.version,
+        cfg.action.value,
+        error,
+        audit_path,
     )
 
     if cfg.action.value == "alert_admin":
-        # Recipients = notify list (from spec) + ADMIN_USER_IDS fallback
-        # (from env). Deduped. Without the fallback, contracts authored
-        # without a `notify` field FATAL silently — which is exactly
-        # the 2026-05-12 failure mode.
-        recipients: list[str] = list(cfg.notify or [])
-        admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
-        admin_users = [u.strip() for u in admin_users_str.split(",") if u.strip()]
-        for admin in admin_users:
-            if admin and admin not in recipients:
-                recipients.append(admin)
-                break  # one admin fallback is enough — don't spam everyone
-
-        if not recipients:
-            logger.critical(
-                "CONTRACT FAILURE %s: no recipients (empty notify + empty "
-                "ADMIN_USER_IDS) — admin alert NOT delivered. Add notify "
-                "to the contract spec or set ADMIN_USER_IDS.",
-                contract.id,
+        message = (
+            f"⚠️ Contract {contract.id} v{contract.version} FAILED.\n"
+            f"Error: {error}\n"
+            f"Audit: {audit_path}"
+        )
+        report = await notify_admins(
+            message,
+            contract_id=contract.id,
+            phase="on_failure",
+            audit_path=audit_path,
+            error=error,
+        )
+        # Best-effort: also DM any per-contract notify recipients
+        # listed on the spec. They go through the same direct-Telegram
+        # path (resolved via roster + admin_alert's _send helpers).
+        if cfg.notify:
+            from app.contracts.admin_alert import (
+                _resolve_chat_id,
+                _send_via_telegram_direct,
             )
-
-        from app.contracts.emit import run_emit
-        delivered = 0
-        for user_id in recipients:
-            try:
-                await run_emit(
-                    "telegram_dm",
-                    {
-                        "user_id": user_id,
-                        "text": (
-                            f"⚠️ Contract `{contract.id}` v{contract.version} FAILED:\n"
-                            f"{error}\n\nAudit: {audit_path}"
-                        ),
-                    },
-                    {},
-                )
-                delivered += 1
-            except Exception as e:
-                logger.warning("alert_admin failed to notify %s: %s", user_id, e)
-        if recipients and delivered == 0:
-            logger.critical(
-                "CONTRACT FAILURE %s: alert_admin reached 0/%d recipients. "
-                "All transports failed.",
-                contract.id, len(recipients),
-            )
+            for user_id in cfg.notify:
+                # Skip ids that the admin alert already reached.
+                if any(
+                    a.get("user_id") == user_id and a.get("ok")
+                    for a in report.get("admins", [])
+                ):
+                    continue
+                chat_id = _resolve_chat_id(user_id)
+                if chat_id is None:
+                    logger.warning(
+                        "notify recipient %s for contract %s: no chat_id resolved",
+                        user_id,
+                        contract.id,
+                    )
+                    continue
+                ok, detail = await _send_via_telegram_direct(chat_id, message)
+                if not ok:
+                    logger.warning(
+                        "notify recipient %s for contract %s: send failed (%s)",
+                        user_id,
+                        contract.id,
+                        detail,
+                    )
 
     return {"__status__": "error", "__error__": error, "__audit__": audit_path}
