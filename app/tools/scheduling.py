@@ -723,6 +723,15 @@ def edit_scheduled_task(
         tz = _parse_tz(timezone)
         if tz is None:
             return {"status": "error", "message": f"Unknown timezone: '{timezone}'."}
+        # The create path runs _validate_cron_dow to reject numeric
+        # day-of-week (APScheduler's numeric DOW is off-by-one
+        # relative to standard cron). The edit path used to bypass
+        # the check and rebuild ``CronTrigger.from_crontab`` directly,
+        # so editing could reintroduce the bug for jobs that were
+        # frozen with valid DOW names. Apply the same guard here.
+        dow_err = _validate_cron_dow(new_cron_expression)
+        if dow_err:
+            return {"status": "error", "message": dow_err}
         try:
             new_trigger = CronTrigger.from_crontab(new_cron_expression, timezone=tz)
         except ValueError:

@@ -328,9 +328,9 @@ Tools for researching bugs, library docs, and package versions.
 - `get_scheduled_task_logs` (line 466) — Returns recent fire events from the scheduler job log (JSONL).
 - `delete_scheduled_task` (line 583) — Deletes a scheduled task/reminder.
 - `edit_scheduled_task` (line 614) — Edits an existing scheduled task — all fields are optional, pass only what you want to change.
-- `schedule_system_task` (line 759) — Schedules a one-off system maintenance task that runs with admin privileges.
-- `run_system_task_now` (line 841) — Immediately launches a system maintenance task in the background with admin privileges.
-- `schedule_recurring_system_task` (line 906) — Schedules a recurring system maintenance task that runs with admin privileges on a cron schedule.
+- `schedule_system_task` (line 768) — Schedules a one-off system maintenance task that runs with admin privileges.
+- `run_system_task_now` (line 850) — Immediately launches a system maintenance task in the background with admin privileges.
+- `schedule_recurring_system_task` (line 915) — Schedules a recurring system maintenance task that runs with admin privileges on a cron schedule.
 
 ### `app/tools/scratchpad.py`
 Session-scoped scratchpad for multi-step research tasks.
