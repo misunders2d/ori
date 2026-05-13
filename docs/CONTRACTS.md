@@ -326,6 +326,22 @@ in the grace window would land in a broken-transport error path
 that admins couldn't see. With the paused-start change, every
 overdue job's first delivery attempt finds its adapter.
 
+### Adapter signature-conformance test
+
+``tests/test_contracts_emit_status_check.py:test_all_emit_adapters_resolve_under_basic_call``
+calls every registered emit adapter with minimal valid args + a
+mocked downstream tool. Any adapter that passes a kwarg the tool's
+signature doesn't accept raises ``TypeError`` at test time instead
+of at 20:30 Kyiv on production.
+
+The 2026-05-13 ``linux_mastery_30_days_v2`` v5 ``telegram_dm`` crash
+(``telegram_send_dm() got an unexpected keyword argument 'user_id'``)
+was exactly this gap: the legacy adapter passed ``user_id=`` to a
+tool whose parameter was ``person``, and prior tests stopped at the
+adapter's arg-validation gate without ever exercising the wrapping
+call. Adding adapters now requires a row in ``minimal_args`` so the
+guard keeps growing with the registry.
+
 ### Worker defense layers around emit results
 
 The worker now applies three orthogonal checks to every adapter

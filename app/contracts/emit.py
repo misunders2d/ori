@@ -173,34 +173,52 @@ async def slack_post(args: dict[str, Any], state: dict[str, Any]) -> dict[str, A
     required=["user_id", "text"],
 )
 async def telegram_dm(args: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
-    """Send ``args.text`` to ``args.user_id`` via Telegram. Used for
-    admin alerts (``on_failure`` notifications) and personal reminders.
+    """Send ``args.text`` to the Telegram chat identified by
+    ``args.user_id`` (the bot's canonical platform id, e.g.
+    ``"330959414"`` or ``"tg_330959414"``).
+
+    Implementation uses the same direct ``api.telegram.org``
+    sendMessage path that ``app.contracts.admin_alert`` uses for
+    failure DMs — bypassing ``app.tools.telegram.telegram_send_dm``
+    entirely. Reasons:
+
+      1. ``telegram_send_dm`` takes ``person`` (display name /
+         username) and does a roster NAME lookup. Numeric ids never
+         match a name → ``status="not_found"`` is returned. The
+         pre-2026-05-14 contract adapter actually called it with
+         ``user_id=`` as the kwarg name, which raised a
+         ``TypeError`` on every fire — the adapter had been
+         non-functional since the day it was written.
+      2. The roster may not contain a recently-paired admin; direct
+         send works regardless. ``_resolve_chat_id`` already handles
+         roster lookup, ``tg_`` prefix variants, and numeric
+         fallback (Telegram private chats: chat_id == user_id).
     """
-    from app.tools.telegram import telegram_send_dm
-    from app.contracts._loader_context import LoaderContext
+    from app.contracts.admin_alert import (
+        _resolve_chat_id,
+        _send_via_telegram_direct,
+    )
 
     if "user_id" not in args or "text" not in args:
         raise ValueError("telegram_dm requires args.user_id and args.text")
 
-    result = await telegram_send_dm(
-        user_id=str(args["user_id"]),
-        text=args["text"],
-        tool_context=LoaderContext(),
-    )
-
-    # Status check — ``telegram_send_dm`` does a roster name lookup
-    # internally and returns ``{"status": "not_found"|"ambiguous"|"error"}``
-    # on any failure. The pre-2026-05-13 worker treated any non-raising
-    # return as success, so a not_found drop landed in audit as
-    # ``ok: True`` and the admin alert path silently swallowed every
-    # contract failure. Raise here so the worker's
-    # ``except Exception`` branch catches it.
-    if not isinstance(result, dict) or result.get("status") != "success":
+    user_id = str(args["user_id"])
+    chat_id = _resolve_chat_id(user_id)
+    if chat_id is None:
         raise RuntimeError(
-            f"telegram_dm: send rejected "
-            f"(user_id={args['user_id']!r}, result={result!r})"
+            f"telegram_dm: cannot resolve user_id={user_id!r} to a "
+            "chat_id (roster miss + non-numeric id). Either register "
+            "the user in the roster (have them message the bot once) "
+            "or use a numeric Telegram id directly."
         )
-    return result
+
+    ok, detail = await _send_via_telegram_direct(chat_id, str(args["text"]))
+    if not ok:
+        raise RuntimeError(
+            f"telegram_dm: send rejected (user_id={user_id!r}, "
+            f"chat_id={chat_id}, detail={detail!r})"
+        )
+    return {"status": "success", "chat_id": chat_id, "detail": detail}
 
 
 # ---------------------------------------------------------------------------

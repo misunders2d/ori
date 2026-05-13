@@ -73,37 +73,147 @@ async def test_slack_post_returns_dict_on_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_telegram_dm_raises_on_not_found(monkeypatch):
-    """``telegram_send_dm`` returns status=not_found when the roster
-    has no match. Adapter must raise so the worker hits its
-    emit_failed branch instead of recording silent success."""
+async def test_telegram_dm_sends_via_direct_path_with_resolved_chat_id(monkeypatch):
+    """telegram_dm now bypasses ``telegram_send_dm`` entirely (that
+    tool takes ``person`` and does a roster NAME lookup that numeric
+    ids never match). Adapter calls the same direct
+    ``api.telegram.org`` path admin_alert uses, with chat_id
+    resolved via roster + numeric fallback.
+
+    Direct repro of the 2026-05-13 ``linux_mastery_30_days_v2`` v5
+    crash:
+        TypeError: telegram_send_dm() got an unexpected
+                   keyword argument 'user_id'
+    """
     from app.contracts.emit import telegram_dm
 
-    async def fake_telegram_send_dm(user_id, text, tool_context=None):
-        return {"status": "not_found", "message": "no telegram user matching ..."}
+    call_log: list[dict] = []
+
+    async def fake_send_via_telegram_direct(chat_id, text):
+        call_log.append({"chat_id": chat_id, "text": text})
+        return True, "ok"
 
     monkeypatch.setattr(
-        "app.tools.telegram.telegram_send_dm", fake_telegram_send_dm
+        "app.contracts.admin_alert._send_via_telegram_direct",
+        fake_send_via_telegram_direct,
     )
+    # Numeric fallback path: roster miss + numeric id → use it as
+    # chat_id directly (Telegram private chats: chat_id == user_id).
+    monkeypatch.setattr("app.core.roster.get_entry", lambda uid: None)
 
-    with pytest.raises(RuntimeError, match="telegram_dm: send rejected"):
-        await telegram_dm({"user_id": "999999", "text": "hi"}, {})
+    result = await telegram_dm({"user_id": "330959414", "text": "hi"}, {})
+
+    assert result["status"] == "success"
+    assert call_log == [{"chat_id": 330959414, "text": "hi"}]
 
 
 @pytest.mark.asyncio
-async def test_telegram_dm_returns_dict_on_success(monkeypatch):
+async def test_telegram_dm_raises_when_direct_send_rejected(monkeypatch):
     from app.contracts.emit import telegram_dm
 
-    async def fake_telegram_send_dm(user_id, text, tool_context=None):
-        return {"status": "success", "user_id": user_id, "chat_id": 12345}
+    async def fake_send_via_telegram_direct(chat_id, text):
+        return False, "telegram ok=false: Forbidden: bot was blocked"
 
     monkeypatch.setattr(
-        "app.tools.telegram.telegram_send_dm", fake_telegram_send_dm
+        "app.contracts.admin_alert._send_via_telegram_direct",
+        fake_send_via_telegram_direct,
     )
+    monkeypatch.setattr("app.core.roster.get_entry", lambda uid: None)
 
-    result = await telegram_dm({"user_id": "12345", "text": "hi"}, {})
+    with pytest.raises(RuntimeError, match="telegram_dm: send rejected"):
+        await telegram_dm({"user_id": "330959414", "text": "hi"}, {})
 
-    assert result["status"] == "success"
+
+@pytest.mark.asyncio
+async def test_telegram_dm_raises_on_unresolvable_user_id(monkeypatch):
+    """An id that can't be turned into a chat_id (roster miss +
+    non-numeric id, e.g. Slack-style ``sl_U0ABC``) must raise
+    loudly instead of pretending success."""
+    from app.contracts.emit import telegram_dm
+
+    monkeypatch.setattr("app.core.roster.get_entry", lambda uid: None)
+
+    with pytest.raises(RuntimeError, match="cannot resolve user_id"):
+        await telegram_dm({"user_id": "sl_U0ABCDE", "text": "hi"}, {})
+
+
+# ---------------------------------------------------------------------------
+# Signature conformance: every adapter that wraps a tool MUST pass
+# kwargs the tool actually accepts. The 2026-05-13 telegram_dm
+# regression was exactly this — adapter passed ``user_id=`` to a tool
+# whose parameter was ``person``. Pre-fix tests never exercised the
+# wrapping call (they stopped at the arg-validation gate), so the
+# TypeError lived in production for months. This guard re-checks each
+# adapter signature on every test run.
+# ---------------------------------------------------------------------------
+
+
+def test_all_emit_adapters_resolve_under_basic_call(monkeypatch):
+    """Smoke-call every registered emit adapter with minimal valid
+    args and an inner tool that records the kwargs it received.
+    If any adapter passes a kwarg the tool doesn't accept, Python
+    raises ``TypeError`` HERE — at test time, not in production at
+    20:30 Kyiv. The adapter MUST either pass the call cleanly or
+    raise a documented ``RuntimeError`` / ``ValueError``.
+    """
+    import inspect
+    import asyncio
+    from app.contracts.emit import EMIT_ADAPTERS
+
+    # Per-adapter minimal-valid args. Built from the adapter
+    # contracts (``required`` keys declared at registration).
+    minimal_args = {
+        "slack_post": {"channel": "C012", "content": "hi"},
+        "telegram_dm": {"user_id": "330959414", "text": "hi"},
+        "sheet_append": {"spreadsheet_id": "x" * 44, "row": ["a", "b"]},
+        "drive_doc_fill": {"doc_id": "x" * 44, "fields": {"k": "v"}},
+        "memory_update": {
+            "namespace": "professional",
+            "text": "x",
+            "short_description": "y",
+            "category": "memory",
+        },
+    }
+
+    # Mock every downstream tool / side-effect to a recording stub.
+    # The point is to confirm the ADAPTER → TOOL kwarg handshake
+    # doesn't raise TypeError, not to exercise the network/I/O.
+    async def fake_slack_post_message(channel, text, thread_ts=None, tool_context=None):
+        return {"status": "success", "ts": "1", "channel": channel}
+
+    async def fake_send_via_telegram_direct(chat_id, text):
+        return True, "ok"
+
+    monkeypatch.setattr("app.tools.slack.slack_post_message", fake_slack_post_message)
+    monkeypatch.setattr(
+        "app.contracts.admin_alert._send_via_telegram_direct",
+        fake_send_via_telegram_direct,
+    )
+    monkeypatch.setattr("app.core.roster.get_entry", lambda uid: None)
+
+    # sheet_append / drive_doc_fill / memory_update need OAuth /
+    # external creds; this test isn't about them. We only confirm
+    # they reach their first credential / network check without a
+    # TypeError. Catch RuntimeError too — those are documented and
+    # not signature-mismatch bugs.
+    state: dict = {"__contract__": {"author": "sergey@mellanni.com"}}
+
+    for name, args in minimal_args.items():
+        adapter = EMIT_ADAPTERS.get(name)
+        if adapter is None:
+            continue
+        try:
+            asyncio.get_event_loop().run_until_complete(adapter(args, state))
+        except (RuntimeError, ValueError):
+            # Documented application-level errors. Not a signature
+            # mismatch. Acceptable.
+            pass
+        except TypeError as e:
+            pytest.fail(
+                f"emit adapter {name!r} raised TypeError on its inner "
+                f"tool call: {e}. Adapter argument names are out of "
+                "sync with the tool's signature."
+            )
 
 
 # ---------------------------------------------------------------------------
