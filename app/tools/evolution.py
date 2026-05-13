@@ -103,6 +103,73 @@ def _safe_resolve_path(file_path: str, base_dir: str) -> str | None:
     return resolved
 
 
+def _bootstrap_symlink_recursive(
+    live_root: str,
+    sandbox_root: str,
+    *,
+    skip_top_level: set[str] | None = None,
+    links_created: list[str] | None = None,
+) -> None:
+    """Mirror ``live_root`` into ``sandbox_root`` by symlinking every
+    file/dir from ``live_root`` that the sandbox doesn't already have.
+
+    Recurses into any sandbox directory that exists as a REAL dir
+    (i.e. a directory the staging step created to host a staged
+    file). When the sandbox path is missing, the live dir is
+    symlinked wholesale — cheap and correct, since the live tree
+    is the source of truth for that whole subtree.
+
+    Pre-2026-05-14 the bootstrap was one level deep: walking
+    ``live_root`` top-level, symlinking each child into the sandbox
+    if missing. When staging created e.g.
+    ``sandbox/app/callbacks/guardrails/admin.py``, the bootstrap saw
+    ``sandbox/app/callbacks`` exists and skipped — never recursing
+    in to add the missing ``__init__.py`` / sibling files.
+    ``app.callbacks`` then resolved as an incomplete package and
+    pytest collection blew up with ``KeyError: 'app'``.
+
+    The ``skip_top_level`` set is consulted ONLY at the first level
+    (matches the original behaviour of skipping ``.git``, ``data``,
+    ``tests`` etc.). Deeper levels copy everything.
+    """
+    skip = skip_top_level or set()
+    links = links_created if links_created is not None else []
+
+    def _walk(live_dir: str, sandbox_dir: str, depth: int) -> None:
+        for name in os.listdir(live_dir):
+            # First-level skip rules. The leading-dot rule (matches
+            # ``.git``, ``.docs_read_marker``, ...) only applies at
+            # the top level — deeper hidden files (think
+            # ``app/.gitkeep``) are real project content.
+            if depth == 0:
+                if name in skip:
+                    continue
+                if "." in skip and name.startswith("."):
+                    continue
+            src = os.path.join(live_dir, name)
+            dst = os.path.join(sandbox_dir, name)
+
+            # Existing real dir → recurse.
+            if os.path.isdir(src) and os.path.isdir(dst) and not os.path.islink(dst):
+                _walk(src, dst, depth + 1)
+                continue
+
+            # Missing in sandbox → symlink the whole thing.
+            if not os.path.exists(dst):
+                try:
+                    os.symlink(
+                        src, dst, target_is_directory=os.path.isdir(src)
+                    )
+                    links.append(dst)
+                except Exception:
+                    pass
+                continue
+
+            # Existing file / symlink → leave alone (staging owns it).
+
+    _walk(live_root, sandbox_root, depth=0)
+
+
 def _sandbox_digest(sandbox_dir: str) -> str:
     """Return a stable digest of real staged files in the sandbox."""
     digest = hashlib.sha256()
@@ -554,35 +621,26 @@ def evolution_verify_sandbox(
             }
 
         elif check == "import" or check == "pytest":
-            # Auto-bootstrap: symlink project structure to backfill missing files
-            links_created = []
-            for item in os.listdir(PROJECT_ROOT):
-                if item.startswith('.') or item == "data" or item == "tests":
-                    continue
-                src = os.path.join(PROJECT_ROOT, item)
-                dst = os.path.join(sandbox_dir, item)
-                
-                # IMPROVED BOOTSTRAP: If directory exists (due to staging), symlink contents individually
-                if os.path.isdir(src):
-                    os.makedirs(dst, exist_ok=True)
-                    for subitem in os.listdir(src):
-                        sub_src = os.path.join(src, subitem)
-                        sub_dst = os.path.join(dst, subitem)
-                        if not os.path.exists(sub_dst):
-                            try:
-                                if os.path.isdir(sub_src):
-                                    os.symlink(sub_src, sub_dst, target_is_directory=True)
-                                else:
-                                    os.symlink(sub_src, sub_dst)
-                                links_created.append(sub_dst)
-                            except Exception:
-                                pass
-                elif not os.path.exists(dst):
-                    try:
-                        os.symlink(src, dst)
-                        links_created.append(dst)
-                    except Exception:
-                        pass
+            # Auto-bootstrap: backfill missing files in the sandbox by
+            # symlinking them from the live tree. Recursive so that
+            # staging a deeply-nested file (e.g. ``app/callbacks/guardrails/admin.py``)
+            # doesn't leave its sibling files invisible — pre-2026-05-14
+            # the bootstrap only walked one level deep, so any time
+            # staging created a real directory inside the sandbox, the
+            # bootstrap saw it ``os.path.exists`` and SKIPPED, never
+            # recursing in. Tests then failed with ``KeyError: 'app'``
+            # at collection time because ``app.callbacks/__init__.py``
+            # and siblings of the staged file were missing. Bezos
+            # spent the 2026-05-13 incident mis-labelling those
+            # collection errors as "pre-existing unrelated failures";
+            # they were caused by his own staging.
+            links_created: list[str] = []
+            _bootstrap_symlink_recursive(
+                PROJECT_ROOT,
+                sandbox_dir,
+                skip_top_level={".", "data", "tests"},
+                links_created=links_created,
+            )
 
             if check == "import":
                 if not target:
