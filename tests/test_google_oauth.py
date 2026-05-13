@@ -77,10 +77,17 @@ async def test_drive_list_not_connected():
 
 @pytest.mark.asyncio
 async def test_sheets_read_not_connected():
+    """ID validation now runs before the auth check (see
+    ``_extract_google_drive_id``), so the spreadsheet argument must
+    have a valid 25-80 char ID shape — otherwise the test asserts
+    the wrong error path."""
     from app.tools.google_drive import sheets_read
+
+    # 44-char synthetic ID — matches the real Google Drive ID shape.
+    valid_shape_id = "1abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG"
     mock_ctx = MagicMock()
     mock_ctx.state.to_dict.return_value = {"user_id": "nobody@test.com"}
     with patch("app.tools.google_drive.get_token", return_value=None):
-        result = await sheets_read("fake_id", tool_context=mock_ctx)
+        result = await sheets_read(valid_shape_id, tool_context=mock_ctx)
         assert result["status"] == "error"
         assert "not connected" in result["message"].lower()

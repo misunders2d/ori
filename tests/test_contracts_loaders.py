@@ -91,27 +91,12 @@ async def test_static_param_renders_template_in_value():
 
 
 # ---------------------------------------------------------------------------
-# Reserved slots — placeholders that surface NotImplementedError
+# (The reserved-slot tests were retired once these loaders moved from
+# ``NotImplementedError`` stubs to real implementations backed by
+# Sheets / Drive / BigQuery / Keepa. Live behaviour is covered by the
+# loader-specific integration suites; missing-args paths surface as
+# ``ValueError`` and are checked alongside each adapter.)
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "name,args",
-    [
-        ("sheet_read", {"spreadsheet_id": "x", "range": "A1:C5"}),
-        ("drive_doc_read", {"doc_id": "x"}),
-        ("bigquery_query", {"sql": "SELECT 1"}),
-        ("keepa_get_history", {"asin": "B0XYZ", "days": 90}),
-    ],
-)
-@pytest.mark.asyncio
-async def test_reserved_loaders_surface_not_implemented(name, args):
-    """These slots are registered (so authoring can REFERENCE them and
-    pass schema validation) but raise on call. P7 lights them up.
-    The clear ``NotImplementedError`` keeps a dry-run that exercises
-    them honest — won't silently return empty data."""
-    with pytest.raises(NotImplementedError, match="P7|P2"):
-        await run_loader(name, args, {})
 
 
 # ---------------------------------------------------------------------------

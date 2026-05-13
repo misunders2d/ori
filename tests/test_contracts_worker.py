@@ -183,10 +183,19 @@ async def test_aborts_when_disk_body_tampered(isolated_store, emit_recorder):
 
 
 @pytest.mark.asyncio
-async def test_refuses_to_fire_permissive_contract(isolated_store, emit_recorder):
+async def test_refuses_to_fire_permissive_contract(
+    isolated_store, emit_recorder, monkeypatch
+):
     """Production contracts must be STRICT. The author flow refuses to
-    freeze a permissive one (P6), but if one slips through, the worker
-    also refuses."""
+    freeze a permissive one (validator + worker check are
+    defense-in-depth). This test pins the WORKER-level check by
+    bypassing the rigor validator so a permissive contract reaches the
+    fire path."""
+    # Bypass author-time rigor so freeze accepts a permissive spec.
+    from app.contracts import validation as _validation
+
+    monkeypatch.setattr(_validation, "validate_step_rigor", lambda c: None)
+
     c = isolated_store.freeze(
         _make_contract(enforcement=EnforcementMode.PERMISSIVE)
     )
@@ -272,7 +281,14 @@ async def test_reasoning_retries_once_with_feedback_on_invalid_json(
                     id="s1",
                     entry_agent="CoordinatorAgent",
                     user_template="go",
-                    output=OutputSpec(type="json", schema={"type": "object"}),
+                    output=OutputSpec(
+                        type="json",
+                        schema={
+                            "type": "object",
+                            "properties": {"x": {"type": "integer"}},
+                            "required": ["x"],
+                        },
+                    ),
                     retry=Retry(on_validation_fail=1),
                 )
             ]
@@ -304,7 +320,14 @@ async def test_reasoning_fails_after_max_retries(
                     id="s1",
                     entry_agent="CoordinatorAgent",
                     user_template="go",
-                    output=OutputSpec(type="json", schema={"type": "object"}),
+                    output=OutputSpec(
+                        type="json",
+                        schema={
+                            "type": "object",
+                            "properties": {"x": {"type": "integer"}},
+                            "required": ["x"],
+                        },
+                    ),
                     retry=Retry(on_validation_fail=2),
                 )
             ],

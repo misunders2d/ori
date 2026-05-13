@@ -67,8 +67,16 @@ def _coerce_spec(spec: Any) -> Contract:
     # `slack_post_message` (the tool name) instead of `slack_post` (the
     # registered emit adapter). Pydantic accepts any string here;
     # validation makes the bot fail-loud at authoring time.
-    from app.contracts.validation import validate_against_registries
+    from app.contracts.validation import (
+        validate_against_registries,
+        validate_step_rigor,
+    )
     validate_against_registries(contract)
+    # Rigor: rejects sloppy spec patterns that would let the fire-time
+    # LLM deviate from declared steps (output.type='none', empty json
+    # schema, multi-substep prompt, unresolved placeholders,
+    # enforcement='permissive'). See validation.validate_step_rigor.
+    validate_step_rigor(contract)
     return contract
 
 

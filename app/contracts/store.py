@@ -116,8 +116,12 @@ class ContractStore:
         that bypass the tools layer (tests, scripts, future REST entry).
         """
         # Lazy import to break the schema → emit → store cycle.
-        from app.contracts.validation import validate_against_registries
+        from app.contracts.validation import (
+            validate_against_registries,
+            validate_step_rigor,
+        )
         validate_against_registries(contract)
+        validate_step_rigor(contract)
 
         frozen = contract.with_fresh_hash()
 

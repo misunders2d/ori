@@ -32,13 +32,14 @@ from app.contracts.emit import (
 
 def test_known_adapters_contains_full_v1_set():
     """Every adapter the AUTHOR pipeline currently knows about must be
-    registered. New adapters extend this list."""
+    registered. New adapters extend this list. The ``email`` slot is
+    intentionally NOT registered (see emit.py — refused over
+    gmail.readonly-only scope) so it stays out of the expected set."""
     expected = {
         "slack_post",
         "telegram_dm",
         "sheet_append",
         "drive_doc_fill",
-        "email",
         "memory_update",
     }
     assert set(known_adapters()) >= expected
@@ -65,29 +66,21 @@ async def test_run_gate_raises_keyerror_on_unknown():
 
 
 # ---------------------------------------------------------------------------
-# Reserved slots
+# Adapter arg-validation (reserved-slot tests were retired once the
+# adapters became real implementations — each one now surfaces a domain
+# error from its own validation path, exercised below and in the
+# integration-level suites)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "name,args",
-    [
-        ("sheet_append", {"spreadsheet_id": "x", "row": [1, 2, 3]}),
-        ("drive_doc_fill", {"doc_id": "x", "fields": {}}),
-        ("email", {"to": "x@y", "subject": "s", "body": "b"}),
-        ("memory_update", {"title": "x"}),
-    ],
-)
 @pytest.mark.asyncio
-async def test_reserved_adapters_surface_not_implemented(name, args):
-    with pytest.raises(NotImplementedError, match="P7"):
-        await run_emit(name, args, {})
-
-
-@pytest.mark.asyncio
-async def test_reserved_sheet_dedup_gate_surfaces_not_implemented():
-    with pytest.raises(NotImplementedError, match="P7"):
-        await run_gate("sheet_dedup", {"source": "x", "key": "y"}, {})
+async def test_email_adapter_is_unregistered_and_surfaces_keyerror():
+    """The ``email`` slot is intentionally not registered (gmail.readonly
+    scope can't actually send). Calling it must surface the standard
+    unknown-adapter KeyError so contract validation flags it at author
+    time and the worker doesn't silently swallow the misroute."""
+    with pytest.raises(KeyError, match="unknown emit adapter"):
+        await run_emit("email", {"to": "x@y", "subject": "s", "body": "b"}, {})
 
 
 # ---------------------------------------------------------------------------
@@ -173,10 +166,14 @@ async def test_emit_args_are_template_rendered_against_state():
         captured.update(args)
         return {"status": "ok"}
 
-    state = {"asin": "B0XYZ", "today": "2026-05-11"}
+    # Use a non-magic key for the date: ``{today}`` is a built-in
+    # placeholder that resolves to ``date.today().isoformat()`` and
+    # ignores state. Calling it ``audit_date`` exercises the state-path
+    # cleanly without colliding with the magic resolver.
+    state = {"asin": "B0XYZ", "audit_date": "2026-05-11"}
     await run_emit(
         "test_capture_42",
-        {"channel": "#audit-{asin}", "note": "Run on {today}"},
+        {"channel": "#audit-{asin}", "note": "Run on {audit_date}"},
         state,
     )
 

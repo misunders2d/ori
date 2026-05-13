@@ -259,9 +259,20 @@ class TestExportReportToCsv:
         await created_tasks[0]
         message, session_message = notify_messages[0]
         assert "FATAL" in message
-        assert "Amazon response" in message
+        # The failure message now embeds Amazon's raw processing payload
+        # under a ``Report metadata:`` block (the older message used the
+        # phrase "Amazon response"; both serve the same purpose).
+        assert "Report metadata" in message
+        assert '"processingStatus": "FATAL"' in message
         assert "**FATAL**" not in message
-        assert "Do not claim a specific root cause" in session_message
+        # The session_message carries the Agent-only follow-up
+        # instructions — currently a Law-6-compatible block that tells
+        # the agent to either surface the throttle hint or report the
+        # actual cause. Earlier wording included "Do not claim a
+        # specific root cause"; the current text says "surface the
+        # actual cause from the error document" instead.
+        assert "Agent-only context" in session_message
+        assert "surface the actual cause" in session_message
 
     @pytest.mark.asyncio
     @patch("app.tools.sp_api_export._POLL_INTERVAL", 0.01)

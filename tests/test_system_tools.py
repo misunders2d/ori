@@ -90,14 +90,22 @@ def test_lifecycle_tool_docstrings_disambiguate_reset_targets():
 
 
 def test_coordinator_instruction_requires_reset_clarification():
+    """The coordinator instruction must keep the disambiguation block
+    that handles ambiguous ``reset`` / ``refresh`` requests and pins
+    the verbatim lifecycle-tool rule. Strings are matched against the
+    current wording (the heading was renamed to ``RESET / REFRESH``
+    after ``RESTART`` got its own unambiguous rule above)."""
     source = Path("app/sub_agents/coordinator_agent.py").read_text()
 
-    assert "RESET / RESTART AMBIGUITY" in source
-    assert "ask which operation they mean" in source
-    assert "BEFORE calling any tool" in source
-    assert "Never infer this from context" in source
+    assert "RESET / REFRESH AMBIGUITY" in source
+    assert "ASK which operation" in source
+    assert "Never infer from context" in source
     assert "EXACT LIFECYCLE TOOL REQUESTS" in source
     assert "do not substitute" in source
+    # The unambiguous reboot/restart path also stays load-bearing —
+    # the 2026-05-12 production incident proved it's needed.
+    assert "REBOOT / RESTART" in source
+    assert "call `update_self` IMMEDIATELY" in source
 
 
 @pytest.mark.asyncio

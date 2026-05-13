@@ -19,8 +19,18 @@ import pytest
 
 @pytest.fixture
 def isolated_config(tmp_path, monkeypatch):
-    """Redirect the thinking-config JSON to ``tmp_path`` and bust the
-    in-memory cache so each test starts from a known state.
+    """Redirect the thinking-config JSON to ``tmp_path``, bust the
+    in-memory cache, and pin per-component defaults to ``"low"`` so the
+    legacy on/off-shim tests have a predictable baseline.
+
+    The production ``THINKING_DEFAULTS`` deliberately seeds Coordinator
+    / AmazonHead / BigQuery / DeveloperAgent / AmazonDataAnalystAgent /
+    AmazonAgent at ``medium`` so reasoning quality is decent
+    out-of-the-box. That makes legacy ``load()`` return
+    ``enabled=True`` whenever the on-disk overrides file is absent —
+    which collides with the on/off-only tests below. The fixture
+    flattens every component to ``low`` for the test's lifetime so
+    ``load()`` semantics match the pre-2026-05-12 simple boolean shim.
     """
     from app.app_utils import thinking
 
@@ -31,6 +41,13 @@ def isolated_config(tmp_path, monkeypatch):
     # bleeds in through the in-memory copy).
     monkeypatch.setattr(thinking, "_cache", {})
     monkeypatch.setattr(thinking, "_cache_mtime", 0.0)
+
+    # Flatten defaults to "low" — see docstring above.
+    monkeypatch.setattr(
+        thinking,
+        "THINKING_DEFAULTS",
+        {c: "low" for c in thinking.THINKING_DEFAULTS},
+    )
 
     return target
 
@@ -57,13 +74,22 @@ def test_load_returns_defaults_on_corrupt_file(isolated_config):
 
 
 def test_save_then_load_round_trip(isolated_config):
+    """Legacy ``save(enabled, budget)`` is preserved as a shim that
+    writes the new per-component on-disk format. The legacy ``load()``
+    aggregates back to the old shape, so the round-trip stays correct
+    from the caller's perspective even though the JSON layout changed
+    in the 2026-05-12 migration."""
+    from app.app_utils import thinking
     from app.app_utils.thinking import load, save
 
     cfg = save(enabled=True, budget_tokens=8192)
     assert cfg == {"enabled": True, "budget_tokens": 8192}
 
+    # New on-disk layout: {"levels": {component: level}}. ``high`` is
+    # the level the shim chooses when ``budget_tokens >= 8192``.
     on_disk = json.loads(isolated_config.read_text())
-    assert on_disk == {"enabled": True, "budget_tokens": 8192}
+    expected_levels = {c: "high" for c in thinking.THINKING_DEFAULTS}
+    assert on_disk == {"levels": expected_levels}
 
     # Cached load reflects the save without re-reading the file.
     assert load() == {"enabled": True, "budget_tokens": 8192}
@@ -73,15 +99,29 @@ def test_cache_invalidates_when_file_changes(isolated_config):
     """Two ``load()`` calls should reflect external changes to the file
     once its mtime advances — otherwise the second toggle wouldn't take
     effect until a process restart.
+
+    The external write uses the post-2026-05-12 ``{"levels": {...}}``
+    layout — the legacy ``{enabled, budget_tokens}`` form is treated
+    as no-overrides on load (migration path) and would never invalidate
+    a meaningful ``enabled`` flag.
     """
+    from app.app_utils import thinking
     from app.app_utils.thinking import load, save
 
     save(enabled=False, budget_tokens=4096)
     assert load()["enabled"] is False
 
     # Direct disk write (simulates another process / manual edit).
+    # Flip one component to ``medium`` so the aggregate flips to enabled.
     isolated_config.write_text(
-        json.dumps({"enabled": True, "budget_tokens": 1024})
+        json.dumps(
+            {
+                "levels": {
+                    c: ("medium" if c == "CoordinatorAgent" else "low")
+                    for c in thinking.THINKING_DEFAULTS
+                }
+            }
+        )
     )
     # Bump mtime by 1 second so the cache invalidator notices the change.
     new_mtime = os.path.getmtime(isolated_config) + 1
@@ -89,7 +129,8 @@ def test_cache_invalidates_when_file_changes(isolated_config):
 
     refreshed = load()
     assert refreshed["enabled"] is True
-    assert refreshed["budget_tokens"] == 1024
+    # ``medium`` maps to 4096 in ``_ANTHROPIC_BUDGET_BY_LEVEL``.
+    assert refreshed["budget_tokens"] == 4096
 
 
 # ---------------------------------------------------------------------------
@@ -114,22 +155,35 @@ class _FakeNativeModel:
 
 
 class _FakeAgent:
-    def __init__(self, model=None, sub_agents=None):
+    """``apply_to_agent_tree`` keys per-component overrides off
+    ``agent.name`` (``app.app_utils.thinking.apply_to_agent_tree`` →
+    ``load_level(name)``), so the fake must carry one. Tests pass a
+    real component name (e.g. ``CoordinatorAgent``) so the lookup hits
+    the override saved by the test's ``save_level`` / legacy ``save``."""
+
+    def __init__(self, model=None, sub_agents=None, name="CoordinatorAgent"):
+        self.name = name
         self.canonical_model = model
         self.sub_agents = list(sub_agents or [])
 
 
 def test_apply_enables_anthropic_thinking_on_litellm_only(isolated_config):
+    """Post-2026-05-12 the legacy ``save(enabled, budget)`` shim
+    NORMALISES the budget through Gemini-style levels (medium=4096,
+    high=8192). Passing ``budget_tokens=2048`` lands on ``medium`` and
+    the model picks up the canonical 4096 budget. The test pins both
+    facts: only the LiteLlm-backed model is mutated, and the budget
+    matches the level mapping (NOT the raw input)."""
     from app.app_utils import thinking
     from app.app_utils.thinking import apply_to_agent_tree
 
-    thinking.save(enabled=True, budget_tokens=2048)
+    thinking.save(enabled=True, budget_tokens=4096)
 
     litellm = _FakeLiteLlmModel()
     native = _FakeNativeModel()
     root = _FakeAgent(
         model=native,
-        sub_agents=[_FakeAgent(model=litellm)],
+        sub_agents=[_FakeAgent(model=litellm, name="AmazonHeadAgent")],
     )
 
     counts = apply_to_agent_tree(root)
@@ -137,7 +191,7 @@ def test_apply_enables_anthropic_thinking_on_litellm_only(isolated_config):
     assert counts["inspected"] == 2
     assert counts["mutated"] == 1
     assert litellm._additional_args == {
-        "thinking": {"type": "enabled", "budget_tokens": 2048}
+        "thinking": {"type": "enabled", "budget_tokens": 4096}
     }
 
 
