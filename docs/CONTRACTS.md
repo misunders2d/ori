@@ -242,6 +242,28 @@ Step enforcement strictness is captured by `Contract.enforcement` —
 `STRICT` is the only production mode. The worker refuses to fire a
 `PERMISSIVE` contract.
 
+### Model temperature per family
+
+The reasoning-step LLM call goes through LiteLLM (one code path per
+provider). Temperature is **provider-conditional**:
+
+- **Gemini 3 family** (`gemini-3-flash-preview`, `gemini-3-pro`, …) —
+  temperature is **omitted**. Google's release notes (echoed by
+  LiteLLM's
+  `vertex_and_google_ai_studio_gemini.py:1009` runtime warning) state
+  that `temperature < 1.0` on Gemini 3 can cause **infinite loops,
+  degraded reasoning performance, and failure on complex tasks**. We
+  let the provider apply its native default (1.0).
+- **Everything else** (Anthropic Sonnet/Opus, Gemini 2.x, OpenRouter
+  passthroughs) — `temperature=0.2`. Sub-sampled completions converge
+  faster on structured-output schemas and let retry-with-feedback
+  produce a stable target.
+
+Implemented in `app.contracts.worker._invoke_llm_for_step` (the only
+site that picks temperature). Authoring does **not** expose
+`temperature` as a contract field — keeping it provider-rule-driven
+makes the per-fire behaviour deterministic.
+
 ## Coexistence with legacy scheduled jobs
 
 The legacy `schedule_recurring_task` / `schedule_one_off_task` path

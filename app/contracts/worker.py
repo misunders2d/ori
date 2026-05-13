@@ -168,14 +168,28 @@ async def _invoke_llm_for_step(
     else:
         completion_model = model_str
 
-    response = await litellm.acompletion(
-        model=completion_model,
-        messages=[
+    # Temperature handling per provider/family:
+    #
+    #   * Gemini 3 family — Google's release notes (echoed by LiteLLM's
+    #     vertex_and_google_ai_studio_gemini.py runtime warning):
+    #     "Setting temperature < 1.0 for Gemini 3 models can cause
+    #     infinite loops, degraded reasoning performance, and failure
+    #     on complex tasks." We OMIT the kwarg so the provider applies
+    #     its native default (1.0).
+    #   * Everything else (Anthropic, OpenRouter, Gemini 2.x) — we keep
+    #     0.2 so structured-output validation has a stable target and
+    #     retry-with-feedback converges quickly.
+    completion_kwargs: dict[str, Any] = {
+        "model": completion_model,
+        "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
         ],
-        temperature=0.2,
-    )
+    }
+    if not model_name.startswith("gemini-3"):
+        completion_kwargs["temperature"] = 0.2
+
+    response = await litellm.acompletion(**completion_kwargs)
     return response.choices[0].message.content or ""
 
 
