@@ -137,12 +137,13 @@ def schedule_contract(contract: Contract) -> dict:
 
     job_id = contract_job_id(contract.id)
 
-    # Remove any prior job for the same contract id (revisions).
-    try:
-        scheduler.remove_job(job_id)
-        logger.info("Removed prior APScheduler job %s before re-add", job_id)
-    except Exception:
-        pass  # no prior job is fine
+    # NOTE: pre-2026-05-14 this path called ``scheduler.remove_job``
+    # first and then ``scheduler.add_job(..., replace_existing=True)``.
+    # The remove was redundant — ``replace_existing=True`` overwrites
+    # the existing job atomically in the SQLAlchemyJobStore — and it
+    # opened a tiny race where an in-flight fire could trigger
+    # between the remove and the add. The pre-call has been dropped;
+    # ``replace_existing`` handles the swap in a single transaction.
 
     if isinstance(contract.trigger, OnDemandTrigger):
         return {

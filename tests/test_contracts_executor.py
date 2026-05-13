@@ -65,12 +65,20 @@ def test_schedule_cron_adds_job_with_contract_prefix(mock_scheduler):
     assert call.kwargs["kwargs"]["contract_id"] == c.id
 
 
-def test_schedule_removes_prior_job_before_re_adding(mock_scheduler):
-    """Revising a contract reuses the same job id; re-scheduling must
-    drop the old job before adding the new one (atomic switch)."""
+def test_schedule_swaps_via_replace_existing_not_remove_then_add(mock_scheduler):
+    """Revising a contract reuses the same job id. Pre-2026-05-14 we
+    called ``scheduler.remove_job`` before ``add_job`` and relied on
+    that to wipe the prior version, which opened a tiny race where an
+    in-flight fire could trigger between remove and add. The
+    current implementation skips the remove and lets
+    ``replace_existing=True`` swap the job atomically in the
+    SQLAlchemyJobStore."""
     c = _make_contract()
     exec_mod.schedule_contract(c)
-    mock_scheduler.remove_job.assert_called_once_with(f"contract:{c.id}")
+    mock_scheduler.remove_job.assert_not_called()
+    add_call = mock_scheduler.add_job.call_args
+    assert add_call.kwargs["replace_existing"] is True
+    assert add_call.kwargs["id"] == f"contract:{c.id}"
 
 
 def test_schedule_with_on_demand_trigger_skips_apscheduler(mock_scheduler):

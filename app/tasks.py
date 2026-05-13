@@ -8,6 +8,14 @@ logger = logging.getLogger(__name__)
 # In-memory registry for tracking real-time status of background tasks
 ACTIVE_TASKS = {}
 
+
+def _read_bytes(path: str) -> bytes:
+    """Synchronous file read helper, used inside ``asyncio.to_thread``
+    so multi-MB media payloads don't stall the asyncio event loop
+    during a single ``open().read()`` call."""
+    with open(path, "rb") as f:
+        return f.read()
+
 # Persistent event log for scheduled/system task fires — appended JSONL so the
 # agent can read it back via get_scheduled_task_logs without parsing free-form
 # Python logs. Rotation is handled by simple size-based truncation.
@@ -500,10 +508,17 @@ async def _deliver_message(
     logger.info("Delivering message to %s channel, target: %s", channel_type, target)
     try:
         if file_path and os.path.isfile(file_path):
+            import asyncio as _asyncio
             import mimetypes
             mime, _ = mimetypes.guess_type(file_path)
-            with open(file_path, "rb") as f:
-                data = f.read()
+            # File reads happen on the asyncio event-loop thread. A
+            # multi-MB media payload (image, audio, PDF) read with a
+            # plain ``open().read()`` blocks the loop for the full
+            # duration of the read, stalling every other coroutine
+            # (Slack/Telegram polling, contract fires, A2A traffic).
+            # Push the read to the default thread executor so the
+            # loop stays responsive.
+            data = await _asyncio.to_thread(_read_bytes, file_path)
             # Most adapters (Slack, Telegram) support 'caption' on send_media.
             await adapter.send_media(
                 target, data, mime or "application/octet-stream", caption=message

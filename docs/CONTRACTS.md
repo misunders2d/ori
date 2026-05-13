@@ -301,6 +301,16 @@ agent: delete_scheduled_task("cron_79d58bac")   ← only after the new
 No bulk auto-migration. The user keeps full control of when each job
 moves over.
 
+### Schedule swap is atomic — no pre-remove
+
+``schedule_contract`` registers / revises a contract via
+``scheduler.add_job(..., replace_existing=True)``. Earlier code
+called ``scheduler.remove_job(job_id)`` first; that was redundant
+(``replace_existing`` already overwrites the row in the
+SQLAlchemyJobStore atomically) and opened a tiny race where an
+in-flight fire could trigger between the remove and the add. The
+pre-call has been dropped.
+
 ### Boot order: scheduler resume after transports
 
 ``run_bot.main`` now calls ``scheduler.start(paused=True)`` and
