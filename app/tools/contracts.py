@@ -146,27 +146,38 @@ async def contract_dry_run(
         reasoning outputs, emit_results with rendered args).
     """
     c = _coerce_spec(spec)
-    # Dry-run accepts unfrozen contracts — we hash them in-flight just
-    # so worker's integrity check has something to verify against, but
-    # do NOT persist.
+    # Dry-run accepts unfrozen contracts — we hash them in-flight so
+    # the worker's integrity check (which reads back from the store by
+    # ``(id, hash)``) has something to verify against.
     c = c.with_fresh_hash()
     contract_store_singleton_temp = contract_store  # alias
 
-    # Inject the unsaved contract into the store's in-process index so
-    # ``execute_contract``'s hash-verify can find it. We undo on exit.
+    # Persist the contract so ``execute_contract``'s hash-verify can
+    # find it. NOTE: ``store.freeze`` may BUMP THE VERSION if prior
+    # versions exist on disk — when it does, it re-computes the hash
+    # against the bumped version field and returns a fresh Contract
+    # object whose ``hash`` differs from the one we computed above.
+    # We MUST use the returned object for ``execute_contract``;
+    # otherwise the worker looks up an unbumped hash that's never on
+    # disk and crashes with "no version with hash=...". 2026-05-13
+    # production incident on ``fba_listing_analysis_b098pc693h``.
     contract_store_singleton_temp._locks  # touch attr for lint
     versions_before = contract_store_singleton_temp.list_versions(c.id)
     try:
-        contract_store_singleton_temp.freeze(c)
+        c = contract_store_singleton_temp.freeze(c)
     except Exception:
+        # Freeze may legitimately refuse (e.g. duplicate hash on a
+        # repeat dry-run of an unchanged spec). The in-memory ``c`` is
+        # still hash-consistent in that case, so execute_contract's
+        # verify will resolve against the existing on-disk body.
         pass
 
     try:
         return await execute_contract(c, dry_run=True, mock_inputs=mock_inputs)
     finally:
-        # If we minted a new version just for the dry-run and the user
-        # hasn't seen it yet, leave it. The freeze step is idempotent;
-        # the next real freeze will pick up from this version.
+        # Leave the (possibly new) version on disk. The freeze step is
+        # idempotent for identical bodies; the next real freeze will
+        # pick up from here.
         _ = versions_before
 
 

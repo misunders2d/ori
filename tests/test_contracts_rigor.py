@@ -430,3 +430,102 @@ def test_all_errors_reported_in_single_raise():
 def test_on_demand_trigger_passes():
     c = _full_contract(trigger=OnDemandTrigger())
     validate_step_rigor(c)
+
+
+# ---------------------------------------------------------------------------
+# Regression: contract_dry_run must use the freeze() return value
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dry_run_handles_existing_versions_on_disk(tmp_path, monkeypatch):
+    """Repro of the 2026-05-13 ``fba_listing_analysis_b098pc693h``
+    incident: ``contract_dry_run`` minted a Contract with version=1,
+    hashed it, then called ``store.freeze``. The store, seeing prior
+    versions on disk, BUMPED the version (1 → next) and re-hashed
+    before persisting — but the dry-run code discarded the return
+    and handed the *original* version=1 Contract (with the wrong
+    hash) to ``execute_contract``. The worker then asked the store
+    for that hash, which wasn't there, and aborted with
+    ``no version with hash=...``.
+
+    Fix: ``contract_dry_run`` must adopt the Contract returned by
+    ``freeze`` for the execute step.
+    """
+    from app.contracts.emit import EMIT_ADAPTERS
+    from app.contracts.store import ContractStore
+    from app.contracts import worker as worker_mod
+    from app.tools.contracts import contract_dry_run
+
+    # Per-test store, audit dir, and module-level singletons.
+    store = ContractStore(root=str(tmp_path / "contracts"))
+    monkeypatch.setattr("app.tools.contracts.contract_store", store)
+    monkeypatch.setattr("app.contracts.worker.contract_store", store)
+    monkeypatch.setattr(
+        "app.contracts.worker._AUDIT_DIR", str(tmp_path / "audit")
+    )
+
+    # Capturing emit adapter so dry-run has something to "emit" against.
+    captured: list[dict] = []
+
+    async def _cap(args, state):
+        captured.append({"args": dict(args), "state_keys": sorted(state.keys())})
+        return {"status": "ok", "echo": args}
+
+    prior = EMIT_ADAPTERS.get("record_dryrun")
+    EMIT_ADAPTERS["record_dryrun"] = _cap
+    try:
+        spec = {
+            "id": "dry_run_bump_test",
+            "description": "Regression: dry-run after multiple freezes.",
+            "author": "test",
+            "trigger": {"type": "on_demand"},
+            "inputs": [
+                {
+                    "id": "greeting",
+                    "loader": "static_param",
+                    "args": {"value": "hello"},
+                }
+            ],
+            "emit": [
+                {"adapter": "record_dryrun", "args": {"echo": "{greeting}"}}
+            ],
+        }
+
+        # Seed two prior versions on disk so the next freeze must bump
+        # to version >= 3 (and recompute the hash to match the bumped
+        # version field).
+        from app.contracts.schema import Contract
+
+        v1 = Contract.model_validate(spec).with_fresh_hash()
+        store.freeze(v1)
+
+        spec_v2 = dict(spec)
+        spec_v2["description"] = "Regression: dry-run after multiple freezes (v2)."
+        v2 = Contract.model_validate(spec_v2).with_fresh_hash()
+        store.freeze(v2)
+
+        # Now dry-run a THIRD distinct spec. Pre-fix this raised
+        # ``no version with hash=...`` because the dry-run code didn't
+        # adopt the hash freeze recomputed against the bumped version.
+        spec_v3 = dict(spec_v2)
+        spec_v3["description"] = "Regression: dry-run after multiple freezes (v3)."
+
+        class _Ctx:
+            state = type("S", (), {"to_dict": staticmethod(lambda: {})})()
+
+        out = await contract_dry_run(spec_v3, tool_context=_Ctx())
+
+        assert out.get("__status__") == "ok", f"dry-run returned: {out}"
+        # Verify the emit adapter got the rendered arg even on dry-run
+        # (dry-run captures rendered args without persisting side
+        # effects).
+        emit_results = out.get("__emit_results__") or []
+        assert any(
+            r.get("rendered_args", {}).get("echo") == "hello" for r in emit_results
+        ), f"expected rendered echo='hello' in emit_results, got {emit_results!r}"
+    finally:
+        if prior is None:
+            EMIT_ADAPTERS.pop("record_dryrun", None)
+        else:
+            EMIT_ADAPTERS["record_dryrun"] = prior

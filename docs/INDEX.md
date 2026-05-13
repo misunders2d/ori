@@ -91,13 +91,13 @@ Contract-pipeline tools — the agent-facing surface for authoring,
 
 - `async contract_draft_validate` (line 88) — Validate a freshly-drafted contract spec WITHOUT persisting.
 - `async contract_dry_run` (line 123) — Simulate one fire of a contract WITHOUT applying any side
-- `async contract_freeze` (line 173) — Persist a contract to disk, hash it, and record it in the
-- `async contract_schedule` (line 218) — Wire the latest frozen version of ``contract_id`` into
-- `async contract_unschedule` (line 237) — Remove ``contract_id`` from APScheduler. The frozen body stays
-- `async contract_revise` (line 250) — Freeze a new version of an existing contract, recording the
-- `async contract_list` (line 285) — List all known contracts (latest version of each), plus their
-- `async contract_inspect` (line 318) — Return the full frozen body of a contract — useful for the
-- `async contract_from_existing` (line 361) — Sketch a draft contract spec that approximates a legacy
+- `async contract_freeze` (line 184) — Persist a contract to disk, hash it, and record it in the
+- `async contract_schedule` (line 229) — Wire the latest frozen version of ``contract_id`` into
+- `async contract_unschedule` (line 248) — Remove ``contract_id`` from APScheduler. The frozen body stays
+- `async contract_revise` (line 261) — Freeze a new version of an existing contract, recording the
+- `async contract_list` (line 296) — List all known contracts (latest version of each), plus their
+- `async contract_inspect` (line 329) — Return the full frozen body of a contract — useful for the
+- `async contract_from_existing` (line 372) — Sketch a draft contract spec that approximates a legacy
 
 ### `app/tools/diagnostics.py`
 - `check_active_tasks` (line 8) — Check background task status.
