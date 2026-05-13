@@ -480,6 +480,35 @@ def validate_adapter_arg_shapes(contract: Contract) -> None:
             label = f"emit[{i}] (adapter={emit.adapter!r})"
             errors.extend(_check_args_against_schema(emit.args, schema, label))
 
+        # Author-time session-prefix block. ``sl_<channel>`` is the
+        # bot-internal ADK session id ``SlackAdapter.make_session_id``
+        # produces, NEVER a real Slack channel id. ``tg_<id>`` is the
+        # Telegram analogue. The 2026-05-13 ``linux_mastery_30_days_v2``
+        # incident (v3 → v5 → v6, three back-to-back author revisions
+        # all with the wrong prefix) showed that bezos keeps reaching
+        # for the session-id form. Block it at freeze so the same
+        # mistake can't re-ship.
+        if emit.adapter == "slack_post":
+            ch = str(emit.args.get("channel", "")).strip()
+            if ch.startswith("sl_"):
+                errors.append(
+                    f"emit[{i}] (slack_post): args.channel={ch!r} starts "
+                    "with 'sl_' — that's the bot's INTERNAL ADK session "
+                    "prefix, NOT a Slack channel id. Drop the 'sl_' "
+                    "prefix (real channel id like 'C012ABCDE'), or use a "
+                    "literal '#channel-name'. Templated values "
+                    "(`{X.Y}`) are allowed and skipped here."
+                ) if not (ch.startswith("{") and ch.endswith("}")) else None
+        if emit.adapter == "telegram_dm":
+            uid = str(emit.args.get("user_id", "")).strip()
+            if uid.startswith("sl_"):
+                errors.append(
+                    f"emit[{i}] (telegram_dm): args.user_id={uid!r} "
+                    "starts with 'sl_' — that's a Slack session prefix, "
+                    "not a Telegram user id. Use a numeric Telegram id "
+                    "(e.g. '330959414') or the 'tg_<id>' platform form."
+                ) if not (uid.startswith("{") and uid.endswith("}")) else None
+
         if emit.gate is not None:
             gate_schema = GATE_ARG_SCHEMAS.get(emit.gate.type)
             if gate_schema is not None:

@@ -132,6 +132,23 @@ async def slack_post(args: dict[str, Any], state: dict[str, Any]) -> dict[str, A
     if "channel" not in args or "content" not in args:
         raise ValueError("slack_post requires args.channel and args.content")
 
+    channel = str(args["channel"]).strip()
+
+    # Reject bot-internal session ids. ``sl_<channel>`` is what
+    # ``SlackAdapter.make_session_id`` produces for ADK sessions; it
+    # is NEVER a valid Slack channel id. Author repeatedly froze
+    # contracts with the session prefix; Slack returned
+    # ``channel_not_found`` and pre-2026-05-13 the worker silently
+    # logged ``ok: true``. Fail loud at fire time so the same author
+    # mistake can't ship a no-op contract again.
+    if channel.startswith("sl_"):
+        raise RuntimeError(
+            f"slack_post: args.channel={channel!r} starts with 'sl_' — "
+            "that's the bot's INTERNAL ADK session-id prefix, NOT a "
+            "Slack channel id. Drop the 'sl_' prefix or use a real "
+            "channel id (e.g. 'C012ABCDE') or a '#name' literal."
+        )
+
     # ``slack_post_message`` is async. The pre-2026-05-14 adapter did
     # ``return slack_post_message(...)`` WITHOUT awaiting — so the
     # worker awaited the outer adapter coroutine, got an un-awaited
@@ -202,7 +219,18 @@ async def telegram_dm(args: dict[str, Any], state: dict[str, Any]) -> dict[str, 
     if "user_id" not in args or "text" not in args:
         raise ValueError("telegram_dm requires args.user_id and args.text")
 
-    user_id = str(args["user_id"])
+    user_id = str(args["user_id"]).strip()
+
+    # Reject Slack session-id prefix (``sl_<channel>``) — a Telegram
+    # adapter handed a Slack session id is always an author mix-up.
+    if user_id.startswith("sl_"):
+        raise RuntimeError(
+            f"telegram_dm: args.user_id={user_id!r} starts with 'sl_' — "
+            "that's a Slack session-id prefix, not a Telegram user/chat id. "
+            "Use a numeric Telegram id (e.g. '330959414') or the "
+            "'tg_<id>' platform form."
+        )
+
     chat_id = _resolve_chat_id(user_id)
     if chat_id is None:
         raise RuntimeError(

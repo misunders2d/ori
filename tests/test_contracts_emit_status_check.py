@@ -31,7 +31,9 @@ from unittest.mock import AsyncMock
 @pytest.mark.asyncio
 async def test_slack_post_awaits_inner_and_raises_on_slack_error(monkeypatch):
     """slack_post must AWAIT slack_post_message AND raise when the
-    underlying tool returns ``status="error"`` (e.g. channel_not_found)."""
+    underlying tool returns ``status="error"`` (e.g. channel_not_found).
+    Channel here uses the real ``C…`` id form so the new
+    session-prefix block doesn't short-circuit the test."""
     from app.contracts.emit import slack_post
 
     call_log: list[dict] = []
@@ -45,10 +47,40 @@ async def test_slack_post_awaits_inner_and_raises_on_slack_error(monkeypatch):
     )
 
     with pytest.raises(RuntimeError, match="Slack rejected"):
-        await slack_post({"channel": "sl_C079N5N7H08", "content": "hi"}, {})
+        await slack_post({"channel": "C079N5N7H08", "content": "hi"}, {})
 
     # The inner call ACTUALLY happened — proves the await is wired.
-    assert call_log == [{"channel": "sl_C079N5N7H08", "text": "hi"}]
+    assert call_log == [{"channel": "C079N5N7H08", "text": "hi"}]
+
+
+@pytest.mark.asyncio
+async def test_slack_post_rejects_session_prefix_channel(monkeypatch):
+    """Direct repro of the 2026-05-13 ``linux_mastery_30_days_v2`` v6
+    bug: contract body had ``channel="sl_D07LHACUY6R"`` (Sergey's DM
+    ADK session id), Slack returned ``channel_not_found``. The new
+    fire-time prefix block surfaces the cause loudly BEFORE the
+    Slack API call so the error message points the author at the
+    real fix (drop the ``sl_``)."""
+    from app.contracts.emit import slack_post
+
+    # Stub slack_post_message so a stray call doesn't reach Slack.
+    # The block must fire before we get there.
+    called = []
+
+    async def fake_slack_post_message(channel, text, thread_ts=None, tool_context=None):
+        called.append(channel)
+        return {"status": "success", "ts": "1", "channel": channel}
+
+    monkeypatch.setattr(
+        "app.tools.slack.slack_post_message", fake_slack_post_message
+    )
+
+    with pytest.raises(RuntimeError, match="INTERNAL ADK session-id prefix"):
+        await slack_post(
+            {"channel": "sl_D07LHACUY6R", "content": "hi"}, {}
+        )
+    # Confirm we blocked BEFORE the HTTP call.
+    assert called == []
 
 
 @pytest.mark.asyncio
@@ -127,13 +159,28 @@ async def test_telegram_dm_raises_when_direct_send_rejected(monkeypatch):
 @pytest.mark.asyncio
 async def test_telegram_dm_raises_on_unresolvable_user_id(monkeypatch):
     """An id that can't be turned into a chat_id (roster miss +
-    non-numeric id, e.g. Slack-style ``sl_U0ABC``) must raise
-    loudly instead of pretending success."""
+    non-numeric id) must raise loudly instead of pretending success.
+    Using ``alice_username`` so the test exercises the
+    chat-id-resolution branch (not the new sl_-prefix block)."""
     from app.contracts.emit import telegram_dm
 
     monkeypatch.setattr("app.core.roster.get_entry", lambda uid: None)
 
     with pytest.raises(RuntimeError, match="cannot resolve user_id"):
+        await telegram_dm({"user_id": "alice_username", "text": "hi"}, {})
+
+
+@pytest.mark.asyncio
+async def test_telegram_dm_rejects_slack_session_prefix(monkeypatch):
+    """Author mix-up: ``user_id="sl_U0ABCDE"`` is a Slack platform
+    id, not a Telegram chat id. Block at fire time with a clear
+    message instead of running through the chat-id resolver and
+    failing with ``cannot resolve``."""
+    from app.contracts.emit import telegram_dm
+
+    monkeypatch.setattr("app.core.roster.get_entry", lambda uid: None)
+
+    with pytest.raises(RuntimeError, match="Slack session-id prefix"):
         await telegram_dm({"user_id": "sl_U0ABCDE", "text": "hi"}, {})
 
 

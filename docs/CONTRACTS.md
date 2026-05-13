@@ -326,6 +326,27 @@ in the grace window would land in a broken-transport error path
 that admins couldn't see. With the paused-start change, every
 overdue job's first delivery attempt finds its adapter.
 
+### Session-prefix block for channel / user_id args
+
+``sl_<id>`` is the internal ADK session id ``SlackAdapter.make_session_id``
+produces; ``tg_<id>`` is the Telegram analogue. Neither is a valid
+external destination — they are bot-internal conventions for keying
+ADK sessions. Bezos repeatedly froze contracts with
+``channel="sl_<...>"`` (2026-05-13 ``linux_mastery_30_days_v2`` v3
+→ v5 → v6), Slack returned ``channel_not_found``, and emit failed.
+
+Block at TWO layers:
+
+  * **Author time** (``validate_adapter_arg_shapes``): freeze
+    refuses a literal ``sl_…`` value in ``slack_post.args.channel``
+    or a literal ``sl_…`` in ``telegram_dm.args.user_id``.
+    Templated values (``{X.Y}``) are skipped — they're resolved at
+    fire time.
+  * **Fire time** (adapter body): the adapter raises a documented
+    ``RuntimeError`` if the (post-render) channel / user_id still
+    starts with ``sl_``. Catches templated values that resolve to
+    the prefix at runtime.
+
 ### Adapter signature-conformance test
 
 ``tests/test_contracts_emit_status_check.py:test_all_emit_adapters_resolve_under_basic_call``

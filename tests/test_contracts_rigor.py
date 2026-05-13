@@ -769,6 +769,75 @@ def test_telegram_dm_missing_text_rejected():
         validate_adapter_arg_shapes(c)
 
 
+def test_slack_post_with_session_prefix_channel_rejected():
+    """``sl_<id>`` is the bot's INTERNAL ADK session id, not a Slack
+    channel. Direct repro of the 2026-05-13
+    ``linux_mastery_30_days_v2`` v6 author bug — bezos froze the
+    contract with ``channel="sl_D07LHACUY6R"`` and Slack returned
+    ``channel_not_found``. The validator now blocks this at freeze
+    so the author can't ship the same shape again."""
+    c = _ai_pilot_shape_contract(
+        {"channel": "sl_D07LHACUY6R", "content": "hi"}
+    )
+    with pytest.raises(AdapterArgShapeError) as ei:
+        validate_adapter_arg_shapes(c)
+    msg = str(ei.value)
+    assert "INTERNAL ADK session" in msg
+    assert "sl_D07LHACUY6R" in msg
+
+
+def test_slack_post_with_templated_channel_passes_prefix_block():
+    """``{some_input}`` placeholder is resolved at fire time. We
+    can't tell at author time whether the resolved value starts
+    with ``sl_`` — but the FIRE-time block in the adapter still
+    catches it. Validator must NOT reject a templated channel."""
+    c = _ai_pilot_shape_contract(
+        {"channel": "{channel_input}", "content": "hi"}
+    )
+    # No reasoning steps, so the placeholder is in an emit arg — it
+    # references a name not declared anywhere, which the rigor
+    # validator would flag separately. Use a contract that DOES
+    # declare the input.
+    c = Contract(
+        id="templated_channel_test",
+        description="Templated channel passes prefix block.",
+        author="sergey",
+        trigger=OnDemandTrigger(),
+        inputs=[
+            InputSpec(
+                id="channel_input",
+                loader="static_param",
+                args={"value": "C012ABCDE"},
+            )
+        ],
+        emit=[
+            EmitStep(
+                adapter="slack_post",
+                args={"channel": "{channel_input}", "content": "hi"},
+            )
+        ],
+    )
+    # Should not raise on the prefix block.
+    validate_adapter_arg_shapes(c)
+
+
+def test_telegram_dm_with_slack_prefix_user_id_rejected():
+    c = Contract(
+        id="tg_prefix_test",
+        description="Reject Slack prefix on Telegram user_id.",
+        author="sergey",
+        trigger=OnDemandTrigger(),
+        emit=[
+            EmitStep(
+                adapter="telegram_dm",
+                args={"user_id": "sl_U0ABCDE", "text": "hi"},
+            )
+        ],
+    )
+    with pytest.raises(AdapterArgShapeError, match="Slack session prefix"):
+        validate_adapter_arg_shapes(c)
+
+
 def test_drive_doc_fill_accepts_document_id_alias():
     """drive_doc_fill accepts ``document_id`` as an alias for ``doc_id``."""
     c = Contract(
