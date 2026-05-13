@@ -287,15 +287,15 @@ Tools for researching bugs, library docs, and package versions.
 
 ## `app/tools/scheduling.py`
 - `get_current_time` (line 8) — Returns the current date and time in the specified timezone.
-- `schedule_one_off_task` (line 228) — Schedules the agent to execute a specific task once at a specific date and time.
-- `schedule_recurring_task` (line 324) — Schedules the agent to execute a task automatically on a recurring schedule.
-- `list_scheduled_tasks` (line 425) — Lists the current user's scheduled tasks/reminders.
-- `get_scheduled_task_logs` (line 466) — Returns recent fire events from the scheduler job log (JSONL).
-- `delete_scheduled_task` (line 583) — Deletes a scheduled task/reminder.
-- `edit_scheduled_task` (line 614) — Edits an existing scheduled task — all fields are optional, pass only what you want to change.
-- `schedule_system_task` (line 768) — Schedules a one-off system maintenance task that runs with admin privileges.
-- `run_system_task_now` (line 850) — Immediately launches a system maintenance task in the background with admin privileges.
-- `schedule_recurring_system_task` (line 915) — Schedules a recurring system maintenance task that runs with admin privileges on a cron schedule.
+- `schedule_one_off_task` (line 242) — Schedules the agent to execute a specific task once at a specific date and time.
+- `schedule_recurring_task` (line 338) — Schedules the agent to execute a task automatically on a recurring schedule.
+- `list_scheduled_tasks` (line 439) — Lists the current user's scheduled tasks/reminders.
+- `get_scheduled_task_logs` (line 480) — Returns recent fire events from the scheduler job log (JSONL).
+- `delete_scheduled_task` (line 597) — Deletes a scheduled task/reminder.
+- `edit_scheduled_task` (line 628) — Edits an existing scheduled task — all fields are optional, pass only what you want to change.
+- `schedule_system_task` (line 782) — Schedules a one-off system maintenance task that runs with admin privileges.
+- `run_system_task_now` (line 864) — Immediately launches a system maintenance task in the background with admin privileges.
+- `schedule_recurring_system_task` (line 929) — Schedules a recurring system maintenance task that runs with admin privileges on a cron schedule.
 
 ## `app/tools/scratchpad.py`
 Session-scoped scratchpad for multi-step research tasks.

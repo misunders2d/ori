@@ -523,21 +523,38 @@ async def _deliver_message(
 
 
 async def _deliver_with_fallback(notify: dict, message: str, task_id: str, file_path: str | None = None) -> None:
-    """Deliver to notify's channel; if that fails and origin_session_id differs,
-    try delivering the failure notice to origin so the user is never left in the
-    dark. Never raises.
+    """Deliver to notify's channel; if that fails AND the creator's
+    session is a different channel, route a failure notice to the
+    creator so they're never left in the dark.
+
+    Reads ``origin_session_id`` for the creator (always the
+    scheduling session) and falls back to the legacy alias for
+    pre-2026-05-14 notify dicts. ``target_session_id`` is the
+    intended primary destination; same-channel checks compare
+    against IT.
     """
     delivered = await _deliver_message(notify, message, task_id=task_id, file_path=file_path)
     if delivered:
         return
 
-    # Fallback — try origin_session_id if it's a different channel.
+    # Fallback — ALWAYS the creator's session. The 2026-05-13 audit
+    # found that legacy ``_stamp_ownership`` clobbered
+    # ``origin_session_id`` with ``deliver_to`` whenever ``deliver_to``
+    # was set, so the fallback retried delivery to the same broken
+    # target. ``origin_session_id`` now keeps the creator's session
+    # verbatim.
     origin = (notify or {}).get("origin_session_id", "")
     primary = (notify or {}).get("chat_id") or (notify or {}).get("channel", "")
     if not origin or not primary:
         return
-    if origin == f"sl_{primary}" or origin == f"tg_{primary}" or origin.endswith(f"_{primary}"):
-        return  # same channel as primary, nothing to retry
+    # Skip the fallback if origin == primary channel (no point in
+    # retrying the same destination).
+    if (
+        origin == f"sl_{primary}"
+        or origin == f"tg_{primary}"
+        or origin.endswith(f"_{primary}")
+    ):
+        return
 
     from app.core.transport import parse_notify_from_session_id
     fallback_notify = parse_notify_from_session_id(origin)
@@ -553,11 +570,21 @@ async def _deliver_with_fallback(notify: dict, message: str, task_id: str, file_
 
 async def _inject_into_session(notify: dict, message: str):
     """Append the delivered scheduled-task text as a model-authored event in the
-    target chat's session, so it shows up in conversation history on the next turn.
+    DELIVERY channel's session, so it shows up in conversation history on the
+    next turn in that channel.
 
-    Silently no-ops if the session doesn't exist or the runner isn't available.
+    Reads ``target_session_id`` first (the channel that just received the
+    delivery). Falls back to ``origin_session_id`` for legacy notify dicts
+    that pre-date the split, since pre-2026-05-14 ``_stamp_ownership``
+    wrote the target into ``origin_session_id``.
+
+    Silently no-ops if the session doesn't exist or the runner isn't
+    available.
     """
-    target_session = (notify or {}).get("origin_session_id")
+    target_session = (
+        (notify or {}).get("target_session_id")
+        or (notify or {}).get("origin_session_id")
+    )
     if not target_session:
         return
 

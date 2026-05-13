@@ -205,19 +205,33 @@ def _stamp_ownership(notify: dict, user_id: str, deliver_to: str, origin_session
 
     Ownership is NOT stored here any more — owner_user_id is an explicit top-level
     kwarg on the job itself (see schedule_one_off_task / schedule_recurring_task).
-    This function only records where to deliver results and which chat session's
-    history should receive the synthetic event on fire. The `user_id` arg is
-    retained for signature compatibility but unused; it will be removed once
-    all callers are updated.
+    This function only records:
+
+      * ``origin_session_id`` — the session that CREATED the task. Used by
+        ``_deliver_with_fallback`` to retry delivery to the creator when the
+        primary delivery channel fails, AND by ``_inject_into_session`` to
+        mirror the response into the creator's chat history.
+      * ``target_session_id`` — the session that should RECEIVE delivery
+        (== ``deliver_to`` when set, otherwise the origin session). Kept as
+        a separate field so cross-channel delivery doesn't overwrite the
+        origin — the 2026-05-13 audit found that legacy behaviour clobbered
+        ``origin_session_id`` with the target whenever ``deliver_to`` was
+        provided, defeating the fallback path.
+      * ``deliver_to_session`` — legacy alias for ``target_session_id``,
+        kept until all readers migrate.
+
+    The ``user_id`` arg is retained for signature compatibility but unused;
+    it will be removed once all callers are updated.
     """
     del user_id  # intentionally ignored — see docstring
     stamped = dict(notify) if notify else {}
-    if deliver_to:
-        stamped["deliver_to_session"] = deliver_to
-    # Prefer an explicit deliver_to target; fall back to the origin session.
-    target_session = deliver_to or origin_session_id
-    if target_session:
-        stamped["origin_session_id"] = target_session
+    target = deliver_to or origin_session_id
+    if origin_session_id:
+        stamped["origin_session_id"] = origin_session_id
+    if target:
+        stamped["target_session_id"] = target
+        # Legacy reader alias — drop once nothing reads this name.
+        stamped["deliver_to_session"] = target
     return stamped
 
 
