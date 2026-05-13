@@ -468,20 +468,48 @@ def get_scheduled_task_logs(
 ) -> dict:
     """Returns recent fire events from the scheduler job log (JSONL).
 
-    Each event records one of: fire_start, fire_end, error. Events include
-    timestamps, task_id, kind (scheduled/system), duration_ms, status, and
-    response_preview. Use this to check whether a scheduled job actually ran,
-    how long it took, and what it produced — without re-running it.
+    Each event records one of: fire_start, fire_end, error, delivery,
+    delivery_failure. Events include timestamps, task_id, kind
+    (scheduled/system), duration_ms, status, and response_preview. Use
+    this to check whether a scheduled job actually ran, how long it
+    took, and what it produced — without re-running it.
+
+    Access control:
+      * Admin (``ADMIN_USER_IDS`` env) can see everything — every
+        task_id, every owner, every system event.
+      * Non-admin callers MUST supply a ``task_id`` and may only see
+        events for tasks they own (``fire_start.owner_user_id``
+        matches the caller's resolved user_id). Cross-user / system
+        log inspection is admin-only — prevents non-admins from
+        scraping other users' prompt_preview / response_preview /
+        channel metadata from the global log.
 
     Args:
-        task_id (str): Optional task_id to filter by (e.g. 'sched_a1b2c3d4'). Empty = all events.
-        limit (int): Maximum number of events to return (most recent first). Default 50.
+        task_id (str): Task id to filter by (e.g. 'sched_a1b2c3d4').
+            Required for non-admins; optional for admins.
+        limit (int): Maximum number of events to return (most recent
+            first). Default 50.
 
     Returns:
-        dict: {'status', 'events': [...]} — events are chronological (newest last).
+        dict: ``{'status', 'events': [...], 'count': int}`` on success,
+        or ``{'status': 'error', 'message': str}`` on access denial /
+        read failure. Events are chronological (newest last).
     """
     import json as _json
     import os as _os
+
+    is_admin = _is_admin(tool_context)
+    caller_id = _get_user_id(tool_context) or ""
+
+    if not is_admin and not task_id:
+        return {
+            "status": "error",
+            "message": (
+                "Access denied: non-admin callers must supply a task_id "
+                "and may only read events for tasks they own. Use "
+                "list_scheduled_tasks to find your task_ids."
+            ),
+        }
 
     path = _os.path.abspath("./data/scheduler_jobs.log")
     if not _os.path.exists(path):
@@ -493,7 +521,8 @@ def get_scheduled_task_logs(
     except Exception as e:
         return {"status": "error", "message": f"Failed to read log: {e}"}
 
-    events = []
+    # First pass: parse + (optional) filter by task_id.
+    all_events = []
     for line in lines:
         line = line.strip()
         if not line:
@@ -504,9 +533,50 @@ def get_scheduled_task_logs(
             continue
         if task_id and rec.get("task_id") != task_id:
             continue
-        events.append(rec)
+        all_events.append(rec)
 
-    events = events[-max(1, int(limit)):]
+    # Ownership check for non-admins (task_id is required at this
+    # point, so the events list is already narrowed to one task).
+    if not is_admin:
+        owner = ""
+        for rec in all_events:
+            if rec.get("event") == "fire_start" and rec.get("owner_user_id"):
+                owner = rec["owner_user_id"]
+                break
+        # Fallback: scan any event with an owner_user_id (delivery
+        # events don't carry one, but errors / fire_end do).
+        if not owner:
+            for rec in all_events:
+                if rec.get("owner_user_id"):
+                    owner = rec["owner_user_id"]
+                    break
+        # System tasks (``kind == "system"``) are admin-only regardless
+        # of owner stamping.
+        is_system = any(rec.get("kind") == "system" for rec in all_events)
+        if is_system:
+            return {
+                "status": "error",
+                "message": "Access denied: system task logs are admin-only.",
+            }
+        if not owner:
+            return {
+                "status": "error",
+                "message": (
+                    f"Access denied: task {task_id!r} has no recorded owner. "
+                    "Legacy tasks without owner stamping are admin-only — ask "
+                    "an admin to inspect."
+                ),
+            }
+        if owner != caller_id:
+            return {
+                "status": "error",
+                "message": (
+                    f"Access denied: task {task_id!r} is owned by another "
+                    "user. You may only read logs for tasks you created."
+                ),
+            }
+
+    events = all_events[-max(1, int(limit)):]
     return {"status": "success", "events": events, "count": len(events)}
 
 

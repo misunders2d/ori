@@ -172,10 +172,13 @@ async def run_scheduled_task(
         "end_time": None,
         "error": None
     }
+    # Stamp owner_user_id on every event so the log can be filtered
+    # by ownership at read time (get_scheduled_task_logs gate).
     _log_job_event(
         "fire_start",
         task_id=task_id,
         kind="scheduled",
+        owner_user_id=owner_user_id or "",
         prompt_preview=task_prompt[:140],
         channel=(notify or {}).get("chat_id") or (notify or {}).get("channel"),
     )
@@ -214,7 +217,7 @@ async def run_scheduled_task(
             )
             ACTIVE_TASKS[task_id]["status"] = "Failed (no owner)"
             ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
-            _log_job_event("error", task_id=task_id, kind="scheduled", error="missing owner_user_id")
+            _log_job_event("error", task_id=task_id, kind="scheduled", owner_user_id="", error="missing owner_user_id")
             await _deliver_with_fallback(notify, response, task_id=task_id)
             return
 
@@ -260,11 +263,11 @@ async def run_scheduled_task(
                     f"Prompt: {task_prompt[:200]}"
                 )
                 ACTIVE_TASKS[task_id]["status"] = "Failed (empty response)"
-                _log_job_event("error", task_id=task_id, kind="scheduled", error="empty response")
+                _log_job_event("error", task_id=task_id, kind="scheduled", owner_user_id=owner_user_id or "", error="empty response")
             elif "Guardrail Intervention:" in response:
                 response = f":warning: Scheduled task `{task_id}` hit a guardrail.\n{response}"
                 ACTIVE_TASKS[task_id]["status"] = "Failed (guardrail)"
-                _log_job_event("error", task_id=task_id, kind="scheduled", error="guardrail intervention")
+                _log_job_event("error", task_id=task_id, kind="scheduled", owner_user_id=owner_user_id or "", error="guardrail intervention")
             else:
                 ACTIVE_TASKS[task_id]["status"] = "Completed"
             ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
@@ -278,7 +281,7 @@ async def run_scheduled_task(
             ACTIVE_TASKS[task_id]["status"] = "Failed"
             ACTIVE_TASKS[task_id]["error"] = str(e)
             ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
-            _log_job_event("error", task_id=task_id, kind="scheduled", error=f"{type(e).__name__}: {e}")
+            _log_job_event("error", task_id=task_id, kind="scheduled", owner_user_id=owner_user_id or "", error=f"{type(e).__name__}: {e}")
         finally:
             try:
                 await runner.session_service.delete_session(
@@ -298,7 +301,7 @@ async def run_scheduled_task(
         )
         ACTIVE_TASKS[task_id]["status"] = "Failed (no runner)"
         ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
-        _log_job_event("error", task_id=task_id, kind="scheduled", error="runner unavailable")
+        _log_job_event("error", task_id=task_id, kind="scheduled", owner_user_id=owner_user_id or "", error="runner unavailable")
 
     # Deliver to the user's channel, with fallback to origin on failure.
     await _deliver_with_fallback(notify, response, task_id=task_id)
@@ -307,6 +310,7 @@ async def run_scheduled_task(
         "fire_end",
         task_id=task_id,
         kind="scheduled",
+        owner_user_id=owner_user_id or "",
         status=ACTIVE_TASKS[task_id]["status"],
         duration_ms=duration_ms,
         response_preview=(response or "")[:200],
