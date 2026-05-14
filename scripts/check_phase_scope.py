@@ -177,14 +177,66 @@ def get_staged_files() -> list[str]:
     return [line for line in out.split("\n") if line]
 
 
-def get_diff_files(base_ref: str) -> list[str]:
-    """Files changed between ``base_ref`` and HEAD."""
+_PHASE_OVERRIDE_PREFIX = "PHASE_OVERRIDE:"
+
+
+def _commit_has_override(sha: str) -> bool:
+    """True iff the commit message body contains a
+    ``PHASE_OVERRIDE: <reason>`` line with a non-empty reason.
+
+    Per docs/PHASE_1_PLAN.md §6.4 the override is the documented
+    escape hatch for out-of-scope work during a phase. The local
+    pre-commit hook (``--staged`` mode) is intentionally strict
+    and cannot see the future commit message, so the override
+    applies to retrospective range checks (``--diff``) only.
+    Empty reasons don't qualify — the marker is meant to be
+    auditable.
+    """
+    body = _git("log", "-1", "--format=%B", sha)
+    for line in body.splitlines():
+        if line.startswith(_PHASE_OVERRIDE_PREFIX):
+            reason = line[len(_PHASE_OVERRIDE_PREFIX):].strip()
+            if reason:
+                return True
+    return False
+
+
+def _files_for_commit(sha: str) -> list[str]:
     out = _git(
-        "diff",
+        "diff-tree",
+        "--no-commit-id",
         "--name-only",
-        f"{base_ref}...HEAD",
+        "-r",
+        sha,
     ).strip()
     return [line for line in out.split("\n") if line]
+
+
+def get_diff_files(base_ref: str) -> list[str]:
+    """Files changed between ``base_ref`` and HEAD, EXCLUDING
+    files touched only by commits carrying a ``PHASE_OVERRIDE:``
+    marker in their message body.
+
+    Implementation walks the rev-list per-commit so we can
+    inspect each commit's message individually. The slower path
+    (versus a single range diff) is fine for branch-level
+    checks — they don't run on every keystroke.
+    """
+    rev_list = _git("rev-list", "--reverse", f"{base_ref}..HEAD").strip()
+    if not rev_list:
+        return []
+    shas = [line for line in rev_list.split("\n") if line]
+
+    files: list[str] = []
+    seen: set[str] = set()
+    for sha in shas:
+        if _commit_has_override(sha):
+            continue
+        for f in _files_for_commit(sha):
+            if f not in seen:
+                seen.add(f)
+                files.append(f)
+    return files
 
 
 # ---------------------------------------------------------------------------
