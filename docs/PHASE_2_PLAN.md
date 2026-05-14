@@ -67,6 +67,7 @@ app/v2/
     source.py                 # slice 1 — SourceDescriptor + Input/Output
     emit.py                   # slice 1 — EmitDescriptor + Input/Output
   registry.py                 # slice 2 — typed registries (metadata only)
+  validation.py               # slice 3 — validate_schedule_spec chokepoint
 
 tests/v2/
   test_tool_tags.py           # slice 1 — tag enum coverage + policy helpers
@@ -74,6 +75,7 @@ tests/v2/
   test_descriptors_source.py  # slice 1 — SourceDescriptor + I/O contracts
   test_descriptors_emit.py    # slice 1 — EmitDescriptor + I/O contracts
   test_registry.py            # slice 2 — registry surface + no-execution invariants
+  test_validation.py          # slice 3 — validate_schedule_spec rules + smoke checks
 
 docs/PHASE_2_PLAN.md          # this file
 ```
@@ -273,6 +275,61 @@ no `dispatch`, `invoke`, `call`, `execute`, `run`, `send`
 methods on any registry. No I/O imports in the module. Phase 2
 is metadata only.
 
+### 4.9 Validation entry point (slice 3)
+
+`validate_schedule_spec(spec, *, execution_plans=None, registries=None) → ValidationResult`
+
+Pure function. Collects all issues, not just the first.
+
+Issue / result shapes:
+
+```python
+Severity = Literal["error", "warning"]
+
+class ValidationIssue(BaseModel):
+    code: str
+    severity: Severity
+    path: str          # JSONPath-style ref into the spec
+    message: str
+
+class ValidationResult(BaseModel):
+    issues: list[ValidationIssue]
+    @property ok: bool        # True iff no error-severity entries
+    def errors(): ...
+    def warnings(): ...
+
+@dataclass(frozen=True)
+class RegistrySnapshot:
+    tools:   Optional[ToolRegistry]   = None
+    sources: Optional[SourceRegistry] = None
+    emits:   Optional[EmitRegistry]   = None
+```
+
+Validators (each pure, each returns 0+ issues, all run
+unconditionally):
+
+| Rule | Code(s) emitted | Trigger |
+|---|---|---|
+| Hash present + matches `compute_hash()` | `hash_required`, `hash_mismatch` | always |
+| `execution_plan_hash` is 64 lowercase hex (or null) | `execution_plan_hash_bad_format` | when set |
+| Reminder rule: `execution_plan_hash is None ⇒ trigger is OneOff` | `missing_execution_plan_for_complex_trigger` | always |
+| Referenced plan hash exists in supplied index | `execution_plan_hash_unknown` | when `execution_plans` supplied |
+| Referenced loaders / tools / emit adapters exist in supplied registries | `unknown_source_loader`, `unknown_tool`, `unknown_emit_adapter` | when both `execution_plans` and `registries` supplied |
+
+Out of scope for slice 3 (deferred to later slices or phases):
+
+- Per-source / per-emit concrete subclasses (probably phase 9).
+- Per-kind Event payload models (waiting on runtime to start
+  emitting events).
+- Workspace / channel allowlist enums (design §5.7) — those
+  need cache invariants the validator can't yet supply.
+- Live source reachability, OAuth status, freeze dry-run handshake.
+
+The validator does NOT block on supplied registries being
+absent — it skips registry-aware checks when registries are
+None. This makes the function safe to call from test fixtures
+and authoring tools without needing a fully-wired environment.
+
 ---
 
 ## 5. Test inventory
@@ -368,6 +425,53 @@ No-execution invariant:
 - No public method named `dispatch`, `invoke`, `call`,
   `execute`, `run`, or `send` exists on any registry class.
 
+### 5.6 `tests/v2/test_validation.py` (slice 3)
+
+Happy paths:
+- One-off reminder with no plan passes.
+- Cron spec with a valid SHA-256 `execution_plan_hash` passes
+  when no index is supplied (only format + reminder-rule
+  checks fire).
+- Cron spec + known plan hash + complete registries: full
+  adapter walk passes.
+
+Hash rules:
+- Empty `ScheduleSpec.hash` → `hash_required`.
+- Tampered hash → `hash_mismatch`.
+- Empty hash emits one issue, not two (no spurious mismatch).
+
+`execution_plan_hash` format:
+- Uppercase, wrong length, prefixed (`sha256:` leak from
+  snapshot format), non-hex characters, empty string → all
+  rejected as `execution_plan_hash_bad_format`.
+
+Reminder rule:
+- One-off + no plan: allowed.
+- Cron / interval / event / conditional + no plan:
+  `missing_execution_plan_for_complex_trigger`.
+
+Plan-index existence:
+- Missing hash in supplied index → `execution_plan_hash_unknown`.
+- Known hash in index → no error.
+- No index supplied → existence check skipped (not fail-closed).
+
+Adapter walk:
+- Unknown loader / tool / emit adapter → matching error code.
+- Walk skipped when registries are None.
+- Walk skipped when plan hash isn't present in the supplied
+  index (the missing-hash error already covers it).
+
+Result composition:
+- Multiple issues surface from a single call.
+- `RegistrySnapshot` defaults all-None, is frozen, and
+  partial registries only check supplied layers.
+
+Smoke checks:
+- `app.v2.validation` imports no I/O / storage libs (httpx,
+  requests, slack_sdk, sqlite3, etc.).
+- No public callable named `dispatch` / `invoke` / `call` /
+  `execute` / `run` / `send`.
+
 ---
 
 ## 6. CI guard adjustments
@@ -407,8 +511,9 @@ commit ships with its tests in the same commit.
 | # | scope | files | status |
 |---|---|---|---|
 | 1 | phase bump + plan + allowlist widening + tags enum + descriptors + tests | this file, `.v2-current-phase`, `scripts/check_phase_scope.py`, the seven files in §2 | **shipped** (ae7b000 + reviewer fix 58b9bd6) |
-| 2 | registry layer (typed registries for tool / source / emit, fail-safe tag lookup, belt-checks for `model_construct` bypass) + tests | `app/v2/registry.py`, `tests/v2/test_registry.py` | **in flight** |
-| 3 | … to be determined by reviewer / Sergey after slice 2 lands | | pending |
+| 2 | registry layer (typed registries for tool / source / emit, fail-safe tag lookup, belt-checks for `model_construct` bypass) + tests | `app/v2/registry.py`, `tests/v2/test_registry.py` | **shipped** (ed87e59 + doc fix a332ad7) |
+| 3 | validation entry point (`validate_schedule_spec`) + non-runtime validators (hash, plan-hash format, reminder rule, plan-index existence, optional adapter walk) + tests | `app/v2/validation.py`, `tests/v2/test_validation.py` | **in flight** |
+| 4 | … to be determined by reviewer / Sergey after slice 3 lands | | pending |
 
 The "first slice" was intentionally larger than phase 1's first
 commit: it included the phase scaffolding (plan + bump + allowlist)
