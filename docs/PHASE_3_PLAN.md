@@ -278,6 +278,33 @@ helper does NOT compute or modify the hash — the caller is
 expected to have called `spec.with_fresh_hash()` (phase 2's
 validator enforces hash present).
 
+**`owner` storage semantics — deviation from design §4.0.2
+example.** The DDL comment shows `owner TEXT NOT NULL` with
+examples like `'tg_330959414'` / `'sergey@mellanni.com'`, i.e.
+a flat lookup key. Slice 3 stores the full Pydantic `UserRef`
+as canonical JSON instead (`{"platform": ..., "user_id": ...,
+"display_name": ...}`) so the round-trip preserves
+`display_name` — losing it on every write would silently
+demote user-supplied data, which violates the no-silent-loss
+rule.
+
+Consequence: `idx_schedules_owner` becomes an index over
+deterministic JSON bytes, NOT a clean per-user lookup key.
+Future "list schedules owned by X" queries MUST either:
+
+- Use `json_extract(owner, '$.platform') = ? AND
+  json_extract(owner, '$.user_id') = ?` (no index hit unless
+  paired with an expression index), OR
+- Introduce a separate `owner_key TEXT` column populated as
+  `{platform}_{user_id}` with its own index, via a future
+  v00N migration (NOT a v001 edit — v001 has shipped and is
+  immutable).
+
+This deferral is intentional: phase 3 is the data-plane
+scaffolding, not the query layer. The first caller that
+actually needs "list by owner" will ship the migration +
+indexing alongside the query helper.
+
 ### 5.2 `execution_plans`
 
 ```python
