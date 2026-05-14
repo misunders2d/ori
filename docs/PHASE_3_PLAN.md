@@ -44,10 +44,15 @@ Read this with:
 ### Out of scope (phase 3)
 
 - **Any** runtime / worker / wakeup / APScheduler code.
-- Run claim execution. The claim SQL (single-flight predicate
-  per design §4.0.4) ships in phase 4 with the worker; phase 3
-  exposes the underlying UPDATE helper but does NOT spawn a
-  worker that calls it on a loop.
+- **Run claim — fully deferred to phase 4.** The single-flight
+  predicate per design §4.0.4 + the `pending → claimed`
+  transition + every test that exercises claim ownership ALL
+  live in phase 4 with the worker. Phase 3's storage surface
+  does NOT include `claim_run` and does NOT include any
+  single-flight or "exactly-one worker wins" test. The reasoning:
+  the moment storage knows about claim semantics it has crossed
+  into runtime territory; per design §12 step 4 the claim ships
+  with the worker, not the data plane.
 - Recovery scan on boot.
 - Authoring tools, freeze tool, dry-run handshake.
 - Coordinator / sub-agent edits.
@@ -160,15 +165,15 @@ TX, and a `SAVEPOINT`-based emulation invites bugs. A caller
 that needs composition writes the larger block as one
 `transaction()`.
 
-### 4.2 Composite state-transition + event append
+### 4.2 Atomic UPDATE-run-status + append-event helper
 
 The design's "ledger transactionality" invariant (§4.0.4 row 4)
-requires that a Run state change and its matching Event row
-land in the same TX. Phase 3 ships a helper that captures
-this in one call:
+requires that a Run row mutation and its matching Event row
+land in the same TX. Phase 3 ships a deliberately **neutral**
+storage primitive that bundles the two writes atomically:
 
 ```python
-def transition_run_and_emit_event(
+def update_run_status_and_append_event(
     conn: sqlite3.Connection,
     *,
     run_id: str,
@@ -177,10 +182,20 @@ def transition_run_and_emit_event(
     extra_columns: Optional[dict[str, Any]] = None,
 ) -> None:
     """Atomically (a) UPDATE runs.status = new_status (plus any
-    extra columns, e.g. claimed_at) and (b) INSERT the matching
-    event row. Both inside one BEGIN ... COMMIT. Raises if the
-    UPDATE affects 0 rows."""
+    extra columns, e.g. started_at, completed_at) and (b)
+    INSERT the matching event row. Both inside one
+    BEGIN ... COMMIT. Raises if the UPDATE affects 0 rows."""
 ```
+
+**Storage primitive, not a state-machine step.** The helper
+performs an unpredicated `UPDATE runs WHERE id = ?` — no
+single-flight check, no source-status guard, no claim
+ownership. Phase 3 tests must not exercise the
+``pending → claimed`` transition or any other claim-shaped
+behavior; that's phase 4's job. The atomicity guarantee
+belongs in phase 3 because it's a SQLite transaction
+property of the data plane; the *policy* of which
+transitions are legal lives in phase 4's state machine.
 
 The helper opens its own `transaction()` block internally
 unless the caller is already inside one. For phase 3 we keep
@@ -240,14 +255,36 @@ insert_run(conn, run: Run) -> str                        # returns run.id
 get_run(conn, run_id: str) -> Optional[Run]
 list_pending_due(conn, *, now: datetime, limit: int) -> list[Run]
 list_runs_in_chain(conn, root_run_id: str) -> list[Run]  # ordered by attempt
-claim_run(conn, run_id: str, *, claimed_by: str, now: datetime) -> bool
 mark_run_status(conn, run_id: str, *, status: RunStatus, **extra) -> None
 ```
 
-`claim_run` runs the design-§4.0.4 single-flight UPDATE — the
-SQL itself ships here. The worker that calls it on a loop is
-phase 4. Phase-3 tests exercise the SQL directly to pin
-correctness.
+All five helpers are neutral CRUD over the `runs` table:
+
+- `insert_run` writes a row from a Pydantic ``Run``.
+- `get_run` returns a Pydantic ``Run`` or ``None``.
+- `list_pending_due` orders by ``due_at`` and respects
+  ``limit`` — used by the future wakeup callback. It is a
+  read-only query; it never mutates and never claims.
+- `list_runs_in_chain` returns the retry chain in attempt
+  order via ``WHERE root_run_id = ?``.
+- `mark_run_status` runs an unpredicated
+  ``UPDATE runs SET status = ?, <extra...> WHERE id = ?``.
+  No source-status guard, no single-flight predicate. The
+  call site is responsible for any prior consistency check.
+
+**Deferred to phase 4 (do not implement in phase 3):**
+
+- `claim_run` — single-flight ``UPDATE`` with
+  ``WHERE status='pending' AND NOT EXISTS(...)``. The SQL
+  per design §4.0.4 lives with the worker that calls it on
+  a loop.
+- Recovery-scan helpers that promote ``claimed`` / ``running``
+  back to ``pending`` after a timeout.
+
+Phase-3 tests for ``runs`` must NOT exercise pending → claimed
+or any single-flight scenario. Any test that walks a status
+chain restricts itself to neutral round-trips (insert + get;
+mark + get).
 
 ### 5.4 `events`
 
@@ -442,8 +479,14 @@ the phase-1 migration runner.
 - Clean exit → commit.
 - Exception → rollback + re-raise.
 - Partial mutation in a rolled-back TX leaves DB untouched.
-- `transition_run_and_emit_event` atomic-on-failure: SQL error
-  on the event INSERT rolls back the run UPDATE.
+- `update_run_status_and_append_event` atomic-on-failure: SQL
+  error on the event INSERT rolls back the run UPDATE.
+- The helper raises when the target run id does not exist
+  (the run UPDATE affects 0 rows).
+- Test inputs cover a generic non-claim transition (e.g.
+  ``running → succeeded``). The pending → claimed shape is
+  explicitly NOT tested in phase 3 — that's phase 4's
+  state-machine territory.
 
 ### 9.4 `test_storage_schedules.py`
 
@@ -464,15 +507,21 @@ the phase-1 migration runner.
 
 ### 9.6 `test_storage_runs.py`
 
-- Insert + get.
+- Insert + get round-trip.
 - `list_pending_due` orders by `due_at` and respects `limit`.
+- `list_pending_due` excludes non-pending statuses.
 - `list_runs_in_chain` returns the chain in attempt order.
-- `claim_run` succeeds on a `pending` Run, fails on a
-  `claimed` Run.
-- Single-flight: with two `pending` Runs for the same
-  schedule and one already `claimed`, the SQL refuses to
-  promote a second.
-- `mark_run_status` writes the new status + any extra columns.
+- `mark_run_status` writes the new status + any extra columns
+  (e.g. `started_at`, `completed_at`, `error`).
+- `mark_run_status` is unpredicated: it overwrites the row
+  regardless of the prior status. Tests pin this neutrality
+  by walking ``running → succeeded`` and asserting no
+  source-status filtering is silently applied.
+
+**Explicitly forbidden in phase 3 tests:** the
+``pending → claimed`` transition, any single-flight scenario,
+any "two workers race" simulation. Those land in phase 4 with
+the worker that introduces claim semantics.
 
 ### 9.7 `test_storage_events.py`
 
@@ -541,7 +590,7 @@ reviewer + Sergey override):
 | 2 | transactions + the composite transition helper + tests | `app/v2/storage/transactions.py` + test |
 | 3 | schedules CRUD + tests | `app/v2/storage/schedules.py` + test |
 | 4 | execution_plans CRUD + tests | `app/v2/storage/execution_plans.py` + test |
-| 5 | runs CRUD (incl. claim helper) + tests | `app/v2/storage/runs.py` + test |
+| 5 | runs CRUD (neutral; claim helper deferred to phase 4) + tests | `app/v2/storage/runs.py` + test |
 | 6 | events append + tests | `app/v2/storage/events.py` + test |
 | 7 | schedule_state CAS + tests | `app/v2/storage/schedule_state.py` + test |
 | 8 | source_snapshots CRUD + tests | `app/v2/storage/source_snapshots.py` + test |
@@ -564,8 +613,12 @@ Phase 3 is complete when ALL of the following hold:
    reports no violations.
 5. Every helper signature in §5 is implemented and tested.
 6. The CAS test exercises both success and stale-version paths.
-7. The transition-and-emit helper test confirms atomic
-   rollback when either side fails.
+7. The update-status-and-append-event helper test confirms
+   atomic rollback when either side fails, AND uses a neutral
+   transition (no `pending → claimed`).
+7a. No phase-3 test exercises `pending → claimed`,
+    single-flight, or any claim ownership scenario; those are
+    phase 4.
 8. The smoke-test invariants (§9.10) pass: no production DB
    access, no worker-style callables, no I/O imports.
 9. CI workflow `.github/workflows/v2_phase_guard.yml` passes
@@ -583,12 +636,14 @@ v2 phase 3 complete
 Adds the storage layer over the v001 SQLite schema:
 typed CRUD helpers for schedules, execution_plans, runs, events,
 schedule_state, source_snapshots; transaction primitive +
-atomic state-transition + event-append helper; CAS for
+atomic update-run-status-and-append-event helper; CAS for
 schedule_state; JSON ↔ Pydantic serialization glue.
 
-No runtime worker. No APScheduler wakeup. No Run loop. v1
-paths untouched. Production DB never accessed implicitly —
-every helper takes an explicit connection.
+No runtime worker. No APScheduler wakeup. No Run claim.
+Claim semantics + single-flight + recovery scan land in
+phase 4 with the worker. v1 paths untouched. Production DB
+never accessed implicitly — every helper takes an explicit
+connection.
 
 Design: docs/CONTRACTS_V2_DESIGN.md §4.0.4, §12 step 3
 Plan:   docs/PHASE_3_PLAN.md
