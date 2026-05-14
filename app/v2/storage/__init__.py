@@ -49,6 +49,11 @@ from app.v2.storage.schedule_state import (
     get_state,
     set_state_cas,
 )
+from app.v2.storage.source_snapshots import (
+    get_snapshot,
+    insert_snapshot,
+    list_snapshots_by_hash,
+)
 from app.v2.storage.schedules import (
     ScheduleNotFoundError,
     ScheduleNotFrozenError,
@@ -88,6 +93,9 @@ __all__ = [
     "StateRunMismatchError",
     "get_state",
     "set_state_cas",
+    "get_snapshot",
+    "insert_snapshot",
+    "list_snapshots_by_hash",
     "ScheduleNotFoundError",
     "ScheduleNotFrozenError",
     "get_schedule",
