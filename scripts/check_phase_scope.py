@@ -52,7 +52,24 @@ PHASE_ALLOWLIST: dict[int, set[str]] = {
         # Doc-read marker bookkeeping (existing pre-commit gate)
         ".docs_read_marker",
     },
-    2: {"app/v2/", "tests/v2/"},
+    2: {
+        # Code surface for v2 adapter/source contracts + tests
+        "app/v2/",
+        "tests/v2/",
+        # CI guard machinery (carried forward from phase 1)
+        "scripts/check_phase_scope.py",
+        "scripts/install_hooks.py",
+        ".githooks/v2_phase_guard.sh",
+        ".githooks/pre-commit",
+        ".github/workflows/v2_phase_guard.yml",
+        # Phase-tracking artefact
+        ".v2-current-phase",
+        # Plan + design docs
+        "docs/PHASE_2_PLAN.md",
+        "docs/CONTRACTS_V2_DESIGN.md",
+        # Doc-read marker bookkeeping
+        ".docs_read_marker",
+    },
     # Future phases populate here as they land.
 }
 
