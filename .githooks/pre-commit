@@ -121,4 +121,17 @@ EOF
     fi
 fi
 
+# V2 scheduler phase scope guard (docs/PHASE_1_PLAN.md §6).
+# Inert when .v2-current-phase is missing. While active (phase 1..7),
+# blocks commits that touch v1 scheduler paths or files outside the
+# current phase's allowlist. Logic lives in scripts/check_phase_scope.py;
+# wrapper at .githooks/v2_phase_guard.sh. Override semantics (rare,
+# emergency-only) are handled by the CI workflow, NOT here — local
+# rejection is hard.
+if [ -f ".v2-current-phase" ] && command -v uv >/dev/null 2>&1; then
+    if ! bash ".githooks/v2_phase_guard.sh"; then
+        exit 1
+    fi
+fi
+
 exit 0

@@ -2,7 +2,11 @@
 """Install version-controlled git hooks (idempotent).
 
 Sets `git config core.hooksPath .githooks` so this clone uses the hooks
-checked in under `.githooks/` (pre-commit doc-read gate, etc).
+checked in under `.githooks/` — currently:
+
+- pre-commit doc-read gate (Phase 8 of the v1 build-out)
+- v2 scheduler phase scope guard (invoked from pre-commit;
+  inert unless `.v2-current-phase` is present at the repo root)
 
 Safe to call from anywhere — re-running on an already-configured clone
 is a no-op. Called from:

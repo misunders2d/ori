@@ -1,0 +1,99 @@
+name: v2 phase scope guard
+
+# Runs on every PR. Enforces docs/PHASE_1_PLAN.md §6:
+#
+#   * Only files in the current phase's allowlist may be touched.
+#   * v1 scheduler paths are off-limits during phases 1-7.
+#   * Override via a 'PHASE_OVERRIDE: <reason>' line in any commit
+#     message in the PR's range. Override does NOT skip the check —
+#     it changes the failure mode from 'hard fail' to 'require human
+#     ack' (the PR is labelled and merge is blocked until an admin
+#     reviewer leaves an approving review on the override).
+#
+# See docs/CONTRACTS_V2_DESIGN.md §12.1 invariants 1-3.
+#
+# SECURITY: every reference to PR / commit metadata flows through
+# environment variables, never directly interpolated into a shell.
+# See: https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/
+
+on:
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  scope-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need full history for diff against base
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Run phase scope check
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set +e
+          python scripts/check_phase_scope.py --diff "$BASE_SHA"
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          set -e
+
+      - name: Look for PHASE_OVERRIDE marker in commit messages
+        id: override
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # git log output is captured into a variable to avoid passing
+          # commit-message bytes through any further shell stage.
+          MSGS=$(git log --format=%B "$BASE_SHA..$HEAD_SHA")
+          if printf '%s\n' "$MSGS" | grep -q '^PHASE_OVERRIDE:'; then
+            REASON=$(printf '%s\n' "$MSGS" | grep '^PHASE_OVERRIDE:' | head -1 | sed 's/^PHASE_OVERRIDE: //')
+            {
+              printf 'found=true\n'
+              printf 'reason<<EOF\n'
+              printf '%s\n' "$REASON"
+              printf 'EOF\n'
+            } >> "$GITHUB_OUTPUT"
+          else
+            printf 'found=false\n' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Hard fail if scope violation AND no override
+        if: steps.scope.outputs.exit_code != '0' && steps.override.outputs.found != 'true'
+        run: |
+          echo "::error::Phase scope violation with no PHASE_OVERRIDE marker."
+          echo "Add 'PHASE_OVERRIDE: <reason>' to a commit message to override,"
+          echo "or restrict the diff to the current phase's allowlist."
+          exit 1
+
+      - name: Label PR for human ack when override is used
+        if: steps.scope.outputs.exit_code != '0' && steps.override.outputs.found == 'true'
+        uses: actions/github-script@v7
+        env:
+          OVERRIDE_REASON: ${{ steps.override.outputs.reason }}
+        with:
+          script: |
+            // OVERRIDE_REASON arrives via env so commit-message bytes
+            // never reach a shell. We read it from process.env, not
+            // template-interpolate it into JS source.
+            const reason = process.env.OVERRIDE_REASON || "(no reason captured)";
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: ['requires_human_ack', 'phase_override']
+            });
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `⚠️ This PR violates v2 phase scope and uses PHASE_OVERRIDE.\n\n**Reason given**: ${reason}\n\nMerge is blocked until an admin reviewer leaves an approving review specifically acknowledging the override. See docs/PHASE_1_PLAN.md §6.4.`
+            });
+            core.setFailed("Phase override requires human ack — see PR comment.");
