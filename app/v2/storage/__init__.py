@@ -30,6 +30,14 @@ from app.v2.storage.execution_plans import (
     get_execution_plan,
     insert_execution_plan,
 )
+from app.v2.storage.runs import (
+    ALLOWED_EXTRA_RUN_COLUMNS,
+    get_run,
+    insert_run,
+    list_pending_due,
+    list_runs_in_chain,
+    mark_run_status,
+)
 from app.v2.storage.schedules import (
     ScheduleNotFoundError,
     ScheduleNotFrozenError,
@@ -56,6 +64,12 @@ __all__ = [
     "ExecutionPlanNotFrozenError",
     "get_execution_plan",
     "insert_execution_plan",
+    "ALLOWED_EXTRA_RUN_COLUMNS",
+    "get_run",
+    "insert_run",
+    "list_pending_due",
+    "list_runs_in_chain",
+    "mark_run_status",
     "ScheduleNotFoundError",
     "ScheduleNotFrozenError",
     "get_schedule",
