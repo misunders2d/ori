@@ -4,12 +4,15 @@ Pins per ``docs/PHASE_3_PLAN.md`` §9.2:
 
 - Pydantic round-trip (encode → decode → equal).
 - Plain-value round-trip (dict, list, scalar).
-- Naive datetime rejected on encode (both plain-value path and
-  the plain re-encode of a Pydantic-emitted naive ISO would be
-  surfaced — but Pydantic v2's mode='json' converts naive
-  datetimes to ISO without tzinfo, which then sails through
-  json.dumps because the value is already a string; that
-  limitation is documented in the module, not enforced here).
+- Naive datetime rejected on encode for BOTH paths:
+    * Plain values: ``_json_default`` catches the raw datetime
+      before ``json.dumps`` serialises it.
+    * Pydantic models: encoder walks ``model_dump(mode='python')``
+      recursively and raises on the first naive datetime — at
+      any depth (top-level, nested model, list element, dict
+      value). Without this walk, ``model_dump(mode='json')``
+      silently stringifies the naive datetime and the JSON
+      bytes would carry no tzinfo, defeating the contract.
 - ISO 8601 string with ``+00:00`` decodes to a UTC datetime
   via a Pydantic model.
 - Sort-order stability: equivalent dicts produce identical
@@ -182,6 +185,91 @@ def test_pydantic_iso_string_decodes_to_utc_datetime():
     assert restored.when == _UTC_NOW
     assert restored.when.tzinfo is not None
     assert restored.when.utcoffset() == timedelta(0)
+
+
+# ---------------------------------------------------------------------------
+# Pydantic naive-datetime rejection (reviewer follow-up).
+# Walks model_dump(mode='python') so a naive datetime cannot
+# slip through model_dump(mode='json')'s silent stringification.
+# ---------------------------------------------------------------------------
+
+
+_NAIVE_DT = datetime(2026, 5, 15, 9, 30)  # tzinfo None
+
+
+class _NestedModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    inner_when: datetime
+
+
+class _ModelWithNested(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    label: str
+    nested: _NestedModel
+
+
+class _ModelWithListOfDatetimes(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    label: str
+    timestamps: list[datetime]
+
+
+class _ModelWithDictPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    label: str
+    payload: dict[str, datetime]
+
+
+def test_pydantic_top_level_naive_datetime_rejected():
+    """Naive datetime in a direct ``datetime`` field — without
+    the python-mode walk, model_dump(mode='json') would emit
+    an ISO string with no offset and the encoder would never
+    notice."""
+    model = _SampleModel(name="x", count=1, when=_NAIVE_DT)
+    with pytest.raises(NaiveDatetimeError, match="when"):
+        encode_json(model)
+
+
+def test_pydantic_nested_model_naive_datetime_rejected():
+    """Naive datetime hiding inside a sub-model. The walker
+    descends into the dict produced by mode='python'."""
+    nested = _NestedModel(inner_when=_NAIVE_DT)
+    parent = _ModelWithNested(label="parent", nested=nested)
+    with pytest.raises(NaiveDatetimeError, match="inner_when"):
+        encode_json(parent)
+
+
+def test_pydantic_list_of_datetimes_with_one_naive_rejected():
+    """One naive value in a list-of-datetimes field fails the
+    whole encode."""
+    model = _ModelWithListOfDatetimes(
+        label="x",
+        timestamps=[_UTC_NOW, _NAIVE_DT, _UTC_NOW],
+    )
+    with pytest.raises(NaiveDatetimeError, match=r"timestamps\[1\]"):
+        encode_json(model)
+
+
+def test_pydantic_dict_payload_naive_value_rejected():
+    """Datetime hiding inside a ``dict[str, datetime]`` field."""
+    model = _ModelWithDictPayload(
+        label="x",
+        payload={"good": _UTC_NOW, "evil": _NAIVE_DT},
+    )
+    with pytest.raises(NaiveDatetimeError, match="evil"):
+        encode_json(model)
+
+
+def test_pydantic_all_tz_aware_passes_walk():
+    """A model with tz-aware datetimes everywhere (top-level,
+    nested, list, dict-value) encodes successfully."""
+    nested = _NestedModel(inner_when=_UTC_NOW)
+    parent = _ModelWithNested(label="parent", nested=nested)
+    raw = encode_json(parent)
+    # Sanity: walks the structure without raising and produces
+    # a non-empty JSON string.
+    assert raw.startswith("{")
+    assert raw.endswith("}")
 
 
 # ---------------------------------------------------------------------------

@@ -16,14 +16,24 @@ Two design choices:
    in tests and for any content-addressed lookup the runtime
    might add later.
 
-2. **UTC-aware datetimes only.** Naive datetimes are a common
-   bug source (silent UTC reinterpretation across timezones).
-   The encoder raises :class:`NaiveDatetimeError` rather than
-   silently serializing them. Pydantic models that route their
-   datetimes through ``model_dump(mode='json')`` get this for
-   free; plain dicts containing raw ``datetime`` objects are
-   converted via the ``default`` callback below, which also
-   rejects naive values.
+2. **Timezone-aware datetimes only.** Naive datetimes are a
+   common bug source (silent UTC reinterpretation across
+   timezones). The encoder raises :class:`NaiveDatetimeError`
+   for both code paths:
+
+   - Plain dict / list: the ``default`` callback fires on
+     each raw ``datetime`` and rejects naive ones.
+   - Pydantic model: ``model_dump(mode='python', by_alias=True)``
+     produces a plain Python representation where datetime
+     fields remain as ``datetime`` objects. The encoder walks
+     that representation recursively and raises on the first
+     naive datetime BEFORE the JSON-mode dump silently
+     stringifies it. Catches naive values nested arbitrarily
+     deep inside list / dict / sub-model fields.
+
+   This is timezone-aware enforcement, not UTC-only — model
+   validators (e.g. ``EmitOutputContract.attempted_at``) own
+   the stricter UTC rule for fields that need it.
 
 References:
 - ``docs/CONTRACTS_V2_DESIGN.md`` §4.0.2
@@ -74,25 +84,63 @@ def _json_default(value: Any) -> Any:
     )
 
 
+def _assert_no_naive_datetime(value: Any, path: str = "<root>") -> None:
+    """Walk a Python value and raise :class:`NaiveDatetimeError`
+    on the first naive datetime encountered.
+
+    Used on the Pydantic encode path against the result of
+    ``model_dump(mode='python', by_alias=True)``: that
+    representation preserves datetime objects (mode='json'
+    silently stringifies them and would let naive datetimes
+    slip through). We walk it BEFORE the JSON-mode dump so
+    naive values fail loud at the storage boundary regardless
+    of how deeply they're nested.
+
+    ``path`` is a JSONPath-style trace so the error message
+    pinpoints which field carried the naive value.
+    """
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            raise NaiveDatetimeError(
+                f"naive datetime at {path}: {value!r} — attach "
+                "tzinfo (typically datetime.timezone.utc) before "
+                "encoding."
+            )
+        return
+    if isinstance(value, dict):
+        for k, v in value.items():
+            _assert_no_naive_datetime(v, f"{path}.{k}")
+        return
+    if isinstance(value, (list, tuple)):
+        for i, v in enumerate(value):
+            _assert_no_naive_datetime(v, f"{path}[{i}]")
+        return
+    # Scalars (None, str, int, float, bool, bytes) and any
+    # opaque types Pydantic returns from custom serializers:
+    # skip. Naive datetimes only live in datetime objects.
+
+
 def encode_json(value: Union[BaseModel, Any]) -> str:
     """Encode ``value`` as a deterministic JSON string.
 
-    Pydantic ``BaseModel`` instances are dumped via
-    ``model_dump(mode='json', by_alias=True)`` first, then
-    re-serialised through ``json.dumps`` with sorted keys so the
-    output is byte-identical for equivalent inputs. Plain Python
-    values (dicts, lists, scalars) go straight through
-    ``json.dumps``.
+    Pydantic ``BaseModel`` instances go through a two-step:
 
-    Datetime handling matches both paths: the Pydantic path
-    relies on Pydantic's own conversion (which preserves
-    tzinfo), and the plain path uses :func:`_json_default`
-    above. Naive datetimes raise :class:`NaiveDatetimeError`
-    in either case (Pydantic emits an ISO with no offset; the
-    runtime test fixture confirms naive Pydantic datetimes
-    still surface through the plain re-encode step).
+    1. ``model_dump(mode='python', by_alias=True)`` → walk the
+       result with :func:`_assert_no_naive_datetime` to reject
+       any naive datetime arbitrarily deep in the structure.
+    2. ``model_dump(mode='json', by_alias=True)`` → final JSON
+       representation, re-serialised via ``json.dumps`` with
+       sorted keys + compact separators so equivalent inputs
+       produce byte-identical strings.
+
+    Plain Python values (dicts, lists, scalars) skip the walk
+    because :func:`_json_default` handles raw datetimes on the
+    fly during ``json.dumps`` (it sees each ``datetime`` before
+    serialisation and rejects naive ones).
     """
     if isinstance(value, BaseModel):
+        py_dump = value.model_dump(mode="python", by_alias=True)
+        _assert_no_naive_datetime(py_dump)
         body = value.model_dump(mode="json", by_alias=True)
         return json.dumps(
             body,

@@ -369,9 +369,23 @@ Pydantic targets and `json.loads(raw)` for plain types.
 ### 6.2 Datetime handling
 
 Python `datetime` ↔ ISO 8601 string. The helper enforces
-UTC-aware datetimes on the way in (raises on naive) and parses
-ISO strings on the way out. Matches the v2 model rule
-(see `EmitOutputContract` etc.).
+timezone-aware datetimes on the way in (raises
+`NaiveDatetimeError` on naive) and parses ISO strings on the
+way out. Matches the v2 model rule (see `EmitOutputContract`
+etc., which then narrows the contract further to UTC-only).
+
+**Both paths covered:**
+
+- Plain dict / list: the `_json_default` callback fires on
+  every raw `datetime` during `json.dumps`. Naive → raise.
+- Pydantic model: encoder walks
+  `model_dump(mode='python', by_alias=True)` recursively
+  BEFORE calling the JSON-mode dump. `mode='python'` preserves
+  datetime objects (where `mode='json'` would silently
+  stringify them and erase the tzinfo signal). The walk
+  descends into nested models, lists, and dict-values, so a
+  naive datetime at any depth surfaces with a JSONPath-style
+  error message pinpointing the field.
 
 ### 6.3 Sort order + deterministic encoding
 
