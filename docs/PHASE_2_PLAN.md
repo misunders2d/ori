@@ -226,6 +226,51 @@ error:             str | None
 two ways so both adapter authors and audit-log readers stay
 consistent.
 
+### 4.8 Registry layer (slice 2)
+
+Three typed registries hold descriptors at boot. Metadata only —
+no dispatch, no execution.
+
+```
+ToolRegistry    keyed by ToolDescriptor.name
+SourceRegistry  keyed by SourceDescriptor.id
+EmitRegistry    keyed by EmitDescriptor.id
+```
+
+Common surface (`_BaseRegistry[D]`):
+
+| Method | Behavior |
+|---|---|
+| `register(descriptor)` | TypeError if wrong descriptor type; `_validate(descriptor)` hook for subclass belt checks; `DuplicateDescriptorError` on key collision; insert. |
+| `lookup(key)` | Descriptor or `None`. |
+| `require(key)` | Descriptor or registry-specific `Unknown*Error`. |
+| `__contains__` / `__iter__` / `__len__` / `keys()` / `clear()` | Standard. `clear()` for test isolation only. |
+
+`ToolRegistry` adds `tags_for(name)`: returns the descriptor's
+tags if registered, else `FAIL_SAFE_UNKNOWN_TAGS =
+frozenset({WRITE_EXTERNAL})` per design §5.4 final paragraph.
+This is the read-only-reasoning gate's fail-safe — it is NOT
+the admin-approval gate, which is a separate "previously-unused
+adapter" runtime check.
+
+`SourceRegistry._validate` re-asserts the read-only invariant
+(must include `READ_EXTERNAL`; must NOT include `WRITE_EXTERNAL` /
+`SEND_MESSAGE` / `FILESYSTEM_WRITE`). Belt against
+`model_construct` bypass — Pydantic already enforces this at
+normal construction.
+
+`EmitRegistry._validate` re-asserts that the descriptor carries
+at least one of `SEND_MESSAGE` or `WRITE_EXTERNAL`.
+
+Module-level singletons (`TOOLS`, `SOURCES`, `EMITS`) exist so
+production code has a stable boot-time target. Tests construct
+fresh instances rather than mutating the singletons.
+
+Explicitly absent from the surface (verified by a smoke test):
+no `dispatch`, `invoke`, `call`, `execute`, `run`, `send`
+methods on any registry. No I/O imports in the module. Phase 2
+is metadata only.
+
 ---
 
 ## 5. Test inventory
@@ -289,6 +334,38 @@ consistent.
 - `attempted_at` is timezone-aware (UTC enforced like other v2
   datetime fields).
 
+### 5.5 `tests/v2/test_registry.py` (slice 2)
+
+For each registry:
+- Register + lookup round-trip; `require` raises on unknown
+  with the registry-specific error subclass.
+- Duplicate registration raises `DuplicateDescriptorError`.
+- Wrong descriptor type raises `TypeError` (independent of any
+  belt checks).
+- Membership / iteration / `keys()` / `clear()` behave as
+  specified.
+
+`ToolRegistry`:
+- `tags_for(known)` returns the descriptor's tags.
+- `tags_for(unknown)` returns `FAIL_SAFE_UNKNOWN_TAGS`.
+- The fail-safe composes correctly: `is_blocked_by_read_only_reasoning(fail_safe) is True`; `requires_admin_approval(fail_safe) is False`.
+
+`SourceRegistry`:
+- Belt rejects `model_construct`-built descriptor with missing
+  `READ_EXTERNAL` (matches Pydantic error).
+- Belt rejects `model_construct`-built descriptor carrying any
+  of `WRITE_EXTERNAL` / `SEND_MESSAGE` / `FILESYSTEM_WRITE`.
+
+`EmitRegistry`:
+- Belt rejects `model_construct`-built descriptor that lacks both
+  `SEND_MESSAGE` and `WRITE_EXTERNAL`.
+
+No-execution invariant:
+- `app.v2.registry` imports no I/O libraries (httpx, requests,
+  slack_sdk, googleapiclient, etc.).
+- No public method named `dispatch`, `invoke`, `call`,
+  `execute`, `run`, or `send` exists on any registry class.
+
 ---
 
 ## 6. CI guard adjustments
@@ -327,13 +404,16 @@ commit ships with its tests in the same commit.
 
 | # | scope | files | status |
 |---|---|---|---|
-| 1 | phase bump + plan + allowlist widening + tags enum + descriptors + tests | this file, `.v2-current-phase`, `scripts/check_phase_scope.py`, the seven files in §2 | **first slice** |
-| 2 | … to be determined by reviewer / Sergey after slice 1 lands | | pending |
+| 1 | phase bump + plan + allowlist widening + tags enum + descriptors + tests | this file, `.v2-current-phase`, `scripts/check_phase_scope.py`, the seven files in §2 | **shipped** (ae7b000 + reviewer fix 58b9bd6) |
+| 2 | registry layer (typed registries for tool / source / emit, fail-safe tag lookup, belt-checks for `model_construct` bypass) + tests | `app/v2/registry.py`, `tests/v2/test_registry.py` | **in flight** |
+| 3 | … to be determined by reviewer / Sergey after slice 2 lands | | pending |
 
-The "first slice" is intentionally larger than phase 1's first
-commit: it includes the phase scaffolding (plan + bump + allowlist)
-AND the canonical metadata enum + descriptors + tests. Subsequent
-phase-2 slices add more granular contracts (per-source / per-emit
+The "first slice" was intentionally larger than phase 1's first
+commit: it included the phase scaffolding (plan + bump + allowlist)
+AND the canonical metadata enum + descriptors + tests. Slice 2
+is a thinner add — just the registry layer that stores
+descriptors without executing them. Subsequent phase-2 slices
+will add more granular contracts (per-source / per-emit
 subclasses) once reviewer signs off on the base shapes.
 
 ---
