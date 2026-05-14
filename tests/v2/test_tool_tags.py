@@ -130,29 +130,64 @@ def test_read_only_block_returns_false_on_empty_set():
 
 
 # ---------------------------------------------------------------------------
-# requires_admin_approval
+# requires_admin_approval — design §5.9 CustomFlow friction gate
+# fires on PRIVILEGED, COSTLY, or FILESYSTEM_WRITE.
 # ---------------------------------------------------------------------------
 
 
-def test_requires_admin_approval_true_when_privileged_present():
-    assert requires_admin_approval({ToolCapabilityTag.PRIVILEGED}) is True
+@pytest.mark.parametrize(
+    "tag",
+    [
+        ToolCapabilityTag.PRIVILEGED,
+        ToolCapabilityTag.COSTLY,
+        ToolCapabilityTag.FILESYSTEM_WRITE,
+    ],
+)
+def test_requires_admin_approval_true_for_each_friction_tag(tag):
+    """Each of the three friction-triggering tags individually
+    flips the gate. Catches a regression where one was forgotten."""
+    assert requires_admin_approval({tag}) is True
 
 
-def test_requires_admin_approval_false_without_privileged():
+def test_requires_admin_approval_false_for_non_friction_tags():
+    """Tags that are not on the §5.9 list (here: read_external,
+    write_external, send_message, uses_oauth) do not trip the
+    admin approval gate by themselves."""
     assert (
         requires_admin_approval(
             {
                 ToolCapabilityTag.READ_EXTERNAL,
                 ToolCapabilityTag.WRITE_EXTERNAL,
-                ToolCapabilityTag.COSTLY,
+                ToolCapabilityTag.SEND_MESSAGE,
+                ToolCapabilityTag.USES_OAUTH,
             }
         )
         is False
     )
 
 
+def test_requires_admin_approval_true_on_mixed_set_with_friction_tag():
+    """A friction tag mixed with non-friction tags still trips
+    the gate."""
+    tags = {
+        ToolCapabilityTag.READ_EXTERNAL,
+        ToolCapabilityTag.WRITE_EXTERNAL,
+        ToolCapabilityTag.COSTLY,
+    }
+    assert requires_admin_approval(tags) is True
+
+
 def test_requires_admin_approval_false_on_empty_set():
     assert requires_admin_approval(set()) is False
+
+
+def test_costly_helper_still_independent_of_admin_gate():
+    """``is_costly`` and ``requires_admin_approval`` overlap on
+    COSTLY but address different concerns (cost warning vs.
+    approval gate). Keep them independently callable."""
+    tags = {ToolCapabilityTag.COSTLY}
+    assert is_costly(tags) is True
+    assert requires_admin_approval(tags) is True
 
 
 # ---------------------------------------------------------------------------

@@ -57,6 +57,19 @@ _READ_ONLY_BLOCKING_TAGS: frozenset[ToolCapabilityTag] = frozenset(
 )
 
 
+# Tags that, when present on any tool used by a CustomFlow,
+# trigger the admin-approval friction gate. The set matches the
+# bullets under "Tools tagged privileged or costly" +
+# "filesystem_write tools" in design §5.9.
+_ADMIN_APPROVAL_TAGS: frozenset[ToolCapabilityTag] = frozenset(
+    {
+        ToolCapabilityTag.PRIVILEGED,
+        ToolCapabilityTag.COSTLY,
+        ToolCapabilityTag.FILESYSTEM_WRITE,
+    }
+)
+
+
 def is_blocked_by_read_only_reasoning(
     tags: AbstractSet[ToolCapabilityTag],
 ) -> bool:
@@ -74,9 +87,18 @@ def is_blocked_by_read_only_reasoning(
 
 def requires_admin_approval(tags: AbstractSet[ToolCapabilityTag]) -> bool:
     """True iff the tool needs explicit admin approval at
-    authoring time (CustomFlow friction trigger; see design
-    §5.9)."""
-    return ToolCapabilityTag.PRIVILEGED in tags
+    authoring time (CustomFlow friction trigger).
+
+    Per design §5.9, any of the following tags trips the gate:
+
+    - ``PRIVILEGED`` — admin-only ops.
+    - ``COSTLY`` — billable destinations (BQ scans, LLM calls);
+      admin sign-off prevents unbounded spend.
+    - ``FILESYSTEM_WRITE`` — local filesystem mutation needs
+      a human in the loop because the bot's deploy host is
+      the same machine the agent reasons on.
+    """
+    return bool(set(tags) & _ADMIN_APPROVAL_TAGS)
 
 
 def is_costly(tags: AbstractSet[ToolCapabilityTag]) -> bool:

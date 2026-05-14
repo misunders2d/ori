@@ -263,3 +263,34 @@ def test_output_drift_guard_every_selection_method_accepted():
 def test_output_extra_field_rejected():
     with pytest.raises(ValidationError):
         SourceOutputContract(**_output_kwargs(checksum="abc"))
+
+
+# ---------------------------------------------------------------------------
+# Documented relationship to SourceSnapshotMetadata: the
+# adapter's response is a SUBSET — run_id + source_id come from
+# the matching SourceInputContract at runtime assembly time.
+# Adapters never echo their inputs.
+# ---------------------------------------------------------------------------
+
+
+def test_output_does_not_carry_input_identifiers():
+    """``run_id`` and ``source_id`` are the runtime's
+    responsibility — the adapter doesn't see a reason to repeat
+    them. Pinning this guards against an accidental refactor
+    that adds them back to the response shape and silently
+    expects adapters to echo IDs."""
+    fields = set(SourceOutputContract.model_fields.keys())
+    assert "run_id" not in fields
+    assert "source_id" not in fields
+
+
+def test_snapshot_metadata_is_output_plus_ids():
+    """Documented relationship between the adapter response and
+    the storage row: ``SourceSnapshotMetadata == SourceOutput
+    Contract ∪ {run_id, source_id}``. The runtime assembles the
+    metadata from (input, output) before insert."""
+    from app.v2.models.snapshot import SourceSnapshotMetadata
+
+    output_fields = set(SourceOutputContract.model_fields.keys())
+    snapshot_fields = set(SourceSnapshotMetadata.model_fields.keys())
+    assert snapshot_fields == output_fields | {"run_id", "source_id"}

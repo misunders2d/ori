@@ -106,10 +106,14 @@ Policy helpers (pure functions, no I/O):
 | Helper | Returns True iff |
 |---|---|
 | `is_blocked_by_read_only_reasoning(tags)` | tags ∩ {`write_external`, `send_message`, `filesystem_write`, `privileged`} ≠ ∅ |
-| `requires_admin_approval(tags)` | `privileged` ∈ tags |
+| `requires_admin_approval(tags)` | tags ∩ {`privileged`, `costly`, `filesystem_write`} ≠ ∅ (design §5.9 CustomFlow friction triggers) |
 | `is_costly(tags)` | `costly` ∈ tags |
 | `requires_oauth(tags)` | `uses_oauth` ∈ tags |
 | `is_user_facing(tags)` | `send_message` ∈ tags |
+
+`is_costly` and `requires_admin_approval` overlap on `COSTLY`
+deliberately — they address different concerns (cost warning vs.
+authoring-time approval gate). Both stay independently callable.
 
 Default tag for unknown tools is `write_external` (fail-safe per
 design §5.4 final line). Future ToolDescriptors registered without
@@ -162,10 +166,11 @@ when validating request shape.
 
 ### 4.4 SourceOutputContract
 
-Matches `SourceSnapshotMetadata` from phase 1 — it's the same
-information, but expressed as the adapter's response (the bytes
-land at `content_path`; SQLite gets the metadata via
-`SourceSnapshotMetadata` after the runtime persists it):
+Subset of `SourceSnapshotMetadata` from phase 1 — only the fields
+the adapter alone knows. The runtime merges the matching
+`SourceInputContract`'s `run_id` + `source_id` with this response
+to assemble the storage row (`SourceSnapshotMetadata`). Adapters
+never echo their inputs back here.
 
 ```
 content_hash:      str  ^sha256:[0-9a-f]{64}$
@@ -176,6 +181,9 @@ source_kind:       str
 source_version:    str | None
 selection_method:  SelectionMethod
 ```
+
+Documented invariant pinned in tests:
+`SourceSnapshotMetadata.fields == SourceOutputContract.fields ∪ {run_id, source_id}`.
 
 ### 4.5 EmitDescriptor
 

@@ -117,10 +117,19 @@ class SourceOutputContract(BaseModel):
     """Response shape every source loader returns.
 
     The bytes themselves land on disk at ``content_path``
-    (relative to the data root). SQLite gets the metadata via
-    ``SourceSnapshotMetadata`` after the runtime persists it —
-    the field set is intentionally identical so the persistence
-    step is a direct ``model_dump`` + insert.
+    (relative to the data root). The runtime then builds the
+    final ``SourceSnapshotMetadata`` row by merging the
+    ``run_id`` + ``source_id`` it knew from the matching
+    ``SourceInputContract`` with the fields below. Adapters do
+    NOT echo their inputs back here — keeping the response shape
+    minimal makes adapter implementations simpler and rules out
+    a class of "loader returned a different source_id than it
+    was asked for" bugs.
+
+    Field set is a subset of ``SourceSnapshotMetadata``:
+    everything the adapter alone knows. Storage persistence is
+    therefore ``runtime_assemble(input, output) → metadata``,
+    not a direct ``output.model_dump() → insert``.
     """
 
     model_config = ConfigDict(extra="forbid")
