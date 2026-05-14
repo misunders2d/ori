@@ -35,26 +35,35 @@ Read this with:
    pending cancellation) are documented as future paths and
    are NOT in the phase-4 LEGAL_TRANSITIONS table.
 2. **Claim primitive** — `claim_run(conn, run_id, *, claimed_by,
-   now) → bool`. Wraps the design §6.1 single-flight UPDATE
-   PLUS a schedule-status predicate so paused / archived
+   now, event_id) → bool`. Wraps the design §6.1 single-flight
+   UPDATE PLUS a schedule-status predicate so paused / archived
    schedules cannot have their pending runs claimed.
+   ``event_id`` is the injected id for the paired
+   ``run_claimed`` event row.
 3. **Recovery scan** — boot-time helper that finds stale
    claimed / running rows past their per-status timeout and
-   routes each by `RecoveryPolicy`. Two cursors:
-   ``claimed_at`` for claimed-stale, ``started_at`` for
-   running-stale. Failures surface as `RecoveryError` items
-   in the result list — never silently dropped.
+   applies ``RecoveryPolicy.QUEUE_RETRY`` to both cases (the
+   stale row is marked ``failed`` terminal + a fresh pending
+   retry row is inserted with parent_run_id /
+   root_run_id-carried / attempt+1 / fire_reason='retry').
+   Two cursors: ``claimed_at`` for claimed-stale,
+   ``started_at`` for running-stale. Failures surface as
+   `RecoveryError` items in the result list — never silently
+   dropped.
 4. **Worker loop** — long-running async task that polls
    `list_pending_due`, claims a run, transitions
    `claimed → running → succeeded` (empty body), recording
    matching events for every transition. The body itself is
    `await asyncio.sleep(0)` or equivalent no-op — real
    reasoning + emit lands in later phases.
-5. **Wakeup callback** — `wakeup(conn, schedule_id, *, now) →
-   list[str]`. Reads the ScheduleSpec, computes any due
-   `due_at`(s), INSERTs Run rows + matching `run_created`
-   events in the same TX. Returns the inserted run ids.
-   Callable directly (testable in isolation).
+5. **Wakeup callback** — `wakeup(conn, *, schedule_id, now,
+   run_id_factory, event_id_factory) → list[str]`. Reads the
+   ScheduleSpec, computes any due `due_at`(s), INSERTs Run
+   rows + matching `run_created` events in the same TX.
+   Returns the inserted run ids. Callable directly (testable
+   in isolation). ``run_id_factory`` / ``event_id_factory``
+   are required injectables — no implicit ``uuid.uuid4()`` at
+   this layer.
 6. **APScheduler binding (callable surface only)** — a thin
    module that exposes the wakeup function as the callback
    APScheduler will register. Real APScheduler scheduler
@@ -378,26 +387,39 @@ def scan_stale_runs(
         regresses the scan treats null as immediately stale
         rather than silently never-recovering.
 
-    Remediation policy per prior status:
+    Remediation policy per prior status (reviewer round-3
+    correction — claimed-stale now QUEUE_RETRY, not
+    MARK_FAILED):
 
-      - prior = claimed  → RecoveryPolicy.MARK_FAILED.
-        UPDATE the row to ``failed`` + append a
-        ``run_recovered`` event. No new pending row — a
-        claimed-but-never-started run is treated as
-        abandoned; the schedule's failure policy / next
-        wakeup tick handles re-firing.
-      - prior = running  → RecoveryPolicy.QUEUE_RETRY.
-        Two-row remediation in a single TX:
-          1. UPDATE the stale row to ``failed`` (terminal).
+      - prior = claimed  → RecoveryPolicy.QUEUE_RETRY.
+        Worker died AFTER claiming but BEFORE the body
+        started. The body never ran, so no external work was
+        performed and no emit fired. Re-firing is safe (no
+        duplicate-side-effect risk); not re-firing trades
+        duplicate safety we don't need for a missed task.
+        For reminder-style schedules a missed fire is the
+        worse failure mode. Two-row remediation in a single
+        TX, same shape as running-stale below:
+          1. UPDATE the stale row to ``failed`` (terminal —
+             round-6 invariant: no re-statusing a row out of
+             a terminal state; the retry is a NEW row).
           2. INSERT a NEW pending Run row with
              parent_run_id = stale_run.id,
              root_run_id = stale_run.root_run_id (carried),
              attempt = stale_run.attempt + 1,
              fire_reason = 'retry',
-             due_at = now (re-fire immediately; retry policy
-             may defer this in a later phase).
+             due_at = now.
           3. Append matching events: run_failed +
              run_retry_scheduled.
+      - prior = running  → RecoveryPolicy.QUEUE_RETRY.
+        Same two-row remediation as claimed-stale. Caveat:
+        body started, side effects MAY have partially fired
+        (a real worker writes emit_succeeded events as they
+        go; the retry path relies on the ledger's
+        ``get_last_emit_succeeded`` dedup to skip already-
+        delivered emits). Phase 4's worker has an empty body,
+        so this corner does not bite until later phases wire
+        real emit.
 
     Each remediation runs in its own ``transaction(conn)``
     block. **Non-silent failure**: a remediation that raises
@@ -432,6 +454,36 @@ Resolution: phase 4 plan documents the mapping; a tiny
 design-doc resync commit may follow (gated on Sergey approval
 to edit the locked design doc).
 
+### 5.2.1 Claimed-stale policy deviation from design default
+
+Reviewer round-3 push-back: design §4.0.4 row 5 says claimed-
+stale default is ``MARK_FAILED`` ("refuse to re-execute"). The
+plan now uses ``QUEUE_RETRY`` for claimed-stale.
+
+Reasoning (reviewer + my read):
+- Claimed means worker died AFTER the claim UPDATE but BEFORE
+  the row transitioned to ``running``. The body never ran;
+  no emit fired; no external side effect occurred. Re-firing
+  is safe (nothing to dedupe against).
+- For reminder-style schedules, a missed fire is the worse
+  failure mode than a duplicate would be. Design's default
+  trades duplicate-safety we don't have any exposure to.
+
+Counter-concern (not yet addressed in plan):
+- For high-cadence cron schedules ("every minute"), a retry
+  queued at ``due_at = now`` can briefly produce 2× output
+  (the retry + the next regular tick). Design §4.0.4 alludes
+  to ``backfill_policy`` for this, but the plan doesn't wire
+  it. Phase 4's empty worker body neutralises the visible
+  impact — no real cadence regression possible until later
+  phases wire emit. The right per-schedule recovery policy
+  (and backfill policy) lands when those phases ship.
+
+**Sergey to confirm before slice 1.** If the design-doc
+default takes precedence, flip claimed-stale back to
+MARK_FAILED in §5.1 + §5.3. Either way, the helper signature
++ result structure stay the same.
+
 ### 5.3 Tests
 
 - Empty DB → empty list.
@@ -439,15 +491,17 @@ to edit the locked design doc).
   are stale candidates).
 - Claimed within `claimed_timeout` → not recovered.
 - Claimed past `claimed_timeout` → RecoveredRun with
-  applied_policy=MARK_FAILED; status flips to ``failed``;
-  ``run_recovered`` event row emitted; no new pending row.
+  applied_policy=QUEUE_RETRY (reviewer round-3); two-row
+  remediation: stale row flipped to ``failed`` (terminal),
+  NEW pending row inserted with parent_run_id,
+  root_run_id carried, attempt += 1, fire_reason='retry',
+  due_at=now. Events: run_failed + run_retry_scheduled.
+  RecoveredRun.new_pending_run_id populated.
 - Running within `running_timeout` (started_at recent) → not
   recovered.
-- Running past `running_timeout` (started_at past) →
-  two-row remediation: stale row flipped to ``failed``, NEW
-  pending row inserted with parent_run_id, root_run_id
-  carried, attempt += 1, fire_reason='retry', due_at=now.
-  Events: run_failed + run_retry_scheduled. RecoveredRun.new_pending_run_id populated.
+- Running past `running_timeout` (started_at past) → same
+  two-row remediation as claimed-stale; RecoveredRun.
+  applied_policy=QUEUE_RETRY.
 - Running with `started_at IS NULL` (invariant violation
   defensive case) → treated as immediately stale; same
   two-row remediation.
@@ -681,7 +735,8 @@ slice** if all earlier slices are clean.
 | `test_runtime_claim.py` | single-flight per schedule; cross-schedule independence; naive now; atomicity-on-failure |
 | `test_runtime_recovery.py` | empty DB; claimed within/past timeout; running within/past timeout; two-row remediation for running stale |
 | `test_runtime_worker.py` | single-tick state-machine walk; no-pending tick; concurrent workers; cooperative shutdown; smoke check on imports |
-| `test_runtime_wakeup.py` | OneOff past/future; Cron aligned/misaligned; paused; archived; unknown id; NotImplementedError on Interval/Event/Conditional |
+| `test_runtime_wakeup.py` (5a) | OneOff past/future; paused; archived; unknown id; Cron schedule passed to 5a wakeup raises NotImplementedError; Interval / Event / Conditional → NotImplementedError; injected id factories invoked once per inserted row/event. |
+| `test_runtime_wakeup_cron.py` (5b, after parser choice) | Cron aligned/misaligned with `now`; paused / archived still no-op; parser-specific edge cases (test list lands with 5b commit). |
 
 Cross-cutting smoke checks (carried from phase 3 pattern):
 - `app.v2.runtime.*` imports no I/O libraries (httpx, requests,
