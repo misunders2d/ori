@@ -19,8 +19,10 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.v2.enums import (
+    DeliveryFallbackPolicy,
     FailureActionType,
     OnOversizePolicy,
+    RetryStrategy,
     SourceFallbackPolicy,
 )
 
@@ -119,12 +121,10 @@ class Delivery(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     target_session_id: str
-    fallback_policy: str = Field(
+    fallback_policy: DeliveryFallbackPolicy = Field(
         description=(
-            "Either 'session_to_origin' (try the creator's "
-            "session on L1 failure) or 'admin_alert_only' "
-            "(skip user-facing fallback; admin gets the L3 "
-            "alert). See §7.2 of the design contract."
+            "L1 → L2 fallback policy. See §7.2 of the design "
+            "contract."
         ),
     )
 
@@ -135,11 +135,7 @@ class RetryPolicy(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    strategy: str = Field(
-        description="'exponential' or 'fixed'. Exponential bases "
-        "the next backoff on attempt number; fixed uses "
-        "``base_seconds`` every time.",
-    )
+    strategy: RetryStrategy
     base_seconds: int = Field(ge=1)
     max_attempts: int = Field(ge=1)
 

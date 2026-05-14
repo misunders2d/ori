@@ -287,6 +287,36 @@ class FailureActionType(str, Enum):
     CUSTOM = "custom"
 
 
+class DeliveryFallbackPolicy(str, Enum):
+    """ScheduleSpec.delivery.fallback_policy values.
+
+    ``session_to_origin`` — on L1 delivery failure, try the
+        creator's session (different channel for cross-platform
+        schedules). Default for most ScheduleSpecs.
+    ``admin_alert_only`` — skip the user-facing L2 fallback;
+        only the L3 admin alert fires. Used when L2 retry is
+        guaranteed to fail (e.g. the recipient explicitly
+        unreachable).
+
+    See ``docs/CONTRACTS_V2_DESIGN.md`` §7.2 (L1/L2/L3 layers).
+    """
+
+    SESSION_TO_ORIGIN = "session_to_origin"
+    ADMIN_ALERT_ONLY = "admin_alert_only"
+
+
+class RetryStrategy(str, Enum):
+    """RetryPolicy.strategy values.
+
+    ``exponential`` — backoff scales by attempt number
+        (typically ``base_seconds * 2 ** (attempt - 1)``).
+    ``fixed``       — same ``base_seconds`` between every retry.
+    """
+
+    EXPONENTIAL = "exponential"
+    FIXED = "fixed"
+
+
 class ToolMode(str, Enum):
     """ReasoningStep.tool_mode — controls which tools the LLM
     may call inside the reasoning step.
