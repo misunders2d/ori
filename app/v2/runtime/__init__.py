@@ -14,6 +14,7 @@ References:
 - ``docs/PHASE_4_PLAN.md``
 """
 
+from app.v2.runtime.claim import claim_run
 from app.v2.runtime.state_machine import (
     IllegalTransitionError,
     LEGAL_TRANSITIONS,
@@ -27,4 +28,5 @@ __all__ = [
     "LEGAL_TRANSITIONS",
     "assert_legal_transition",
     "is_legal_transition",
+    "claim_run",
 ]
