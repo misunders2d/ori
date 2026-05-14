@@ -538,8 +538,14 @@ commit ships with its tests in the same commit.
 |---|---|---|---|
 | 1 | phase bump + plan + allowlist widening + tags enum + descriptors + tests | this file, `.v2-current-phase`, `scripts/check_phase_scope.py`, the seven files in §2 | **shipped** (ae7b000 + reviewer fix 58b9bd6) |
 | 2 | registry layer (typed registries for tool / source / emit, fail-safe tag lookup, belt-checks for `model_construct` bypass) + tests | `app/v2/registry.py`, `tests/v2/test_registry.py` | **shipped** (ed87e59 + doc fix a332ad7) |
-| 3 | validation entry point (`validate_schedule_spec`) + non-runtime validators (hash, plan-hash format, reminder rule, plan-index existence, optional adapter walk) + tests | `app/v2/validation.py`, `tests/v2/test_validation.py` | **in flight** |
-| 4 | … to be determined by reviewer / Sergey after slice 3 lands | | pending |
+| 3 | validation entry point (`validate_schedule_spec`) + non-runtime validators (hash, plan-hash format, reminder rule, plan-index existence, plan-body integrity, enforcement strict, reasoning output rigor, adapter walk) + tests | `app/v2/validation.py`, `tests/v2/test_validation.py` | **shipped** (2bda3d1 + reviewer fix c40e0dd) |
+| — | phase-2 closeout: acceptance verified, tag `v2-phase-2-complete` pushed | this file (§7 update only) | **closing** |
+
+No further slices required for phase 2 — every acceptance
+criterion in §8 was reached by slice 3. Per-source / per-emit
+concrete subclasses, per-kind Event payload models, and the
+allowlist-cache enums (design §5.7) stay deferred to later
+phases per their original notes.
 
 The "first slice" was intentionally larger than phase 1's first
 commit: it included the phase scaffolding (plan + bump + allowlist)
