@@ -60,18 +60,20 @@ and Phase 1's plan for the workflow vocabulary.
 
 ```
 app/v2/
-  tool_tags.py                # ToolCapabilityTag enum + helpers
+  tool_tags.py                # slice 1 — ToolCapabilityTag enum + helpers
   descriptors/
-    __init__.py
-    tool.py                   # ToolDescriptor (registry shape)
-    source.py                 # SourceDescriptor + Input/Output
-    emit.py                   # EmitDescriptor + Input/Output
+    __init__.py               # slice 1
+    tool.py                   # slice 1 — ToolDescriptor
+    source.py                 # slice 1 — SourceDescriptor + Input/Output
+    emit.py                   # slice 1 — EmitDescriptor + Input/Output
+  registry.py                 # slice 2 — typed registries (metadata only)
 
 tests/v2/
-  test_tool_tags.py           # tag enum coverage + policy helpers
-  test_descriptors_tool.py    # ToolDescriptor validation
-  test_descriptors_source.py  # SourceDescriptor + I/O contracts
-  test_descriptors_emit.py    # EmitDescriptor + I/O contracts
+  test_tool_tags.py           # slice 1 — tag enum coverage + policy helpers
+  test_descriptors_tool.py    # slice 1 — ToolDescriptor validation
+  test_descriptors_source.py  # slice 1 — SourceDescriptor + I/O contracts
+  test_descriptors_emit.py    # slice 1 — EmitDescriptor + I/O contracts
+  test_registry.py            # slice 2 — registry surface + no-execution invariants
 
 docs/PHASE_2_PLAN.md          # this file
 ```
