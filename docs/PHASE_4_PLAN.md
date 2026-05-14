@@ -30,15 +30,20 @@ Read this with:
 ### In scope (phase 4)
 
 1. **State machine** — a pure module describing the legal
-   `RunStatus` transitions. Used by the worker to validate each
-   transition before issuing the storage update. Phase 3 left
-   the storage layer policy-free; phase 4 introduces policy.
+   `RunStatus` transitions that phase-4 code actually
+   performs. Other transitions (manual clear-claim, paused-
+   pending cancellation) are documented as future paths and
+   are NOT in the phase-4 LEGAL_TRANSITIONS table.
 2. **Claim primitive** — `claim_run(conn, run_id, *, claimed_by,
-   now) → bool`. Wraps the design §6.1 single-flight UPDATE.
-   This is the helper phase 3 deliberately deferred.
+   now) → bool`. Wraps the design §6.1 single-flight UPDATE
+   PLUS a schedule-status predicate so paused / archived
+   schedules cannot have their pending runs claimed.
 3. **Recovery scan** — boot-time helper that finds stale
-   claimed / running rows past a timeout and routes each by
-   `RecoveryPolicy`.
+   claimed / running rows past their per-status timeout and
+   routes each by `RecoveryPolicy`. Two cursors:
+   ``claimed_at`` for claimed-stale, ``started_at`` for
+   running-stale. Failures surface as `RecoveryError` items
+   in the result list — never silently dropped.
 4. **Worker loop** — long-running async task that polls
    `list_pending_due`, claims a run, transitions
    `claimed → running → succeeded` (empty body), recording
@@ -122,22 +127,41 @@ those primitives stay frozen; the runtime layer composes them.
 
 ### 3.1 Legal transitions
 
+Phase 4 ``LEGAL_TRANSITIONS`` contains EXACTLY the transitions
+phase-4 code actually performs. Anything outside this set
+raises ``IllegalTransitionError``.
+
 ```
 pending   → claimed     (worker wins single-flight claim)
-pending   → cancelled   (schedule paused/archived enforcement)
 claimed   → running     (worker has started the body)
-claimed   → pending     (recovery: clear stale claim)
 claimed   → failed      (recovery: mark abandoned claim)
 running   → succeeded   (worker body completed)
-running   → failed      (worker body raised; per FailurePolicy)
-running   → pending     (recovery: re-queue stale running run)
-running   → failed      (recovery: mark abandoned running)
+running   → failed      (worker body raised, OR recovery
+                         marks abandoned running)
 ```
 
 Terminal states: `succeeded`, `failed`, `cancelled`. Retries
 land as NEW pending Run rows with `parent_run_id` set, NOT by
 re-statusing a failed row (round-6 invariant; storage layer's
 RunStatus CHECK enforces no `retry_pending`).
+
+### 3.1.1 Transitions deliberately NOT in phase 4
+
+The earlier draft of this plan listed `claimed → pending`,
+`running → pending`, and `pending → cancelled` as legal — that
+was wrong. Each is removed because no phase-4 code performs
+them:
+
+| Transition | Future owner |
+|---|---|
+| `claimed → pending` | Admin tool using `RecoveryPolicy.CLEAR_CLAIM` (manual override only — design §4.0.4). Ships in a later admin slice or phase. |
+| `running → pending` | Retry chain construction inserts a NEW pending row (different Run id) rather than re-statusing the old one. The stale running row goes to `failed` per §5. |
+| `pending → cancelled` | Pause / archive enforcement per design §4.0.4 + the `paused_pending_policy` field on a schedule. Lands when the pause/archive admin path ships (later phase). |
+
+These are documented for future implementers; including them
+in phase 4's table would create real re-execution risk
+(running → pending makes the same Run row eligible for a
+second worker claim).
 
 ### 3.2 Module API
 
@@ -209,7 +233,8 @@ def claim_run(
     longer pending OR a concurrent run on the same schedule
     is already claimed/running (single-flight).
 
-    Implementation runs the design §6.1 UPDATE:
+    Implementation runs the design §6.1 UPDATE, EXTENDED with
+    a schedule-status predicate (per reviewer round-2 fix):
 
         UPDATE runs SET
             status = 'claimed',
@@ -222,16 +247,30 @@ def claim_run(
             WHERE r2.schedule_id = runs.schedule_id
               AND r2.status IN ('claimed', 'running')
           )
+          AND EXISTS (
+            SELECT 1 FROM schedules s
+            WHERE s.id = runs.schedule_id
+              AND s.status = 'active'
+          )
 
-    SQLite WAL serialises writers, so the single-flight
-    predicate evaluates atomically with the UPDATE. The helper
-    does NOT append a paired event row — the worker that wins
-    the claim writes the `run_claimed` event in a follow-up
-    storage call (or via update_run_status_and_append_event for
-    the next transition). See §3.4 for the event-emission rule.
+    The schedule-status check closes the **paused-schedule
+    claim gap**: pending Runs that were INSERTed before a
+    pause must NOT be claimed by a worker that sees the
+    schedule as paused/archived. The check happens INSIDE the
+    same atomic UPDATE — no TOCTOU window. SQLite WAL
+    serialises writers; the single-flight + schedule-status
+    predicates evaluate together with the UPDATE.
 
-    On successful claim, the helper also writes the
-    ``run_claimed`` Event in the same transaction (uses
+    What this does NOT do: it does NOT mark already-pending
+    runs as ``cancelled`` when their schedule pauses. That's
+    the ``paused_pending_policy`` decision (let_complete vs
+    cancel_pending) which lands when the pause/archive admin
+    path ships. Phase 4's behavior: pause leaves pending rows
+    untouched; claim refuses them; if the schedule resumes
+    later the runs become claimable again.
+
+    On successful claim, the helper writes the ``run_claimed``
+    Event in the same transaction (uses
     transactions.transaction(conn) + append_event from phase 3).
     Atomicity-on-failure: if the event INSERT fails the claim
     UPDATE rolls back.
@@ -249,9 +288,9 @@ inside one `transaction(conn)` block.
 
 ### 4.3 Tests
 
-- Single pending run → claim_run returns True; status flips
-  to `claimed`; `claimed_by` + `claimed_at` set; `run_claimed`
-  event appended.
+- Single pending run + active schedule → claim_run returns
+  True; status flips to `claimed`; `claimed_by` + `claimed_at`
+  set; `run_claimed` event appended.
 - Single claimed-then-stale → claim_run returns False (status
   guard fires).
 - Two pending runs on different schedules → both claim
@@ -263,6 +302,13 @@ inside one `transaction(conn)` block.
   schedule → False (single-flight).
 - A pending run on schedule A + a claimed run on a different
   schedule → True (per-schedule predicate, not global).
+- **Paused schedule + pending run → claim_run returns False,
+  run stays pending, no `run_claimed` event written.** This
+  is the regression pin for the paused-schedule claim gap.
+- **Archived schedule + pending run → claim_run returns
+  False, run stays pending, no event leaked.**
+- Schedule transitions paused → active mid-test → previously
+  refused run becomes claimable.
 - Naive `now` rejected.
 - Atomicity-on-failure: if the event INSERT fails (pre-seeded
   duplicate event id), the claim UPDATE rolls back; status
@@ -279,40 +325,87 @@ inside one `transaction(conn)` block.
 
 @dataclass(frozen=True)
 class RecoveredRun:
-    """One row from the recovery scan."""
+    """A successfully recovered row."""
     run_id: str
     schedule_id: str
-    prior_status: RunStatus   # claimed OR running
+    prior_status: RunStatus            # claimed OR running
     applied_policy: RecoveryPolicy
+    new_pending_run_id: Optional[str]  # set when policy
+                                       # inserted a retry row
+
+@dataclass(frozen=True)
+class RecoveryError:
+    """A row the scan attempted to remediate but couldn't.
+
+    Returned alongside ``RecoveredRun`` so the caller sees
+    every failure — the scan never silently drops a remediation.
+    ``logger.error`` is also called inside the helper; the
+    structured result is what the caller iterates for
+    follow-up (admin alert, retry, etc.).
+    """
+    run_id: str
+    schedule_id: str
+    prior_status: RunStatus
+    error_message: str
 
 def scan_stale_runs(
     conn: sqlite3.Connection,
     *,
     now: datetime,
-    timeout: timedelta,
-) -> list[RecoveredRun]:
+    claimed_timeout: timedelta,
+    running_timeout: timedelta,
+) -> list[Union[RecoveredRun, RecoveryError]]:
     """Boot-time scan + remediation.
 
-    SELECTs runs in status claimed/running where
-    ``claimed_at < (now - timeout)``. For each, the policy is
-    chosen by prior status:
+    The scan uses TWO timestamp cursors (reviewer round-2 fix
+    — earlier draft used ``claimed_at`` for both, which can
+    false-recover a long-queued claimed row whose body just
+    hasn't started yet):
 
-      - prior = claimed  → RecoveryPolicy.MARK_FAILED
-        (worker died before starting; refuse to re-execute).
-      - prior = running  → RecoveryPolicy.QUEUE_RETRY
-        (worker died mid-execution; insert a fresh pending Run
-        with parent_run_id = the stale run, attempt += 1,
-        root_run_id carried forward).
+      - claimed-stale = ``status='claimed'`` AND
+        ``claimed_at < now - claimed_timeout``.
+      - running-stale = ``status='running'`` AND
+        (``started_at < now - running_timeout`` OR
+         ``started_at IS NULL``).
+        The IS-NULL fallback is defensive — phase-4 invariant
+        says a row in ``running`` status MUST have
+        ``started_at`` set, but if the invariant ever
+        regresses the scan treats null as immediately stale
+        rather than silently never-recovering.
+
+    Remediation policy per prior status:
+
+      - prior = claimed  → RecoveryPolicy.MARK_FAILED.
+        UPDATE the row to ``failed`` + append a
+        ``run_recovered`` event. No new pending row — a
+        claimed-but-never-started run is treated as
+        abandoned; the schedule's failure policy / next
+        wakeup tick handles re-firing.
+      - prior = running  → RecoveryPolicy.QUEUE_RETRY.
+        Two-row remediation in a single TX:
+          1. UPDATE the stale row to ``failed`` (terminal).
+          2. INSERT a NEW pending Run row with
+             parent_run_id = stale_run.id,
+             root_run_id = stale_run.root_run_id (carried),
+             attempt = stale_run.attempt + 1,
+             fire_reason = 'retry',
+             due_at = now (re-fire immediately; retry policy
+             may defer this in a later phase).
+          3. Append matching events: run_failed +
+             run_retry_scheduled.
+
+    Each remediation runs in its own ``transaction(conn)``
+    block. **Non-silent failure**: a remediation that raises
+    catches at the boundary, calls ``logger.error(...)`` with
+    the full context, and appends a ``RecoveryError`` to the
+    result list. The scan continues with the next row.
+    The caller iterates the result list, sees both successes
+    and errors, and decides whether to alert / retry / abort.
 
     The third RecoveryPolicy value (CLEAR_CLAIM) is reserved
-    for a manual admin tool that flips a stuck claimed row
-    back to pending without bumping attempt. Phase 4 does NOT
-    expose that path — adding it later is a separate slice.
-
-    Each remediation is an atomic transaction: status change +
-    matching event (kind=run_recovered) + optional new run row.
-    Failure of any one remediation logs + continues with the
-    rest; the scan returns the list of recovered rows.
+    for an admin tool that flips a stuck claimed row back to
+    pending without bumping attempt. Phase 4 does NOT expose
+    that path.
     """
 ```
 
@@ -333,27 +426,36 @@ to edit the locked design doc).
 - Empty DB → empty list.
 - Pending + due_at past → NOT recovered (only claimed/running
   are stale candidates).
-- Claimed within timeout → not recovered.
-- Claimed past timeout → recovered, marked failed, event row
-  emitted.
-- Running within timeout → not recovered.
-- Running past timeout → recovered, NEW pending run inserted
-  with `parent_run_id = stale_run.id`, `root_run_id` carried,
-  `attempt = stale.attempt + 1`, fire_reason=retry. Original
-  stale run is NOT re-statused (terminal at failed).
+- Claimed within `claimed_timeout` → not recovered.
+- Claimed past `claimed_timeout` → RecoveredRun with
+  applied_policy=MARK_FAILED; status flips to ``failed``;
+  ``run_recovered`` event row emitted; no new pending row.
+- Running within `running_timeout` (started_at recent) → not
+  recovered.
+- Running past `running_timeout` (started_at past) →
+  two-row remediation: stale row flipped to ``failed``, NEW
+  pending row inserted with parent_run_id, root_run_id
+  carried, attempt += 1, fire_reason='retry', due_at=now.
+  Events: run_failed + run_retry_scheduled. RecoveredRun.new_pending_run_id populated.
+- Running with `started_at IS NULL` (invariant violation
+  defensive case) → treated as immediately stale; same
+  two-row remediation.
+- Mixed cursor regression: a claimed-stale row whose
+  claimed_at is past but whose timeout corresponds to the
+  RUNNING threshold must NOT recover (each cursor is
+  independent).
+- Remediation failure non-silent: monkey-patch the helper to
+  raise mid-remediation. Result list contains a RecoveryError
+  for that row + the helper's `logger.error` was called.
+  Subsequent rows still attempted.
 
-Wait — design §4.0.4 says the prior-running stale run gets
-queued for retry. But terminal "failed" is forever per
-round-6. So actually the stale running run is marked
-**failed** (terminal) AND a new pending row is inserted as the
-retry. Two-row remediation. Pin this carefully in tests.
+### 5.4 Timeouts
 
-### 5.4 Timeout
-
-Single argument; caller-controlled. No default in phase 4 —
-forces the caller to think about it. Production wiring picks
-a value (probably 5 minutes for `claimed`, longer for
-`running`).
+Two arguments now (claimed_timeout, running_timeout). No
+defaults — forces the caller to think about it. Production
+wiring picks values; reasonable defaults documented in code
+comments (probably 5 minutes for claimed, 30 minutes for
+running, but configurable per deployment).
 
 ---
 
@@ -425,12 +527,15 @@ def wakeup(
 
     Trigger semantics:
       - OneOffTrigger: insert one run at the configured
-        at_iso_datetime; cleanup is the registration layer's
-        job (later phase).
-      - CronTrigger: insert one run for the current fire time
-        (cron parsing per the installed croniter or
-        APScheduler util; phase 4 makes a deliberate decision
-        below).
+        at_iso_datetime when ``at_iso_datetime <= now``;
+        cleanup is the registration layer's job (later phase).
+      - CronTrigger: ships in a SEPARATE slice after the
+        OneOff path lands. Cron parsing source is an open
+        question (reviewer to pick between APScheduler's
+        ``CronTrigger.from_crontab`` and ``croniter``).
+        **No in-house cron parser** — using the same parser
+        v1 already trusts avoids a whole class of date-math
+        regressions.
       - IntervalTrigger / EventTrigger / ConditionalTrigger:
         stubbed in phase 4 — raise NotImplementedError. Real
         wakeup wiring lands when their use cases ship.
@@ -441,10 +546,11 @@ def wakeup(
     """
 ```
 
-Cron parsing decision (phase 4): use the cron library already
-present in the v1 scheduler if available; otherwise add a tiny
-helper that computes "is this cron due at this `now`" without
-pulling in APScheduler at runtime. Reviewer to pick.
+**Cron parsing decision (open):** APScheduler's
+``CronTrigger.from_crontab`` (already a dependency in v1) OR
+``croniter`` (small dedicated lib). NOT in-house. Reviewer to
+pick BEFORE the Cron slice starts; the OneOff slice ships
+first and is parser-independent.
 
 ### 6.3 APScheduler binding
 
@@ -546,10 +652,11 @@ ships with matching tests in the same commit. Suggested order
 |---|---|
 | 0 | this plan + phase bump + allowlist widening |
 | 1 | state machine module + tests |
-| 2 | claim_run primitive + tests (single-flight regression suite) |
-| 3 | recovery scan + tests |
+| 2 | claim_run primitive (with schedule-status predicate) + tests (single-flight + paused-claim regressions) |
+| 3 | recovery scan (two-cursor: claimed_at / started_at) + non-silent RecoveryError result + tests |
 | 4 | worker loop with empty body + tests |
-| 5 | wakeup callback + tests |
+| 5a | wakeup OneOff path + tests |
+| 5b | wakeup Cron path + tests (after parser choice confirmed) |
 | 6 | (optional) APScheduler binding glue + integration test |
 | close | acceptance criteria verified + tag |
 
@@ -570,17 +677,25 @@ Phase 4 complete when ALL true:
    acknowledged side-track override marker if it persists).
 5. Every legal transition in §3.1 has a passing
    round-trip test (worker walks the path or
-   `assert_legal_transition` allows it).
-6. Every illegal transition has a passing rejection test.
-7. Claim single-flight predicate is exercised under all
-   four scenarios in §4.3.
-8. Recovery scan handles both the claimed-stale and
-   running-stale cases per §5.3, including the two-row
-   remediation for running.
+   `assert_legal_transition` allows it). §3.1.1 future
+   transitions are NOT in `LEGAL_TRANSITIONS`.
+6. Every illegal transition has a passing rejection test,
+   including the §3.1.1 future transitions (must raise in
+   phase 4).
+7. Claim single-flight predicate AND the schedule-status
+   predicate are exercised: paused / archived schedules
+   refuse claim, then become claimable after a transition
+   back to active.
+8. Recovery scan uses TWO cursors (claimed_at /
+   started_at); each is tested independently. Two-row
+   remediation pinned for running-stale. Failed remediations
+   surface as `RecoveryError` items in the result list
+   (non-silent failure).
 9. Worker walks pending → claimed → running → succeeded
    under a synthetic clock with no I/O imports.
-10. Wakeup callback handles OneOff + Cron + the three
-    stubbed-NotImplementedError trigger types.
+10. Wakeup callback handles OneOff in slice 5a. Cron lands
+    in 5b after the parser choice is confirmed. Interval /
+    Event / Conditional → NotImplementedError.
 11. Smoke test confirms no `reason` / `emit` / `delegate` /
     `transfer` callables anywhere in `app/v2/runtime/*` — the
     worker body remains a no-op until later phases wire real
@@ -620,10 +735,10 @@ Plan:   docs/PHASE_4_PLAN.md
    `RESUME`). Phase 4 uses the phase-1 names; design doc
    resync gated on Sergey approval.
 
-2. **Cron parsing source**: APScheduler's util, croniter, or
-   a tiny in-house helper? Reviewer to pick before slice 5.
-   Default proposal: APScheduler's `CronTrigger` parsing,
-   imported as a pure parser without spawning a scheduler.
+2. **Cron parsing source**: APScheduler's
+   `CronTrigger.from_crontab` or `croniter`. **NOT in-house**
+   (reviewer round-2 — too risky to roll a custom parser).
+   Reviewer to pick BEFORE slice 5b.
 
 3. **APScheduler binding glue location**: phase-4 closeout
    slice OR deferred to phase 5? Reviewer call after slice 5
@@ -635,3 +750,11 @@ Plan:   docs/PHASE_4_PLAN.md
    the standard pattern, but stale connection recovery (e.g.
    restart after migration) might prefer per-tick. Plan
    proposes long-lived; reviewer can push back.
+
+5. **paused_pending_policy implementation**: when does a
+   schedule's pause actually mark existing pending runs as
+   cancelled? Phase 4's claim check refuses them; the
+   cancellation transition (`pending → cancelled`) is owned
+   by the future pause/archive admin path. Reviewer +
+   Sergey to decide whether that lives in phase 4 closeout
+   or a later phase. Default: defer.
