@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Iterator, Optional
 
 from app.v2.enums import RunStatus
@@ -134,13 +134,14 @@ def transaction(conn: sqlite3.Connection) -> Iterator[None]:
 
 def _serialize_extra_value(value: Any) -> Any:
     """Coerce an ``extra_columns`` value to its SQLite-storable
-    form, rejecting naive datetimes.
+    form, rejecting naive datetimes and normalising tz-aware
+    ones to UTC.
 
-    ``datetime`` values become ISO 8601 strings; everything else
-    is returned as-is. The serialization layer already enforces
-    timezone-aware datetimes elsewhere — this helper extends the
-    same rule to the ``extra_columns`` channel so a caller can't
-    smuggle a naive ``started_at`` past the storage boundary.
+    ``datetime`` values become ISO 8601 strings in ``+00:00``;
+    everything else is returned as-is. UTC normalisation
+    matches the same pattern in ``runs._to_iso_or_none`` —
+    storing mixed offsets would break lexical compares on
+    indexed datetime columns.
     """
     if isinstance(value, datetime):
         if value.tzinfo is None:
@@ -149,7 +150,7 @@ def _serialize_extra_value(value: Any) -> Any:
                 f"{value!r} — attach tzinfo (typically "
                 "datetime.timezone.utc) before passing."
             )
-        return value.isoformat()
+        return value.astimezone(timezone.utc).isoformat()
     return value
 
 
@@ -270,7 +271,7 @@ def update_run_status_and_append_event(
         event.id,
         event.run_id,
         event.schedule_id,
-        event.ts.isoformat(),
+        event.ts.astimezone(timezone.utc).isoformat(),
         event.kind.value,
         encode_json(event.payload),
         event.correlates,

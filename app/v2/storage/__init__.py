@@ -25,6 +25,12 @@ from app.v2.storage.serialization import (
     decode_json,
     encode_json,
 )
+from app.v2.storage.events import (
+    append_event,
+    get_last_emit_succeeded,
+    list_events_for_run,
+    list_events_for_schedule,
+)
 from app.v2.storage.execution_plans import (
     ExecutionPlanNotFrozenError,
     get_execution_plan,
@@ -61,6 +67,10 @@ __all__ = [
     "NaiveDatetimeError",
     "decode_json",
     "encode_json",
+    "append_event",
+    "get_last_emit_succeeded",
+    "list_events_for_run",
+    "list_events_for_schedule",
     "ExecutionPlanNotFrozenError",
     "get_execution_plan",
     "insert_execution_plan",
