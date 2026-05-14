@@ -25,6 +25,11 @@ from app.v2.storage.serialization import (
     decode_json,
     encode_json,
 )
+from app.v2.storage.execution_plans import (
+    ExecutionPlanNotFrozenError,
+    get_execution_plan,
+    insert_execution_plan,
+)
 from app.v2.storage.schedules import (
     ScheduleNotFoundError,
     ScheduleNotFrozenError,
@@ -48,6 +53,9 @@ __all__ = [
     "NaiveDatetimeError",
     "decode_json",
     "encode_json",
+    "ExecutionPlanNotFrozenError",
+    "get_execution_plan",
+    "insert_execution_plan",
     "ScheduleNotFoundError",
     "ScheduleNotFrozenError",
     "get_schedule",
