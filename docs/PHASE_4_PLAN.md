@@ -173,14 +173,11 @@ class IllegalTransitionError(ValueError):
     isn't in the legal-transitions table."""
 
 LEGAL_TRANSITIONS: frozenset[tuple[RunStatus, RunStatus]] = frozenset({
-    (RunStatus.PENDING,   RunStatus.CLAIMED),
-    (RunStatus.PENDING,   RunStatus.CANCELLED),
-    (RunStatus.CLAIMED,   RunStatus.RUNNING),
-    (RunStatus.CLAIMED,   RunStatus.PENDING),
-    (RunStatus.CLAIMED,   RunStatus.FAILED),
-    (RunStatus.RUNNING,   RunStatus.SUCCEEDED),
-    (RunStatus.RUNNING,   RunStatus.FAILED),
-    (RunStatus.RUNNING,   RunStatus.PENDING),
+    (RunStatus.PENDING, RunStatus.CLAIMED),    # worker claim
+    (RunStatus.CLAIMED, RunStatus.RUNNING),    # worker body start
+    (RunStatus.CLAIMED, RunStatus.FAILED),     # recovery: abandoned claim
+    (RunStatus.RUNNING, RunStatus.SUCCEEDED),  # worker body completed
+    (RunStatus.RUNNING, RunStatus.FAILED),     # worker raised, or recovery
 })
 
 def is_legal_transition(src: RunStatus, dst: RunStatus) -> bool:
@@ -225,6 +222,7 @@ def claim_run(
     *,
     claimed_by: str,
     now: datetime,
+    event_id: str,
 ) -> bool:
     """Attempt to atomically claim a pending run.
 
@@ -274,6 +272,11 @@ def claim_run(
     transactions.transaction(conn) + append_event from phase 3).
     Atomicity-on-failure: if the event INSERT fails the claim
     UPDATE rolls back.
+
+    ``event_id`` is injected — the helper does NOT call
+    ``uuid.uuid4()`` itself. Worker passes
+    ``event_id_factory()`` at the call site. Tests inject a
+    deterministic counter.
     """
 ```
 
@@ -354,6 +357,8 @@ def scan_stale_runs(
     now: datetime,
     claimed_timeout: timedelta,
     running_timeout: timedelta,
+    run_id_factory: Callable[[], str],
+    event_id_factory: Callable[[], str],
 ) -> list[Union[RecoveredRun, RecoveryError]]:
     """Boot-time scan + remediation.
 
@@ -406,6 +411,12 @@ def scan_stale_runs(
     for an admin tool that flips a stuck claimed row back to
     pending without bumping attempt. Phase 4 does NOT expose
     that path.
+
+    ``run_id_factory`` / ``event_id_factory`` are injected —
+    the helper does NOT call ``uuid.uuid4()`` itself. Caller
+    (boot sequence) wires production factories; tests inject
+    deterministic counters so the inserted retry rows and
+    paired events have stable ids assertable in tests.
     """
 ```
 
@@ -476,26 +487,45 @@ class Worker:
             worker_id: str,
             *,
             poll_interval: timedelta,
+            clock: Callable[[], datetime],          # required
+            run_id_factory: Callable[[], str],      # required
+            event_id_factory: Callable[[], str],    # required
         )
 
-    The factory pattern lets the worker open its own dedicated
-    connection without the storage layer ever taking an
-    implicit dependency on data/ori-scheduler.db. Production
-    wires the factory to point at the prod DB; tests wire it
-    to a tmp_path connection.
+    Three injected dependencies, all required (no defaults at
+    the class level — production wiring picks them once, tests
+    pick deterministic ones):
+
+    - ``conn_factory`` opens a SQLite connection. Production
+      wires the prod DB path; tests wire ``tmp_path``.
+    - ``clock`` returns the current ``datetime`` (tz-aware).
+      Tests inject a synthetic clock so recovery timestamps
+      and claim_at values are deterministic.
+    - ``run_id_factory`` / ``event_id_factory`` produce new ids
+      for any Run / Event rows the worker inserts. Production
+      wires ``uuid.uuid4().hex``; tests wire a counter that
+      yields ``run-1``, ``run-2``, ... so assertions on inserted
+      rows have stable values.
+
+    The worker NEVER calls ``datetime.now()`` or ``uuid.uuid4()``
+    directly. Every timestamp comes from ``clock()``; every
+    new id comes from one of the two factories. A smoke test
+    pins this by grepping the module for raw calls.
 
     Lifecycle:
         await worker.start()   # spawns the poll loop
         await worker.stop()    # cooperative shutdown
 
     Per-tick:
-        1. list_pending_due(now, limit=1)
-        2. claim_run(...)
-        3. on True: mark_run_status(claimed → running)
-           append run_started event in same TX.
+        1. list_pending_due(now=clock(), limit=1)
+        2. claim_run(..., now=clock(), event_id=event_id_factory())
+        3. on True: mark_run_status(claimed → running) via
+           update_run_status_and_append_event with
+           kind=run_started, event id from event_id_factory().
         4. (empty body — await asyncio.sleep(0))
-        5. update_run_status_and_append_event(running → succeeded,
-           kind=run_succeeded).
+        5. update_run_status_and_append_event(running →
+           succeeded, kind=run_succeeded, event id from
+           event_id_factory()).
         6. Sleep poll_interval.
         7. Exit cleanly when stop() called.
 
@@ -514,6 +544,8 @@ def wakeup(
     *,
     schedule_id: str,
     now: datetime,
+    run_id_factory: Callable[[], str],
+    event_id_factory: Callable[[], str],
 ) -> list[str]:
     """Read the ScheduleSpec for schedule_id, compute due_at(s)
     based on its trigger, INSERT one or more pending Run rows
@@ -543,6 +575,10 @@ def wakeup(
     The callable is the function APScheduler will eventually
     register. Phase 4 does NOT actually register it — tests
     invoke it directly with a synthetic ``now``.
+
+    ``run_id_factory`` / ``event_id_factory`` injected — same
+    rule as scan_stale_runs (helper does not call
+    ``uuid.uuid4()``).
     """
 ```
 
@@ -551,6 +587,24 @@ def wakeup(
 ``croniter`` (small dedicated lib). NOT in-house. Reviewer to
 pick BEFORE the Cron slice starts; the OneOff slice ships
 first and is parser-independent.
+
+### 6.2.1 Clock + id-factory injection rule (cross-cutting)
+
+EVERY phase-4 runtime helper that needs a timestamp takes
+``now`` (or ``clock`` in long-lived constructors). EVERY helper
+that inserts a row needing a new id takes
+``run_id_factory`` / ``event_id_factory`` callables. No phase-4
+runtime module imports ``datetime.datetime`` for ``now()`` or
+``uuid`` for ``uuid4()`` directly — the smoke tests grep for
+those calls and fail loud if added.
+
+Production wiring (NOT in phase 4):
+- ``clock = lambda: datetime.now(timezone.utc)``
+- ``run_id_factory = event_id_factory = lambda: uuid.uuid4().hex``
+
+A single ``app/v2/runtime/_defaults.py`` module SHIPS later
+alongside the APScheduler binding glue. Phase 4 forces every
+helper to accept the injection explicitly.
 
 ### 6.3 APScheduler binding
 
@@ -570,11 +624,12 @@ slice** if all earlier slices are clean.
   with 4 event rows (run_created not from worker; worker emits
   run_claimed + run_started + run_succeeded).
 - Worker tick with no pending runs returns cleanly + sleeps.
-- Worker tick on a paused schedule does NOT claim
-  (claim_run's single-flight predicate handles this only if
-  the schedule's pending run was already inserted; the wakeup
-  callback skips paused schedules at INSERT time, not the
-  worker).
+- Worker tick on a paused schedule does NOT claim. The
+  ``schedule-status predicate`` inside ``claim_run`` (§4.1
+  UPDATE clause ``EXISTS schedules WHERE status='active'``)
+  catches pending rows that pre-dated a pause; the wakeup
+  callback (§6.2) refuses to insert NEW pending rows for a
+  paused schedule.
 - Concurrent workers (two `Worker` instances, distinct
   worker_id) on the same DB: each claims a distinct pending
   run for distinct schedules. Single-flight predicate is what
@@ -587,17 +642,34 @@ slice** if all earlier slices are clean.
 
 ### 6.5 Wakeup tests
 
-- OneOff at_iso_datetime past `now` → no insert.
-- OneOff at_iso_datetime <= `now` → insert one pending Run +
+**Slice 5a (OneOff only — no cron parser dependency):**
+
+- OneOff `at_iso_datetime > now` → no insert.
+- OneOff `at_iso_datetime <= now` → insert one pending Run +
   run_created event in same TX.
-- Cron `*/5 * * * *` with `now` aligned → insert.
-- Cron with `now` between fire times → no insert.
-- Paused schedule → no insert regardless of trigger.
-- Archived schedule → no insert.
+- Paused schedule + any trigger → no insert.
+- Archived schedule + any trigger → no insert.
 - Unknown schedule id → no insert (returns []).
+- CronTrigger schedule passed to slice-5a wakeup → raises
+  ``NotImplementedError`` (slice 5b not yet shipped). Pinning
+  this so a coder who runs 5a doesn't accidentally implement
+  cron alongside.
 - IntervalTrigger / EventTrigger / ConditionalTrigger →
   NotImplementedError (deliberately, with explicit message
   pointing at the phase that will land them).
+- Injected ``run_id_factory`` / ``event_id_factory`` are
+  invoked exactly once per inserted row / event; pin via a
+  counter factory.
+
+**Slice 5b (Cron, after parser choice confirmed):**
+
+- Cron `*/5 * * * *` with `now` aligned to a fire time →
+  insert one pending Run + run_created event.
+- Cron with `now` between fire times → no insert.
+- Cron + paused / archived → no insert (carries forward the
+  5a guard rails).
+- Parser-specific edge cases (parser-source dependent —
+  reviewer-approved test list lands with 5b).
 
 ---
 
