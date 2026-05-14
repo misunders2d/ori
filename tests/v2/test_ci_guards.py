@@ -326,126 +326,39 @@ def test_main_returns_zero_when_diff_empty(guard, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# PHASE_OVERRIDE handling in --diff mode (per docs/PHASE_1_PLAN.md §6.4
-# + reviewer fix from phase 3 slice 1).
-#
-# `--diff` walks the rev-list per commit. For commits whose
-# message body carries ``PHASE_OVERRIDE: <reason>`` the touched
-# files are excluded from the violation set — the marker is the
-# documented retrospective-ack mechanism for side-track work that
-# bypassed the local pre-commit hook.
+# PHASE_OVERRIDE semantics live in the workflow, not the script
+# (per docs/PHASE_1_PLAN.md §6.4 + reviewer correction). The
+# script reports every touched path as a violation regardless of
+# any commit-message marker; the workflow at
+# .github/workflows/v2_phase_guard.yml reads PHASE_OVERRIDE
+# lines from the range and converts a non-zero exit + marker
+# into the requires_human_ack label. Filtering override files
+# inside the script would silently bypass the ack workflow —
+# the script stays purely path-based.
 # ---------------------------------------------------------------------------
 
 
-def test_commit_has_override_true_with_reason(guard, monkeypatch):
-    monkeypatch.setattr(
-        guard, "_git",
-        lambda *args, **kwargs: (
-            "wiring up the ads api\n\n"
-            "PHASE_OVERRIDE: one-time side-track for refresh token\n"
-        ),
-    )
-    assert guard._commit_has_override("abc1234") is True
-
-
-def test_commit_has_override_false_without_marker(guard, monkeypatch):
-    monkeypatch.setattr(
-        guard, "_git",
-        lambda *args, **kwargs: (
-            "feat(scheduler/v2): phase 3 slice 1\n\n"
-            "Adds the connection contract.\n"
-        ),
-    )
-    assert guard._commit_has_override("abc1234") is False
-
-
-def test_commit_has_override_false_with_empty_reason(guard, monkeypatch):
-    """A bare ``PHASE_OVERRIDE:`` with no reason after the colon
-    must NOT qualify — the marker is supposed to be auditable."""
-    monkeypatch.setattr(
-        guard, "_git",
-        lambda *args, **kwargs: (
-            "feat(x): something\n\nPHASE_OVERRIDE:   \n"
-        ),
-    )
-    assert guard._commit_has_override("abc1234") is False
-
-
-def test_commit_has_override_ignores_inline_substring(guard, monkeypatch):
-    """The marker must START a line; an inline mention in body
-    prose does not qualify."""
-    monkeypatch.setattr(
-        guard, "_git",
-        lambda *args, **kwargs: (
-            "feat(x): something\n\n"
-            "considered using PHASE_OVERRIDE: but decided not to\n"
-        ),
-    )
-    assert guard._commit_has_override("abc1234") is False
-
-
-def test_get_diff_files_excludes_override_commits(guard, monkeypatch):
-    """Walks rev-list; for a commit with PHASE_OVERRIDE we skip
-    its files. Non-override commits contribute normally."""
-    rev_list_output = "sha_override\nsha_normal\n"
-    commit_messages = {
-        "sha_override": "side track\n\nPHASE_OVERRIDE: ack\n",
-        "sha_normal": "feat(v2): slice 1\n",
-    }
-    commit_files = {
-        "sha_override": "app/a2a_server.py\nscripts/ads_oauth_helper.py\n",
-        "sha_normal": "app/v2/storage/connection.py\n",
-    }
+def test_get_diff_files_does_not_filter_by_override_marker(guard, monkeypatch):
+    """Even if a commit in the range has PHASE_OVERRIDE in its
+    message body, get_diff_files reports the file. The override
+    is the workflow's signal, not the script's."""
 
     def fake_git(*args, **kwargs):
-        if args[:1] == ("rev-list",):
-            return rev_list_output
-        if args[:1] == ("log",):
-            # args looks like ("log", "-1", "--format=%B", sha)
-            sha = args[-1]
-            return commit_messages[sha]
-        if args[:1] == ("diff-tree",):
-            sha = args[-1]
-            return commit_files[sha]
-        raise AssertionError(f"unexpected git call: {args}")
-
-    monkeypatch.setattr(guard, "_git", fake_git)
-
-    files = guard.get_diff_files("base")
-    # Override commit's files excluded; normal commit's stay.
-    assert files == ["app/v2/storage/connection.py"]
-
-
-def test_get_diff_files_returns_empty_for_empty_range(guard, monkeypatch):
-    monkeypatch.setattr(
-        guard, "_git",
-        lambda *args, **kwargs: "",
-    )
-    assert guard.get_diff_files("base") == []
-
-
-def test_get_diff_files_dedups_across_commits(guard, monkeypatch):
-    """If two non-override commits touch the same file, return
-    that path only once. Keeps the violation report compact."""
-    rev_list_output = "sha_a\nsha_b\n"
-    commit_files = {
-        "sha_a": "app/v2/storage/connection.py\n",
-        "sha_b": "app/v2/storage/connection.py\napp/v2/storage/serialization.py\n",
-    }
-
-    def fake_git(*args, **kwargs):
-        if args[:1] == ("rev-list",):
-            return rev_list_output
-        if args[:1] == ("log",):
-            return "feat(x): clean\n"  # no override on either
-        if args[:1] == ("diff-tree",):
-            return commit_files[args[-1]]
+        # get_diff_files asks `git diff --name-only base...HEAD`
+        # — a single shell-style invocation.
+        if args[:2] == ("diff", "--name-only"):
+            return "app/a2a_server.py\nscripts/ads_oauth_helper.py\n"
         raise AssertionError(f"unexpected git call: {args}")
 
     monkeypatch.setattr(guard, "_git", fake_git)
 
     files = guard.get_diff_files("base")
     assert files == [
-        "app/v2/storage/connection.py",
-        "app/v2/storage/serialization.py",
+        "app/a2a_server.py",
+        "scripts/ads_oauth_helper.py",
     ]
+
+
+def test_get_diff_files_returns_empty_for_empty_range(guard, monkeypatch):
+    monkeypatch.setattr(guard, "_git", lambda *args, **kwargs: "")
+    assert guard.get_diff_files("base") == []
