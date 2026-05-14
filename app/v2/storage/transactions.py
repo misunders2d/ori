@@ -313,7 +313,9 @@ def update_run_status_and_append_event(
 
 
 __all__ = [
+    "EventRunMismatchError",
     "RunNotFoundError",
+    "UnknownExtraColumnError",
     "transaction",
     "update_run_status_and_append_event",
 ]
