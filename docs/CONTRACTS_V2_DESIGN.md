@@ -353,12 +353,26 @@ CREATE INDEX idx_runs_root ON runs(root_run_id);  -- O(1) retry-chain lookup
 CREATE INDEX idx_runs_schedule_running ON runs(schedule_id, status) WHERE status IN ('claimed', 'running');  -- single-flight check
 
 -- EventLedger
+-- kind is CHECK-constrained against the canonical EventKind set
+-- (app/v2/enums.py:EventKind). Adding a new EventKind requires a
+-- new migration to widen this CHECK alongside the enum addition.
 CREATE TABLE events (
     id              TEXT PRIMARY KEY,            -- uuid4
     run_id          TEXT,                        -- FK runs.id (nullable for schedule-level events)
     schedule_id     TEXT NOT NULL,
     ts              TEXT NOT NULL,
-    kind            TEXT NOT NULL,
+    kind            TEXT NOT NULL CHECK (kind IN (
+                        'schedule_created', 'schedule_revised', 'schedule_paused',
+                        'schedule_archived', 'schedule_resumed', 'schedule_revived',
+                        'run_created', 'run_claimed', 'run_started', 'run_recovered',
+                        'run_succeeded', 'run_failed', 'run_retry_scheduled', 'run_cancelled',
+                        'source_resolved', 'source_drift_detected', 'source_failed',
+                        'reasoning_started', 'reasoning_completed', 'reasoning_failed',
+                        'emit_started', 'emit_succeeded', 'emit_failed', 'emit_skipped_idempotent',
+                        'delivery_failed', 'admin_alert_sent', 'admin_alert_acked',
+                        'audit_mirror_appended', 'boot_self_test_passed',
+                        'boot_self_test_failed', 'migration_v1_to_v2_complete'
+                    )),
     payload_json    TEXT NOT NULL,               -- event-specific fields
     correlates      TEXT,                        -- another event id (e.g. ack <-> admin_alert_sent)
     FOREIGN KEY (run_id) REFERENCES runs(id),
@@ -370,6 +384,9 @@ CREATE INDEX idx_events_schedule_ts ON events(schedule_id, ts);
 CREATE INDEX idx_events_kind ON events(kind);
 
 -- Cross-fire state (per-schedule key/value with versions)
+-- written_by_run is a nullable FK to runs(id): author-time seeds
+-- legitimately have NULL, but when set the value must reference
+-- a real Run (replay + lineage queries depend on this).
 CREATE TABLE schedule_state (
     schedule_id     TEXT NOT NULL,
     key             TEXT NOT NULL,
@@ -378,20 +395,27 @@ CREATE TABLE schedule_state (
     written_at      TEXT NOT NULL,
     written_by_run  TEXT,                        -- run id (nullable for author-time seeds)
     PRIMARY KEY (schedule_id, key),
-    FOREIGN KEY (schedule_id) REFERENCES schedules(id)
+    FOREIGN KEY (schedule_id) REFERENCES schedules(id),
+    FOREIGN KEY (written_by_run) REFERENCES runs(id)
 );
 
 -- Source snapshots (when contracts use LiveSourceRef)
--- Stored on filesystem for size, indexed in SQLite by content hash
+-- Stored on filesystem for size, indexed in SQLite by content hash.
+-- selection_method records HOW the fire-time item was picked so
+-- the audit log can explain "why item 5 instead of item 12".
+-- CHECK-constrained against SelectionMethod (app/v2/enums.py).
 CREATE TABLE source_snapshots (
-    run_id          TEXT NOT NULL,
-    source_id       TEXT NOT NULL,               -- input_id from ExecutionPlan
-    content_hash    TEXT NOT NULL,
-    content_path    TEXT NOT NULL,               -- relative path on disk
-    content_size    INTEGER NOT NULL,
-    fetched_at      TEXT NOT NULL,
-    source_kind     TEXT NOT NULL,
-    source_version  TEXT,                        -- revision id where supported
+    run_id           TEXT NOT NULL,
+    source_id        TEXT NOT NULL,              -- input_id from ExecutionPlan
+    content_hash     TEXT NOT NULL,
+    content_path     TEXT NOT NULL,              -- relative path on disk
+    content_size     INTEGER NOT NULL,
+    fetched_at       TEXT NOT NULL,
+    source_kind      TEXT NOT NULL,
+    source_version   TEXT,                       -- revision id where supported
+    selection_method TEXT NOT NULL CHECK (selection_method IN (
+                         'stable_id', 'content_hash', 'row_number'
+                     )),
     PRIMARY KEY (run_id, source_id),
     FOREIGN KEY (run_id) REFERENCES runs(id)
 );
