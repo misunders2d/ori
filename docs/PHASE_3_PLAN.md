@@ -197,11 +197,10 @@ belongs in phase 3 because it's a SQLite transaction
 property of the data plane; the *policy* of which
 transitions are legal lives in phase 4's state machine.
 
-The helper opens its own `transaction()` block internally
-unless the caller is already inside one. For phase 3 we keep
-the simple rule: caller is NOT inside a transaction when
-calling this helper; the helper owns the TX. Nested-aware
-behavior is a later concern.
+The helper owns the transaction. The caller MUST NOT already be
+inside an active transaction when invoking this helper. Nested
+transaction support is deferred — calling this helper from
+within a `transaction()` block is undefined for phase 3.
 
 ### 4.3 Rollback contract
 
@@ -416,18 +415,19 @@ API.
 
 ### 8.2 Same-TX-as-transition
 
-When the caller is recording a Run state transition, they call
-`transition_run_and_emit_event` (§4.2) which wraps both
+When the caller is recording a Run row mutation that must
+land atomically with its matching event row, they call
+`update_run_status_and_append_event` (§4.2) which wraps both
 operations in a single TX. The storage layer surfaces both
 helpers (`append_event` for schedule-level + standalone
-events; `transition_run_and_emit_event` for paired
-transitions).
+events; `update_run_status_and_append_event` for paired
+mutations).
 
 ### 8.3 No silent failure
 
 Every helper either succeeds, returns a sentinel indicating
-the operation didn't happen (e.g. CAS False, claim returns
-False), or raises. None of them swallow exceptions. Design
+the operation didn't happen (e.g. CAS returns False on stale
+version), or raises. None of them swallow exceptions. Design
 §13 ("nothing fails silently") at the storage boundary.
 
 ### 8.4 Idempotency lookup
