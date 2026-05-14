@@ -416,6 +416,122 @@ def reset_all_models() -> dict[str, str]:
     return clear_all_assignments()
 
 
+_MODELS_USAGE = (
+    "Usage:\n"
+    "  `/models` — list all agent model assignments\n"
+    "  `/models <Component> <provider/model>` — set one component's model "
+    "(e.g. `/models DeveloperAgent openrouter/deepseek/deepseek-v4-flash`)\n"
+    "  `/models set <Component> <provider/model>` — explicit alias\n"
+    "  `/models default` — reset ALL agents to their default models\n"
+    "  `/models default <Component>` — reset one component to its default"
+)
+
+
+def dispatch_models_command(text: str) -> str:
+    """Parse a ``/models …`` slash command and return the reply text.
+
+    Pure-data dispatcher: takes the raw user message string, returns
+    the response string. Pollers do the auth check + send the reply.
+    Identical Slack and Telegram behaviour live here so the two
+    surfaces can't drift.
+
+    Grammar:
+
+      * ``/models``                              → list all assignments
+      * ``/models default``                      → reset every override
+      * ``/models default <Component>``          → reset one
+      * ``/models <Component> <provider/model>`` → set one (2026-05-14)
+      * ``/models set <Component> <prov/model>`` → explicit alias of the
+        set form
+
+    Cross-provider swaps (e.g. anthropic → openrouter) require a bot
+    restart because the agent's ``canonical_model`` instance is built
+    once at boot. Same-provider swaps (model string within the same
+    provider — most ``openrouter/X/Y`` → ``openrouter/A/B`` cases) take
+    effect on the next LLM call. The reply text flags the difference
+    explicitly so the operator knows whether to restart.
+    """
+    parts = text.strip().split()
+
+    if len(parts) == 1:  # /models
+        return "```\n" + format_model_assignments(markdown=False) + "\n```"
+
+    if len(parts) >= 2 and parts[1].lower() == "default":
+        if len(parts) == 2:
+            cleared = reset_all_models()
+            msg = (
+                f"Reset {len(cleared)} model override(s) to defaults."
+                if cleared
+                else "No overrides to reset — everything is already on defaults."
+            )
+            return msg + "\n\n```\n" + format_model_assignments(markdown=False) + "\n```"
+        component = parts[2]
+        if component not in VALID_COMPONENTS:
+            return (
+                f"Unknown component '{component}'. "
+                f"Valid: {', '.join(sorted(VALID_COMPONENTS))}"
+            )
+        cleared = reset_model(component)
+        return (
+            f"Reset {component} to default."
+            if cleared
+            else f"{component} was already on its default — nothing to clear."
+        )
+
+    # SET path. Supports both shorthand and explicit forms:
+    #   /models <Component> <model_str>
+    #   /models set <Component> <model_str>
+    if len(parts) == 3 and parts[1] in VALID_COMPONENTS:
+        component, new_model = parts[1], parts[2]
+    elif len(parts) == 4 and parts[1].lower() == "set":
+        component, new_model = parts[2], parts[3]
+    else:
+        return _MODELS_USAGE
+
+    if component not in VALID_COMPONENTS:
+        return (
+            f"Unknown component '{component}'. "
+            f"Valid: {', '.join(sorted(VALID_COMPONENTS))}"
+        )
+
+    # Capture current resolved string so we can flag cross-provider
+    # swaps (require restart) vs same-provider swaps (take effect
+    # next LLM call).
+    try:
+        prev = get_model_string(component)
+        prev_provider, _ = _parse_model_str(prev) if prev else ("", "")
+    except Exception:
+        prev_provider = ""
+
+    try:
+        set_model(component, new_model)
+    except ValueError as e:
+        # set_model rejects unknown providers, invalid component
+        # names, and missing API keys. Surface verbatim so the
+        # operator knows exactly what to fix.
+        return f"Failed to set {component}: {e}"
+
+    try:
+        new_provider, _ = _parse_model_str(new_model)
+    except Exception:
+        new_provider = ""
+
+    restart_note = ""
+    if prev_provider and new_provider and prev_provider != new_provider:
+        restart_note = (
+            f"\n\n⚠️ Cross-provider swap ({prev_provider} → {new_provider}). "
+            "The agent's model instance is locked at boot — "
+            "`update_self` (restart) for this to take effect."
+        )
+    else:
+        restart_note = "\n\nLive — next LLM call to this agent uses the new model."
+
+    return (
+        f"`{component}` → `{new_model}`{restart_note}\n\n"
+        "```\n" + format_model_assignments(markdown=False) + "\n```"
+    )
+
+
 def hydrate_model_env() -> int:
     """Seed os.environ[MODEL_*] from data/model_config.json before any agent imports.
 

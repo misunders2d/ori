@@ -165,21 +165,43 @@ For now: if you set a typoed model name, the failure surfaces only when the agen
 
 ## 8. Common operations
 
+All four forms below are handled deterministically by
+`dispatch_models_command` in `app/app_utils/models.py` — the
+Slack and Telegram pollers route `/models …` through it without
+ever invoking the agent. Zero LLM tokens, zero session-history
+replay.
+
 ### Swap the Coordinator to Claude
+
+```
+/models CoordinatorAgent anthropic/claude-sonnet-4-6
+```
+
+Shorthand form (no `set` keyword needed). Equivalent explicit form:
 
 ```
 /models set CoordinatorAgent anthropic/claude-sonnet-4-6
 ```
 
-Equivalent to: `set_agent_model("CoordinatorAgent", "anthropic/claude-sonnet-4-6")`. After Phase 2, this survives `/reset session` and process restart.
+Both call `set_model("CoordinatorAgent",
+"anthropic/claude-sonnet-4-6")`. Same-provider swaps take effect on
+the next LLM call. Cross-provider swaps require a restart (the
+agent's `canonical_model` is locked at boot); the slash reply
+flags this explicitly with a `⚠️ Cross-provider swap …` note.
 
 ### Roll all components back to defaults
 
 ```
-/models reset
+/models default
 ```
 
-Calls `reset_all_models()` — clears every `assignments[*]` entry and `MODEL_*` env var.
+Calls `reset_all_models()` — clears every `assignments[*]` entry.
+
+### Reset one component
+
+```
+/models default <Component>
+```
 
 ### Inspect current assignments
 
@@ -187,7 +209,9 @@ Calls `reset_all_models()` — clears every `assignments[*]` entry and `MODEL_*`
 /models
 ```
 
-Or programmatically: `get_all_model_strings()` returns `{component: model_str}` for every component (resolved through the full hierarchy).
+Or programmatically: `get_all_model_strings()` returns
+`{component: model_str}` for every component (resolved through the
+full hierarchy).
 
 ### Add a new component
 

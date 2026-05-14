@@ -439,9 +439,11 @@ async def poll_slack(get_runner_fn, process_init_fn):
             return
 
         # /models command — deterministic, bypasses the LLM entirely
-        # /models                       → list all assignments
-        # /models default               → clear all overrides (reset every agent to default)
-        # /models default <Component>   → clear one component's override
+        # /models                              → list all assignments
+        # /models default                      → clear all overrides
+        # /models default <Component>          → clear one component's override
+        # /models <Component> <model_string>   → set one component (2026-05-14)
+        # /models set <Component> <model_str>  → alias for the above
         if text.strip().startswith("/models"):
             admin_users_str = os.environ.get("ADMIN_USER_IDS", "")
             admin_users = {u.strip() for u in admin_users_str.split(",") if u.strip()}
@@ -451,43 +453,10 @@ async def poll_slack(get_runner_fn, process_init_fn):
             if admin_users and not (caller_ids & admin_users):
                 await say("Access denied: /models is admin-only.")
                 return
-            from app.app_utils.models import (
-                format_model_assignments,
-                reset_all_models,
-                reset_model,
-                VALID_COMPONENTS,
-            )
-            parts = text.strip().split()
-            if len(parts) == 1:
-                await say("```\n" + format_model_assignments(markdown=False) + "\n```")
-            elif len(parts) >= 2 and parts[1].lower() == "default":
-                if len(parts) == 2:
-                    cleared = reset_all_models()
-                    msg = (
-                        f"Reset {len(cleared)} model override(s) to defaults."
-                        if cleared else
-                        "No overrides to reset — everything is already on defaults."
-                    )
-                    await say(msg + "\n\n```\n" + format_model_assignments(markdown=False) + "\n```")
-                else:
-                    component = parts[2]
-                    if component not in VALID_COMPONENTS:
-                        await say(f"Unknown component '{component}'. Valid: {', '.join(sorted(VALID_COMPONENTS))}")
-                    else:
-                        cleared = reset_model(component)
-                        msg = (
-                            f"Reset {component} to default."
-                            if cleared else
-                            f"{component} was already on its default — nothing to clear."
-                        )
-                        await say(msg)
-            else:
-                await say(
-                    "Usage:\n"
-                    "  `/models` — list all agent model assignments\n"
-                    "  `/models default` — reset ALL agents to their default models\n"
-                    "  `/models default <Component>` — reset one component to its default"
-                )
+            from app.app_utils.models import dispatch_models_command
+
+            reply = dispatch_models_command(text)
+            await say(reply)
             return
 
         # /init command
