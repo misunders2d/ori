@@ -44,6 +44,10 @@ from app.v2.storage.runs import (
     list_runs_in_chain,
     mark_run_status,
 )
+from app.v2.storage.schedule_state import (
+    get_state,
+    set_state_cas,
+)
 from app.v2.storage.schedules import (
     ScheduleNotFoundError,
     ScheduleNotFrozenError,
@@ -80,6 +84,8 @@ __all__ = [
     "list_pending_due",
     "list_runs_in_chain",
     "mark_run_status",
+    "get_state",
+    "set_state_cas",
     "ScheduleNotFoundError",
     "ScheduleNotFrozenError",
     "get_schedule",
