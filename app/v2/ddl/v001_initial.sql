@@ -76,12 +76,26 @@ CREATE INDEX idx_runs_schedule_running ON runs(schedule_id, status) WHERE status
 
 -- EventLedger: append-only audit truth. Every state transition
 -- and every emit produces one row.
+-- kind is constrained to the canonical EventKind set
+-- (app/v2/enums.py:EventKind). New kinds require a new migration
+-- to widen the CHECK alongside the enum addition.
 CREATE TABLE events (
     id           TEXT PRIMARY KEY,
     run_id       TEXT,
     schedule_id  TEXT NOT NULL,
     ts           TEXT NOT NULL,
-    kind         TEXT NOT NULL,
+    kind         TEXT NOT NULL CHECK (kind IN (
+                     'schedule_created', 'schedule_revised', 'schedule_paused',
+                     'schedule_archived', 'schedule_resumed', 'schedule_revived',
+                     'run_created', 'run_claimed', 'run_started', 'run_recovered',
+                     'run_succeeded', 'run_failed', 'run_retry_scheduled', 'run_cancelled',
+                     'source_resolved', 'source_drift_detected', 'source_failed',
+                     'reasoning_started', 'reasoning_completed', 'reasoning_failed',
+                     'emit_started', 'emit_succeeded', 'emit_failed', 'emit_skipped_idempotent',
+                     'delivery_failed', 'admin_alert_sent', 'admin_alert_acked',
+                     'audit_mirror_appended', 'boot_self_test_passed',
+                     'boot_self_test_failed', 'migration_v1_to_v2_complete'
+                 )),
     payload_json TEXT NOT NULL,
     correlates   TEXT,
     FOREIGN KEY (run_id) REFERENCES runs(id),
@@ -94,6 +108,9 @@ CREATE INDEX idx_events_kind ON events(kind);
 
 
 -- Cross-fire schedule state (per-schedule key/value with version).
+-- written_by_run is nullable: author-time seeds have no run to
+-- attribute. When set, it must reference a real Run for replay
+-- + lineage queries (no orphaned attributions).
 CREATE TABLE schedule_state (
     schedule_id    TEXT NOT NULL,
     key            TEXT NOT NULL,
@@ -102,21 +119,29 @@ CREATE TABLE schedule_state (
     written_at     TEXT NOT NULL,
     written_by_run TEXT,
     PRIMARY KEY (schedule_id, key),
-    FOREIGN KEY (schedule_id) REFERENCES schedules(id)
+    FOREIGN KEY (schedule_id) REFERENCES schedules(id),
+    FOREIGN KEY (written_by_run) REFERENCES runs(id)
 );
 
 
 -- Source snapshots: filesystem stores the bytes (keyed by hash);
 -- SQLite indexes the metadata.
+-- selection_method records HOW the fire-time item was picked so
+-- the audit log can explain "why item 5 instead of item 12".
+-- Constrained to the SelectionMethod enum
+-- (app/v2/enums.py:SelectionMethod).
 CREATE TABLE source_snapshots (
-    run_id         TEXT NOT NULL,
-    source_id      TEXT NOT NULL,
-    content_hash   TEXT NOT NULL,
-    content_path   TEXT NOT NULL,
-    content_size   INTEGER NOT NULL,
-    fetched_at     TEXT NOT NULL,
-    source_kind    TEXT NOT NULL,
-    source_version TEXT,
+    run_id           TEXT NOT NULL,
+    source_id        TEXT NOT NULL,
+    content_hash     TEXT NOT NULL,
+    content_path     TEXT NOT NULL,
+    content_size     INTEGER NOT NULL,
+    fetched_at       TEXT NOT NULL,
+    source_kind      TEXT NOT NULL,
+    source_version   TEXT,
+    selection_method TEXT NOT NULL CHECK (selection_method IN (
+                         'stable_id', 'content_hash', 'row_number'
+                     )),
     PRIMARY KEY (run_id, source_id),
     FOREIGN KEY (run_id) REFERENCES runs(id)
 );

@@ -258,8 +258,8 @@ def test_source_snapshots_run_fk_enforced(migrated_conn):
         migrated_conn.execute(
             "INSERT INTO source_snapshots "
             "(run_id, source_id, content_hash, content_path, content_size, "
-            " fetched_at, source_kind) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            " fetched_at, source_kind, selection_method) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 "missing_run",
                 "syllabus",
@@ -268,6 +268,7 @@ def test_source_snapshots_run_fk_enforced(migrated_conn):
                 10,
                 _NOW,
                 "source_drive_file",
+                "stable_id",
             ),
         )
 
@@ -301,3 +302,199 @@ def test_partial_indexes_created(migrated_conn):
     assert "idx_runs_pending_due" in index_names
     assert "idx_runs_schedule_running" in index_names
     assert "idx_runs_root" in index_names
+
+
+# ---------------------------------------------------------------------------
+# events.kind CHECK — round-7 tightening. Storage refuses any
+# kind not in the EventKind enum so the ledger stays trustworthy
+# even if a buggy caller bypasses the Pydantic layer.
+# ---------------------------------------------------------------------------
+
+
+def _insert_event(
+    conn: sqlite3.Connection,
+    *,
+    event_id: str,
+    schedule_id: str = "daily_audit",
+    kind: str,
+) -> None:
+    conn.execute(
+        "INSERT INTO events "
+        "(id, schedule_id, ts, kind, payload_json) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (event_id, schedule_id, _NOW, kind, "{}"),
+    )
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "schedule_created",
+        "run_started",
+        "run_succeeded",
+        "emit_skipped_idempotent",
+        "admin_alert_acked",
+        "migration_v1_to_v2_complete",
+    ],
+)
+def test_events_kind_accepts_canonical_values(migrated_conn, kind):
+    _insert_schedule(migrated_conn)
+    _insert_event(migrated_conn, event_id=f"e-{kind}", kind=kind)
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "schedule_creates",   # typo
+        "RUN_STARTED",        # wrong case
+        "post_succeeded",     # outdated name
+        "",                   # empty
+        "made_up_kind",       # invented
+    ],
+)
+def test_events_kind_rejects_unknown_values(migrated_conn, kind):
+    _insert_schedule(migrated_conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_event(migrated_conn, event_id=f"e-bad-{kind!r}", kind=kind)
+
+
+def test_events_kind_check_covers_every_enum_value(migrated_conn):
+    """Drift guard: every value in ``EventKind`` must round-trip
+    through the storage layer. If somebody adds a new enum value
+    without updating the DDL CHECK, this test fails — forcing
+    the migration alongside the enum addition."""
+    from app.v2.enums import EventKind
+
+    _insert_schedule(migrated_conn)
+    for i, kind in enumerate(EventKind):
+        _insert_event(migrated_conn, event_id=f"e-{i}", kind=kind.value)
+
+
+# ---------------------------------------------------------------------------
+# source_snapshots.selection_method — round-7 tightening.
+# Required column; Pydantic model has always required it but the
+# initial DDL draft missed the column entirely.
+# ---------------------------------------------------------------------------
+
+
+def _insert_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    source_id: str = "syllabus",
+    selection_method: str | None = "stable_id",
+) -> None:
+    cols = [
+        "run_id",
+        "source_id",
+        "content_hash",
+        "content_path",
+        "content_size",
+        "fetched_at",
+        "source_kind",
+    ]
+    vals: list[object] = [
+        run_id,
+        source_id,
+        "sha256:" + "a" * 64,
+        "data/x.json",
+        10,
+        _NOW,
+        "source_drive_file",
+    ]
+    if selection_method is not None:
+        cols.append("selection_method")
+        vals.append(selection_method)
+    placeholders = ", ".join(["?"] * len(cols))
+    conn.execute(
+        f"INSERT INTO source_snapshots ({', '.join(cols)}) "
+        f"VALUES ({placeholders})",
+        vals,
+    )
+
+
+@pytest.mark.parametrize(
+    "method", ["stable_id", "content_hash", "row_number"]
+)
+def test_source_snapshots_selection_method_accepts_canonical(migrated_conn, method):
+    _insert_schedule(migrated_conn)
+    _insert_run(migrated_conn, run_id=f"r-{method}")
+    _insert_snapshot(
+        migrated_conn, run_id=f"r-{method}", selection_method=method
+    )
+
+
+@pytest.mark.parametrize(
+    "method", ["first_row", "index", "primary_key", ""]
+)
+def test_source_snapshots_selection_method_rejects_unknown(migrated_conn, method):
+    _insert_schedule(migrated_conn)
+    _insert_run(migrated_conn, run_id="r-sel")
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_snapshot(
+            migrated_conn, run_id="r-sel", selection_method=method
+        )
+
+
+def test_source_snapshots_selection_method_not_null(migrated_conn):
+    _insert_schedule(migrated_conn)
+    _insert_run(migrated_conn, run_id="r-nosel")
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_snapshot(
+            migrated_conn, run_id="r-nosel", selection_method=None
+        )
+
+
+def test_source_snapshots_selection_method_covers_every_enum_value(migrated_conn):
+    """Drift guard mirror of the event-kind guard."""
+    from app.v2.enums import SelectionMethod
+
+    _insert_schedule(migrated_conn)
+    _insert_run(migrated_conn, run_id="r-drift")
+    for i, method in enumerate(SelectionMethod):
+        _insert_snapshot(
+            migrated_conn,
+            run_id="r-drift",
+            source_id=f"src-{i}",
+            selection_method=method.value,
+        )
+
+
+# ---------------------------------------------------------------------------
+# schedule_state.written_by_run FK — round-7 tightening. Nullable
+# (author-time seeds) but when set must point at a real Run.
+# ---------------------------------------------------------------------------
+
+
+def _insert_state(
+    conn: sqlite3.Connection,
+    *,
+    schedule_id: str = "daily_audit",
+    key: str = "last_fired_day",
+    written_by_run: str | None = None,
+) -> None:
+    conn.execute(
+        "INSERT INTO schedule_state "
+        "(schedule_id, key, value_json, version, written_at, written_by_run) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (schedule_id, key, "1", 1, _NOW, written_by_run),
+    )
+
+
+def test_schedule_state_written_by_run_accepts_existing_run(migrated_conn):
+    _insert_schedule(migrated_conn)
+    _insert_run(migrated_conn, run_id="r-state")
+    _insert_state(migrated_conn, key="k1", written_by_run="r-state")
+
+
+def test_schedule_state_written_by_run_accepts_null(migrated_conn):
+    """Author-time seeds have no Run id to attribute. NULL is a
+    legitimate written_by_run."""
+    _insert_schedule(migrated_conn)
+    _insert_state(migrated_conn, key="k2", written_by_run=None)
+
+
+def test_schedule_state_written_by_run_rejects_missing_run(migrated_conn):
+    _insert_schedule(migrated_conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_state(migrated_conn, key="k3", written_by_run="ghost-run")
