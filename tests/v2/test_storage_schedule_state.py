@@ -36,7 +36,11 @@ from app.v2.enums import FireReason, RunStatus
 from app.v2.migrations import runner
 from app.v2.storage import schedule_state as schedule_state_mod
 from app.v2.storage.connection import ConnectionNotReady
-from app.v2.storage.schedule_state import get_state, set_state_cas
+from app.v2.storage.schedule_state import (
+    StateRunMismatchError,
+    get_state,
+    set_state_cas,
+)
 from app.v2.storage.serialization import NaiveDatetimeError
 
 
@@ -407,6 +411,149 @@ def test_written_by_run_rejects_missing_run(tmp_path):
             written_by_run="ghost-run",
             now=_NOW,
         )
+
+
+# ===========================================================================
+# Cross-schedule written_by_run guard (reviewer follow-up).
+# Same audit-truth corruption pattern as events.append_event +
+# transactions.update_run_status_and_append_event. State row
+# attributes a lineage entry to a run from a different
+# schedule? Refuse.
+# ===========================================================================
+
+
+def test_first_write_rejects_cross_schedule_run(tmp_path):
+    """Two schedules; run lives under schedule A. State row for
+    schedule B that attributes write to run-A must be rejected
+    with StateRunMismatchError BEFORE the INSERT runs. No row
+    leaks to either schedule."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn, "daily_audit")
+    _seed_schedule(conn, "weekly_report")
+    _seed_run(conn, run_id="run-from-daily")
+
+    with pytest.raises(StateRunMismatchError, match="written_by_run"):
+        set_state_cas(
+            conn,
+            schedule_id="weekly_report",  # state belongs here
+            key="k",
+            new_value=1,
+            expected_version=0,
+            written_by_run="run-from-daily",  # but run is daily_audit's
+            now=_NOW,
+        )
+
+    # Neither schedule has a state row.
+    assert get_state(conn, schedule_id="daily_audit", key="k") is None
+    assert get_state(conn, schedule_id="weekly_report", key="k") is None
+
+
+def test_cas_update_rejects_cross_schedule_run(tmp_path):
+    """Existing state row + CAS update with a run from a
+    different schedule → reject. Old row untouched."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn, "daily_audit")
+    _seed_schedule(conn, "weekly_report")
+    _seed_run(conn, run_id="run-daily")
+    # Seed the state row under daily_audit via author-time seed.
+    set_state_cas(
+        conn,
+        schedule_id="weekly_report",
+        key="counter",
+        new_value=5,
+        expected_version=0,
+        written_by_run=None,  # author-time seed
+        now=_NOW,
+    )
+
+    # CAS update that attempts to attribute the bump to a run
+    # belonging to a different schedule.
+    with pytest.raises(StateRunMismatchError, match="written_by_run"):
+        set_state_cas(
+            conn,
+            schedule_id="weekly_report",
+            key="counter",
+            new_value=99,
+            expected_version=1,
+            written_by_run="run-daily",  # belongs to daily_audit, not weekly_report
+            now=_NOW + timedelta(seconds=1),
+        )
+
+    # Original row unchanged.
+    fetched = get_state(
+        conn, schedule_id="weekly_report", key="counter"
+    )
+    assert fetched.value == 5
+    assert fetched.version == 1
+    assert fetched.written_by_run is None
+
+
+def test_first_write_accepts_matching_schedule_run(tmp_path):
+    """Positive control: run belongs to the same schedule as
+    the state row → write succeeds."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn)
+    _seed_run(conn, run_id="run-abc")
+    ok = set_state_cas(
+        conn,
+        schedule_id="daily_audit",
+        key="k",
+        new_value=1,
+        expected_version=0,
+        written_by_run="run-abc",
+        now=_NOW,
+    )
+    assert ok is True
+    fetched = get_state(conn, schedule_id="daily_audit", key="k")
+    assert fetched.written_by_run == "run-abc"
+
+
+def test_cas_update_accepts_matching_schedule_run(tmp_path):
+    """Positive control for the CAS path: matching schedule
+    succeeds after a fresh-read retry."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn)
+    _seed_run(conn, run_id="run-abc")
+    set_state_cas(
+        conn,
+        schedule_id="daily_audit",
+        key="k",
+        new_value=1,
+        expected_version=0,
+        written_by_run=None,
+        now=_NOW,
+    )
+    ok = set_state_cas(
+        conn,
+        schedule_id="daily_audit",
+        key="k",
+        new_value=2,
+        expected_version=1,
+        written_by_run="run-abc",
+        now=_NOW + timedelta(seconds=1),
+    )
+    assert ok is True
+    fetched = get_state(conn, schedule_id="daily_audit", key="k")
+    assert fetched.written_by_run == "run-abc"
+    assert fetched.value == 2
+
+
+def test_written_by_run_none_still_succeeds_after_guard(tmp_path):
+    """The cross-check only runs when written_by_run is not
+    None. Pinning that None continues to work (author-time
+    seeds are common)."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn)
+    ok = set_state_cas(
+        conn,
+        schedule_id="daily_audit",
+        key="k",
+        new_value=1,
+        expected_version=0,
+        written_by_run=None,
+        now=_NOW,
+    )
+    assert ok is True
 
 
 def test_cas_update_with_changed_written_by_run(tmp_path):

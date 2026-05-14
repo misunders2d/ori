@@ -28,6 +28,20 @@ from app.v2.storage.connection import assert_connection_ready
 from app.v2.storage.serialization import NaiveDatetimeError, encode_json
 
 
+class StateRunMismatchError(ValueError):
+    """Raised by :func:`set_state_cas` when ``written_by_run``
+    references a run belonging to a different schedule than
+    ``schedule_id``.
+
+    Same audit-truth pattern as
+    :class:`app.v2.storage.transactions.EventRunMismatchError`
+    + the cross-check inside ``append_event``: both FKs (state →
+    schedules, state.written_by_run → runs) pass independently
+    while the lineage row falsely attributes a state mutation
+    to a run that belongs to a different schedule.
+    """
+
+
 def get_state(
     conn: sqlite3.Connection,
     *,
@@ -134,6 +148,27 @@ def set_state_cas(
             "comparable across rows."
         )
 
+    # Cross-check that ``written_by_run`` (when set) names a run
+    # belonging to ``schedule_id``. Without this, both FKs would
+    # pass while the lineage row would falsely attribute a
+    # state mutation to a run from a different schedule. The
+    # SELECT happens BEFORE any INSERT/UPDATE so a mismatch
+    # raises without touching the row. Missing run continues to
+    # route through the FK constraint (IntegrityError).
+    if written_by_run is not None:
+        row = conn.execute(
+            "SELECT schedule_id FROM runs WHERE id = ?",
+            (written_by_run,),
+        ).fetchone()
+        if row is not None and row[0] != schedule_id:
+            raise StateRunMismatchError(
+                f"written_by_run={written_by_run!r} belongs to "
+                f"schedule {row[0]!r}, but the state row is "
+                f"for schedule {schedule_id!r}. Both FKs would "
+                "pass yet the lineage attribution would be wrong "
+                "— refusing the write."
+            )
+
     now_iso = now.astimezone(timezone.utc).isoformat()
     value_json = encode_json(new_value)
 
@@ -173,6 +208,7 @@ def set_state_cas(
 
 
 __all__ = [
+    "StateRunMismatchError",
     "get_state",
     "set_state_cas",
 ]
