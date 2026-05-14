@@ -26,7 +26,9 @@ from app.v2.storage.serialization import (
     encode_json,
 )
 from app.v2.storage.transactions import (
+    EventRunMismatchError,
     RunNotFoundError,
+    UnknownExtraColumnError,
     transaction,
     update_run_status_and_append_event,
 )
@@ -38,7 +40,9 @@ __all__ = [
     "NaiveDatetimeError",
     "decode_json",
     "encode_json",
+    "EventRunMismatchError",
     "RunNotFoundError",
+    "UnknownExtraColumnError",
     "transaction",
     "update_run_status_and_append_event",
 ]

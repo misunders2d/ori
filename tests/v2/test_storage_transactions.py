@@ -37,7 +37,9 @@ from app.v2.models.event import Event
 from app.v2.storage import transactions as transactions_mod
 from app.v2.storage.serialization import NaiveDatetimeError
 from app.v2.storage.transactions import (
+    EventRunMismatchError,
     RunNotFoundError,
+    UnknownExtraColumnError,
     transaction,
     update_run_status_and_append_event,
 )
@@ -475,6 +477,205 @@ def test_helper_calls_assert_connection_ready(tmp_path):
             new_status=RunStatus.SUCCEEDED,
             event=_make_event(),
         )
+
+
+# ===========================================================================
+# Event ↔ run / schedule consistency (reviewer follow-up).
+# The helper must refuse to record an event that names a
+# different run or a different schedule than the row being
+# updated — otherwise the audit ledger can claim run B changed
+# when run A is what actually moved.
+# ===========================================================================
+
+
+def test_helper_rejects_event_pointing_at_wrong_run(tmp_path):
+    """``event.run_id`` != the function arg ``run_id`` →
+    ``EventRunMismatchError``. Caught BEFORE any DB write —
+    asserts the run stays in its original status."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn)
+    _seed_run(conn, run_id="run-abc")
+    _seed_run(conn, run_id="run-other")
+
+    other_run_event = _make_event(run_id="run-other")
+    with pytest.raises(
+        EventRunMismatchError, match="event.run_id"
+    ):
+        update_run_status_and_append_event(
+            conn,
+            run_id="run-abc",
+            new_status=RunStatus.SUCCEEDED,
+            event=other_run_event,
+        )
+
+    # Neither run changed.
+    rows = conn.execute(
+        "SELECT id, status FROM runs ORDER BY id"
+    ).fetchall()
+    assert rows == [("run-abc", "running"), ("run-other", "running")]
+
+
+def test_helper_rejects_event_pointing_at_wrong_schedule(tmp_path):
+    """``event.schedule_id`` != the updated run's
+    ``schedule_id`` → ``EventRunMismatchError``. The check
+    happens INSIDE the TX (after fetching the run's actual
+    schedule_id), so the run UPDATE never runs."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn, schedule_id="daily_audit")
+    _seed_schedule(conn, schedule_id="weekly_report")
+    _seed_run(conn, run_id="run-abc", schedule_id="daily_audit")
+
+    cross_schedule_event = _make_event(
+        run_id="run-abc",
+        schedule_id="weekly_report",  # WRONG: run belongs to daily_audit
+    )
+
+    with pytest.raises(
+        EventRunMismatchError, match="schedule_id"
+    ):
+        update_run_status_and_append_event(
+            conn,
+            run_id="run-abc",
+            new_status=RunStatus.SUCCEEDED,
+            event=cross_schedule_event,
+        )
+
+    # The UPDATE never ran — the in-TX SELECT caught the
+    # mismatch first.
+    status = conn.execute(
+        "SELECT status FROM runs WHERE id = 'run-abc'"
+    ).fetchone()[0]
+    assert status == "running"
+    # And no event row leaked.
+    event_count = conn.execute(
+        "SELECT COUNT(*) FROM events"
+    ).fetchone()[0]
+    assert event_count == 0
+
+
+def test_helper_accepts_matching_run_and_schedule(tmp_path):
+    """Positive control: when both ids match the helper writes
+    both rows normally — no false-positive consistency error."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn, schedule_id="daily_audit")
+    _seed_run(conn, run_id="run-abc", schedule_id="daily_audit")
+
+    update_run_status_and_append_event(
+        conn,
+        run_id="run-abc",
+        new_status=RunStatus.SUCCEEDED,
+        event=_make_event(run_id="run-abc", schedule_id="daily_audit"),
+    )
+
+    status = conn.execute(
+        "SELECT status FROM runs WHERE id = 'run-abc'"
+    ).fetchone()[0]
+    assert status == "succeeded"
+
+
+# ===========================================================================
+# extra_columns allowlist (reviewer follow-up).
+# Keys go straight into the UPDATE identifier list, so the
+# helper accepts ONLY a fixed phase-3 allowlist. Anything else
+# raises UnknownExtraColumnError before any DB write.
+# ===========================================================================
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["started_at", "completed_at", "error"],
+)
+def test_helper_accepts_allowed_extra_columns(tmp_path, key):
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn)
+    _seed_run(conn)
+
+    value: object
+    if key.endswith("_at"):
+        value = _NOW + timedelta(minutes=1)
+    else:
+        value = "test error message"
+
+    update_run_status_and_append_event(
+        conn,
+        run_id="run-abc",
+        new_status=RunStatus.SUCCEEDED,
+        event=_make_event(),
+        extra_columns={key: value},
+    )
+    row = conn.execute(
+        f"SELECT {key} FROM runs WHERE id = 'run-abc'"
+    ).fetchone()
+    expected = value.isoformat() if isinstance(value, datetime) else value
+    assert row[0] == expected
+
+
+@pytest.mark.parametrize(
+    "bad_key",
+    [
+        # Columns that would corrupt the schema if writeable.
+        "status",
+        "schedule_id",
+        "attempt",
+        "root_run_id",
+        "parent_run_id",
+        # Claim columns — phase 4 territory.
+        "claimed_by",
+        "claimed_at",
+        # Bogus columns.
+        "id",
+        "fire_reason",
+        # SQL injection attempts.
+        "started_at = 'x'; DROP TABLE runs; --",
+        "started_at, evil_col",
+    ],
+)
+def test_helper_rejects_unknown_extra_columns(tmp_path, bad_key):
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn)
+    _seed_run(conn)
+
+    with pytest.raises(UnknownExtraColumnError):
+        update_run_status_and_append_event(
+            conn,
+            run_id="run-abc",
+            new_status=RunStatus.SUCCEEDED,
+            event=_make_event(),
+            extra_columns={bad_key: "any-value"},
+        )
+
+    # Confirm nothing was mutated.
+    status = conn.execute(
+        "SELECT status FROM runs WHERE id = 'run-abc'"
+    ).fetchone()[0]
+    assert status == "running"
+
+
+def test_helper_rejects_extra_columns_with_mixed_allowed_and_unknown(tmp_path):
+    """Even one bad key in an otherwise-valid set fails the
+    whole call — fail-loud rather than partial-apply."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn)
+    _seed_run(conn)
+
+    with pytest.raises(UnknownExtraColumnError, match="claimed_by"):
+        update_run_status_and_append_event(
+            conn,
+            run_id="run-abc",
+            new_status=RunStatus.SUCCEEDED,
+            event=_make_event(),
+            extra_columns={
+                "completed_at": _NOW,
+                "claimed_by": "worker-1",  # phase 4 territory
+            },
+        )
+
+    # completed_at was NOT applied.
+    row = conn.execute(
+        "SELECT status, completed_at FROM runs WHERE id = 'run-abc'"
+    ).fetchone()
+    assert row[0] == "running"
+    assert row[1] is None
 
 
 # ===========================================================================

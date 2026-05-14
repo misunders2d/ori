@@ -182,20 +182,63 @@ def update_run_status_and_append_event(
     extra_columns: Optional[dict[str, Any]] = None,
 ) -> None:
     """Atomically (a) UPDATE runs.status = new_status (plus any
-    extra columns, e.g. started_at, completed_at) and (b)
-    INSERT the matching event row. Both inside one
-    BEGIN ... COMMIT. Raises if the UPDATE affects 0 rows."""
+    extra columns from a fixed allowlist) and (b) INSERT the
+    matching event row. Both inside one BEGIN ... COMMIT.
+    Raises if the run id is missing, if the event names a
+    different run / schedule than the row being updated, or if
+    extra_columns carries an unknown key."""
 ```
 
 **Storage primitive, not a state-machine step.** The helper
-performs an unpredicated `UPDATE runs WHERE id = ?` — no
-single-flight check, no source-status guard, no claim
-ownership. Phase 3 tests must not exercise the
+performs an unpredicated `UPDATE runs WHERE id = ?` on the
+status column — no single-flight check, no source-status guard,
+no claim ownership. Phase 3 tests must not exercise the
 ``pending → claimed`` transition or any other claim-shaped
 behavior; that's phase 4's job. The atomicity guarantee
-belongs in phase 3 because it's a SQLite transaction
-property of the data plane; the *policy* of which
-transitions are legal lives in phase 4's state machine.
+belongs in phase 3 because it's a SQLite transaction property
+of the data plane; the *policy* of which transitions are legal
+lives in phase 4's state machine.
+
+**Event ↔ run / schedule consistency** (reviewer follow-up,
+not a state-machine concern — it's about the audit ledger
+recording the truth):
+
+- ``event.run_id`` MUST equal ``run_id`` (cheap pre-TX check).
+- ``event.schedule_id`` MUST equal the updated run's
+  ``schedule_id`` (fetched via SELECT inside the same TX
+  before the UPDATE runs — no TOCTOU window because SQLite
+  WAL serialises writers).
+
+Mismatch raises ``EventRunMismatchError``. The atomicity-on-
+failure property holds: a mismatch caught after BEGIN rolls
+back any in-flight statement (here: only the SELECT, which
+has no side effect).
+
+**``extra_columns`` allowlist** (reviewer follow-up — SQL
+identifiers go straight into the UPDATE clause and MUST come
+from a fixed set):
+
+```python
+_ALLOWED_EXTRA_COLUMNS = frozenset({
+    "started_at",
+    "completed_at",
+    "error",
+})
+```
+
+Anything else raises ``UnknownExtraColumnError`` BEFORE any
+DB write. The guard rules out:
+
+- Writes to ``status``, ``schedule_id``, ``attempt``,
+  ``root_run_id``, ``parent_run_id``, ``fire_reason``,
+  ``id`` (column corruption / state-machine bypass).
+- Phase-4-only columns (``claimed_by``, ``claimed_at``) that
+  carry claim semantics not yet introduced.
+- SQL-injection attempts via crafted key strings (``"x; DROP
+  TABLE runs"`` or ``"started_at, evil_col"``).
+
+Datetime values in the allowed columns are converted to ISO
+8601 strings and rejected if naive (same rule as ``event.ts``).
 
 The helper owns the transaction. The caller MUST NOT already be
 inside an active transaction when invoking this helper. Nested
@@ -493,10 +536,30 @@ the phase-1 migration runner.
 - Clean exit → commit.
 - Exception → rollback + re-raise.
 - Partial mutation in a rolled-back TX leaves DB untouched.
-- `update_run_status_and_append_event` atomic-on-failure: SQL
-  error on the event INSERT rolls back the run UPDATE.
-- The helper raises when the target run id does not exist
-  (the run UPDATE affects 0 rows).
+- Nested ``transaction(conn)`` surfaces SQLite's "cannot start
+  a transaction within a transaction" error (parent TX is not
+  silently committed — regression pin against the Python
+  sqlite3 ``isolation_level`` no-op assignment quirk).
+- ``update_run_status_and_append_event`` atomic-on-failure:
+  pre-seeded duplicate event id triggers the helper's INSERT
+  to fail with IntegrityError → run UPDATE rolls back.
+- The helper raises ``RunNotFoundError`` when the target run
+  id does not exist.
+- The helper raises ``EventRunMismatchError`` when
+  ``event.run_id`` != ``run_id`` (caught pre-TX; no DB write).
+- The helper raises ``EventRunMismatchError`` when
+  ``event.schedule_id`` != the updated run's actual
+  schedule_id (caught inside the TX via SELECT; UPDATE never
+  runs; ledger stays empty).
+- The helper raises ``UnknownExtraColumnError`` for any key
+  outside the phase-3 allowlist — including
+  ``status`` / ``schedule_id`` / ``attempt`` / ``root_run_id``
+  / ``claimed_by`` / ``claimed_at`` / ``id``, plus crafted
+  SQL-injection strings.
+- Mixed allowed-and-unknown ``extra_columns`` fails the whole
+  call (no partial apply).
+- ``error`` and ``completed_at`` / ``started_at`` round-trip
+  via the helper.
 - Test inputs cover a generic non-claim transition (e.g.
   ``running → succeeded``). The pending → claimed shape is
   explicitly NOT tested in phase 3 — that's phase 4's
