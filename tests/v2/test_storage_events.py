@@ -41,6 +41,7 @@ from app.v2.storage.events import (
     list_events_for_schedule,
 )
 from app.v2.storage.serialization import NaiveDatetimeError
+from app.v2.storage.transactions import EventRunMismatchError
 
 
 _NOW = datetime(2026, 5, 15, 9, 0, tzinfo=timezone.utc)
@@ -176,6 +177,72 @@ def test_round_trip_preserves_correlates(tmp_path):
     by_id = {e.id: e for e in fetched}
     assert by_id["follow"].correlates == "seed"
     assert by_id["seed"].correlates is None
+
+
+# ===========================================================================
+# Run / schedule consistency (reviewer follow-up).
+# Without this guard, both FK constraints could pass while the
+# ledger row falsely attributes a run-A event to schedule B.
+# ===========================================================================
+
+
+def test_append_event_rejects_run_schedule_mismatch(tmp_path):
+    """Two schedules; a run lives under schedule A; an event
+    naming run-A but schedule-B must be refused with
+    EventRunMismatchError — and no row leaks to the events
+    table."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn, schedule_id="daily_audit")
+    _seed_schedule(conn, schedule_id="weekly_report")
+    # Run lives under daily_audit.
+    _seed_run(conn, run_id="run-abc")
+
+    cross_schedule_event = _make_event(
+        event_id="bad",
+        run_id="run-abc",
+        schedule_id="weekly_report",  # WRONG — run is under daily_audit
+        kind=EventKind.RUN_STARTED,
+    )
+
+    with pytest.raises(EventRunMismatchError, match="schedule_id"):
+        append_event(conn, cross_schedule_event)
+
+    # Neither schedule got an event row.
+    assert list_events_for_schedule(conn, "daily_audit") == []
+    assert list_events_for_schedule(conn, "weekly_report") == []
+
+
+def test_append_event_accepts_run_schedule_match(tmp_path):
+    """Positive control: same data, but event.schedule_id
+    matches the run's actual schedule. Helper writes normally
+    — no false-positive on the guard."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn, schedule_id="daily_audit")
+    _seed_run(conn, run_id="run-abc")
+
+    correct_event = _make_event(
+        event_id="ok",
+        run_id="run-abc",
+        schedule_id="daily_audit",
+        kind=EventKind.RUN_STARTED,
+    )
+    append_event(conn, correct_event)
+    fetched = list_events_for_run(conn, "run-abc")
+    assert [e.id for e in fetched] == ["ok"]
+
+
+def test_append_event_skips_consistency_check_when_run_id_none(tmp_path):
+    """Schedule-level events (run_id IS NULL) have no run to
+    reconcile against. The guard must NOT fire — those are
+    written all the time during schedule lifecycle."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn, schedule_id="daily_audit")
+    # No runs at all in the DB. Append a schedule-level event.
+    append_event(
+        conn,
+        _make_event(run_id=None, kind=EventKind.SCHEDULE_CREATED),
+    )
+    assert len(list_events_for_schedule(conn, "daily_audit")) == 1
 
 
 # ===========================================================================

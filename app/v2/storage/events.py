@@ -36,6 +36,7 @@ from app.v2.enums import EventKind
 from app.v2.models.event import Event
 from app.v2.storage.connection import assert_connection_ready
 from app.v2.storage.serialization import NaiveDatetimeError, encode_json
+from app.v2.storage.transactions import EventRunMismatchError
 
 
 _EVENT_COLUMNS = (
@@ -98,12 +99,52 @@ def append_event(conn: sqlite3.Connection, event: Event) -> str:
     composite index over ``(schedule_id, ts)`` orders
     chronologically regardless of caller offset.
 
+    **Run / schedule consistency** (matches the same guard in
+    :func:`app.v2.storage.transactions.update_run_status_and_append_event`):
+    when ``event.run_id`` is set, the helper looks up the
+    referenced run's ``schedule_id`` and refuses to write if it
+    does not equal ``event.schedule_id``. Without this check
+    both FK constraints could pass (run exists, schedule
+    exists) while the ledger row falsely attributes the
+    event to a different schedule. ``event.run_id is None``
+    skips the cross-check entirely (schedule-level events
+    have no run to reconcile against).
+
     No update / delete helper exists in this module. Phase-3
     contract: events are append-only at the surface; the
     schema does not enforce it (no triggers) but the API does.
+
+    Raises:
+        NaiveDatetimeError: ``event.ts`` was naive.
+        EventRunMismatchError: ``event.run_id`` is set and the
+            referenced run's ``schedule_id`` does not equal
+            ``event.schedule_id``.
+        sqlite3.IntegrityError: ``event.run_id`` references a
+            run row that does not exist (FK enforced at INSERT).
+        ConnectionNotReady: bad connection state.
     """
     assert_connection_ready(conn)
     ts_iso = _event_ts_to_utc_iso(event.ts, field="event.ts")
+
+    if event.run_id is not None:
+        row = conn.execute(
+            "SELECT schedule_id FROM runs WHERE id = ?",
+            (event.run_id,),
+        ).fetchone()
+        # Missing run row → fall through to the INSERT and let
+        # the FK constraint raise IntegrityError. The reviewer
+        # accepted either path; FK gives a uniform error type
+        # for "run does not exist".
+        if row is not None and row[0] != event.schedule_id:
+            raise EventRunMismatchError(
+                f"event.schedule_id={event.schedule_id!r} does "
+                f"not match run.schedule_id={row[0]!r} for "
+                f"event.run_id={event.run_id!r}. Both FK "
+                "constraints would pass, but the ledger row "
+                "would falsely attribute this event to a "
+                "different schedule — refusing the write."
+            )
+
     conn.execute(
         f"INSERT INTO events ({', '.join(_EVENT_COLUMNS)}) "
         f"VALUES ({', '.join(['?'] * len(_EVENT_COLUMNS))})",
