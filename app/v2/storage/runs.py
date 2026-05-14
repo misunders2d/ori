@@ -24,7 +24,7 @@ References:
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from app.v2.enums import RunStatus
@@ -72,8 +72,16 @@ _SELECT_SQL = f"SELECT {', '.join(_RUN_COLUMNS)} FROM runs"
 
 
 def _to_iso_or_none(dt: Optional[datetime], *, field: str) -> Optional[str]:
-    """Convert an optional ``datetime`` to ISO 8601, rejecting
-    naive values loud.
+    """Convert an optional ``datetime`` to ISO 8601 in UTC,
+    rejecting naive values loud.
+
+    The conversion to UTC is load-bearing: ISO 8601 strings are
+    compared LEXICALLY in SQL, and the lexical order matches
+    the chronological order only when every value is in the
+    same offset. ``10:00+03:00`` (= ``07:00Z``) lexically sorts
+    AFTER ``08:00+00:00`` (= ``08:00Z``) even though it
+    happened earlier. Normalising to ``+00:00`` at the storage
+    boundary makes the lexical compare correct.
 
     ``field`` appears in the error message so the caller knows
     which field carried the naive value.
@@ -85,11 +93,11 @@ def _to_iso_or_none(dt: Optional[datetime], *, field: str) -> Optional[str]:
             f"naive datetime in {field}: {dt!r} — attach tzinfo "
             "(typically datetime.timezone.utc) before passing."
         )
-    return dt.isoformat()
+    return dt.astimezone(timezone.utc).isoformat()
 
 
 def _coerce_extra_value(value: Any, *, field: str) -> Any:
-    """Same naive-rejection / ISO-coercion as
+    """Same naive-rejection / UTC-ISO coercion as
     :func:`_to_iso_or_none` but lifts the field name into the
     error path for ``mark_run_status``'s extras."""
     if isinstance(value, datetime):
@@ -98,7 +106,7 @@ def _coerce_extra_value(value: Any, *, field: str) -> Any:
                 f"naive datetime in extra_columns.{field}: "
                 f"{value!r} — attach tzinfo before passing."
             )
-        return value.isoformat()
+        return value.astimezone(timezone.utc).isoformat()
     return value
 
 
@@ -204,10 +212,18 @@ def list_pending_due(
     4's job.
 
     ``now`` MUST be timezone-aware; naive values raise
-    ``NaiveDatetimeError`` so a caller can't accidentally
-    compare against a tz-mismatched cursor. ``limit`` is
-    forwarded straight to the SQL ``LIMIT`` clause — the caller
-    decides the batch size.
+    ``NaiveDatetimeError``. The cursor is converted to UTC
+    before the SQL comparison so it matches the UTC-normalised
+    ``due_at`` strings written by :func:`insert_run` — without
+    that, a non-UTC ``now`` could lexically miss or over-match
+    rows whose true chronological order differs from their
+    string order.
+
+    ``limit`` MUST be >= 1; ``ValueError`` is raised otherwise.
+    Forbidding ``limit < 1`` rules out SQLite's "no-limit"
+    sentinel (``LIMIT -1``) — a caller accidentally passing 0
+    or -1 would otherwise fetch every pending row in one
+    query, defeating the batch contract.
     """
     assert_connection_ready(conn)
     if now.tzinfo is None:
@@ -217,12 +233,22 @@ def list_pending_due(
             "against stored ISO-with-offset timestamps is well-"
             "defined."
         )
+    if limit < 1:
+        raise ValueError(
+            f"limit must be >= 1; got {limit}. SQLite treats "
+            "LIMIT -1 as 'no limit', and a 0 / negative limit "
+            "almost certainly indicates a caller bug."
+        )
 
     rows = conn.execute(
         f"{_SELECT_SQL} "
         "WHERE status = ? AND due_at <= ? "
         "ORDER BY due_at ASC LIMIT ?",
-        (RunStatus.PENDING.value, now.isoformat(), limit),
+        (
+            RunStatus.PENDING.value,
+            now.astimezone(timezone.utc).isoformat(),
+            limit,
+        ),
     ).fetchall()
     return [_row_to_run(row) for row in rows]
 

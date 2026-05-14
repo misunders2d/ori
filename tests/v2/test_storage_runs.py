@@ -305,6 +305,145 @@ def test_list_pending_due_empty(tmp_path):
     assert list_pending_due(conn, now=_NOW, limit=10) == []
 
 
+# ---------------------------------------------------------------------------
+# Non-UTC datetimes (reviewer follow-up): lexical ISO compare in
+# SQL only matches chronological order when every value is in
+# the same offset. The storage layer normalises tz-aware
+# datetimes to UTC before write + compare; pinning the
+# regression so a future refactor that drops the .astimezone()
+# call fails loudly.
+# ---------------------------------------------------------------------------
+
+
+def test_list_pending_due_non_utc_due_at_compares_chronologically(tmp_path):
+    """A run with ``due_at = 10:00+03:00`` (i.e. ``07:00Z``)
+    must be returned by ``list_pending_due(now=08:00Z)``.
+    Without UTC normalisation, the stored ``10:00+03:00`` string
+    would lexically sort AFTER ``08:00+00:00`` and the run
+    would silently be missed."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn)
+
+    eastern_3 = datetime(
+        2026, 5, 15, 10, 0, tzinfo=timezone(timedelta(hours=3))
+    )
+    insert_run(
+        conn,
+        _baseline_run(id="r-eastern", root_run_id="r-eastern", due_at=eastern_3),
+    )
+
+    cursor_utc = datetime(2026, 5, 15, 8, 0, tzinfo=timezone.utc)
+    # 10:00+03:00 == 07:00Z, which IS <= 08:00Z.
+    results = list_pending_due(conn, now=cursor_utc, limit=10)
+    assert [r.id for r in results] == ["r-eastern"]
+
+
+def test_list_pending_due_non_utc_now_compares_chronologically(tmp_path):
+    """Mirror of the above: the ``now`` cursor itself in a
+    non-UTC offset must still resolve correctly."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn)
+    insert_run(
+        conn,
+        _baseline_run(
+            id="r-utc",
+            root_run_id="r-utc",
+            due_at=datetime(2026, 5, 15, 7, 0, tzinfo=timezone.utc),
+        ),
+    )
+
+    # 11:00+03:00 == 08:00Z, AFTER the run's 07:00Z due_at.
+    cursor_eastern = datetime(
+        2026, 5, 15, 11, 0, tzinfo=timezone(timedelta(hours=3))
+    )
+    results = list_pending_due(conn, now=cursor_eastern, limit=10)
+    assert [r.id for r in results] == ["r-utc"]
+
+
+def test_insert_run_normalises_non_utc_to_utc(tmp_path):
+    """Round-trip pin: non-UTC due_at is stored normalised to
+    ``+00:00`` so the stored bytes match between two equivalent
+    moments expressed in different offsets."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn)
+
+    eastern = datetime(
+        2026, 5, 15, 10, 0, tzinfo=timezone(timedelta(hours=3))
+    )
+    insert_run(
+        conn,
+        _baseline_run(id="r-tz", root_run_id="r-tz", due_at=eastern),
+    )
+
+    stored = conn.execute(
+        "SELECT due_at FROM runs WHERE id = 'r-tz'"
+    ).fetchone()[0]
+    assert stored.endswith("+00:00")
+    # And the round-tripped datetime equals the original moment
+    # (Python datetime equality compares moments).
+    fetched = get_run(conn, "r-tz")
+    assert fetched.due_at == eastern
+
+
+def test_mark_run_status_normalises_non_utc_extra_to_utc(tmp_path):
+    """``mark_run_status`` extras containing non-UTC datetimes
+    are stored normalised so the stored value matches what
+    list_pending_due / SQL compares would see."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn)
+    insert_run(conn, _baseline_run(status=RunStatus.RUNNING))
+
+    eastern = datetime(
+        2026, 5, 15, 14, 0, tzinfo=timezone(timedelta(hours=3))
+    )
+    mark_run_status(
+        conn,
+        "run-abc",
+        status=RunStatus.SUCCEEDED,
+        completed_at=eastern,
+    )
+    stored = conn.execute(
+        "SELECT completed_at FROM runs WHERE id = 'run-abc'"
+    ).fetchone()[0]
+    assert stored.endswith("+00:00")
+    fetched = get_run(conn, "run-abc")
+    assert fetched.completed_at == eastern
+
+
+# ---------------------------------------------------------------------------
+# limit guard (reviewer follow-up): ``LIMIT -1`` in SQLite
+# means "no limit"; ``LIMIT 0`` returns nothing. Both are
+# almost certainly caller bugs — the helper refuses both with
+# ValueError.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_limit", [0, -1, -100])
+def test_list_pending_due_rejects_non_positive_limit(tmp_path, bad_limit):
+    conn = _migrate(tmp_path)
+    with pytest.raises(ValueError, match="limit"):
+        list_pending_due(conn, now=_NOW, limit=bad_limit)
+
+
+def test_list_pending_due_accepts_limit_one(tmp_path):
+    """1 is the lower edge of the allowed range — verify it
+    works rather than being implicitly forbidden."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn)
+    for i in range(3):
+        rid = f"r-{i}"
+        insert_run(
+            conn,
+            _baseline_run(
+                id=rid,
+                root_run_id=rid,
+                due_at=_NOW - timedelta(seconds=i),
+            ),
+        )
+    results = list_pending_due(conn, now=_NOW, limit=1)
+    assert len(results) == 1
+
+
 # ===========================================================================
 # list_runs_in_chain
 # ===========================================================================
