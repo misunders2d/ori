@@ -314,6 +314,9 @@ unconditionally):
 | `execution_plan_hash` is 64 lowercase hex (or null) | `execution_plan_hash_bad_format` | when set |
 | Reminder rule: `execution_plan_hash is None ⇒ trigger is OneOff` | `missing_execution_plan_for_complex_trigger` | always |
 | Referenced plan hash exists in supplied index | `execution_plan_hash_unknown` | when `execution_plans` supplied |
+| Plan body internal integrity: `plan.hash` non-empty, `plan.hash == spec.execution_plan_hash`, `plan.hash == plan.compute_hash()` | `execution_plan_body_hash_missing`, `execution_plan_body_hash_mismatch_spec`, `execution_plan_body_hash_mismatch_self` | when plan body found in supplied index |
+| Plan enforcement mode is STRICT (PERMISSIVE rejected at freeze) | `execution_plan_enforcement_not_strict` | when plan body found |
+| Reasoning steps declare `OutputSpec.type ∈ {'json', 'text'}` (`'none'` forbidden in frozen plans) | `reasoning_output_type_forbidden` | when plan body found |
 | Referenced loaders / tools / emit adapters exist in supplied registries | `unknown_source_loader`, `unknown_tool`, `unknown_emit_adapter` | when both `execution_plans` and `registries` supplied |
 
 Out of scope for slice 3 (deferred to later slices or phases):
@@ -460,6 +463,29 @@ Adapter walk:
 - Walk skipped when registries are None.
 - Walk skipped when plan hash isn't present in the supplied
   index (the missing-hash error already covers it).
+
+Plan-body integrity (reviewer follow-up):
+- Empty `plan.hash` → `execution_plan_body_hash_missing` and
+  short-circuits the comparison rules.
+- Plan inserted under wrong mapping key →
+  `execution_plan_body_hash_mismatch_spec`.
+- Plan body tampered after freeze →
+  `execution_plan_body_hash_mismatch_self`.
+- Clean plan body passes all three integrity checks.
+- Integrity rules skipped when the index isn't supplied.
+
+Plan enforcement mode:
+- `enforcement=PERMISSIVE` → `execution_plan_enforcement_not_strict`.
+- `enforcement=STRICT` passes.
+- Check skipped when plan body absent from the index.
+
+Reasoning output rigor:
+- `OutputSpec.type='none'` in any reasoning step →
+  `reasoning_output_type_forbidden` with the correct
+  `path = execution_plan.reasoning[i].output.type`.
+- `OutputSpec.type='json'` / `'text'` passes.
+- All offending steps surface their own error in one pass
+  (not first-failure).
 
 Result composition:
 - Multiple issues surface from a single call.

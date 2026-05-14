@@ -25,6 +25,7 @@ from app.v2.descriptors.source import SourceDescriptor
 from app.v2.descriptors.tool import ToolDescriptor
 from app.v2.enums import (
     DeliveryFallbackPolicy,
+    EnforcementMode,
     FailureActionType,
     SelectionMethod,
 )
@@ -38,6 +39,7 @@ from app.v2.models.execution_plan import (
     EmitStep,
     ExecutionPlan,
     InputSpec,
+    OutputSpec,
     ReasoningStep,
 )
 from app.v2.models.schedule import ScheduleSpec
@@ -529,6 +531,232 @@ def test_partial_registries_only_check_supplied_layers():
     assert "unknown_source_loader" in codes
     assert "unknown_tool" not in codes
     assert "unknown_emit_adapter" not in codes
+
+
+# ===========================================================================
+# Plan-body integrity (reviewer follow-up)
+# ===========================================================================
+
+
+def test_plan_body_with_empty_hash_is_error():
+    """A plan body whose ``hash`` is empty must not be trusted —
+    it hasn't been frozen. Validator surfaces a dedicated error
+    and short-circuits the downstream hash comparisons (which
+    would compare against an empty value)."""
+    plan = ExecutionPlan(
+        id="daily_audit_plan",
+        description="walk the audit",
+        author="sergey",
+        emit=[EmitStep(id="emit_one", adapter="slack_post_message")],
+    )
+    # No with_fresh_hash() — plan.hash stays "".
+    spec = _cron_spec(execution_plan_hash="a" * 64)
+    result = validate_schedule_spec(
+        spec, execution_plans={"a" * 64: plan}
+    )
+    codes = [i.code for i in result.errors()]
+    assert "execution_plan_body_hash_missing" in codes
+    # Short-circuit guard: the downstream hash-comparison codes
+    # must NOT also fire on a missing hash.
+    assert "execution_plan_body_hash_mismatch_spec" not in codes
+    assert "execution_plan_body_hash_mismatch_self" not in codes
+
+
+def test_plan_under_wrong_mapping_key_is_error():
+    """Plan was inserted into the index under a hash that
+    doesn't match the plan's own hash. This is the
+    wrong-mapping-key bug. The validator catches it via
+    plan.hash != spec.execution_plan_hash."""
+    real_plan = _plan_with_refs()
+    real_hash = real_plan.hash
+    # Pin the spec to a hash that is NOT the plan's actual hash,
+    # but place the plan under that bogus key.
+    bogus_key = "c" * 64
+    spec = _cron_spec(execution_plan_hash=bogus_key)
+    result = validate_schedule_spec(
+        spec, execution_plans={bogus_key: real_plan}
+    )
+    codes = [i.code for i in result.errors()]
+    assert "execution_plan_body_hash_mismatch_spec" in codes
+    # Plan body itself is internally consistent → no _self code.
+    assert "execution_plan_body_hash_mismatch_self" not in codes
+    # Sanity: real_hash differs from the bogus key.
+    assert real_hash != bogus_key
+
+
+def test_tampered_plan_body_is_error():
+    """Plan was frozen, then a field was mutated after the hash
+    was set. plan.hash != plan.compute_hash() catches this."""
+    plan = _plan_with_refs()
+    # Mutate description after freezing — model_copy preserves
+    # hash but compute_hash() now returns a different value.
+    tampered = plan.model_copy(update={"description": "MUTATED"})
+    # Place the tampered body in the index under the spec's
+    # claimed hash. The mapping-key check passes (we still use
+    # plan.hash as the key); the self-recompute check fails.
+    spec = _cron_spec(execution_plan_hash=tampered.hash)
+    result = validate_schedule_spec(
+        spec, execution_plans={tampered.hash: tampered}
+    )
+    codes = [i.code for i in result.errors()]
+    assert "execution_plan_body_hash_mismatch_self" in codes
+
+
+def test_clean_plan_body_passes_integrity_checks():
+    plan = _plan_with_refs()
+    spec = _cron_spec(execution_plan_hash=plan.hash)
+    result = validate_schedule_spec(
+        spec, execution_plans={plan.hash: plan}
+    )
+    integrity_codes = {
+        "execution_plan_body_hash_missing",
+        "execution_plan_body_hash_mismatch_spec",
+        "execution_plan_body_hash_mismatch_self",
+    }
+    seen = {i.code for i in result.errors()}
+    assert not (seen & integrity_codes), seen
+
+
+def test_integrity_checks_skipped_when_plan_index_absent():
+    """No supplied index → integrity rules don't fire."""
+    spec = _cron_spec(execution_plan_hash="a" * 64)
+    result = validate_schedule_spec(spec, execution_plans=None)
+    codes = {i.code for i in result.errors()}
+    assert "execution_plan_body_hash_missing" not in codes
+    assert "execution_plan_body_hash_mismatch_spec" not in codes
+    assert "execution_plan_body_hash_mismatch_self" not in codes
+
+
+# ===========================================================================
+# Plan enforcement mode (reviewer follow-up)
+# ===========================================================================
+
+
+def test_permissive_enforcement_is_error():
+    """ExecutionPlan model accepts PERMISSIVE; the freeze
+    pathway rejects it. The chokepoint validator is what
+    rejects it (per the plan model docstring)."""
+    plan = ExecutionPlan(
+        id="daily_audit_plan",
+        description="walk the audit",
+        author="sergey",
+        emit=[EmitStep(id="emit_one", adapter="slack_post_message")],
+        enforcement=EnforcementMode.PERMISSIVE,
+    ).with_fresh_hash()
+    spec = _cron_spec(execution_plan_hash=plan.hash)
+    result = validate_schedule_spec(
+        spec, execution_plans={plan.hash: plan}
+    )
+    codes = [i.code for i in result.errors()]
+    assert "execution_plan_enforcement_not_strict" in codes
+
+
+def test_strict_enforcement_passes():
+    plan = _plan_with_refs()  # default STRICT
+    spec = _cron_spec(execution_plan_hash=plan.hash)
+    result = validate_schedule_spec(
+        spec, execution_plans={plan.hash: plan}
+    )
+    assert "execution_plan_enforcement_not_strict" not in [
+        i.code for i in result.errors()
+    ]
+
+
+def test_enforcement_check_skipped_when_plan_body_absent():
+    spec = _cron_spec(execution_plan_hash="a" * 64)
+    result = validate_schedule_spec(spec, execution_plans={})
+    assert "execution_plan_enforcement_not_strict" not in [
+        i.code for i in result.errors()
+    ]
+
+
+# ===========================================================================
+# Reasoning output type rigor (reviewer follow-up)
+# ===========================================================================
+
+
+def test_reasoning_output_type_none_is_error():
+    """OutputSpec.type='none' is accepted by the model for test
+    fixtures; frozen plans must declare 'json' or 'text' so
+    post-LLM validation has something to check."""
+    plan = ExecutionPlan(
+        id="daily_audit_plan",
+        description="walk the audit",
+        author="sergey",
+        inputs=[InputSpec(id="src", loader="source_drive_file")],
+        reasoning=[
+            ReasoningStep(
+                id="reason",
+                entry_agent="CoordinatorAgent",
+                tools=["slack_post_message"],
+                user_template="t",
+                output=OutputSpec(type="none"),
+            )
+        ],
+        emit=[EmitStep(id="emit_one", adapter="slack_post_message")],
+    ).with_fresh_hash()
+    spec = _cron_spec(execution_plan_hash=plan.hash)
+    result = validate_schedule_spec(
+        spec, execution_plans={plan.hash: plan}
+    )
+    codes = [i.code for i in result.errors()]
+    assert "reasoning_output_type_forbidden" in codes
+
+
+def test_reasoning_output_type_json_passes():
+    plan = _plan_with_refs()  # default OutputSpec(type='json')
+    spec = _cron_spec(execution_plan_hash=plan.hash)
+    result = validate_schedule_spec(
+        spec, execution_plans={plan.hash: plan}
+    )
+    assert "reasoning_output_type_forbidden" not in [
+        i.code for i in result.errors()
+    ]
+
+
+def test_reasoning_output_type_check_iterates_all_steps():
+    """Plan with multiple reasoning steps: each offending step
+    produces its own dedicated error with the right path
+    index."""
+    plan = ExecutionPlan(
+        id="multi_step_plan",
+        description="multi-step reasoning",
+        author="sergey",
+        reasoning=[
+            ReasoningStep(
+                id="step_one",
+                entry_agent="CoordinatorAgent",
+                user_template="t",
+                output=OutputSpec(type="none"),
+            ),
+            ReasoningStep(
+                id="step_two",
+                entry_agent="CoordinatorAgent",
+                user_template="t",
+                output=OutputSpec(type="json"),
+            ),
+            ReasoningStep(
+                id="step_three",
+                entry_agent="CoordinatorAgent",
+                user_template="t",
+                output=OutputSpec(type="none"),
+            ),
+        ],
+        emit=[EmitStep(id="emit_one", adapter="slack_post_message")],
+    ).with_fresh_hash()
+    spec = _cron_spec(execution_plan_hash=plan.hash)
+    result = validate_schedule_spec(
+        spec, execution_plans={plan.hash: plan}
+    )
+    forbidden = [
+        i for i in result.errors()
+        if i.code == "reasoning_output_type_forbidden"
+    ]
+    paths = sorted(i.path for i in forbidden)
+    assert paths == [
+        "execution_plan.reasoning[0].output.type",
+        "execution_plan.reasoning[2].output.type",
+    ]
 
 
 # ===========================================================================

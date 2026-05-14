@@ -35,6 +35,7 @@ from typing import Literal, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.v2.enums import EnforcementMode
 from app.v2.models.execution_plan import ExecutionPlan
 from app.v2.models.schedule import ScheduleSpec
 from app.v2.models.triggers import OneOffTrigger
@@ -238,6 +239,158 @@ def _validate_execution_plan_hash_exists(
     return []
 
 
+def _validate_plan_body_integrity(
+    spec: ScheduleSpec,
+    execution_plans: Optional[Mapping[str, ExecutionPlan]],
+) -> list[ValidationIssue]:
+    """When the caller supplies a plan body for the spec's
+    referenced hash, verify it is internally consistent.
+
+    Three failure modes covered:
+
+    - ``execution_plan_body_hash_missing`` — ``plan.hash`` empty.
+      A plan that hasn't been frozen has no business being
+      treated as the body of a frozen ScheduleSpec.
+    - ``execution_plan_body_hash_mismatch_spec`` — the plan's
+      own ``hash`` doesn't equal the spec's
+      ``execution_plan_hash``. This catches a wrong mapping key
+      (caller bug) or a spec pointing at the wrong revision
+      (drift).
+    - ``execution_plan_body_hash_mismatch_self`` — the plan's
+      ``hash`` doesn't equal ``plan.compute_hash()`` over the
+      same body. This catches tampering / stale serialisation
+      that would let the registry walk see a body different
+      from the one the hash claims to identify.
+
+    Skipped silently when the plan body isn't supplied or the
+    spec has no execution_plan_hash at all. Empty plan.hash
+    short-circuits the downstream comparisons (they would be
+    nonsensical against a missing value).
+    """
+    if spec.execution_plan_hash is None or execution_plans is None:
+        return []
+    plan = execution_plans.get(spec.execution_plan_hash)
+    if plan is None:
+        return []  # existence check has already flagged this
+
+    issues: list[ValidationIssue] = []
+    if not plan.hash:
+        issues.append(
+            ValidationIssue(
+                code="execution_plan_body_hash_missing",
+                severity="error",
+                path="execution_plan.hash",
+                message=(
+                    f"ExecutionPlan body for spec hash "
+                    f"{spec.execution_plan_hash!r} has an empty "
+                    "``hash`` — call with_fresh_hash() on the plan "
+                    "before freezing the schedule."
+                ),
+            )
+        )
+        return issues
+
+    if plan.hash != spec.execution_plan_hash:
+        issues.append(
+            ValidationIssue(
+                code="execution_plan_body_hash_mismatch_spec",
+                severity="error",
+                path="execution_plan.hash",
+                message=(
+                    f"ExecutionPlan.hash {plan.hash!r} does not "
+                    f"match spec.execution_plan_hash "
+                    f"{spec.execution_plan_hash!r}. The mapping "
+                    "key and the body's own hash must agree — "
+                    "otherwise the spec is pinned to one revision "
+                    "while validation walks another."
+                ),
+            )
+        )
+
+    recomputed = plan.compute_hash()
+    if plan.hash != recomputed:
+        issues.append(
+            ValidationIssue(
+                code="execution_plan_body_hash_mismatch_self",
+                severity="error",
+                path="execution_plan.hash",
+                message=(
+                    f"ExecutionPlan.hash {plan.hash!r} does not "
+                    f"match plan.compute_hash() {recomputed!r}. "
+                    "The body has been tampered with or serialised "
+                    "stale — refuse to trust adapter references "
+                    "inside it."
+                ),
+            )
+        )
+
+    return issues
+
+
+def _validate_plan_enforcement_mode(
+    spec: ScheduleSpec,
+    execution_plans: Optional[Mapping[str, ExecutionPlan]],
+) -> list[ValidationIssue]:
+    """ExecutionPlan model accepts PERMISSIVE; the freeze pathway
+    rejects it. The chokepoint is THIS validator (per the
+    ExecutionPlan docstring).
+    """
+    if spec.execution_plan_hash is None or execution_plans is None:
+        return []
+    plan = execution_plans.get(spec.execution_plan_hash)
+    if plan is None:
+        return []
+    if plan.enforcement != EnforcementMode.STRICT:
+        return [
+            ValidationIssue(
+                code="execution_plan_enforcement_not_strict",
+                severity="error",
+                path="execution_plan.enforcement",
+                message=(
+                    f"ExecutionPlan.enforcement must be "
+                    f"{EnforcementMode.STRICT.value!r} at freeze "
+                    f"time; got {plan.enforcement.value!r}."
+                ),
+            )
+        ]
+    return []
+
+
+def _validate_plan_reasoning_output_types(
+    spec: ScheduleSpec,
+    execution_plans: Optional[Mapping[str, ExecutionPlan]],
+) -> list[ValidationIssue]:
+    """``OutputSpec.type='none'`` is accepted by the model so
+    test fixtures can exercise it; the rigor validator (this
+    one) forbids it in frozen plans per the OutputSpec
+    docstring.
+    """
+    if spec.execution_plan_hash is None or execution_plans is None:
+        return []
+    plan = execution_plans.get(spec.execution_plan_hash)
+    if plan is None:
+        return []
+    issues: list[ValidationIssue] = []
+    for ri, step in enumerate(plan.reasoning):
+        if step.output.type == "none":
+            issues.append(
+                ValidationIssue(
+                    code="reasoning_output_type_forbidden",
+                    severity="error",
+                    path=(
+                        f"execution_plan.reasoning[{ri}].output.type"
+                    ),
+                    message=(
+                        f"ReasoningStep[{ri}] declares "
+                        "output.type='none' — frozen plans require "
+                        "'json' or 'text' so post-LLM validation "
+                        "has something to check against."
+                    ),
+                )
+            )
+    return issues
+
+
 def _validate_referenced_adapters(
     spec: ScheduleSpec,
     execution_plans: Optional[Mapping[str, ExecutionPlan]],
@@ -358,6 +511,11 @@ def validate_schedule_spec(
     issues.extend(_validate_execution_plan_hash_format(spec))
     issues.extend(_validate_reminder_rule(spec))
     issues.extend(_validate_execution_plan_hash_exists(spec, execution_plans))
+    issues.extend(_validate_plan_body_integrity(spec, execution_plans))
+    issues.extend(_validate_plan_enforcement_mode(spec, execution_plans))
+    issues.extend(
+        _validate_plan_reasoning_output_types(spec, execution_plans)
+    )
     issues.extend(
         _validate_referenced_adapters(spec, execution_plans, registries)
     )
