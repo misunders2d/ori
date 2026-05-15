@@ -14,6 +14,11 @@ References:
 - ``docs/PHASE_7_PLAN.md``
 """
 
+from app.v2.authoring.compile import (
+    schedule_draft_compile,
+    schedule_draft_discard,
+    schedule_draft_list,
+)
 from app.v2.authoring.delivery import schedule_set_delivery
 from app.v2.authoring.drafts import (
     DEFAULT_DRAFT_BASE,
@@ -37,6 +42,9 @@ __all__ = [
     "ScheduleSpecDraft",
     "ToolResponse",
     "ToolResponseStatus",
+    "schedule_draft_compile",
+    "schedule_draft_discard",
+    "schedule_draft_list",
     "schedule_draft_start",
     "schedule_set_cron",
     "schedule_set_delivery",
