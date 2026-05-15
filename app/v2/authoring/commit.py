@@ -39,7 +39,13 @@ passes):
   ``event_id_factory``; ``ts`` from ``clock()`` normalised
   to UTC; payload is exactly
   ``{"hash": spec.hash, "template": <name|None>}``
-  (round-1 reviewer Q6).
+  (round-1 reviewer Q6). An ``IntegrityError`` here
+  (event-id collision under the ``events.id`` primary key)
+  rolls the TX back AND surfaces as
+  ``validation_failed(duplicate_event_id)`` — the slice-4
+  reviewer fix discriminates the two storage helpers via
+  an inner-try sentinel so the LLM never sees a
+  ``duplicate_schedule_id`` code for an event-side cause.
 - Both writes succeed → the context manager issues
   ``COMMIT``.
 
@@ -241,18 +247,46 @@ async def schedule_draft_commit(
         correlates=None,
     )
 
+    # Inner-try sentinel discriminates which storage helper
+    # raised: ``insert_schedule`` IntegrityError surfaces as
+    # ``duplicate_schedule_id``; an ``append_event``
+    # IntegrityError (e.g. event-id collision under the
+    # events.id PRIMARY KEY) surfaces as
+    # ``duplicate_event_id`` so the LLM sees the actual
+    # cause. Reviewer slice-4 verdict: a single outer
+    # ``except sqlite3.IntegrityError`` mis-attributes the
+    # event-side collision as a schedule-id duplicate.
+    insert_raised_integrity = False
     try:
         with transaction(conn):
-            insert_schedule(conn, spec)
+            try:
+                insert_schedule(conn, spec)
+            except sqlite3.IntegrityError:
+                insert_raised_integrity = True
+                raise
             append_event(conn, event)
     except sqlite3.IntegrityError as exc:
+        if insert_raised_integrity:
+            return _validation_failed_single(
+                code="duplicate_schedule_id",
+                path="id",
+                message=(
+                    f"schedule id {spec.id!r} already exists in "
+                    f"the schedules table; storage refused the "
+                    f"insert ({exc!s})"
+                ),
+            )
+        # Event-side collision: insert succeeded, append
+        # blew up. Surface as ``duplicate_event_id`` so the
+        # caller can retry with a fresh event id factory.
         return _validation_failed_single(
-            code="duplicate_schedule_id",
-            path="id",
+            code="duplicate_event_id",
+            path="event.id",
             message=(
-                f"schedule id {spec.id!r} already exists in the "
-                f"schedules table; storage refused the insert "
-                f"({exc!s})"
+                f"schedule_created event id collision while "
+                f"committing schedule {spec.id!r}; the schedules "
+                f"insert rolled back. Retry with a fresh "
+                f"event_id_factory output ({exc!s})"
             ),
         )
 

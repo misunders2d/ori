@@ -494,6 +494,68 @@ async def test_append_event_failure_rolls_back_insert(
 
 
 @pytest.mark.asyncio
+async def test_duplicate_event_id_returns_duplicate_event_id_not_schedule(
+    tmp_path,
+):
+    """Reviewer slice-4 verdict: event-id collision must
+    surface as `duplicate_event_id`, NOT
+    `duplicate_schedule_id`. Pre-fix the single outer
+    `except sqlite3.IntegrityError` mis-attributed the
+    event collision as a schedule-id duplicate; pin the
+    discrimination."""
+    drafts, handshakes = await _seed(tmp_path, _oneoff_draft())
+    conn = _migrate_conn(tmp_path)
+
+    # Pre-seed an event row with the id the factory will
+    # return. Use a separate dummy schedule so the FK is
+    # satisfied. (Events.schedule_id has an FK to
+    # schedules.id; we land a sentinel schedule first.)
+    from app.v2.models.event import Event as _Event
+    from app.v2.models.triggers import OneOffTrigger as _OneOff
+
+    sentinel_draft = _oneoff_draft(id_="sentinel_for_event_seed")
+    sentinel_drafts, sentinel_handshakes = await _seed(
+        tmp_path, sentinel_draft
+    )
+    r0 = await schedule_draft_commit(
+        "sentinel_for_event_seed",
+        session_id="sess1",
+        store=sentinel_drafts,
+        handshake_store=sentinel_handshakes,
+        conn=conn,
+        event_id_factory=_event_id_factory,
+        clock=_fixed_clock,
+    )
+    assert r0.status == "ok"
+
+    # Now sched_alpha is brand-new. Its event_id_factory
+    # returns the SAME id already in the events table from
+    # the sentinel commit above → events.id PRIMARY KEY
+    # collision on append_event.
+    r = await schedule_draft_commit(
+        "sched_alpha",
+        session_id="sess1",
+        store=drafts,
+        handshake_store=handshakes,
+        conn=conn,
+        event_id_factory=_event_id_factory,
+        clock=_fixed_clock,
+    )
+
+    assert r.status == "validation_failed"
+    codes = {i.code for i in r.issues}
+    assert "duplicate_event_id" in codes
+    # CRITICAL pin: must NOT mis-attribute as schedule
+    # duplicate.
+    assert "duplicate_schedule_id" not in codes
+    # Schedule row rolled back (TX atomicity).
+    assert get_schedule(conn, "sched_alpha") is None
+    # Files preserved for retry.
+    assert drafts.read("sess1", "sched_alpha").id == "sched_alpha"
+    handshakes.read("sess1", "sched_alpha")
+
+
+@pytest.mark.asyncio
 async def test_duplicate_id_returns_validation_failed(tmp_path):
     drafts, handshakes = await _seed(tmp_path, _oneoff_draft())
     conn = _migrate_conn(tmp_path)
