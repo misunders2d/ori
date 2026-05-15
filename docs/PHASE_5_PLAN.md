@@ -87,24 +87,19 @@ authority source.
    runtime module already pin that.
 
 2. **APScheduler binding wrapper** —
-   `app/v2/runtime/binding.py`. Thin `SchedulerBinding` class
-   that wraps `AsyncIOScheduler` with:
-
-   ```python
-   class SchedulerBinding:
-       async def start(self) -> None: ...
-       async def stop(self) -> None: ...
-       def register(self, spec: ScheduleSpec) -> None: ...
-       def unregister(self, schedule_id: str) -> None: ...
-       def reregister(self, spec: ScheduleSpec) -> None: ...
-       def list_registered(self) -> list[str]: ...
-   ```
-
+   `app/v2/runtime/binding.py`. `SchedulerBinding` class
+   wraps `AsyncIOScheduler` with construction +
+   lifecycle (`start` / `stop` / `pause` / `resume` /
+   `is_paused`) and registration (`register` /
+   `unregister` / `reregister` / `list_registered`).
    `register` translates the trigger to APScheduler's job
    form and binds the wakeup callable. Phase-4 invariants
    carry forward: APScheduler manages only its
    `apscheduler_jobs` table (design §4.0.3); the v2 runs
    table remains the only source of truth for run state.
+   Canonical signatures + the per-method semantics live in
+   §3.2 below — this list is intentionally a brief
+   surface map.
 
 3. **Boot sequence module** — `app/v2/runtime/boot.py`. The
    startup hook ordered per design §4.0.5:
@@ -760,7 +755,7 @@ clean.
 |---|---|---|
 | 0 (plan) | `docs/PHASE_5_PLAN.md` + `docs/CONTRACTS_V2_DESIGN.md` §12 renumber + `.v2-current-phase` bump 4→5 + `PHASE_ALLOWLIST[5]` | (none) |
 | 1 | `_defaults.py` + `cron_guard.py` (extracted public helper from phase-4 wakeup) + minimal `wakeup.py` edit to import from new location | `test_runtime_defaults.py` + `test_runtime_cron_guard.py` (phase-4 wakeup tests stay green unchanged) |
-| 2 | `binding.py` — construction + start/stop only (no register) + APScheduler exception-swallow `_fire_for` skeleton | `test_runtime_binding.py` (lifecycle + exception swallow) |
+| 2 | `binding.py` — construction + full lifecycle (`start` / `stop` / `pause` / `resume` / `is_paused`) + APScheduler exception-swallow `_fire_for` skeleton; no `register` yet | `test_runtime_binding.py` (lifecycle inc. paused-start / resume / pause / pre-start-pause-raises + exception swallow) |
 | 3 | `binding.py` — `register(spec)` for OneOff + Cron + reject of unwired types + numeric-DOW rejection at register time | `test_runtime_binding.py` (registration) |
 | 4 | `binding.py` — `unregister`, `reregister`, OneOff register-time guard (`_one_off_already_fired`) | `test_runtime_binding.py` (revisions + guard) |
 | 5 | `boot.py` — recovery + binding + backfill + register + workers in documented order | `test_runtime_boot.py` (mocked SchedulerBinding so this test stays fast) |
@@ -808,15 +803,41 @@ Lifecycle + construction:
   they call APScheduler's sync `start()` / `shutdown()` —
   pin the bridge.
 - `start(paused=True)` → `is_paused()` returns True
-  immediately after the await. Pre-registered persisted
-  jobs whose `next_run_time` is past do NOT fire until
-  `resume()` is awaited. Pin via spying on the wakeup
-  callable: register a job set to fire immediately,
-  `start(paused=True)`, assert the wakeup spy was NOT
-  called within a short polling budget (50 ms).
-- `await binding.resume()` after a paused start → fires
-  pending jobs; wakeup spy is called. `is_paused()`
-  returns False after.
+  immediately after the await. Persisted jobs whose
+  `next_run_time` is past do NOT fire until `resume()` is
+  awaited.
+
+  Recipe (two-phase test because APScheduler persists
+  jobs to the SQLAlchemy jobstore at ``add_job`` time
+  during a running scheduler — adding before ``start()``
+  is rejected by APScheduler):
+
+  1. Phase A — seed the jobstore. Construct binding
+     pointing at a fresh `tmp_path / "v2-jobs.db"`
+     SQLAlchemy URL. `await binding.start()` (paused=False,
+     default). Register a wakeup-spy-bound OneOff with
+     `at_iso_datetime = synthetic_now - 5 s` so its
+     `next_run_time` is past the moment APScheduler starts
+     it. `await binding.stop()`. Jobstore file now
+     contains the persisted job.
+  2. Phase B — paused restart. Construct a fresh binding
+     pointing at the SAME jobstore URL (the same wakeup
+     spy bound). `await binding.start(paused=True)`. The
+     SQLAlchemy jobstore is loaded, but no fires occur.
+     Assert the wakeup spy's call count stays 0 across a
+     50 ms polling budget; assert `is_paused()` is True.
+  3. `await binding.resume()`. The previously-loaded
+     persisted job's misfired DateTrigger fires within
+     `misfire_grace_time`; the wakeup spy gets called.
+     Assert `is_paused()` is False after.
+
+  This two-phase recipe is the only deterministic way to
+  pin "persisted jobs do NOT fire under paused start"
+  because APScheduler 3.x will not accept `add_job` on a
+  pre-`start` scheduler — the only way to have persisted
+  jobs at start time is via the SQLAlchemy file from a
+  prior run.
+
 - `await binding.pause()` after a running binding →
   `is_paused()` returns True; new fires stop until next
   `resume()`. Idempotent against an already-paused binding.
