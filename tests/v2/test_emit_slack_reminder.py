@@ -232,6 +232,66 @@ async def test_response_missing_ok_key_returns_fallback_error():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_ok",
+    [
+        "true",      # truthy str — Slack never sends this
+        "True",      # capitalised str
+        "false",     # truthy str (non-empty) but semantically false
+        "False",     # capitalised str
+        "yes",
+        "no",
+        "0",         # non-empty string
+        1,           # truthy int — Slack never sends this
+        2,
+        -1,
+        0,           # falsy but not the True bool
+        1.0,         # truthy float
+        [],          # falsy non-bool
+        ["ok"],      # truthy non-bool
+        {},          # falsy non-bool
+        {"a": 1},    # truthy non-bool
+        None,        # missing
+    ],
+)
+async def test_response_non_bool_ok_treated_as_failure(bad_ok):
+    """Round-1 reviewer slice-4 fix: Slack API contract
+    treats success ONLY when ``ok`` is the literal ``True``
+    bool. Truthy non-bool values (``"true"`` / ``1`` /
+    ``"yes"``) MUST NOT map to success. Pin parametrically
+    so a future refactor that re-introduces
+    ``bool(response.get("ok"))`` semantics surfaces."""
+    client = _StubSlackClient(
+        response={"ok": bad_ok, "ts": "1700000000.000100"}
+    )
+    result = await emit_reminder_to_slack(
+        spec=_spec(),
+        slack_client=client,
+        clock=_fixed_clock,
+    )
+
+    assert result.ok is False, (
+        f"non-bool ok={bad_ok!r} of type {type(bad_ok).__name__} "
+        "must not map to SlackPostResult.ok=True"
+    )
+
+
+@pytest.mark.asyncio
+async def test_response_literal_true_only_is_success():
+    """Sanity: the ONLY value of ``ok`` that maps to
+    success is the literal ``True`` bool."""
+    client = _StubSlackClient(
+        response={"ok": True, "ts": "1700000000.000100"}
+    )
+    result = await emit_reminder_to_slack(
+        spec=_spec(),
+        slack_client=client,
+        clock=_fixed_clock,
+    )
+    assert result.ok is True
+
+
+@pytest.mark.asyncio
 async def test_response_ts_non_string_coerced_to_none():
     client = _StubSlackClient(
         response={"ok": True, "ts": 12345}  # int, not str

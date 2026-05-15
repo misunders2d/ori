@@ -177,7 +177,15 @@ async def emit_reminder_to_slack(
             error=str(exc),
         )
 
-    ok = bool(response.get("ok", False))
+    # Slack API contract: success ONLY when `ok` is the
+    # literal True bool. Truthy non-bool values ("true"
+    # string, 1 int, "yes", etc.) MUST NOT map to success
+    # — Slack never sends those, and accepting them would
+    # let a malformed / spoofed response masquerade as ok.
+    # Use identity check (`is True`) so the type narrows
+    # to bool, not the looser truthy semantics of
+    # ``bool(...)`` (round-1 reviewer slice-4 bug fix).
+    ok = response.get("ok") is True
     ts = response.get("ts")
     error = response.get("error") if not ok else None
     return SlackPostResult(
