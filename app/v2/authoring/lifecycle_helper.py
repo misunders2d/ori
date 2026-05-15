@@ -94,7 +94,7 @@ def update_status_with_event(
     event_id_factory: Callable[[], str],
     clock: Callable[[], datetime],
     cancel_pending_runs: bool = False,
-) -> None:
+) -> int:
     """Atomic status flip + EventLedger append.
 
     Behaviour:
@@ -123,6 +123,10 @@ def update_status_with_event(
     transaction if any). The implementation does NOT call
     ``conn.commit()`` — the lifecycle tool that owns the
     request is the commit site.
+
+    Returns the number of pending Runs cancelled when
+    ``cancel_pending_runs=True``; 0 otherwise (no-op shortcut,
+    cancel branch disabled, or no pending Runs found).
     """
     target_status, event_kind = _ACTION_TO_STATUS_AND_EVENT[action]
 
@@ -138,8 +142,9 @@ def update_status_with_event(
     current_status = ScheduleStatus(current_row[0])
     if current_status == target_status:
         # No-op (Q15) — no update, no event.
-        return
+        return 0
 
+    cancelled_count = 0
     savepoint_name = f"lifecycle_{action.value}"
     conn.execute(f"SAVEPOINT {savepoint_name}")
     try:
@@ -166,7 +171,7 @@ def update_status_with_event(
 
         # 3. Cancel pending Runs (archive path only).
         if cancel_pending_runs:
-            _cancel_pending_runs(
+            cancelled_count = _cancel_pending_runs(
                 conn,
                 schedule_id=schedule_id,
                 correlates_event_id=schedule_event.id,
@@ -179,6 +184,8 @@ def update_status_with_event(
         raise
     else:
         conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+
+    return cancelled_count
 
 
 def _cancel_pending_runs(

@@ -25,6 +25,12 @@ from app.v2.authoring.drafts import (
     DraftStore,
     ScheduleSpecDraft,
 )
+from app.v2.authoring.lifecycle import (
+    schedule_archive,
+    schedule_pause,
+    schedule_resume,
+    schedule_revive,
+)
 from app.v2.authoring.responses import ToolResponse, ToolResponseStatus
 from app.v2.authoring.setters import (
     schedule_draft_start,
@@ -42,10 +48,14 @@ __all__ = [
     "ScheduleSpecDraft",
     "ToolResponse",
     "ToolResponseStatus",
+    "schedule_archive",
     "schedule_draft_compile",
     "schedule_draft_discard",
     "schedule_draft_list",
     "schedule_draft_start",
+    "schedule_pause",
+    "schedule_resume",
+    "schedule_revive",
     "schedule_set_cron",
     "schedule_set_delivery",
     "schedule_set_description",
