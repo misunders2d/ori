@@ -254,7 +254,7 @@ async def test_e2e_slow_one_off_fires_on_real_wall_clock(tmp_path):
                 break
 
         assert terminal_row is not None, (
-            "OneOff did not reach succeeded within the 10 s "
+            "OneOff did not reach succeeded within the 12 s "
             "wall-clock budget. APScheduler did not fire OR "
             "the worker did not walk the lifecycle."
         )
@@ -295,10 +295,28 @@ async def test_e2e_slow_one_off_fires_on_real_wall_clock(tmp_path):
         finally:
             verify.close()
     finally:
-        # Always tear the runtime down under a HARD timeout
-        # so a leaked AsyncIOScheduler thread or jobstore
-        # engine pool fails loud instead of hanging the test
-        # session. 5 s is generous -- AsyncIOScheduler's
+        # Tear the runtime down under a HARD timeout so a
+        # leaked AsyncIOScheduler thread or jobstore engine
+        # pool fails loud instead of hanging the test session.
+        # 5 s is generous -- AsyncIOScheduler's
         # shutdown(wait=False) + a SQLAlchemy engine dispose
         # finish in milliseconds on a healthy run.
         await asyncio.wait_for(shutdown_runtime(handle), timeout=5.0)
+        # Structural pin (reviewer's slice-7b regression): if
+        # AsyncIOScheduler's deferred ``_shutdown`` never
+        # actually executed -- e.g. binding.stop returned
+        # after a single asyncio.sleep(0) before the
+        # ``call_soon_threadsafe`` callback ran -- the
+        # SQLAlchemyJobStore engine pool stays undisposed and
+        # the pytest process hangs at interpreter exit
+        # waiting on the leaked resources. Asserting
+        # ``running is False`` here catches that regression
+        # structurally inside the test rather than via an
+        # external timeout on the harness.
+        assert handle.binding._scheduler.running is False, (
+            "AsyncIOScheduler still reports running=True "
+            "after shutdown_runtime returned. The deferred "
+            "_shutdown did not execute; SQLAlchemyJobStore "
+            "engine + sqlite handles are leaked and the "
+            "process will hang at interpreter exit."
+        )

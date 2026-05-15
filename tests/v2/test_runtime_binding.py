@@ -502,6 +502,32 @@ async def test_stop_yields_for_deferred_shutdown(tmp_path):
         await b.stop()
 
 
+@pytest.mark.asyncio
+async def test_stop_waits_until_scheduler_not_running(tmp_path):
+    """Slice-7b reviewer regression: a single
+    ``asyncio.sleep(0)`` is not sufficient to flush
+    AsyncIOScheduler's ``@run_in_event_loop`` deferred
+    ``_shutdown`` callback in every host environment (pytest-
+    asyncio's per-test loop closes immediately after this
+    coroutine returns; if the deferred callback never ran,
+    ``SQLAlchemyJobStore.engine.dispose()`` is skipped and
+    the process hangs at interpreter exit on undisposed
+    SQLAlchemy resources).
+
+    Pin: after ``stop()`` returns, the underlying scheduler
+    must observably report ``running=False``. Polling on
+    that flag is the contract ``binding.stop`` guarantees.
+    """
+    b = _make_binding(tmp_path)
+    await b.start()
+    assert b._scheduler.running is True
+    await b.stop()
+    # The deferred _shutdown must have completed; if not, the
+    # caller's event loop closing right now would leak the
+    # jobstore engine + sqlite file handles.
+    assert b._scheduler.running is False
+
+
 # ===========================================================================
 # Lifecycle -- pause / resume
 # ===========================================================================

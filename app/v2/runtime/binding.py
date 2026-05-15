@@ -278,18 +278,51 @@ class SchedulerBinding:
         ``start()`` was never called.
 
         Internally calls APScheduler's sync
-        ``shutdown(wait=False)`` then yields once via
-        ``asyncio.sleep(0)`` so the event-loop completes the
-        deferred ``_shutdown`` task. Without the yield,
-        callers that immediately inspect ``is_paused()`` or
-        re-call ``start()`` would race the pending shutdown.
+        ``shutdown(wait=False)`` and then yields repeatedly
+        until the scheduler observably transitions to
+        ``STATE_STOPPED``.
+
+        Why a yield loop and not a single ``asyncio.sleep(0)``:
+        ``AsyncIOScheduler.shutdown`` is decorated
+        ``@run_in_event_loop`` (see
+        ``apscheduler/schedulers/asyncio.py``). It defers the
+        real shutdown work -- executor shutdown, jobstore
+        shutdown, ``SQLAlchemyJobStore.engine.dispose()`` (the
+        call that releases sqlite file handles + the
+        SQLAlchemy connection pool) -- by scheduling
+        ``_shutdown`` via ``call_soon_threadsafe``. A single
+        ``await asyncio.sleep(0)`` puts the current task
+        back on the ready queue alongside the deferred
+        callback and the order in which they run is not
+        guaranteed -- in pytest-asyncio's per-test loop the
+        loop closes immediately after this coroutine returns,
+        the deferred callback never executes, and the
+        SQLAlchemy engine is never disposed; the process then
+        hangs at interpreter exit waiting on undisposed
+        resources (reviewer's slice-7b regression). Yielding
+        until ``not self._scheduler.running`` guarantees the
+        deferred ``_shutdown`` actually completed before
+        ``stop()`` returns. Budget 500 ms (50 * 10 ms) is
+        well above the real microsecond cost on a healthy
+        loop; if the budget elapses, log + fall through (a
+        runaway scheduler is a separate operational bug).
         """
         if not self._started:
             return
         self._scheduler.shutdown(wait=False)
         self._started = False
-        # Let AsyncIOScheduler's deferred _shutdown task run.
-        await asyncio.sleep(0)
+        # Wait for the deferred ``_shutdown`` to actually
+        # transition the scheduler. See docstring rationale.
+        for _ in range(50):
+            if not self._scheduler.running:
+                return
+            await asyncio.sleep(0.01)
+        _logger.error(
+            "binding.stop: AsyncIOScheduler still reports "
+            "running=True after 500 ms; deferred _shutdown "
+            "did not execute. Caller risks leaked jobstore "
+            "engine + sqlite file handles."
+        )
 
     async def pause(self) -> None:
         """Pause the scheduler. No new fires until
