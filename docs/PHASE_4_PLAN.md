@@ -919,9 +919,11 @@ Phase 4 complete when ALL true:
    (non-silent failure).
 9. Worker walks pending → claimed → running → succeeded
    under a synthetic clock with no I/O imports.
-10. Wakeup callback handles OneOff in slice 5a. Cron lands
-    in 5b after the parser choice is confirmed. Interval /
-    Event / Conditional → NotImplementedError.
+10. Wakeup callback handles OneOff and Cron;
+    Interval / Event / Conditional raise
+    NotImplementedError. Cron uses APScheduler's
+    ``CronTrigger.from_crontab`` and rejects numeric
+    day-of-week.
 11. Smoke test confirms no `reason` / `emit` / `delegate` /
     `transfer` callables anywhere in `app/v2/runtime/*` — the
     worker body remains a no-op until later phases wire real
@@ -961,10 +963,13 @@ Plan:   docs/PHASE_4_PLAN.md
    `RESUME`). Phase 4 uses the phase-1 names; design doc
    resync gated on Sergey approval.
 
-2. **Cron parsing source**: APScheduler's
+2. ~~**Cron parsing source**: APScheduler's
    `CronTrigger.from_crontab` or `croniter`. **NOT in-house**
    (reviewer round-2 — too risky to roll a custom parser).
-   Reviewer to pick BEFORE slice 5b.
+   Reviewer to pick BEFORE slice 5b.~~ — **Closed in slice
+   5b.** Chose APScheduler `CronTrigger.from_crontab` with
+   `ZoneInfo(timezone)`; rationale + DOW name-only constraint
+   documented in §6.2.
 
 3. **APScheduler binding glue location**: phase-4 closeout
    slice OR deferred to phase 5? Reviewer call after slice 5
