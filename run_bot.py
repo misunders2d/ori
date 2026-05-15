@@ -70,6 +70,16 @@ from google.adk.sessions import DatabaseSessionService
 from app.agent import app as ori_app
 from app.scheduler_instance import scheduler
 
+# Phase 9 slice 7 — v2 runtime boot wiring. Imported lazily
+# inside main() to keep top-level startup cheap and to avoid
+# pulling the v2 stack into smoke imports of run_bot.
+_V2_STATE_DB_PATH = os.path.abspath("./data/scheduler-v2-state.db")
+"""SQLite file backing the v2 scheduler's ``schedules`` /
+``runs`` / ``events`` tables (separate from the APScheduler
+jobstore at ``data/scheduler-v2-jobs.db`` per phase-9 plan
+§3.7 / Q9). Created + migrated on first boot via
+``app.v2.migrations.runner.apply_pending``."""
+
 _global_runner = None
 
 def get_runner():
@@ -230,6 +240,25 @@ async def main():
     # scheduler at the bottom of this function, after every transport
     # has had a chance to ``register_adapter`` itself.
     scheduler.start(paused=True)
+
+    # Phase 9 slice 7 — boot the v2 runtime AFTER v1 is up.
+    # ``autostart=False`` keeps the v2 binding paused + leaves
+    # workers unstarted until the Slack / Telegram pollers
+    # register their adapters; we drive ``v2_handle.activate()``
+    # in the same delayed task that resumes the v1 scheduler.
+    # If v2 boot fails (migration error, locked db, etc.) we
+    # log + continue with v1 only -- v2 is additive in phase
+    # 9 and a failure here must NOT brick the daemon.
+    v2_handle = None
+    try:
+        from app.v2.boot import boot_v2_runtime
+        v2_handle = await boot_v2_runtime(_V2_STATE_DB_PATH)
+    except Exception as exc:
+        logger.warning(
+            "v2 runtime boot failed (continuing with v1 only): %s",
+            exc,
+        )
+
     tasks = []
     
     # 1. A2A Native Server
@@ -365,6 +394,20 @@ async def main():
             )
         except Exception as e:
             logger.warning("Failed to resume scheduler: %s", e)
+        # Phase 9 slice 7 — activate the v2 runtime AFTER the
+        # transports have registered. The v2 binding stays
+        # paused + workers stay unstarted until this call so
+        # any overdue OneOff reminder backfilled at boot only
+        # emits AFTER the Slack client is live.
+        if v2_handle is not None:
+            try:
+                await v2_handle.activate()
+                logger.info(
+                    "v2 runtime activated — workers polling, "
+                    "binding resumed."
+                )
+            except Exception as e:
+                logger.warning("Failed to activate v2 runtime: %s", e)
     tasks.append(asyncio.create_task(_resume_scheduler_when_transports_ready()))
 
     try:
@@ -384,8 +427,19 @@ async def main():
     except asyncio.CancelledError:
         logger.info("Daemon shutting down.")
     finally:
+        # Phase 9 slice 7 — stop v2 BEFORE v1 (round-1
+        # reviewer L478 fix). ``shutdown_runtime`` works
+        # against an activated OR never-activated handle, so
+        # this is safe even if ``v2_handle.activate()`` never
+        # ran (e.g. boot failed before transports came up).
+        if v2_handle is not None:
+            try:
+                from app.v2.runtime.boot import shutdown_runtime
+                await shutdown_runtime(v2_handle)
+            except Exception as exc:
+                logger.warning("v2 runtime shutdown failed: %s", exc)
         scheduler.shutdown()
-        
+
         # Clear crash file on clean exit (0), update (100) or rollback (101)
         crash_file = os.environ.get("CRASH_FILE", "./data/.crash_count")
         try:

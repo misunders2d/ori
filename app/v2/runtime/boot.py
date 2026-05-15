@@ -90,11 +90,23 @@ class RegistrationError:
     error_message: str
 
 
-@dataclass(frozen=True)
+@dataclass
 class RuntimeHandle:
     """Handle returned from ``boot_runtime`` -- carries the
     live binding + worker pool plus structured boot-health
     signals the caller iterates after boot.
+
+    Phase 9 slice 7 (round-3 reviewer L311 + L320 fix): the
+    handle gains an ``activate()`` async method + a private
+    ``_activated`` flag so phase-9 cutover can boot the
+    runtime with ``autostart=False``, bring transports
+    online, and only then start workers + resume the
+    binding. ``activate()`` is one-shot per handle:
+    re-calling it raises :class:`RuntimeAlreadyActivatedError`
+    so accidental double-activation (e.g. a default
+    ``autostart=True`` boot followed by a defensive
+    ``activate()`` call) flips loudly instead of a silent
+    worker double-start.
     """
 
     binding: SchedulerBinding
@@ -102,6 +114,34 @@ class RuntimeHandle:
     recovery_result: list[Union[RecoveredRun, RecoveryError]]
     backfilled_one_offs: list[BackfilledOneOff]
     registration_errors: list[RegistrationError]
+    _activated: bool = False
+
+    async def activate(self) -> None:
+        """Start every worker, then resume the binding.
+
+        One-shot per handle: a second call (or a call against
+        a handle returned from a default ``autostart=True``
+        boot, which is already activated) raises
+        :class:`RuntimeAlreadyActivatedError`. The worker pool
+        starts BEFORE the binding resumes so the first wakeup
+        the binding fires after resume always has a worker
+        available to claim the resulting Run row -- avoids
+        the race where a misfire_grace_time replay fires the
+        instant resume() returns but no worker is yet polling.
+        """
+        if self._activated:
+            raise RuntimeAlreadyActivatedError(
+                "RuntimeHandle.activate() already called -- "
+                "the handle is one-shot. Default boot_runtime("
+                "autostart=True) already activates before "
+                "returning; pass autostart=False to defer "
+                "activation until transports are ready."
+            )
+        for worker in self.workers:
+            await worker.start()
+        await self.binding.resume()
+        self._activated = True
+        _logger.info("runtime.boot.activated")
 
 
 class RuntimeBootError(RuntimeError):
@@ -116,9 +156,24 @@ class RuntimeBootError(RuntimeError):
     """
 
 
+class RuntimeAlreadyActivatedError(RuntimeError):
+    """Raised by :meth:`RuntimeHandle.activate` when the
+    handle was already activated -- either by a default
+    ``boot_runtime(autostart=True)`` boot or by a previous
+    explicit ``activate()`` call.
+
+    Phase 9 slice 7 round-2 carry-forward (L795): the
+    default ``autostart=True`` path marks the handle
+    activated before returning so accidental ``activate()``
+    after default boot raises here instead of silently
+    double-starting workers + double-resuming the binding.
+    """
+
+
 async def boot_runtime(
     conn_factory: Callable[[], sqlite3.Connection],
     *,
+    autostart: bool = True,
     worker_count: int = 1,
     claimed_timeout: timedelta = timedelta(minutes=5),
     running_timeout: timedelta = timedelta(minutes=30),
@@ -139,6 +194,22 @@ async def boot_runtime(
     (same pattern as the phase-4 helpers) so tests can drive
     deterministic boots; production defaults to the
     ``_defaults`` module's wiring.
+
+    Args:
+        autostart: When True (default) preserves the phase-5
+            contract: ``binding.resume()`` fires + every
+            worker's ``start()`` is awaited BEFORE the handle
+            returns; the handle is marked activated so an
+            accidental subsequent ``activate()`` call raises
+            :class:`RuntimeAlreadyActivatedError` instead of
+            silently double-starting workers (round-2
+            carry-forward L795). When False, the binding
+            stays paused, workers are constructed but NOT
+            started, and the returned handle has
+            ``_activated=False``; the caller must drive
+            activation via ``RuntimeHandle.activate()`` once
+            Slack / Telegram transports are ready (phase 9
+            round-3 reviewer L311 + L320 fix).
 
     Raises:
         RuntimeBootError: ``abort_on_recovery_errors=True``
@@ -336,12 +407,34 @@ async def boot_runtime(
             # fires registered jobs on cadence; misfired
             # persisted jobs within ``misfire_grace_time``
             # replay.
-            await binding.resume()
+            #
+            # Phase 9 slice 7 (round-3 reviewer L311):
+            # ``autostart=False`` skips the resume so the
+            # binding stays paused until the caller drives
+            # ``RuntimeHandle.activate()`` AFTER Slack /
+            # Telegram transports are ready. Without this,
+            # overdue OneOff replays would fire against an
+            # unready Slack client during boot.
+            if autostart:
+                await binding.resume()
 
             # 9. Worker pool. Append to ``started_workers``
             # after each successful ``start()`` so a later
             # worker-start failure still has the running
             # ones in the cleanup list.
+            #
+            # Phase 9 slice 7 (round-3 reviewer L320):
+            # ``autostart=False`` constructs the worker
+            # instances but does NOT call ``start()`` -- the
+            # workers land on the handle in their unstarted
+            # state; ``RuntimeHandle.activate()`` starts them
+            # once transports are ready. Unstarted workers
+            # are appended to a separate ``unstarted_workers``
+            # list so the cleanup-on-error path ONLY iterates
+            # ``started_workers`` (calling ``stop()`` on a
+            # never-started worker is undefined for some
+            # implementations).
+            unstarted_workers: list[Worker] = []
             for i in range(worker_count):
                 worker = Worker(
                     conn_factory=conn_factory,
@@ -352,8 +445,11 @@ async def boot_runtime(
                     event_id_factory=event_id_factory,
                     claim_batch_size=claim_batch_size,
                 )
-                await worker.start()
-                started_workers.append(worker)
+                if autostart:
+                    await worker.start()
+                    started_workers.append(worker)
+                else:
+                    unstarted_workers.append(worker)
         except BaseException:
             # Cleanup any live workers + the started
             # binding so the caller never sees orphaned
@@ -379,13 +475,39 @@ async def boot_runtime(
             raise
 
         # 10. Return handle.
-        return RuntimeHandle(
+        #
+        # Phase 9 slice 7: the handle's ``workers`` list
+        # carries every Worker instance (started OR
+        # unstarted). ``_activated`` mirrors the autostart
+        # flag so a default ``autostart=True`` boot returns
+        # an already-activated handle (round-2 carry-forward
+        # L795: a subsequent accidental ``activate()`` call
+        # raises ``RuntimeAlreadyActivatedError`` instead of
+        # silently double-starting workers).
+        all_workers = started_workers + unstarted_workers
+        handle = RuntimeHandle(
             binding=binding,
-            workers=started_workers,
+            workers=all_workers,
             recovery_result=recovery_result,
             backfilled_one_offs=backfilled_one_offs,
             registration_errors=registration_errors,
+            _activated=autostart,
         )
+        # Phase 9 slice 7: structured boot-completion log so
+        # ``run_bot.py`` can correlate boot + activate stages
+        # in the daemon log. ``activated`` distinguishes a
+        # default-autostart boot (workers running, binding
+        # resumed) from a deferred-activation boot (caller
+        # will run ``activate()`` once transports come online).
+        _logger.info(
+            "runtime.boot.complete: workers=%d backfilled=%d "
+            "register_errors=%d activated=%s",
+            len(all_workers),
+            len(backfilled_one_offs),
+            len(registration_errors),
+            autostart,
+        )
+        return handle
     finally:
         boot_conn.close()
 
@@ -433,6 +555,7 @@ def _has_run_row(conn: sqlite3.Connection, schedule_id: str) -> bool:
 __all__ = [
     "BackfilledOneOff",
     "RegistrationError",
+    "RuntimeAlreadyActivatedError",
     "RuntimeBootError",
     "RuntimeHandle",
     "boot_runtime",

@@ -85,6 +85,7 @@ from app.v2.runtime import boot as boot_mod
 from app.v2.runtime.boot import (
     BackfilledOneOff,
     RegistrationError,
+    RuntimeAlreadyActivatedError,
     RuntimeBootError,
     RuntimeHandle,
     boot_runtime,
@@ -966,3 +967,212 @@ def test_boot_module_does_not_import_uuid():
         if inspect.ismodule(member):
             seen.add(member.__name__)
     assert "uuid" not in seen
+
+
+# ===========================================================================
+# Phase 9 slice 7 — autostart=False + RuntimeHandle.activate()
+# (round-3 reviewer L311 + L320 fix; round-2 carry-forward
+# L795)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_default_autostart_true_returns_activated_handle(
+    tmp_path, stub_binding, stub_worker_class
+):
+    """The default ``autostart=True`` path preserves the
+    phase-5 contract: binding.resume + every worker.start
+    fires BEFORE return. The returned handle is marked
+    ``_activated=True`` so a defensive second
+    ``handle.activate()`` call raises
+    ``RuntimeAlreadyActivatedError`` instead of silently
+    double-starting workers (round-2 carry-forward L795)."""
+    factory = _migrated_factory(tmp_path)
+    handle = await boot_runtime(
+        factory,
+        clock=_fixed_clock,
+        run_id_factory=_fixed_run_id,
+        event_id_factory=_fixed_evt_id,
+    )
+    # Binding resumed.
+    stub_binding.resume.assert_awaited_once()
+    # Workers started.
+    assert all(w.started for w in stub_worker_class.instances)
+    # Handle marked activated.
+    assert handle._activated is True
+
+
+@pytest.mark.asyncio
+async def test_autostart_false_leaves_binding_paused_and_workers_unstarted(
+    tmp_path, stub_binding, stub_worker_class
+):
+    """``autostart=False`` skips ``binding.resume()`` AND
+    skips every ``worker.start()``. Workers are constructed
+    so the handle's ``workers`` list is populated, but each
+    instance's ``started`` flag stays False."""
+    factory = _migrated_factory(tmp_path)
+    handle = await boot_runtime(
+        factory,
+        autostart=False,
+        worker_count=2,
+        clock=_fixed_clock,
+        run_id_factory=_fixed_run_id,
+        event_id_factory=_fixed_evt_id,
+    )
+    # Binding never resumed during boot.
+    stub_binding.resume.assert_not_awaited()
+    # Workers constructed but NOT started.
+    assert len(stub_worker_class.instances) == 2
+    assert all(w.started is False for w in stub_worker_class.instances)
+    # All workers land on the handle so activate() can find them.
+    assert len(handle.workers) == 2
+    # Handle marked NOT activated.
+    assert handle._activated is False
+
+
+@pytest.mark.asyncio
+async def test_activate_starts_workers_then_resumes_binding(
+    tmp_path, stub_binding, stub_worker_class
+):
+    """``handle.activate()`` starts every worker BEFORE the
+    binding resumes (so the first wakeup the binding fires
+    after resume always has a worker available to claim).
+    After activation, ``_activated`` flips to True."""
+    factory = _migrated_factory(tmp_path)
+    handle = await boot_runtime(
+        factory,
+        autostart=False,
+        worker_count=3,
+        clock=_fixed_clock,
+        run_id_factory=_fixed_run_id,
+        event_id_factory=_fixed_evt_id,
+    )
+    # Pre-condition: nothing started/resumed yet.
+    assert all(w.started is False for w in stub_worker_class.instances)
+    stub_binding.resume.assert_not_awaited()
+
+    await handle.activate()
+
+    # Every worker now started.
+    assert all(w.started for w in stub_worker_class.instances)
+    # Binding resumed.
+    stub_binding.resume.assert_awaited_once()
+    # Handle flag flipped.
+    assert handle._activated is True
+
+
+@pytest.mark.asyncio
+async def test_activate_second_call_raises_already_activated(
+    tmp_path, stub_binding, stub_worker_class
+):
+    """``activate()`` is one-shot per handle. A second call
+    must raise ``RuntimeAlreadyActivatedError`` -- this is
+    the guard that catches accidental double-activation
+    (e.g. a defensive call after a default-autostart boot)
+    instead of silently double-starting workers."""
+    factory = _migrated_factory(tmp_path)
+    handle = await boot_runtime(
+        factory,
+        autostart=False,
+        clock=_fixed_clock,
+        run_id_factory=_fixed_run_id,
+        event_id_factory=_fixed_evt_id,
+    )
+    await handle.activate()
+    with pytest.raises(RuntimeAlreadyActivatedError):
+        await handle.activate()
+
+
+@pytest.mark.asyncio
+async def test_activate_against_default_autostart_handle_raises(
+    tmp_path, stub_binding, stub_worker_class
+):
+    """L795 carry-forward (round-2): a default
+    ``autostart=True`` boot returns an already-activated
+    handle. ``activate()`` against it must raise so the
+    workers aren't started twice + the binding isn't
+    resumed twice."""
+    factory = _migrated_factory(tmp_path)
+    handle = await boot_runtime(
+        factory,
+        clock=_fixed_clock,
+        run_id_factory=_fixed_run_id,
+        event_id_factory=_fixed_evt_id,
+    )
+    # Pre-condition: default boot already activated.
+    assert handle._activated is True
+    # First resume already happened during boot.
+    stub_binding.resume.assert_awaited_once()
+    # Reset the mock so a stray resume() call from a buggy
+    # activate() implementation would show up here.
+    stub_binding.resume.reset_mock()
+
+    with pytest.raises(RuntimeAlreadyActivatedError):
+        await handle.activate()
+    # Verify the failed activate() did NOT call resume()
+    # (i.e. the guard fired BEFORE the side-effecting steps).
+    stub_binding.resume.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_runtime_works_against_never_activated_handle(
+    tmp_path, stub_binding, stub_worker_class
+):
+    """``shutdown_runtime`` must work against a handle that
+    was never activated (``autostart=False`` + no
+    ``activate()`` call). The worker pool was constructed
+    but never started; ``shutdown_runtime`` calls ``stop()``
+    on each anyway -- the test stub treats ``stop()`` as
+    idempotent so a never-started worker's stop is a
+    no-op."""
+    factory = _migrated_factory(tmp_path)
+    handle = await boot_runtime(
+        factory,
+        autostart=False,
+        worker_count=2,
+        clock=_fixed_clock,
+        run_id_factory=_fixed_run_id,
+        event_id_factory=_fixed_evt_id,
+    )
+    # Pre-condition: workers never started.
+    assert all(w.started is False for w in stub_worker_class.instances)
+
+    # Must not raise.
+    await shutdown_runtime(handle)
+
+    # All workers stopped (even though they were never
+    # started -- the stub's stop() flips the flag).
+    assert all(w.stopped for w in stub_worker_class.instances)
+    # Binding stopped exactly once.
+    stub_binding.stop.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_boot_step_ordering_preserved_when_autostart_false(
+    tmp_path, stub_binding, stub_worker_class
+):
+    """``autostart=False`` only suppresses step 8 (resume)
+    + step 9 (worker.start). Steps 2-7 (recovery, paused
+    start, backfill, reconcile, register) must still run in
+    the documented order. Pins: binding.start was awaited
+    with ``paused=True`` AND each active schedule was
+    registered."""
+    factory = _migrated_factory(tmp_path)
+    one_off_at = _fixed_clock() + timedelta(hours=1)  # future
+    spec = _one_off(schedule_id="future_oneoff", at=one_off_at)
+    _seed_schedule(factory, spec)
+
+    await boot_runtime(
+        factory,
+        autostart=False,
+        clock=_fixed_clock,
+        run_id_factory=_fixed_run_id,
+        event_id_factory=_fixed_evt_id,
+    )
+
+    # Binding started paused.
+    stub_binding.start.assert_awaited_once_with(paused=True)
+    # Schedule registered (step 7 ran).
+    assert stub_binding.list_registered() == ["future_oneoff"]
+    # Resume skipped.
+    stub_binding.resume.assert_not_awaited()
