@@ -129,7 +129,34 @@ in that commit.
    - `schedule_draft_list(session_id) -> ToolResponse`:
      lists draft ids for a session.
 
-5. **Lifecycle tools** — `app/v2/authoring/lifecycle.py`.
+5. **State-machine transition extension (slice 5a
+   prerequisite)** — `app/v2/runtime/state_machine.py`.
+   Round-3 reviewer L155 fix: the phase-4 transition table
+   does not yet include ``(RunStatus.PENDING,
+   RunStatus.CANCELLED)``. Phase 7 slice 5a adds the
+   single entry + the matching `assert_legal_transition`
+   pin so the archive cancellation branch can route every
+   pending Run through the chokepoint without policy
+   bypass. No other transitions change; the worker /
+   recovery scan paths are not touched.
+
+   Update is small + isolated. Plan-doc note here, code
+   diff in slice 5a (see §4). New table:
+
+   ```python
+   LEGAL_TRANSITIONS: frozenset[tuple[RunStatus, RunStatus]] = frozenset(
+       {
+           (RunStatus.PENDING, RunStatus.CLAIMED),
+           (RunStatus.PENDING, RunStatus.CANCELLED),   # NEW (phase 7 slice 5a)
+           (RunStatus.CLAIMED, RunStatus.RUNNING),
+           (RunStatus.CLAIMED, RunStatus.FAILED),
+           (RunStatus.RUNNING, RunStatus.SUCCEEDED),
+           (RunStatus.RUNNING, RunStatus.FAILED),
+       }
+   )
+   ```
+
+6. **Lifecycle tools** — `app/v2/authoring/lifecycle.py`.
    **Round-2 reviewer L109 + L442 + L598 fix:** lifecycle
    tools must (a) emit the matching EventLedger event in
    the SAME transaction as the status update, (b) honour
@@ -141,21 +168,50 @@ in that commit.
    wrapper module under `app/v2/authoring/`):
 
    ```python
+   # Round-3 reviewer L144 fix: helper enforces a
+   # (new_status, event_kind) mapping so callers cannot
+   # write e.g. status=PAUSED + event=SCHEDULE_ARCHIVED.
+   # The lifecycle-action enum derives both fields in one
+   # step so the mismatch is unrepresentable at the call
+   # site.
+
+   class _LifecycleAction(str, Enum):
+       PAUSE = "pause"     # active   -> paused    + schedule_paused
+       RESUME = "resume"   # paused   -> active    + schedule_resumed
+       ARCHIVE = "archive" # any      -> archived  + schedule_archived
+       REVIVE = "revive"   # archived -> paused    + schedule_revived
+
+   _ACTION_TO_STATUS_AND_EVENT: dict[
+       _LifecycleAction, tuple[ScheduleStatus, EventKind]
+   ] = {
+       _LifecycleAction.PAUSE:   (ScheduleStatus.PAUSED,    EventKind.SCHEDULE_PAUSED),
+       _LifecycleAction.RESUME:  (ScheduleStatus.ACTIVE,    EventKind.SCHEDULE_RESUMED),
+       _LifecycleAction.ARCHIVE: (ScheduleStatus.ARCHIVED,  EventKind.SCHEDULE_ARCHIVED),
+       _LifecycleAction.REVIVE:  (ScheduleStatus.PAUSED,    EventKind.SCHEDULE_REVIVED),
+   }
+
+
    def update_status_with_event(
        conn: sqlite3.Connection,
        schedule_id: str,
-       new_status: ScheduleStatus,
-       event_kind: EventKind,
+       action: _LifecycleAction,
        *,
        event_id_factory: Callable[[], str],
        clock: Callable[[], datetime],
        cancel_pending_runs: bool = False,
    ) -> None:
-       """Atomic status flip + EventLedger append. When
-       ``cancel_pending_runs=True`` also flips every pending
-       Run for this schedule to ``cancelled`` and appends a
-       ``run_cancelled`` event for each — all in one
-       transaction. Used by ``schedule_archive``.
+       """Atomic status flip + EventLedger append. ``action``
+       determines BOTH the target status and the event kind
+       via ``_ACTION_TO_STATUS_AND_EVENT`` — a caller cannot
+       pass an inconsistent pair (L144 fix).
+
+       When ``cancel_pending_runs=True`` (set by
+       ``schedule_archive``) the helper also flips every
+       pending Run for this schedule to ``cancelled`` and
+       appends a ``run_cancelled`` event for each — all in
+       one transaction. The pending → cancelled transition
+       is added to :data:`app.v2.runtime.state_machine.LEGAL_TRANSITIONS`
+       in slice 5a (round-3 reviewer L155).
        """
    ```
 
@@ -186,13 +242,13 @@ in that commit.
    wires the hook calls alongside the status-and-event
    helper.
 
-6. **Toolset bundle** — `app/v2/toolsets/authoring.py`.
+7. **Toolset bundle** — `app/v2/toolsets/authoring.py`.
    ADK `BaseToolset` subclass exposing every authoring tool
    as `FunctionTool` instances. The toolset is NOT registered
    with `CoordinatorAgent`; tests instantiate it directly
    and invoke tools to drive the authoring flow.
 
-7. **`ToolResponse` discriminated-union model** —
+8. **`ToolResponse` discriminated-union model** —
    `app/v2/authoring/responses.py`. Each tool returns one
    of:
    - `ToolResponse.ok(...)` — success payload.
@@ -378,15 +434,46 @@ the changed field immediately; full
 ``validate_schedule_spec`` only when the draft is complete):
 
 1. Loads via `DraftStore.read`.
-2. **Per-field validation BEFORE mutation:** construct the
-   field-typed Pydantic model (e.g. `CronTrigger(...)`,
-   `UserRef(...)`, `FailurePolicy(...)`) from the raw
-   arguments. A `ValidationError` here →
-   `ToolResponse.validation_failed` with the pydantic
-   issues mapped to `ValidationIssue` shape. This catches
-   typos (e.g. naive ISO datetime to `set_one_off`, numeric
-   DOW to `set_cron` via the phase-5 `cron_guard`) the
-   moment the LLM passes a bad arg.
+2. **Per-field validation BEFORE mutation** (round-3
+   reviewer L381 hardening — Pydantic models alone do NOT
+   catch every authoring-time hazard; setters must run
+   explicit guards):
+
+   - Construct the field-typed Pydantic model (e.g.
+     `CronTrigger(...)`, `UserRef(...)`,
+     `FailurePolicy(...)`) from the raw arguments. A
+     `ValidationError` here →
+     `ToolResponse.validation_failed` with the pydantic
+     issues mapped to `ValidationIssue` shape.
+   - **`schedule_set_cron` additional guards:**
+     - `cron_guard.reject_numeric_dow(cron_expr)` BEFORE
+       constructing the trigger. Numeric DOW slips past
+       the Pydantic model (which only stores the string).
+     - `ZoneInfo(timezone)` constructor invoked to verify
+       the tz name; `ZoneInfoNotFoundError` → validation
+       failure with a synthetic issue naming the unknown
+       tz.
+   - **`schedule_set_one_off` additional guards:**
+     - Parse the ISO string into a `datetime`; if
+       `tzinfo is None` (naive) → validation failure with
+       a synthetic issue mandating explicit tz.
+     - `ZoneInfo(timezone)` constructor invoked.
+     - If the resulting datetime is in the past at
+       `clock()` time, a WARNING-level issue is added but
+       the setter still accepts (the boot backfill scan
+       at phase 5 handles past OneOffs; an explicit guard
+       here would prevent legitimate "fire as soon as
+       possible" intents).
+   - **`schedule_set_owner` additional guards:**
+     - `platform` must be one of the documented adapter
+       names (`slack` / `telegram` / `email`). Anything
+       else → validation failure.
+   - **`schedule_set_failure_policy`:** Pydantic model
+     covers the enum + retry policy; no extra guards.
+
+   On any guard failure the setter returns
+   `ToolResponse.validation_failed` and does NOT write the
+   draft.
 3. Apply the field update to the draft.
 4. If `draft.missing_required_fields()` is empty AND the
    final-spec rules apply: build the spec via `to_spec` and
@@ -541,10 +628,16 @@ async def schedule_pause(
     Returns ``ToolResponse.ok(schedule_id=...)`` on success;
     ``ToolResponse.not_found`` on missing row.
 
-    Idempotent against already-paused: the second call still
-    appends a ``schedule_paused`` event (audit trail logs the
-    operator action even if the status was unchanged).
-    Reviewer call open in §9.2 #15.
+    **No-op semantics (round-3 reviewer L544 / Q15
+    answer):** if the schedule is already in the target
+    status, the helper performs NO update and appends NO
+    event — EventLedger tracks state transitions, and a
+    duplicate ``schedule_paused`` row would look like a
+    second transition (a misleading audit signal). The
+    tool still returns ``ToolResponse.ok`` with a
+    ``message`` hint that the schedule was already in the
+    target state. Same shape across all four lifecycle
+    actions.
     """
 
 
@@ -660,9 +753,9 @@ The toolset uses ADK's `BaseToolset` per the existing
 | 2 | `setters.py` (start / set_description / set_owner / set_cron / set_one_off / set_failure_policy) | `test_authoring_setters.py` |
 | 3 | `delivery.py` (set_delivery + resolver wiring + NoCacheAndNetworkDown raise path) | `test_authoring_delivery.py` |
 | 4 | `compile.py` (compile / discard / list — NO commit, per round-2 L95 / Q5) | `test_authoring_compile.py` |
-| 5a | `update_status_with_event` helper in storage + tests | new helper tests in `test_authoring_lifecycle_helper.py` |
+| 5a | `update_status_with_event` helper + `_LifecycleAction` enum + `(PENDING, CANCELLED)` entry added to `app/v2/runtime/state_machine.LEGAL_TRANSITIONS` (round-3 reviewer L144 + L155) | new helper tests in `test_authoring_lifecycle_helper.py` + updated `test_runtime_state_machine.py` (pin new transition) |
 | 5b | `lifecycle.py` (pause / resume / archive / revive) with event-id factory DI, archive cancellation of pending Runs, archived → PAUSED revive | `test_authoring_lifecycle.py` |
-| 6 | `app/v2/toolsets/authoring.py` + ToolDescriptor registration (Q7) + package smoke | `test_authoring_toolset.py` |
+| 6 | `app/v2/toolsets/authoring.py` + new `db_write` tag in `app/v2/tool_tags.py` + ToolDescriptor registration per the §4 tag matrix (Q7 + round-3 reviewer L676) + package smoke | `test_authoring_toolset.py` + updated `test_tool_tags.py` for the new tag |
 | closeout | acceptance + tag `v2-phase-7-complete` (gated on codex pass) | — |
 
 Slice 5 is split into the **5a helper** (atomic
@@ -676,11 +769,46 @@ reviewer attention before four tools depend on it.
 Slice 6 introduces the new `app/v2/toolsets/` directory.
 Per Q7 answer it ALSO registers every authoring tool as a
 `ToolDescriptor` in `app/v2/registry.py:ToolRegistry` with
-the appropriate metadata tags per design §5.4 (mostly
-`write_external` for the setters/lifecycle/compile, plus
-`uses_oauth` on `schedule_set_delivery` because it can
-trigger a Slack API call). Metadata-only registration —
-no agent mount in phase 7.
+exact metadata tags per design §5.4 (round-3 reviewer L676
+explicit matrix — vague "mostly write_external" wording
+replaced):
+
+| Tool | Tags | Rationale |
+|---|---|---|
+| `schedule_draft_start` | `filesystem_write` | writes a new draft JSON. |
+| `schedule_set_description` | `filesystem_write` | mutates draft file. |
+| `schedule_set_owner` | `filesystem_write` | mutates draft file. |
+| `schedule_set_cron` | `filesystem_write` | mutates draft file. |
+| `schedule_set_one_off` | `filesystem_write` | mutates draft file. |
+| `schedule_set_failure_policy` | `filesystem_write` | mutates draft file. |
+| `schedule_set_delivery` | `read_external` + `uses_oauth` + `filesystem_write` | may trigger a Slack API call (read_external + uses_oauth) and saves the refreshed cache + the draft (filesystem_write). |
+| `schedule_draft_compile` | `read_only` | reads the draft file; validates; returns. No mutations. |
+| `schedule_draft_discard` | `filesystem_write` | deletes a draft file. |
+| `schedule_draft_list` | `read_only` | enumerates session dir; no mutations. |
+| `schedule_pause` | `db_write` (new tag — see below) | mutates v2 schedules + events tables. |
+| `schedule_resume` | `db_write` | same. |
+| `schedule_archive` | `db_write` | mutates schedules + events + runs tables (atomic). |
+| `schedule_revive` | `db_write` | same. |
+
+The phase-3 / phase-2 tag set is `read_external` /
+`write_external` / `send_message` / `filesystem_write` /
+`privileged` / `costly` / `uses_oauth`. The lifecycle
+tools need an explicit DB-write tag so the validation
+chokepoint can compose policies (e.g. "reasoning steps
+cannot run lifecycle tools"). Two options for that tag:
+
+- **Option A**: add `db_write` as a new metadata tag in
+  `app/v2/tool_tags.py`. Simple; one-line addition to
+  the existing enum-style tag set.
+- **Option B**: reuse `write_external` for the lifecycle
+  tools too (the v2 sqlite DB IS external state from the
+  reasoner's perspective). Semantically arguable.
+
+Plan default: **Option A** — add the `db_write` tag in
+slice 6, alongside the descriptor registrations. Tests
+pin the exact tag set per tool.
+
+Metadata-only registration — no agent mount in phase 7.
 
 ---
 
@@ -741,14 +869,30 @@ plan revision rounds may add pins.
 - Each setter loads / mutates / writes; pin by reading
   back the file after the call.
 - Setter on missing draft → `ToolResponse.not_found`.
-- Setter on invalid input (e.g. naive datetime to
-  `set_one_off`) → `ToolResponse.validation_failed` with the
-  underlying ValidationIssue.
-- `schedule_set_cron` with a numeric DOW string →
-  `ToolResponse.validation_failed` (the phase-5 `cron_guard`
-  catches it).
+- **Cron setter guards (round-3 reviewer L381):**
+  - Numeric DOW (`"0 9 * * 0"`) → `ToolResponse.validation_failed`
+    naming the `reject_numeric_dow` violation.
+  - Unknown timezone (`"Mars/Olympus"`) →
+    `ToolResponse.validation_failed` naming the
+    `ZoneInfoNotFoundError` cause.
+  - Valid cron + valid tz → setter succeeds.
+- **OneOff setter guards (round-3 reviewer L381):**
+  - Naive ISO datetime → `ToolResponse.validation_failed`
+    naming the missing tz requirement.
+  - Unknown timezone → `ToolResponse.validation_failed`.
+  - Past tz-aware datetime → setter succeeds but the
+    response carries a warning-severity ValidationIssue
+    in the payload (boot backfill handles past OneOffs).
+  - Future tz-aware datetime → setter succeeds with no
+    warning.
+- **Owner setter guards:** unknown `platform` value →
+  `ToolResponse.validation_failed`. Known platforms
+  (`slack`, `telegram`, `email`) accepted.
 - Partially populated draft → `ToolResponse.not_ready` with
   the `missing_fields` list.
+- `validate_schedule_spec(spec)` is called with NO
+  `execution_plans` / `registries` kwargs when the draft
+  completes (Q6). Pin via patching with a spy.
 
 ### 5.4 `test_authoring_delivery.py`
 
@@ -804,10 +948,18 @@ plan revision rounds may add pins.
 
 ### 5.6a `test_authoring_lifecycle_helper.py`
 
-- `update_status_with_event` flips status AND appends the
-  matching event in one TX. Pin: query schedules + events
-  tables; both reflect the change after the call.
+- `update_status_with_event` (action=PAUSE) flips status
+  to PAUSED AND appends a `schedule_paused` event in one
+  TX. Pin: query schedules + events tables.
+- Each `_LifecycleAction` value maps to exactly one
+  `(ScheduleStatus, EventKind)` pair (round-3 reviewer
+  L144). Pin via inspecting
+  `_ACTION_TO_STATUS_AND_EVENT` mapping directly.
 - Missing schedule_id → `ScheduleNotFoundError`.
+- **No-op semantics (round-3 reviewer L544 / Q15):**
+  helper called with action=PAUSE on an already-paused
+  schedule performs no status update AND appends no event.
+  Pin: query before and after; rows unchanged.
 - Helper rolls back on event-insert failure (simulate by
   monkey-patching `events.insert` to raise after the
   status update is staged). Pin: schedules row reverts to
@@ -818,6 +970,14 @@ plan revision rounds may add pins.
   3 `run_cancelled` events land after one call.
 - Archive variant: a non-pending Run (running / succeeded
   / failed) is NOT touched by the cancel branch.
+- Archive cancel branch routes each pending Run through
+  `assert_legal_transition(PENDING, CANCELLED)` (round-3
+  reviewer L155). Pin: temporarily remove the entry from
+  `LEGAL_TRANSITIONS` and confirm the helper raises
+  `IllegalTransitionError` instead of bypassing.
+- `(PENDING, CANCELLED)` is in
+  `app.v2.runtime.state_machine.LEGAL_TRANSITIONS` after
+  slice 5a. Pin in updated `test_runtime_state_machine.py`.
 
 ### 5.6b `test_authoring_lifecycle.py`
 
@@ -825,9 +985,11 @@ plan revision rounds may add pins.
   pin by querying schedules + events tables.
 - Each lifecycle tool returns `ToolResponse.not_found` for
   a missing schedule.
-- `schedule_pause` on an already-paused schedule emits
-  another `schedule_paused` event (plan default per §9.2
-  #15 — keep audit trail).
+- `schedule_pause` on an already-paused schedule is a
+  no-op: `ToolResponse.ok(message="already paused")`; no
+  status update; no event appended (round-3 reviewer L544
+  / Q15). Pin: schedules + events row counts unchanged
+  after the second call.
 - `schedule_resume` on an archived schedule →
   `ToolResponse.validation_failed` with an issue naming the
   archived → PAUSED requirement (round-2 reviewer L442).
@@ -852,6 +1014,13 @@ plan revision rounds may add pins.
 - Each tool's `name` / `description` are non-empty (ADK
   registry hygiene).
 - Toolset does NOT auto-register with any agent on import.
+- **ToolDescriptor tag matrix (round-3 reviewer L676):**
+  every authoring tool is registered in
+  `app/v2/registry.py:ToolRegistry` with the exact tag set
+  from §4. Pin via a parametrised test that walks the
+  expected `name -> tags` table and asserts equality.
+- `db_write` is a recognised tag in `app/v2/tool_tags.py`
+  (round-3 reviewer L676). Pin via importing the tag set.
 - Smoke: import every public symbol from
   `app.v2.authoring` and `app.v2.toolsets.authoring`;
   no module imports `slack_sdk` / `googleapiclient` at
@@ -896,8 +1065,11 @@ Cross-cutting smoke checks added or carried:
   DI'd parameter throughout.
 - No phase-7 module dispatches to reasoning / emit /
   sub-agents / delegate / transfer / fire / claim / execute
-  (carried from phase 4-6). The compile + commit tools
-  call `insert_schedule` (storage write) only.
+  (carried from phase 4-6). The compile tool is read-only;
+  lifecycle tools write only via
+  ``update_status_with_event``. No ``insert_schedule``
+  call in phase 7 — commit is deferred to phase 8 (round-2
+  reviewer L95 / Q5).
 - Toolset module does NOT auto-mount on any agent (no
   side-effect imports of `app/agent.py` / `run_bot.py`).
 
@@ -1070,16 +1242,35 @@ Plan:   docs/PHASE_7_PLAN.md
     an explicit DI parameter on `schedule_set_delivery` so
     tests stub it and phase-9 wires it.
 
+### 9.1.b Closed in round-3 reviewer
+
+15. ~~Idempotent-pause event behaviour.~~ **CLOSED** (Q15
+    answer): no-op WITHOUT event for already-in-target
+    status. EventLedger tracks state transitions; a
+    duplicate ``schedule_paused`` row would look like a
+    second transition. Same shape applies across all four
+    lifecycle actions.
+16. ~~Setter Pydantic-only validation gap.~~ **CLOSED**
+    (L381): setters call explicit guards before writing
+    — ``reject_numeric_dow`` for cron, ``ZoneInfo(tz)``
+    constructor for timezone validation, naive-datetime
+    guard for one-off, ``platform`` allowlist for owner.
+17. ~~`update_status_with_event` (status, event_kind)
+    mismatch.~~ **CLOSED** (L144): helper now takes a
+    `_LifecycleAction` enum that drives BOTH fields via a
+    fixed mapping. Mismatched pair is unrepresentable.
+18. ~~State-machine table missing PENDING → CANCELLED.~~
+    **CLOSED** (L155): slice 5a adds the transition + the
+    matching `assert_legal_transition` pin so archive
+    cancellation routes through the policy chokepoint.
+19. ~~ToolDescriptor tag matrix vague.~~ **CLOSED** (L676):
+    explicit per-tool tag matrix in §4; new `db_write`
+    metadata tag added to `app/v2/tool_tags.py` in slice 6.
+
 ### 9.2 Still open
 
-15. **Idempotent-pause event behaviour.** Plan default
-    (§3.6): calling `schedule_pause` on an already-paused
-    schedule still appends a `schedule_paused` event for
-    operator-action audit. Reviewer call: keep, or make
-    the second call a no-op without an event? Default keeps
-    the audit trail; switching to a no-op would need
-    explicit operator action to disambiguate "intentional
-    re-pause" from "accidental double-click".
+None — round-3 reviewer closed every prior open item. New
+items will populate here if reviewer rounds 4+ surface gaps.
 
 ---
 
