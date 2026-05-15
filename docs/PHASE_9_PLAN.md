@@ -27,8 +27,27 @@ risk surfaced by codex on the round-1 plan landing
 (`5d4948d`). The design §5.2 amendment lands in the
 same commit as this revision per reviewer Q1.
 `FORBIDDEN_PHASES_1_TO_8` renamed →
-`FORBIDDEN_PHASES_PRE_CUTOVER` in `scripts/check_phase_scope.py`
-per reviewer Q8.
+`FORBIDDEN_PHASES_PRE_CUTOVER` in
+`scripts/check_phase_scope.py` per reviewer Q8.
+
+**Round-3 revision (2026-05-15)** closes 3 cutover-
+semantic blockers surfaced by codex on the round-2
+landing (`7eb337b`):
+- L65 hash drift on `args=None` (canonical_body needs
+  an explicit strip rule for the missing-args case).
+- L311 `boot_runtime` calls `await binding.resume()`
+  before returning — `run_bot.py` cannot keep the
+  binding paused without a phase-5 API change.
+- L320 `boot_runtime` starts workers before transports
+  are ready — even with a paused binding, backfilled
+  pending Runs would be claimed and emitted against
+  an unready Slack client.
+
+Round-3 adds a `boot_runtime(autostart: bool = True)`
+parameter + `RuntimeHandle.activate()` helper so phase
+9 can boot the runtime in a fully-quiet state and
+explicitly activate (resume binding + start workers)
+AFTER transports come online.
 
 Read this with:
 - `docs/CONTRACTS_V2_DESIGN.md` §5.2 (template-first
@@ -64,11 +83,50 @@ break the canonical-hash JSON serialisation.
 
 `ScheduleSpec.compute_hash` extended to include
 `template.args` in its hashed payload — a body change
-re-hashes. Pre-amendment specs (where `args=None`)
-round-trip with NO hash drift because `None` was the
-field's pre-existing implicit value (the field did not
-exist; `args=None` is the same JSON shape as omitting
-the field).
+re-hashes.
+
+**Hash-drift handling for the `args=None` case
+(round-2 reviewer L65):** `canonical_body()` currently
+calls `model_dump(mode="json", by_alias=True)` WITHOUT
+`exclude_none`, so naively adding `args: Optional[...]
+= None` would emit `"args": null` inside the
+serialised template and shift the hash for every
+pre-amendment spec that carries a template (the
+phase-7 round-1 fix landed `TemplateRef(name="X",
+version="1")` on disk without an args key; the new
+serialisation would prepend `"args": null` and the
+hash would drift).
+
+Round-3 resolution: extend `canonical_body()` with an
+explicit strip for the missing-args case. When
+`template` is present in the serialised dict AND
+`template["args"]` is `None`, pop the `args` key
+before the JSON encode. Pseudocode:
+
+```python
+def canonical_body(self) -> dict[str, Any]:
+    d = self.model_dump(mode="json", by_alias=True)
+    d.pop("hash", None)
+    d.pop("authored_at", None)
+    # Phase-9 amendment: TemplateRef.args is omitted
+    # from the canonical body when None so pre-amendment
+    # specs (which had no args field) hash unchanged.
+    template = d.get("template")
+    if template is not None and template.get("args") is None:
+        template.pop("args", None)
+    return d
+```
+
+Pin tests in slice 1:
+- A spec built post-amendment with `template.args=None`
+  hashes IDENTICALLY to a hand-constructed pre-amendment
+  shape (`template={"name":"X","version":"1"}` without
+  args).
+- A spec with `template.args={"text":"hi"}` hashes
+  DIFFERENTLY (the args participate when populated).
+- A spec with no template at all (`template=None`) is
+  unaffected by the strip rule (template entry already
+  serialises as `null`).
 
 The design amendment lands in `docs/CONTRACTS_V2_DESIGN.md`
 §5.2 in this revision commit; per phase-7 round-3 /
@@ -308,24 +366,63 @@ JSON.
    currently `boot_runtime` (phase 5) is unmounted;
    phase 9 wires it.
 
-   **Boot ordering (round-1 reviewer L219 fix):** the
-   existing `boot_runtime` already starts the binding
-   `paused=True` (per
-   `app/v2/runtime/boot.py:194-203`). Phase 9 keeps
-   that semantic AND adds an explicit unpause step in
-   `run_bot.py` AFTER the Slack / Telegram transports
-   are online. Sequence:
+   **Round-2 reviewer L311 + L320 finding:** the
+   existing `boot_runtime` (phase-5) explicitly
+   `await binding.resume()`s before returning
+   (`app/v2/runtime/boot.py:339`) AND starts each
+   worker (`boot.py:345-356`) BEFORE the handle is
+   returned. Even with `paused=True` as a starting
+   state, the resume call fires before transports
+   come online; and even if the binding stayed
+   paused, the worker pool would still claim
+   backfilled pending Runs and try to emit against
+   an unready Slack client.
+
+   **Round-3 resolution — `boot_runtime(autostart:
+   bool = True)` parameter + `RuntimeHandle.activate()`
+   helper.** Plan adds a phase-5 API change in slice
+   7:
+
+   - `boot_runtime` gains an `autostart: bool = True`
+     kwarg. Default `True` preserves existing
+     behaviour (binding.resume + worker.start before
+     return); existing phase-5/6/7/8 tests continue
+     to pass unchanged.
+   - When `autostart=False`:
+     - The binding starts `paused=True` exactly as
+       today.
+     - Recovery / backfill / register-active proceed
+       as today.
+     - `binding.resume()` is SKIPPED.
+     - Workers are constructed but NOT started
+       (`worker.start()` is skipped). They land on
+       the handle in their unstarted state.
+   - `RuntimeHandle.activate()` is a new async method
+     that:
+     - Iterates `self.workers` and calls
+       `await worker.start()` on each (idempotent
+       guard so accidental double-activate is a
+       no-op or raises a clear error).
+     - Calls `await self.binding.resume()`.
+     - Returns nothing.
+   - The handle gains a private boolean
+     (`_activated: bool`) so `activate()` is
+     idempotent / one-shot per handle.
+   - `shutdown_runtime` semantics unchanged (works
+     against an activated or never-activated handle).
+
+   `run_bot.py` (slice 7) sequence then becomes:
 
    1. v1 scheduler boots (existing).
-   2. v2 `boot_runtime` runs: recovery → binding start
-      (`paused=True`) → OneOff backfill → register
-      active schedules → start worker pool. Workers
-      claim pending Runs but the binding does not fire
-      new wakeups while paused.
+   2. `v2_handle = await boot_runtime(...,
+      autostart=False)`. Binding paused; workers
+      constructed but unstarted.
    3. Slack / Telegram pollers + clients come online.
-   4. v2 binding unpauses (new explicit step). Wakeups
-      become active. Overdue OneOff reminders fire.
-      Transport-readiness race closed.
+      Adapter DI singletons populated.
+   4. `await v2_handle.activate()`. Workers start
+      claiming; binding resumes; wakeups fire.
+      Overdue OneOff reminders emit through the now-
+      ready Slack client.
 
    **Jobstore path (round-1 reviewer L229 risk +
    reviewer Q9):** use the existing phase-5 default
@@ -661,6 +758,54 @@ else:
 
 ### 3.7 `boot_runtime` + `shutdown_runtime` integration
 
+`app/v2/runtime/boot.py` (phase-5 module touched by
+phase 9 slice 7):
+
+```python
+# API change (round-3 reviewer L311 + L320 fix):
+async def boot_runtime(
+    conn_factory: Callable[[], sqlite3.Connection],
+    *,
+    autostart: bool = True,  # NEW
+    worker_count: int = 1,
+    ...,
+) -> RuntimeHandle:
+    """...
+    autostart: when True (default) preserves the
+        phase-5 contract: resumes the binding and
+        starts the worker pool before returning.
+        When False the binding stays paused, workers
+        are constructed but NOT started, and the
+        caller must drive activation via
+        ``RuntimeHandle.activate()``. Round-3
+        reviewer L311 + L320 fix: phase 9 boots with
+        autostart=False so it can interleave the
+        Slack / Telegram transport readiness step
+        between boot and activation.
+    """
+
+
+@dataclass
+class RuntimeHandle:
+    binding: SchedulerBinding
+    workers: list[Worker]
+    recovery_result: list[Union[RecoveredRun, RecoveryError]]
+    backfilled_one_offs: int
+    registration_errors: list[RegistrationError]
+    _activated: bool = False  # NEW (private)
+
+    async def activate(self) -> None:
+        """Start workers + resume the binding. One-shot."""
+        if self._activated:
+            raise RuntimeAlreadyActivatedError(
+                "RuntimeHandle.activate() already called"
+            )
+        for worker in self.workers:
+            await worker.start()
+        await self.binding.resume()
+        self._activated = True
+```
+
 `run_bot.py` (or `app/agent.py`):
 
 ```python
@@ -668,22 +813,30 @@ else:
 async def main() -> None:
     # 1. v1 scheduler boots (existing).
     ...
-    # 2. v2 boot_runtime — binding starts PAUSED.
+    # 2. v2 boot_runtime — autostart=False so the
+    #    binding stays paused AND workers stay
+    #    unstarted until transports are ready
+    #    (round-3 reviewer L311 + L320 fix).
     v2_handle = await boot_runtime(
         conn_factory=...,
+        autostart=False,
     )
     try:
-        # 3. Slack / Telegram transports come online.
+        # 3. Slack / Telegram transports come online;
+        #    adapter DI singletons populated.
         await start_pollers()
-        # 4. Unpause v2 binding now that transports
-        #    are ready (round-1 reviewer L219 fix).
-        v2_handle.binding.resume()
-        _logger.info("runtime.boot.unpaused")
+        # 4. Activate v2: workers start; binding
+        #    resumes; wakeups fire. Overdue OneOff
+        #    reminders emit through the now-ready
+        #    Slack client.
+        await v2_handle.activate()
+        _logger.info("runtime.boot.activated")
         # 5. Serve.
         await run_forever()
     finally:
         # 6. Shutdown v2 BEFORE v1 (round-1 reviewer
-        #    L478 fix).
+        #    L478 fix). shutdown_runtime works against
+        #    activated or never-activated handles.
         await shutdown_runtime(v2_handle)
         await stop_v1_scheduler()
 ```
@@ -692,7 +845,8 @@ async def main() -> None:
   `sqlite:///data/scheduler-v2-jobs.db` (round-1
   reviewer Q9). NOT explicitly passed.
 - Boot self-test (§6.7) deferred; phase 9 logs a
-  `boot_runtime_complete` event after step 4.
+  `boot_runtime_complete` event after step 2 and a
+  `boot_runtime_activated` event after step 4.
 
 ### 3.8 Coordinator mount + instruction
 
@@ -741,7 +895,7 @@ async def main() -> None:
 | 4 | Slack emit adapter + `SlackPostResult` | `test_emit_slack_reminder.py` |
 | 5 | Worker emit branch (with `get_schedule` fetch + staleness guards) | `test_runtime_worker_emit_branch.py` |
 | 6 | `_owner_default` + AuthoringToolset constructor wiring | `test_runtime_owner_default.py` + existing toolset constructor pins update |
-| 7 | `boot_runtime` integration into `run_bot.py` (paused-until-transports + shutdown) | existing `test_runtime_boot.py` extended; smoke pin for unpause + shutdown_runtime |
+| 7 | `boot_runtime(autostart=False)` API addition + `RuntimeHandle.activate()` + `run_bot.py` integration (paused-until-transports + shutdown) | existing `test_runtime_boot.py` extended; new pins for `autostart=False` + activate idempotency + shutdown over never-activated handle |
 | 8 | `CoordinatorAgent` mount + instruction update + guardrail test | `test_coordinator_instruction_guardrail.py` |
 | 9 | End-to-end pin | `test_e2e_one_off_reminder.py` |
 | closeout | acceptance walk + tag `v2-phase-9-complete` (gated on codex pass) | — |
@@ -876,8 +1030,14 @@ the L201 schedule-fetch failure pin.
   issues on a OneOffReminder spec.
 - `test_runtime_boot.py` — `boot_runtime` mounted but
   self-test not gated; pin via explicit assertion on
-  the boot sequence; pin paused-until-unpause +
-  shutdown semantics via stubs.
+  the boot sequence; pin `autostart=False` leaves the
+  binding paused + workers unstarted; pin
+  `activate()` starts workers + resumes binding;
+  pin `activate()` second call raises
+  `RuntimeAlreadyActivatedError`; pin
+  `shutdown_runtime` works on a never-activated
+  handle. Existing `autostart=True` (default) tests
+  unchanged.
 
 ---
 
@@ -965,13 +1125,16 @@ Cross-cutting smoke checks (carry-forward):
    kwarg wins; both-None raises `RuntimeError` at
    startup.
 8. `boot_runtime` is called from `run_bot.py` after
-   v1 boot; binding starts PAUSED (L219 fix) and
-   unpauses AFTER transports come online; lifecycle
-   hooks wired so phase-7 lifecycle tools can fire
-   them. Jobstore path is the phase-5 default
+   v1 boot with `autostart=False` (round-3 L311 +
+   L320 fix); binding stays PAUSED and workers stay
+   UNSTARTED until `await handle.activate()` runs
+   AFTER transports come online. Lifecycle hooks
+   wired so phase-7 lifecycle tools can fire them.
+   Jobstore path is the phase-5 default
    `sqlite:///data/scheduler-v2-jobs.db` (L229 risk
    fix / Q9). Shutdown path calls `shutdown_runtime`
-   (L478 fix).
+   (L478 fix); `shutdown_runtime` works against
+   activated AND never-activated handles.
 9. `AuthoringToolset` mounted on `CoordinatorAgent`;
    Coordinator instruction text gains the §11.4
    scheduling-law clause; guardrail test green.
@@ -1019,21 +1182,28 @@ TemplateRef gains an optional args dict (JsonValue-typed)
 so emit-only templates can carry per-instance payload
 (reminder text) without an ExecutionPlan.
 ScheduleSpec.compute_hash includes args so a body change
-re-hashes; pre-args specs round-trip unchanged via
-args=None.
+re-hashes; canonical_body() strips template.args when
+None so pre-amendment specs hash unchanged (round-3
+reviewer L65 fix).
 
 expected_owner_id picks up V2_AUTHORING_OWNER_ID env
 fallback (deferred from phase 7 round-2 L365); explicit
 kwarg still wins; both-None raises a startup error.
 
-run_bot.py boots v2 PAUSED, brings transports online,
-THEN unpauses the v2 binding so overdue OneOff reminders
-can't fire before Slack / Telegram are ready (round-1
-reviewer L219 fix). Shutdown path calls
-shutdown_runtime(handle) before v1 scheduler shutdown
-(round-1 reviewer L478 fix). Jobstore stays at the
-phase-5 default sqlite:///data/scheduler-v2-jobs.db
-(round-1 reviewer Q9).
+run_bot.py calls boot_runtime(autostart=False) so the
+v2 binding stays paused AND the worker pool stays
+unstarted until run_bot.py runs `await
+handle.activate()` AFTER Slack / Telegram transports
+come online (round-3 reviewer L311 + L320 fix). The
+autostart parameter is a phase-5 API addition;
+existing `autostart=True` callers (every phase-5/6/7/8
+test) keep their behaviour unchanged. Shutdown path
+calls shutdown_runtime(handle) before v1 scheduler
+shutdown (round-1 reviewer L478 fix), works on both
+activated and never-activated handles. Jobstore stays
+at the phase-5 default
+sqlite:///data/scheduler-v2-jobs.db (round-1 reviewer
+Q9).
 
 Worker fetches ScheduleSpec via get_schedule(conn,
 run.schedule_id) before emitting; missing / archived /
@@ -1095,24 +1265,36 @@ Plan:   docs/PHASE_9_PLAN.md
     (round-1 reviewer Q10): synchronous / stubbed
     default; real-APScheduler smoke deferred.
 
-Round-1 bugs closed in this revision:
+Round-1 bugs closed in round-2:
 
 - L48 → JsonValue typing for `args`.
-- L68 → design amendment lands in this commit.
+- L68 → design amendment lands in round-2 commit.
 - L98 → builder uses `ChannelRef.external_id`.
 - L201 → worker fetches via `get_schedule` + 4
   staleness reason codes.
 - L219 → boot keeps `paused=True`; explicit unpause
-  step after transports ready.
+  step after transports ready (round-2 framing).
 - L229 → jobstore path stays at phase-5 default.
 - L478 → `shutdown_runtime` wired into `run_bot.py`
   shutdown path.
 - L500 → production wrapper factories +
   DI-leak-pin test.
 
+Round-2 bugs closed in round-3:
+
+- L65 → `canonical_body()` strips `template.args`
+  when None so pre-amendment specs hash unchanged;
+  pin tests in slice 1.
+- L311 → `boot_runtime(autostart=False)` parameter
+  added; binding stays paused.
+- L320 → workers constructed but unstarted when
+  `autostart=False`; `RuntimeHandle.activate()`
+  helper starts workers AND resumes binding
+  one-shot.
+
 ### 9.2 Still open
 
-None. Round-2 will populate here if reviewer surfaces
+None. Round-3 will populate here if reviewer surfaces
 new gaps on this revision.
 
 ---
@@ -1149,12 +1331,21 @@ Same as phase 8 plan §10 with phase-9 additions:
     per §11.1 deprecation timeline; v1 contract tools
     stay mounted on the Coordinator alongside v2
     until the ~60-day sunset.
-12. **v2 binding starts PAUSED**; phase 9 unpauses
-    only AFTER transports are online (round-1 L219
-    fix). Future phases that boot v2 in different
-    contexts must respect this ordering.
+12. **v2 boots quiet; activation gates on transport
+    readiness.** `run_bot.py` calls
+    `boot_runtime(..., autostart=False)`; binding
+    stays paused AND workers stay unstarted until
+    `await handle.activate()` runs after Slack /
+    Telegram transports are online (round-3 L311 +
+    L320 fix). Future phases that boot v2 in
+    different contexts must respect this ordering.
 13. **DI parameters do not appear in LLM-facing tool
     schemas.** Use the production wrapper factory
     pattern (closure over DI; expose only LLM
     parameters). Tests pin via FunctionTool signature
     introspection.
+14. **`canonical_body()` strips `template.args` when
+    None** so pre-amendment specs hash unchanged
+    (round-3 L65 fix). The strip is documented in the
+    method body comment; tests pin both directions
+    (None case stable; populated case re-hashes).
