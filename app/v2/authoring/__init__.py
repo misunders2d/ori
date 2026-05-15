@@ -25,6 +25,12 @@ from app.v2.authoring.drafts import (
     DraftStore,
     ScheduleSpecDraft,
 )
+from app.v2.authoring.handshake import (
+    DEFAULT_HANDSHAKE_BASE,
+    DryRunMode,
+    HandshakeRecord,
+    HandshakeStore,
+)
 from app.v2.authoring.lifecycle import (
     schedule_archive,
     schedule_pause,
@@ -44,7 +50,11 @@ from app.v2.authoring.setters import (
 
 __all__ = [
     "DEFAULT_DRAFT_BASE",
+    "DEFAULT_HANDSHAKE_BASE",
     "DraftStore",
+    "DryRunMode",
+    "HandshakeRecord",
+    "HandshakeStore",
     "ScheduleSpecDraft",
     "ToolResponse",
     "ToolResponseStatus",
