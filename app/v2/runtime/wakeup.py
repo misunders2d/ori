@@ -1,6 +1,6 @@
-"""OneOff wakeup callback for the v2 runtime.
+"""Wakeup callback for the v2 runtime.
 
-Phase 4 slice 5a per ``docs/PHASE_4_PLAN.md`` §6.2 / §6.5.
+Phase 4 slices 5a + 5b per ``docs/PHASE_4_PLAN.md`` §6.2 / §6.5.
 
 The wakeup function is the callable that APScheduler will
 eventually register against each ScheduleSpec. Phase 4 ships
@@ -8,16 +8,24 @@ only the function — no real scheduler construction, no
 registration glue. Tests invoke it directly with a synthetic
 ``now``.
 
-In phase-4 slice 5a only ``OneOffTrigger`` is wired up. The
-other trigger variants raise ``NotImplementedError`` with a
-message pointing at the slice that will land them:
+Wired trigger variants:
 
-- ``CronTrigger``: ships in slice 5b after the cron-parser
-  source is chosen (APScheduler's ``CronTrigger.from_crontab``
-  or ``croniter``; open question in PHASE_4_PLAN §6.2).
-- ``IntervalTrigger`` / ``EventTrigger`` / ``ConditionalTrigger``:
-  unwired in phase 4 entirely — real wakeup support lands when
-  their use cases ship.
+- ``OneOffTrigger`` (slice 5a): fires when ``at_iso_datetime
+  <= now``. Non-idempotent across calls — the registration
+  layer (later phase) is responsible for unregistering after
+  the fire.
+- ``CronTrigger`` (slice 5b): fires when ``now`` aligns
+  exactly with one of the cron expression's fire instants in
+  the trigger's timezone. Computed via APScheduler's
+  forward-only ``CronTrigger.from_crontab(...)
+  .get_next_fire_time(None, now_local)`` — no inverse cron
+  math, no "most recent past fire" semantics. Late wakeups
+  are NOT backfilled; that lives behind the design's
+  ``backfill_policy`` and lands in later phases.
+
+Unwired trigger variants (raise ``NotImplementedError`` with
+explicit per-type message): ``IntervalTrigger`` /
+``EventTrigger`` / ``ConditionalTrigger``.
 
 Per design §4.0.4 row 4 (ledger transactionality), every Run
 row INSERT lands in the same transaction as the matching
@@ -41,6 +49,11 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 from typing import Callable
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from apscheduler.triggers.cron import (
+    CronTrigger as APSchedulerCronTrigger,
+)
 
 from app.v2.enums import EventKind, FireReason, RunStatus, ScheduleStatus
 from app.v2.models.triggers import (
@@ -155,12 +168,17 @@ def wakeup(
             return inserted
 
         if isinstance(trigger, CronTrigger):
-            raise NotImplementedError(
-                "CronTrigger wakeup ships in phase 4 slice 5b "
-                "— cron-parser source is an open question "
-                "(APScheduler's CronTrigger.from_crontab vs "
-                "croniter). See PHASE_4_PLAN §6.2."
+            run_id = _insert_cron_run(
+                conn,
+                spec_id=spec.id,
+                trigger=trigger,
+                now=now,
+                run_id_factory=run_id_factory,
+                event_id_factory=event_id_factory,
             )
+            if run_id is not None:
+                inserted.append(run_id)
+            return inserted
 
         if isinstance(
             trigger, (IntervalTrigger, EventTrigger, ConditionalTrigger)
@@ -254,6 +272,168 @@ def _insert_one_off_run(
                 {
                     "fire_at": fire_at_iso,
                     "trigger_type": trigger.type,
+                }
+            ),
+            None,
+        ),
+    )
+    return run_id
+
+
+def _reject_numeric_dow(cron_expr: str) -> None:
+    """Reject numeric day-of-week fields in v2 cron expressions.
+
+    Standard Unix cron uses ``Sunday=0`` while APScheduler's
+    ``CronTrigger`` uses ``Monday=0``. The numeric forms parse
+    in both — they just mean different days — so an author who
+    types ``0 18 * * 1-5`` expecting "Mon-Fri Unix-style" would
+    silently get "Tue-Sat APScheduler-style". To eliminate the
+    ambiguity, v2 cron triggers MUST express the DOW field as
+    ``*``, ``?``, or named days (``MON``, ``TUE``, ...) with
+    range / list / step syntax (``MON-FRI``, ``MON,WED,FRI``).
+    Any digit in the DOW field is rejected at the wakeup layer
+    before ``from_crontab`` ever sees the expression.
+
+    Note: this rule applies to the DOW (5th) field only — the
+    other four fields (minute / hour / day-of-month / month)
+    use unambiguous numeric semantics and stay unrestricted.
+
+    Raises ``ValueError`` with a message that names the
+    rejected field. The phase-1 ``CronTrigger`` model already
+    validates the 5-field count, so this helper assumes a
+    well-shaped 5-field input; the defensive recheck is cheap
+    and surfaces shape problems too.
+    """
+    fields = cron_expr.strip().split()
+    if len(fields) != 5:
+        # Defensive — phase-1 CronTrigger model rejects this
+        # earlier, but a hand-built trigger that bypasses
+        # Pydantic could land here.
+        raise ValueError(
+            f"cron expression must have exactly 5 whitespace-"
+            f"separated fields; got {len(fields)} in "
+            f"{cron_expr!r}."
+        )
+    dow = fields[4]
+    if any(c.isdigit() for c in dow):
+        raise ValueError(
+            "numeric day-of-week is rejected in v2 cron "
+            f"expressions (got {dow!r} in {cron_expr!r}). "
+            "APScheduler interprets numeric DOW as Monday=0 "
+            "while standard Unix cron uses Sunday=0 — to "
+            "avoid the ambiguity, v2 cron triggers MUST use "
+            "'*' / '?' / named days (MON, TUE...) with range "
+            "(MON-FRI), list (MON,WED,FRI), or named step "
+            "syntax. No numeric components."
+        )
+
+
+def _insert_cron_run(
+    conn: sqlite3.Connection,
+    *,
+    spec_id: str,
+    trigger: CronTrigger,
+    now: datetime,
+    run_id_factory: Callable[[], str],
+    event_id_factory: Callable[[], str],
+) -> str | None:
+    """Insert a pending Run + run_created event when ``now``
+    exactly aligns with one of the cron expression's fire
+    instants in the trigger's timezone. Returns the new run
+    id, or ``None`` when ``now`` is between fires.
+
+    Called INSIDE the wakeup's transaction; opens no nested
+    transaction.
+
+    Forward-only fire detection: ``CronTrigger.from_crontab(
+    cron, timezone=tz).get_next_fire_time(None, now_local)``.
+    APScheduler 3.11.x returns ``now_local`` itself when it
+    aligns with a fire instant (probed for this version), and
+    returns the next future instant otherwise. We compare the
+    returned instant against ``now`` on the UTC time line so
+    timezone choice does not influence equality. No inverse
+    cron math, no "most recent past fire" semantics — that
+    sort of late-fire bookkeeping belongs in the design's
+    ``backfill_policy``, which phase 4 does NOT wire up.
+
+    Raises ``ValueError`` on invalid timezone, numeric DOW, or
+    a cron expression APScheduler refuses to parse.
+    """
+    _reject_numeric_dow(trigger.cron)
+
+    try:
+        tz = ZoneInfo(trigger.timezone)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError(
+            f"unknown timezone {trigger.timezone!r} in cron "
+            f"trigger: {exc}."
+        ) from exc
+
+    try:
+        aps_trigger = APSchedulerCronTrigger.from_crontab(
+            trigger.cron, timezone=tz
+        )
+    except ValueError as exc:
+        # APScheduler raises ValueError with informative
+        # messages already (probed: "Wrong number of fields",
+        # "Invalid expression ..."). Re-raise with context so
+        # the wakeup caller knows which schedule's cron broke.
+        raise ValueError(
+            f"invalid cron expression {trigger.cron!r}: {exc}"
+        ) from exc
+
+    now_local = now.astimezone(tz)
+    next_fire = aps_trigger.get_next_fire_time(None, now_local)
+    if next_fire is None:
+        # APScheduler exhausted its forward search — e.g. a
+        # cron with explicit year past + month/day combinations
+        # that can never happen. Treat as no-op.
+        return None
+    if (
+        next_fire.astimezone(timezone.utc)
+        != now_local.astimezone(timezone.utc)
+    ):
+        # ``now`` is between fires. APScheduler returned the
+        # NEXT future fire; we do not insert.
+        return None
+
+    run_id = run_id_factory()
+    event_id = event_id_factory()
+    fire_at_iso = next_fire.astimezone(timezone.utc).isoformat()
+    now_iso = now.astimezone(timezone.utc).isoformat()
+
+    conn.execute(
+        "INSERT INTO runs "
+        "(id, schedule_id, fire_reason, due_at, status, "
+        " attempt, root_run_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            run_id,
+            spec_id,
+            FireReason.SCHEDULED.value,
+            fire_at_iso,
+            RunStatus.PENDING.value,
+            1,
+            run_id,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO events "
+        "(id, run_id, schedule_id, ts, kind, "
+        " payload_json, correlates) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            event_id,
+            run_id,
+            spec_id,
+            now_iso,
+            EventKind.RUN_CREATED.value,
+            encode_json(
+                {
+                    "fire_at": fire_at_iso,
+                    "trigger_type": trigger.type,
+                    "cron": trigger.cron,
+                    "cron_timezone": trigger.timezone,
                 }
             ),
             None,

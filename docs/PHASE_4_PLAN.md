@@ -687,11 +687,27 @@ def wakeup(
     """
 ```
 
-**Cron parsing decision (open):** APScheduler's
-``CronTrigger.from_crontab`` (already a dependency in v1) OR
-``croniter`` (small dedicated lib). NOT in-house. Reviewer to
-pick BEFORE the Cron slice starts; the OneOff slice ships
-first and is parser-independent.
+**Cron parsing decision (closed, slice 5b):** APScheduler's
+``CronTrigger.from_crontab(cron, timezone=ZoneInfo(...))``.
+Already a dependency in v1; not in-house.
+
+Fire-detection is forward-only: phase-4 wakeup calls
+``aps_trigger.get_next_fire_time(None, now_local)`` and
+inserts a Run only when the returned instant equals ``now``
+on the UTC time line. No "most recent past fire" semantics.
+Late wakeups are NOT backfilled — that lives in the design's
+``backfill_policy`` and ships in later phases.
+
+**DOW name-only constraint:** APScheduler interprets numeric
+day-of-week as ``Monday=0`` while standard Unix cron uses
+``Sunday=0``. Authors trained on Unix cron expecting
+``0 18 * * 1-5`` = "Mon-Fri" would silently get "Tue-Sat".
+To eliminate the ambiguity, v2 cron triggers MUST express the
+DOW field as ``*`` or named days (``MON``, ``TUE``, ...) with
+range / list / step syntax — any digit in field 5 is rejected
+at the wakeup layer BEFORE APScheduler sees the expression.
+APScheduler does NOT accept ``?`` for day_of_week, so that
+form is also unavailable in practice.
 
 ### 6.2.1 Clock + id-factory injection rule (cross-cutting)
 
@@ -766,15 +782,33 @@ slice** if all earlier slices are clean.
   invoked exactly once per inserted row / event; pin via a
   counter factory.
 
-**Slice 5b (Cron, after parser choice confirmed):**
+**Slice 5b (Cron, parser = APScheduler):**
 
-- Cron `*/5 * * * *` with `now` aligned to a fire time →
-  insert one pending Run + run_created event.
-- Cron with `now` between fire times → no insert.
-- Cron + paused / archived → no insert (carries forward the
-  5a guard rails).
-- Parser-specific edge cases (parser-source dependent —
-  reviewer-approved test list lands with 5b).
+- Cron `0 18 * * *` aligned to ``now`` → insert one pending
+  Run + run_created event in the same TX.
+- Cron `*/5 * * * *` aligned to a 5-minute boundary → fires.
+- Cron `0 18 * * MON-FRI` on a Friday at the aligned instant
+  → fires.
+- Cron in a non-UTC timezone (Europe/Kyiv 18:00 = 15:00 UTC
+  in summer) → fires when wakeup ``now`` is the matching UTC
+  instant.
+- Cron `now == 18:01` (one minute past fire) → no insert,
+  factories never called.
+- Cron `now == 17:59` (one minute before fire) → no insert.
+- Cron + paused / archived schedule → no insert (carries
+  forward the 5a guard rails). Factories never called — the
+  schedule-status short-circuit precedes the cron parser.
+- Numeric DOW (`1-5`, `0,6`, `*/2`, `MON-FRI/2`, single
+  digit) rejected at the wakeup layer with ``ValueError``;
+  factories never called.
+- Named DOW (`*`, `FRI`, `MON-FRI`, `MON,WED,FRI`) accepted.
+  ``?`` is NOT supported because APScheduler refuses it.
+- Bad timezone string → ``ValueError`` (no APScheduler call).
+- Invalid cron expression (e.g. `99 18 * * *`) → ``ValueError``
+  with the underlying APScheduler message attached.
+- Hand-built 6-field cron (bypassing the Pydantic 5-field
+  validator via direct trigger_json overwrite) fails loud at
+  the storage re-parse layer.
 
 ---
 
@@ -786,8 +820,8 @@ slice** if all earlier slices are clean.
 | `test_runtime_claim.py` | single-flight per schedule; cross-schedule independence; naive now; atomicity-on-failure |
 | `test_runtime_recovery.py` | empty DB; claimed within/past timeout; running within/past timeout; two-row remediation for running stale |
 | `test_runtime_worker.py` | single-tick state-machine walk; no-pending tick; concurrent workers; cooperative shutdown; smoke check on imports |
-| `test_runtime_wakeup.py` (5a) | OneOff past/future; paused; archived; unknown id; Cron schedule passed to 5a wakeup raises NotImplementedError; Interval / Event / Conditional → NotImplementedError; injected id factories invoked once per inserted row/event. |
-| `test_runtime_wakeup_cron.py` (5b, after parser choice) | Cron aligned/misaligned with `now`; paused / archived still no-op; parser-specific edge cases (test list lands with 5b commit). |
+| `test_runtime_wakeup.py` | OneOff past/future; paused; archived; unknown id; Interval / Event / Conditional → NotImplementedError; injected id factories invoked once per inserted row/event. |
+| `test_runtime_wakeup_cron.py` (5b) | Cron aligned/misaligned with `now`; UTC + non-UTC timezone alignment; named DOW accepted; numeric DOW rejected (5 parametrised forms); invalid cron / timezone surfaces ValueError; paused / archived still no-op. |
 
 Cross-cutting smoke checks (carried from phase 3 pattern):
 - `app.v2.runtime.*` imports no I/O libraries (httpx, requests,

@@ -1,8 +1,10 @@
-"""Tests for ``app.v2.runtime.wakeup`` — slice 5a (OneOff only).
+"""Tests for ``app.v2.runtime.wakeup`` — OneOff path + the
+trigger-type guards that are still unwired after slice 5b.
 
-Pins per ``docs/PHASE_4_PLAN.md`` §6.2 / §6.5.
+Pins per ``docs/PHASE_4_PLAN.md`` §6.2 / §6.5. The cron path
+tests live in ``test_runtime_wakeup_cron.py``.
 
-Behavioural coverage (slice 5a):
+Behavioural coverage (OneOff):
 - OneOff trigger with ``at_iso_datetime > now`` → no insert,
   returns ``[]``.
 - OneOff trigger with ``at_iso_datetime <= now`` → insert one
@@ -13,11 +15,9 @@ Behavioural coverage (slice 5a):
 - Paused schedule + OneOff (any timing) → no insert.
 - Archived schedule + OneOff (any timing) → no insert.
 - Unknown schedule id → no insert, returns ``[]``.
-- CronTrigger schedule → raises ``NotImplementedError`` with
-  a slice-5b pointer.
 - IntervalTrigger / EventTrigger / ConditionalTrigger →
   raise ``NotImplementedError`` with explicit per-type
-  message.
+  message (these stay unwired through phase 4).
 
 Injection + structural pins:
 - ``run_id_factory`` / ``event_id_factory`` called exactly
@@ -29,9 +29,11 @@ Injection + structural pins:
 - Atomicity: pre-seeded duplicate event_id makes the event
   INSERT raise; the Run INSERT rolls back; nothing landed.
 
-Slice-5a scope guards:
-- Wakeup raises for CronTrigger (5b not yet shipped).
-- Wakeup raises for the three other trigger types.
+Out-of-scope here (lives in ``test_runtime_wakeup_cron.py``):
+- CronTrigger aligned/misaligned fires.
+- Cron timezone alignment.
+- Numeric DOW rejection.
+- Invalid-cron rejection.
 """
 
 from __future__ import annotations
@@ -61,7 +63,6 @@ from app.v2.models.common import (
 from app.v2.models.schedule import ScheduleSpec
 from app.v2.models.triggers import (
     ConditionalTrigger,
-    CronTrigger,
     EventTrigger,
     IntervalTrigger,
     OneOffTrigger,
@@ -107,36 +108,6 @@ def _seed_oneoff_schedule(
             at_iso_datetime=fire_at,
             timezone="UTC",
         ),
-        delivery=Delivery(
-            target_session_id="sl_test",
-            fallback_policy=DeliveryFallbackPolicy.SESSION_TO_ORIGIN,
-        ),
-        failure=FailurePolicy(
-            on_failure_action=FailureActionType.ALERT_ADMIN,
-        ),
-        audit=AuditPolicy(),
-        status=status,
-        execution_plan_hash=None,
-        authored_at=_NOW_ISO,
-    ).with_fresh_hash()
-    insert_schedule(conn, spec)
-
-
-def _seed_cron_schedule(
-    conn: sqlite3.Connection,
-    *,
-    schedule_id: str = "daily_audit",
-    status: ScheduleStatus = ScheduleStatus.ACTIVE,
-) -> None:
-    spec = ScheduleSpec(
-        id=schedule_id,
-        owner=UserRef(
-            platform="telegram",
-            user_id="330959414",
-            display_name="Sergey",
-        ),
-        description="daily audit cron",
-        trigger=CronTrigger(cron="0 18 * * *", timezone="UTC"),
         delivery=Delivery(
             target_session_id="sl_test",
             fallback_policy=DeliveryFallbackPolicy.SESSION_TO_ORIGIN,
@@ -455,27 +426,6 @@ def test_unknown_schedule_id_returns_empty(tmp_path):
 # ===========================================================================
 # Unwired trigger types (slice 5a scope guards)
 # ===========================================================================
-
-
-def test_cron_trigger_raises_not_implemented(tmp_path):
-    """Slice 5a does NOT ship cron. The wakeup must raise
-    NotImplementedError pointing at slice 5b, not silently
-    no-op."""
-    conn = _migrate(tmp_path)
-    _seed_cron_schedule(conn)
-    run_factory, _ = _run_counter()
-    evt_factory, _ = _evt_counter()
-    with pytest.raises(NotImplementedError, match="5b"):
-        wakeup(
-            conn,
-            schedule_id="daily_audit",
-            now=_NOW,
-            run_id_factory=run_factory,
-            event_id_factory=evt_factory,
-        )
-    # Nothing inserted.
-    assert _runs(conn) == []
-    assert _events(conn) == []
 
 
 def test_interval_trigger_raises_not_implemented(tmp_path):
