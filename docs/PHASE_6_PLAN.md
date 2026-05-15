@@ -203,11 +203,45 @@ class NoCacheAndNetworkDown(RegistryCacheError):
         )
         self.kind = kind
         self.network_error = network_error
+
+
+class ChannelAmbiguous(RegistryCacheError):
+    """Lookup by name matched more than one ACTIVE Slack
+    channel. IDs stay canonical; authoring layer should
+    re-prompt the user for the explicit id. Phase 6 raises
+    this; phase 7 owns the user-facing rewording."""
+
+    def __init__(self, name: str, candidate_ids: list[str]) -> None:
+        super().__init__(
+            f"channel name {name!r} matches {len(candidate_ids)} "
+            f"active entries: {candidate_ids!r}"
+        )
+        self.name = name
+        self.candidate_ids = candidate_ids
 ```
 
 ### 3.2 `schemas.py`
 
 ```python
+# Shared tz-aware validator — every cache's ``fetched_at``
+# MUST be a tz-aware UTC datetime. Mirrors the runtime
+# invariant from phases 4-5 (naive datetime is a bug).
+def _require_tz_aware(value: datetime) -> datetime:
+    if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+        raise ValueError(
+            "registry_cache fetched_at must be tz-aware (UTC)"
+        )
+    return value
+
+
+# Common owner-id naming: ``owner_id`` covers both Slack
+# ``workspace_id`` and Google ``account_id`` so call-site
+# parameters stay uniform across kinds (reviewer round-1
+# rename per L295 finding). The class attribute keeps the
+# kind-specific label inside the model for human readers
+# of the on-disk file.
+
+
 class SlackChannelEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
@@ -225,23 +259,54 @@ class SlackChannelsCache(BaseModel):
     etag: Optional[str] = None
     channels: list[SlackChannelEntry]
 
+    @field_validator("fetched_at")
+    @classmethod
+    def _tz_aware(cls, v: datetime) -> datetime:
+        return _require_tz_aware(v)
 
-class DriveItemEntry(BaseModel):
+    @property
+    def owner_id(self) -> str:
+        """Uniform name across kinds — see L295 rename."""
+        return self.workspace_id
+
+
+class GoogleSheetsEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
     name: str
-    mime_type: str
+    mime_type: Literal[
+        "application/vnd.google-apps.spreadsheet"
+    ] = "application/vnd.google-apps.spreadsheet"
     parent_id: Optional[str] = None
 
 
-class GoogleDriveCache(BaseModel):
+class GoogleSheetsCache(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    kind: Literal["google_drive_items"] = "google_drive_items"
+    kind: Literal["google_sheets_items"] = "google_sheets_items"
     account_id: str
     fetched_at: datetime
-    source: str  # e.g. "drive.api.files.list"
+    source: str  # e.g. "drive.api.files.list?mimeType=spreadsheet"
     etag: Optional[str] = None
-    items: list[DriveItemEntry]
+    items: list[GoogleSheetsEntry]
+
+    @field_validator("fetched_at")
+    @classmethod
+    def _tz_aware(cls, v: datetime) -> datetime:
+        return _require_tz_aware(v)
+
+    @property
+    def owner_id(self) -> str:
+        return self.account_id
+
+
+class GoogleDocsEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    name: str
+    mime_type: Literal[
+        "application/vnd.google-apps.document"
+    ] = "application/vnd.google-apps.document"
+    parent_id: Optional[str] = None
 
 
 class GoogleDocsCache(BaseModel):
@@ -251,21 +316,47 @@ class GoogleDocsCache(BaseModel):
     fetched_at: datetime
     source: str  # e.g. "drive.api.files.list?mimeType=document"
     etag: Optional[str] = None
-    docs: list[DriveItemEntry]
+    docs: list[GoogleDocsEntry]
+
+    @field_validator("fetched_at")
+    @classmethod
+    def _tz_aware(cls, v: datetime) -> datetime:
+        return _require_tz_aware(v)
+
+    @property
+    def owner_id(self) -> str:
+        return self.account_id
 
 
 CacheKind = Literal[
     "slack_channels",
-    "google_drive_items",
+    "google_sheets_items",
     "google_docs_items",
 ]
 CacheFile = Union[
-    SlackChannelsCache, GoogleDriveCache, GoogleDocsCache
+    SlackChannelsCache, GoogleSheetsCache, GoogleDocsCache
 ]
 ```
 
-Open question 6.1 — Drive items + Docs split vs single cache —
-addressed in §9.2.
+**Reviewer fixes applied here:**
+
+- L223 — `fetched_at` now carries a `field_validator` that
+  rejects naive datetime. Shared `_require_tz_aware`
+  helper is the single producer of the error message so a
+  future change touches one site.
+- L398 — `GoogleDriveCache` is gone. `GoogleSheetsCache`
+  holds `GoogleSheetsEntry` whose `mime_type` is a
+  ``Literal["application/vnd.google-apps.spreadsheet"]``;
+  `GoogleDocsCache` holds `GoogleDocsEntry` with the docs
+  MIME literal. MIME enforcement is intrinsic to the model;
+  the resolver can no longer accidentally accept a docs
+  payload as a sheet.
+- L295 — kinds expose a uniform `owner_id` property; the
+  loader / refresh / resolver call sites switch to the
+  uniform name (see §3.4–§3.6 below).
+- Per Q3 — split is Sheets + Docs (NOT Drive + Docs).
+- Per Q4 — `etag` stays optional; Slack stays `None` (refresh
+  never computes a hash).
 
 ### 3.3 `paths.py`
 
@@ -274,7 +365,7 @@ DEFAULT_CACHE_BASE = pathlib.Path("data/cache/registry")
 
 _FILENAMES: dict[CacheKind, str] = {
     "slack_channels": "slack_channels.json",
-    "google_drive_items": "google_drive_items.json",
+    "google_sheets_items": "google_sheets_items.json",
     "google_docs_items": "google_docs_items.json",
 }
 
@@ -292,7 +383,7 @@ def cache_path(kind: CacheKind, *, base: pathlib.Path | None = None) -> pathlib.
 def load_cache(
     kind: CacheKind,
     *,
-    expected_workspace_id: str | None = None,
+    expected_owner_id: str | None = None,
     base: pathlib.Path | None = None,
 ) -> CacheFile | None:
     """Read + parse the cache for ``kind``.
@@ -300,14 +391,15 @@ def load_cache(
     Returns ``None`` when:
     - the file is absent (no exception — the caller decides
       whether to refresh or raise),
-    - ``expected_workspace_id`` is provided AND the cached
-      workspace_id (or account_id for Drive/Docs kinds) does
-      NOT match. Mismatch is logged; the on-disk file is left
-      untouched so a manual review is possible.
+    - ``expected_owner_id`` is provided AND the cached
+      ``owner_id`` property (workspace_id for slack,
+      account_id for sheets/docs) does NOT match. Mismatch is
+      logged; the on-disk file is left untouched so a manual
+      review is possible (per Q7 — no rename).
 
-    Parse errors (corrupt JSON, schema-invalid payload) raise
-    ``RegistryCacheError`` so caller code does not silently
-    fall back to "no cache".
+    Parse errors (corrupt JSON, schema-invalid payload, kind
+    discriminator mismatch) raise ``RegistryCacheError`` so
+    caller code does not silently fall back to "no cache".
     """
 
 
@@ -319,18 +411,45 @@ def save_cache(
 ) -> None:
     """Write ``snapshot`` to disk atomically via tmp + rename.
 
+    Reviewer L314 fix: if ``snapshot.kind != kind`` raises
+    ``ValueError`` BEFORE any I/O — phase 6 must never persist
+    a docs payload at the slack path (or any other
+    kind-channel pair). The check is the first line of the
+    function so callers see a hard fail rather than a silent
+    corrupting write.
+
     Crash mid-write must leave either:
       (a) the previous good file untouched, or
       (b) a `.tmp.<pid>` orphan that does NOT shadow the
           canonical name.
     Pin via a test that opens a real tmp + rename pair.
     """
+
+
+def is_stale(
+    cache: CacheFile,
+    *,
+    now: datetime,
+    ttl: timedelta = timedelta(hours=24),
+) -> bool:
+    """Pure freshness predicate (per Q5 answer). Returns
+    True when ``now - cache.fetched_at > ttl``. Phase 6
+    ships the helper but does NOT log on staleness — the
+    caller (phase 7 authoring) decides whether to warn,
+    refresh, or proceed. ``now`` is the caller's clock
+    output; the helper itself does not import a clock to
+    keep `_defaults.py` the sole `datetime.now` site."""
 ```
 
 ### 3.5 `refresh.py`
 
 Per-kind functions; each takes a DI'd client Protocol. No
-module-level import of `slack_sdk` / `googleapiclient`.
+module-level import of `slack_sdk` / `googleapiclient`. No
+module-level import of `app.v2.runtime._defaults` either —
+reviewer L347 fix: `clock` is a REQUIRED keyword-only
+parameter with no default, so the package stays decoupled
+from the runtime layer. Production callers (phase 7) pass
+`prod_clock`; tests pass a synthetic clock.
 
 ```python
 class SlackChannelsClient(Protocol):
@@ -343,11 +462,16 @@ class SlackChannelsClient(Protocol):
 def refresh_slack_channels(
     client: SlackChannelsClient,
     *,
-    expected_workspace_id: str,
-    clock=prod_clock,
+    expected_owner_id: str,
+    clock: Callable[[], datetime],
 ) -> SlackChannelsCache:
     """Pull the current conversation list via ``client`` and
     build a fresh snapshot.
+
+    ``expected_owner_id`` is recorded as the snapshot's
+    ``workspace_id``. ``clock()`` populates ``fetched_at``;
+    the value must be tz-aware UTC (pinned by the schema
+    validator).
 
     NEVER writes to disk — the caller decides via
     :func:`save_cache`. Pure function over the client's
@@ -362,24 +486,30 @@ class GoogleDriveClient(Protocol):
         ...
 
 
-def refresh_google_drive(
+def refresh_google_sheets(
     client: GoogleDriveClient,
     *,
-    expected_account_id: str,
-    clock=prod_clock,
-) -> GoogleDriveCache:
-    ...
+    expected_owner_id: str,
+    clock: Callable[[], datetime],
+) -> GoogleSheetsCache:
+    """Filters by
+    ``mimeType='application/vnd.google-apps.spreadsheet'``
+    inside the call. The schema's MIME literal will reject
+    any cross-type payload at validation time, so a
+    forgotten filter surfaces as a schema error during the
+    next save_cache (defence in depth)."""
 
 
 def refresh_google_docs(
     client: GoogleDriveClient,
     *,
-    expected_account_id: str,
-    clock=prod_clock,
+    expected_owner_id: str,
+    clock: Callable[[], datetime],
 ) -> GoogleDocsCache:
-    """Same client surface as ``refresh_google_drive``; the
-    query filter (``mimeType='application/vnd.google-apps.document'``)
-    is applied internally."""
+    """Filters by
+    ``mimeType='application/vnd.google-apps.document'``
+    inside the call. Same defence-in-depth pattern as
+    :func:`refresh_google_sheets`."""
 ```
 
 ### 3.6 `resolver.py`
@@ -388,27 +518,44 @@ def refresh_google_docs(
 def resolve_channel(
     lookup: str,
     cache: SlackChannelsCache | None,
+    *,
+    include_archived: bool = False,
 ) -> SlackChannelEntry:
     """Find a channel by ``id`` OR by ``name`` (Slack ``#name``
-    or bare ``name``). Raises :class:`NoCacheAvailable` when
-    ``cache is None``, :class:`CacheMiss` when the lookup
-    string matches neither id nor name in the loaded set."""
+    or bare ``name``).
+
+    Raises:
+    - :class:`NoCacheAvailable` when ``cache is None``.
+    - :class:`CacheMiss` when the lookup matches neither id
+      nor name in the active subset.
+    - :class:`ChannelAmbiguous` when ``lookup`` is a NAME (not
+      an id) AND the active subset contains more than one
+      matching entry (reviewer L714 fix per Q6 — IDs stay
+      canonical; ambiguous names re-prompt).
+
+    ``include_archived`` defaults to False so archived
+    channels are filtered out before the lookup runs. Pass
+    ``include_archived=True`` when the caller explicitly
+    needs an archive listing.
+    """
 
 
 def resolve_sheet(
     spreadsheet_id: str,
-    cache: GoogleDriveCache | None,
-) -> DriveItemEntry:
-    """Find a Drive item by id. Sheets-specific MIME filter
-    is the caller's responsibility (the cache holds raw Drive
-    items)."""
+    cache: GoogleSheetsCache | None,
+) -> GoogleSheetsEntry:
+    """Find a sheets entry by id. MIME enforcement is built
+    into the cache schema (per reviewer L398 fix); a docs
+    payload could never reach this resolver because the
+    cache class itself would reject it during load."""
 
 
 def resolve_doc(
     document_id: str,
     cache: GoogleDocsCache | None,
-) -> DriveItemEntry:
-    """Find a Docs item by id."""
+) -> GoogleDocsEntry:
+    """Find a docs entry by id. Same schema-level MIME
+    enforcement as :func:`resolve_sheet`."""
 ```
 
 ### 3.7 `__init__.py`
@@ -446,19 +593,34 @@ fix); no design impact.
   fields.
 - `NoCacheAndNetworkDown` carries both `kind` and
   `network_error` attributes.
-- All four subclasses inherit from `RegistryCacheError`, which
+- `ChannelAmbiguous` carries `name` + `candidate_ids` (list of
+  string) attributes; message mentions each candidate id.
+- All five subclasses inherit from `RegistryCacheError`, which
   inherits from `Exception`.
 
 ### 5.2 `test_registry_cache_schemas.py`
 
 - Each cache model rejects unknown fields (`extra="forbid"`).
-- `Literal["slack_channels"]` discriminator is enforced.
-- `fetched_at` accepts only tz-aware datetimes (mirrors the
-  phase-4 / phase-5 invariant). Naive datetime → `ValidationError`.
+- Each cache model enforces its `Literal[<kind>]`
+  discriminator (slack_channels / google_sheets_items /
+  google_docs_items). Passing the wrong kind → `ValidationError`.
+- `fetched_at` accepts only tz-aware datetimes via the
+  shared `_require_tz_aware` validator (reviewer L223 fix).
+  Naive datetime → `ValidationError` on EVERY cache model.
+  Pin separately for each of the three models so a future
+  refactor that drops the validator from one of them is a
+  surfaced test failure.
+- `GoogleSheetsEntry.mime_type` only accepts the Literal
+  spreadsheet MIME; assigning a docs MIME →
+  `ValidationError` (reviewer L398 fix). Same for
+  `GoogleDocsEntry` with the docs MIME literal.
 - Round-trip through `model_dump_json` + `model_validate_json`
-  preserves every field.
+  preserves every field on every model.
 - Empty `channels` / `items` / `docs` list is valid (a freshly
   emptied workspace is legal).
+- `owner_id` property returns `workspace_id` on
+  `SlackChannelsCache`, `account_id` on the two Google
+  caches (reviewer L295 rename).
 
 ### 5.3 `test_registry_cache_paths.py`
 
@@ -473,7 +635,7 @@ Load happy path:
 
 - Save then load round-trips a `SlackChannelsCache` snapshot
   unchanged (including `etag=None`).
-- Save then load round-trips `GoogleDriveCache` /
+- Save then load round-trips `GoogleSheetsCache` /
   `GoogleDocsCache`.
 
 Missing file:
@@ -481,11 +643,21 @@ Missing file:
 - `load_cache(kind, base=tmp_path)` with no file on disk
   returns `None` (not exception).
 
-Workspace mismatch:
+Owner-id mismatch (per L295 rename):
 
 - Save with `workspace_id="T_OLD"`, load with
-  `expected_workspace_id="T_NEW"` → returns `None`. Pin:
-  the file is NOT deleted by the loader (manual review path).
+  `expected_owner_id="T_NEW"` → returns `None`. Pin: the file
+  is NOT deleted by the loader (manual review path per Q7).
+- Same shape against `GoogleSheetsCache` /
+  `GoogleDocsCache` keyed by `account_id`.
+
+Kind-mismatch save guard (per L314 fix):
+
+- `save_cache("slack_channels", docs_snapshot, base=tmp_path)`
+  → `ValueError` raised BEFORE any file I/O. Pin: no file
+  is written to `tmp_path` (assert directory empty after).
+- Inverse: `save_cache("slack_channels", slack_snapshot)`
+  with matching kinds writes successfully.
 
 Atomic write:
 
@@ -503,7 +675,27 @@ Parse errors:
   (mirrors `extra="forbid"`).
 - Schema-valid payload with wrong discriminator → `RegistryCacheError`.
 
+Freshness helper (per Q5):
+
+- `is_stale(cache, now=t0, ttl=24h)` returns False when
+  `cache.fetched_at == t0`.
+- Returns False at the boundary (`now - fetched_at == ttl`).
+- Returns True when `now - fetched_at > ttl`.
+- Pure function — does NOT import any clock. Pin by
+  asserting `inspect.getsource(is_stale)` contains no
+  `datetime.now` AST node (mirrors the phase-5 AST-style
+  pin in `test_runtime_defaults.py`).
+
 ### 5.5 `test_registry_cache_refresh.py`
+
+Clock parameter required (per L347 fix):
+
+- `inspect.signature(refresh_slack_channels).parameters["clock"].default`
+  is `inspect.Parameter.empty`. Same pin for
+  `refresh_google_sheets` and `refresh_google_docs`.
+- The module does NOT import
+  `app.v2.runtime._defaults`. Pin via
+  `sys.modules` snapshot before + after importing `refresh`.
 
 Slack:
 
@@ -512,7 +704,7 @@ Slack:
   order; `fetched_at` matches the injected `clock`.
 - Stub client returning an empty iterable → cache with empty
   `channels` list.
-- `expected_workspace_id` is recorded as the snapshot's
+- `expected_owner_id` is recorded as the snapshot's
   `workspace_id` (caller-supplied; client iteration does not
   override it). Pin so a future refactor that resolves
   workspace_id from the client payload is a deliberate change.
@@ -520,13 +712,22 @@ Slack:
   pin via `sys.modules` snapshot before + after importing
   `refresh`.
 
-Drive / Docs:
+Sheets / Docs (per L398 + Q3):
 
-- Stub client returning a Drive items list produces the
-  matching `GoogleDriveCache` shape.
-- `refresh_google_docs` filters by MIME inside the call
-  (assert via spy on the client's `list_files(query=...)`
-  parameter).
+- Stub Drive client returning a sheets-MIME items list
+  produces a `GoogleSheetsCache` shape with each
+  `GoogleSheetsEntry.mime_type` equal to the spreadsheet
+  literal.
+- `refresh_google_sheets` filters by
+  `mimeType='application/vnd.google-apps.spreadsheet'`
+  inside the call (assert via spy on the client's
+  `list_files(query=...)` parameter).
+- `refresh_google_docs` filters by the docs MIME
+  (analogous spy assertion).
+- If the stub client returns a row whose `mimeType` does NOT
+  match the requested kind, the refresh call surfaces a
+  pydantic `ValidationError` from the entry constructor —
+  defence-in-depth against a buggy client filter.
 - The module does NOT import `googleapiclient` at module
   load (same `sys.modules` snapshot pattern).
 
@@ -536,7 +737,7 @@ Client errors propagate:
   `refresh_*` propagates the original exception unchanged.
   Phase 6 does NOT wrap into `NoCacheAndNetworkDown`; the
   authoring layer (phase 7) is the call site that catches +
-  composes.
+  composes (per Q8 confirmation).
 
 ### 5.6 `test_registry_cache_resolver.py`
 
@@ -549,13 +750,32 @@ Channels:
   name (no `#`).
 - `resolve_channel("missing", cache)` → `CacheMiss`.
 - `resolve_channel("C012", cache=None)` → `NoCacheAvailable`.
+- Archived channels excluded by default (per Q6): cache
+  contains one archived + one active entry sharing a name;
+  default call returns the active one. Same call with
+  `include_archived=True` returns whichever the search hits
+  first (id-keyed lookup remains deterministic).
+- Duplicate active name → `ChannelAmbiguous` (per L714 fix +
+  Q6). Cache contains two active channels both named
+  `"alerts"` with distinct ids. `resolve_channel("alerts",
+  cache)` raises; `exc.candidate_ids` lists both ids in
+  cache order. ID-keyed lookup still works
+  (`resolve_channel("C001", cache)` returns the entry).
+- Archived duplicate names do NOT trigger
+  `ChannelAmbiguous`: the archived entry is filtered before
+  the duplicate check.
 
-Sheets / Docs:
+Sheets / Docs (per L398):
 
-- `resolve_sheet(id, cache)` returns the item.
+- `resolve_sheet(id, cache)` returns the `GoogleSheetsEntry`.
 - `resolve_sheet("nope", cache)` → `CacheMiss`.
 - `resolve_sheet(..., cache=None)` → `NoCacheAvailable`.
-- `resolve_doc` mirrors `resolve_sheet` against the docs cache.
+- `resolve_sheet(id, cache)` type-checks against
+  `GoogleSheetsCache`; passing a `GoogleDocsCache` is a
+  static type error AND a runtime AttributeError (no
+  `items` attribute on a docs cache).
+- `resolve_doc` mirrors `resolve_sheet` against the docs
+  cache, including the inverse type-mismatch check.
 
 ### 5.7 Smoke
 
@@ -616,38 +836,59 @@ Cross-cutting smoke checks added or carried:
 
 1. Branch ahead of `v2-phase-5-complete` by N small commits,
    each scoped to one of the slices in §4.
-2. `errors.py` ships four `RegistryCacheError` subclasses;
-   smoke tests pin the inheritance + init signature.
-3. `schemas.py` ships three cache models with
-   `extra="forbid"` + tz-aware `fetched_at` enforcement.
-4. `paths.py` resolves the documented filenames under
-   `DEFAULT_CACHE_BASE = data/cache/registry/`.
+2. `errors.py` ships FIVE `RegistryCacheError` subclasses
+   (`NoCacheAvailable`, `CacheMiss`, `WorkspaceMismatch`,
+   `NoCacheAndNetworkDown`, `ChannelAmbiguous`); smoke tests
+   pin the inheritance + init signature.
+3. `schemas.py` ships three cache models
+   (`SlackChannelsCache`, `GoogleSheetsCache`,
+   `GoogleDocsCache`) with `extra="forbid"`, shared
+   tz-aware `fetched_at` validator, MIME-literal entry
+   classes, and a uniform `owner_id` property.
+4. `paths.py` resolves filenames `slack_channels.json` /
+   `google_sheets_items.json` / `google_docs_items.json`
+   under `DEFAULT_CACHE_BASE = data/cache/registry/`.
 5. `loader.py` round-trips every kind, returns `None` for
-   missing file, returns `None` for workspace mismatch
+   missing file, returns `None` for owner-id mismatch
    without deleting the file, raises `RegistryCacheError` on
    corrupt JSON / schema-invalid payload, writes atomically
-   via tmp + rename.
-6. `refresh.py` exposes one function per kind, each taking
-   a Protocol-typed client + injected `clock`. The module
-   does NOT import `slack_sdk` / `googleapiclient` at module
+   via tmp + rename, and `save_cache` raises `ValueError`
+   BEFORE any I/O when the snapshot's kind discriminator
+   does not match the requested kind (L314).
+6. `is_stale(cache, *, now, ttl=timedelta(hours=24))` is a
+   pure function that does NOT import any clock. Pinned via
+   AST inspection of its body (Q5).
+7. `refresh.py` exposes one function per kind
+   (`refresh_slack_channels`, `refresh_google_sheets`,
+   `refresh_google_docs`), each taking a Protocol-typed
+   client + REQUIRED `clock` keyword (no default — L347).
+   The module does NOT import `slack_sdk` /
+   `googleapiclient` / `app.v2.runtime._defaults` at module
    load. Client errors propagate unchanged (no
    `NoCacheAndNetworkDown` wrap inside `refresh.py`).
-7. `resolver.py` resolves channels by id or name (with the
-   `#` prefix stripped), sheets / docs by id, raises
-   `NoCacheAvailable` for `cache=None`, raises `CacheMiss`
-   for valid cache + missing lookup.
-8. `app/v2/models/common.py` docstrings no longer reference
+8. `resolver.py` resolves channels by id or name (with the
+   `#` prefix stripped), filters archived channels by
+   default, raises `ChannelAmbiguous` on duplicate active
+   names (L714, Q6), raises `NoCacheAvailable` for
+   `cache=None`, raises `CacheMiss` for valid cache +
+   missing lookup. Sheets / docs resolvers bind to
+   kind-specific caches (L398); a docs payload cannot pass
+   as a sheet.
+9. `app/v2/models/common.py` docstrings no longer reference
    "phase-3" for the registry; the new docstring cites
    phase 6 + `app/v2/registry_cache/resolver.py`.
-9. `__init__.py:__all__` covers every public symbol; smoke
-   import test passes.
-10. Phase guard clean against `v2-phase-5-complete`. No v1
+10. `__init__.py:__all__` covers every public symbol; smoke
+    import test passes.
+11. Phase guard clean against `v2-phase-5-complete`. No v1
     paths touched. `run_bot.py` untouched.
-11. `boot_runtime` untouched (phase 6 ships no boot
-    integration; lazy load on first `resolve_*` call).
-12. Full v2 test suite passes (existing 1205 + phase-6 adds);
+12. `boot_runtime` untouched (phase 6 ships no boot
+    integration). The resolver does NOT load from disk;
+    callers (phase 7 authoring layer) call `load_cache` and
+    pass the result to `resolve_*`. The "lazy" part of
+    §5.7's boot story lives at the phase-7 call site.
+13. Full v2 test suite passes (existing 1205 + phase-6 adds);
     no regressions.
-13. Annotated git tag `v2-phase-6-complete` created and
+14. Annotated git tag `v2-phase-6-complete` created and
     pushed (gated on explicit Sergey approval per workflow
     pattern Sergey pre-approved at phase 6 kickoff).
 
@@ -658,12 +899,15 @@ Cross-cutting smoke checks added or carried:
 ```
 v2 phase 6 complete
 
-Registry cache for Slack channels / Google Drive items /
+Registry cache for Slack channels / Google Sheets items /
 Google Docs items. Pure storage + lookup layer with
 provenance (workspace_id / account_id, fetched_at, source,
-etag), workspace-mismatch invalidation, atomic on-disk
-writes, and DI'd refresh primitives that do NOT import
-slack_sdk / googleapiclient at module load.
+etag), owner-id mismatch invalidation, atomic on-disk writes,
+MIME-literal entry classes for the Google kinds (defence in
+depth against cross-type payload), and DI'd refresh
+primitives that take a REQUIRED clock parameter and do NOT
+import slack_sdk / googleapiclient / runtime._defaults at
+module load.
 
 NO production wiring. ADK tool surface lands in phase 7
 (typed authoring tools); boot integration stays deferred;
@@ -679,7 +923,7 @@ Plan:   docs/PHASE_6_PLAN.md
 
 ## 9. Open questions
 
-### 9.1 Closed in this revision
+### 9.1 Closed in this revision (round-1 reviewer)
 
 1. ~~Cache base directory.~~ **CLOSED.** Design §5.7 example
    uses `data/cache/...`; phase 6 nests under
@@ -688,45 +932,48 @@ Plan:   docs/PHASE_6_PLAN.md
 2. ~~Boot-time eager fetch.~~ **CLOSED.** §5.7 explicitly says
    "Boot does NOT block on Slack/Drive reachability"; phase 6
    keeps `boot_runtime` untouched and uses lazy load.
+3. ~~Drive items + Docs split vs unified.~~ **CLOSED** (Q3
+   answer): split into Sheets + Docs (NOT Drive + Docs).
+   Filenames are `google_sheets_items.json` and
+   `google_docs_items.json`; the corresponding cache classes
+   carry MIME-literal entry constraints so the resolver
+   cannot accept cross-type payload (also closes L398).
+4. ~~`etag` semantics.~~ **CLOSED** (Q4 answer): keep native
+   etag optional. Slack stays `None`; refresh does NOT
+   compute a content hash to back-fill the field.
+5. ~~Stale-warning TTL.~~ **CLOSED** (Q5 answer): phase 6
+   ships a pure `is_stale(cache, *, now, ttl=24h)` helper.
+   Caller decides whether to log / refresh; helper imports
+   no clock.
+6. ~~`name` collisions for channels.~~ **CLOSED** (Q6
+   answer): raise `ChannelAmbiguous` on duplicate ACTIVE
+   names; archived ignored by default
+   (`include_archived=False`). IDs stay canonical.
+7. ~~Workspace-mismatch policy.~~ **CLOSED** (Q7 answer):
+   leave the mismatched file in place; no rename
+   complexity. Loader returns `None`.
+8. ~~Authoring-layer composite (`NoCacheAndNetworkDown`).~~
+   **CLOSED** (Q8 answer): phase 6 ships the class only;
+   phase 7 owns the raise path.
+9. ~~Tz-aware `fetched_at` enforcement.~~ **CLOSED** (L223
+   fix): shared `_require_tz_aware` field validator on every
+   cache model.
+10. ~~`save_cache` kind guard.~~ **CLOSED** (L314 fix):
+    `save_cache` raises `ValueError` BEFORE any I/O when
+    `snapshot.kind != kind`.
+11. ~~`expected_workspace_id` covers Google account_id.~~
+    **CLOSED** (L295 rename): unified `expected_owner_id`
+    parameter across loader + refresh. Cache classes expose
+    matching `owner_id` property.
+12. ~~`clock=prod_clock` couples cache to runtime.~~
+    **CLOSED** (L347 fix): `clock` is a REQUIRED
+    keyword-only parameter on every refresh function;
+    package does NOT import `app.v2.runtime._defaults`.
 
 ### 9.2 Still open
 
-3. **Drive items + Docs split vs unified.** §5.7 lists
-   `slack_channels.json` only and is silent on Drive shape.
-   Phase 6 default splits Drive and Docs into two cache files
-   because their authoring paths are distinct (sheets / docs).
-   A unified `google_drive_resources.json` with a
-   discriminator field is also viable. Reviewer call.
-
-4. **`etag` semantics.** Design §5.7 includes an `etag` field
-   but does not pin a producer. Slack `conversations.list`
-   has no first-class etag; Drive returns one. Phase 6 keeps
-   the field optional. Reviewer: should phase-6 refresh
-   compute a content hash and stuff it into `etag` for kinds
-   with no native value? Default: leave `None` for Slack.
-
-5. **Stale-warning TTL.** §5.7 says "logs stale warning" but
-   no number. Phase 6 default: no TTL check inside the
-   package (caller compares `fetched_at` to `clock()` and
-   logs at its discretion). Add a helper if reviewer wants a
-   standardised "older than 24 h → warn" predicate.
-
-6. **`name` collisions for channels.** Slack channel names
-   are unique within a workspace at any moment but can be
-   reused after deletion. The resolver returns the first
-   match; that's defensible while the cache mirrors a
-   single workspace. Pin in tests so a future "raise on
-   ambiguity" change surfaces.
-
-7. **Workspace-mismatch policy.** Loader returns `None` and
-   leaves the file. Alternative: rename the file with a
-   `.mismatch-<ts>.json` suffix so a refresh can re-save
-   without colliding. Default: leave the file; reviewer
-   decides if the rename is worth the complexity.
-
-8. **Authoring-layer composite.** Phase 7 owns the
-   `NoCacheAndNetworkDown` raise path. Phase 6 ships the
-   class. Reviewer to confirm boundary is correct.
+None — round-1 reviewer closed every prior open item. New
+items will populate here if reviewer rounds 2+ surface gaps.
 
 ---
 
