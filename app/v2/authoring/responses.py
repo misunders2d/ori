@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from app.v2.validation import ValidationIssue
 
@@ -80,6 +80,47 @@ class ToolResponse(BaseModel):
     # on ``status="ok"`` when the tool wants to surface a
     # "already-applied" or similar no-op message.
     message: Optional[str] = None
+
+    # ---- Per-status payload allowlist ----
+    # Round-1 reviewer slice-1 fix: enforce the discriminator
+    # so invalid combos like ``status="ok"`` + ``issues=[...]``
+    # fail validation. Without this guard the model is a bag
+    # of optionals and the LLM (or a future caller) could
+    # interleave payloads across statuses.
+
+    @model_validator(mode="after")
+    def _enforce_status_payload_allowlist(
+        self,
+    ) -> "ToolResponse":
+        allowed_per_status: dict[ToolResponseStatus, set[str]] = {
+            "ok": {"draft_id", "schedule_id", "spec", "message"},
+            "validation_failed": {"issues"},
+            "not_ready": {"missing_fields"},
+            "cache_unavailable": {"cache_kind", "network_error"},
+            "not_found": {"message"},
+        }
+        payload_fields = {
+            "draft_id",
+            "schedule_id",
+            "spec",
+            "issues",
+            "missing_fields",
+            "cache_kind",
+            "network_error",
+            "message",
+        }
+        allowed = allowed_per_status[self.status]
+        forbidden = payload_fields - allowed
+        leaked = {
+            f for f in forbidden if getattr(self, f) is not None
+        }
+        if leaked:
+            raise ValueError(
+                f"ToolResponse(status={self.status!r}) "
+                f"carries forbidden payload fields {sorted(leaked)!r}; "
+                f"allowed fields for this status: {sorted(allowed)!r}"
+            )
+        return self
 
     # ---- Factory helpers ----
 

@@ -55,6 +55,145 @@ def test_extra_keys_forbidden():
 
 
 # ---------------------------------------------------------------------------
+# Discriminated payload allowlist (round-1 reviewer slice-1 L48)
+# ---------------------------------------------------------------------------
+
+
+def test_ok_with_issues_rejected():
+    """``status='ok'`` must not carry an ``issues`` list —
+    that payload belongs to ``validation_failed``."""
+    issues = [
+        ValidationIssue(
+            code="x", severity="error", path="p", message="m"
+        )
+    ]
+    with pytest.raises(ValidationError, match="forbidden payload"):
+        ToolResponse(status="ok", issues=issues)
+
+
+def test_ok_with_missing_fields_rejected():
+    with pytest.raises(ValidationError, match="forbidden payload"):
+        ToolResponse(status="ok", missing_fields=["x"])
+
+
+def test_ok_with_cache_kind_rejected():
+    with pytest.raises(ValidationError, match="forbidden payload"):
+        ToolResponse(status="ok", cache_kind="slack_channels")
+
+
+def test_validation_failed_with_draft_id_rejected():
+    issues = [
+        ValidationIssue(
+            code="x", severity="error", path="p", message="m"
+        )
+    ]
+    with pytest.raises(ValidationError, match="forbidden payload"):
+        ToolResponse(
+            status="validation_failed",
+            issues=issues,
+            draft_id="d_1",
+        )
+
+
+def test_validation_failed_with_message_rejected():
+    issues = [
+        ValidationIssue(
+            code="x", severity="error", path="p", message="m"
+        )
+    ]
+    with pytest.raises(ValidationError, match="forbidden payload"):
+        ToolResponse(
+            status="validation_failed",
+            issues=issues,
+            message="x",
+        )
+
+
+def test_not_ready_with_issues_rejected():
+    issues = [
+        ValidationIssue(
+            code="x", severity="error", path="p", message="m"
+        )
+    ]
+    with pytest.raises(ValidationError, match="forbidden payload"):
+        ToolResponse(
+            status="not_ready",
+            missing_fields=["x"],
+            issues=issues,
+        )
+
+
+def test_not_ready_with_draft_id_rejected():
+    with pytest.raises(ValidationError, match="forbidden payload"):
+        ToolResponse(
+            status="not_ready",
+            missing_fields=["x"],
+            draft_id="d_1",
+        )
+
+
+def test_cache_unavailable_with_draft_id_rejected():
+    with pytest.raises(ValidationError, match="forbidden payload"):
+        ToolResponse(
+            status="cache_unavailable",
+            cache_kind="slack_channels",
+            network_error="x",
+            draft_id="d_1",
+        )
+
+
+def test_cache_unavailable_with_message_rejected():
+    with pytest.raises(ValidationError, match="forbidden payload"):
+        ToolResponse(
+            status="cache_unavailable",
+            cache_kind="slack_channels",
+            network_error="x",
+            message="hint",
+        )
+
+
+def test_not_found_with_draft_id_rejected():
+    with pytest.raises(ValidationError, match="forbidden payload"):
+        ToolResponse(
+            status="not_found",
+            message="missing",
+            draft_id="d_1",
+        )
+
+
+def test_not_found_with_issues_rejected():
+    issues = [
+        ValidationIssue(
+            code="x", severity="error", path="p", message="m"
+        )
+    ]
+    with pytest.raises(ValidationError, match="forbidden payload"):
+        ToolResponse(
+            status="not_found",
+            message="x",
+            issues=issues,
+        )
+
+
+def test_factory_helpers_pass_validator():
+    """All five factory paths produce models the discriminator
+    validator accepts — regression pin for the round-1 fix."""
+    ToolResponse.ok(draft_id="d", spec={"k": "v"}, message="m")
+    ToolResponse.validation_failed(
+        issues=[
+            ValidationIssue(
+                code="x", severity="error", path="p", message="m"
+            )
+        ]
+    )
+    ToolResponse.not_ready(missing_fields=["trigger"])
+    ToolResponse.cache_unavailable(
+        kind="slack_channels", network_error="dns"
+    )
+    ToolResponse.not_found(message="missing")
+
+
+# ---------------------------------------------------------------------------
 # ok
 # ---------------------------------------------------------------------------
 

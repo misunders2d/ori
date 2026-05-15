@@ -46,7 +46,7 @@ import os
 import pathlib
 import re
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from pydantic import BaseModel, ConfigDict
@@ -56,6 +56,7 @@ from app.v2.models.common import (
     AuditPolicy,
     Delivery,
     FailurePolicy,
+    TemplateRef,
     UserRef,
 )
 from app.v2.models.schedule import ScheduleSpec
@@ -88,6 +89,15 @@ class ScheduleSpecDraft(BaseModel):
     audit: AuditPolicy = AuditPolicy()
     status: ScheduleStatus = ScheduleStatus.ACTIVE
     execution_plan_hash: Optional[str] = None
+    # Round-1 reviewer slice-1 L74 fix: ``template`` and
+    # ``parent_hash`` are part of ``ScheduleSpec``; the
+    # draft is documented as a relaxed superset, so it
+    # mirrors them. Phase-7 setters do not populate these
+    # yet (template authoring is a later phase; parent_hash
+    # populates only on revisions), but the draft model
+    # accepts and round-trips them.
+    template: Optional[TemplateRef] = None
+    parent_hash: Optional[str] = None
 
     def missing_required_fields(self) -> list[str]:
         """Return the names of unset required-on-spec fields
@@ -142,7 +152,22 @@ class ScheduleSpecDraft(BaseModel):
         assert self.delivery is not None
         assert self.failure is not None
 
-        authored_at = clock().isoformat()
+        # Round-1 reviewer slice-1 L145 fix: clock() output
+        # must be tz-aware UTC. Naive datetimes are rejected
+        # outright (the runtime invariant from phases 4-5);
+        # tz-aware non-UTC values are normalised via
+        # ``.astimezone(timezone.utc)`` so the ISO string in
+        # ``authored_at`` always carries a "+00:00" offset.
+        clock_value = clock()
+        if (
+            clock_value.tzinfo is None
+            or clock_value.tzinfo.utcoffset(clock_value) is None
+        ):
+            raise ValueError(
+                "to_spec clock() returned a naive datetime; "
+                "authored_at must be tz-aware UTC"
+            )
+        authored_at = clock_value.astimezone(timezone.utc).isoformat()
         spec = ScheduleSpec(
             id=self.id,
             description=self.description,
@@ -153,6 +178,8 @@ class ScheduleSpecDraft(BaseModel):
             audit=self.audit,
             status=self.status,
             execution_plan_hash=self.execution_plan_hash,
+            template=self.template,
+            parent_hash=self.parent_hash,
             authored_at=authored_at,
         )
         return spec.with_fresh_hash()

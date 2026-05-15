@@ -25,7 +25,7 @@ import inspect
 import os
 import textwrap
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -43,6 +43,7 @@ from app.v2.models.common import (
     AuditPolicy,
     Delivery,
     FailurePolicy,
+    TemplateRef,
     UserRef,
 )
 from app.v2.models.triggers import OneOffTrigger
@@ -467,3 +468,91 @@ def test_complete_draft_validates_clean():
     spec = _full_draft().to_spec(clock=_fixed_clock)
     result = validate_schedule_spec(spec)
     assert result.ok, f"unexpected issues: {result.issues!r}"
+
+
+# ===========================================================================
+# Clock tz-aware UTC enforcement (round-1 reviewer slice-1 L145)
+# ===========================================================================
+
+
+def test_to_spec_rejects_naive_clock():
+    """Naive datetime (no tzinfo) → ValueError. authored_at
+    must be tz-aware UTC."""
+    def _naive_clock() -> datetime:
+        return datetime(2026, 5, 15, 12, 0)  # no tzinfo
+
+    with pytest.raises(ValueError, match="naive datetime"):
+        _full_draft().to_spec(clock=_naive_clock)
+
+
+def test_to_spec_normalises_non_utc_to_utc():
+    """tz-aware non-UTC clock output → spec.authored_at
+    carries '+00:00' offset (normalised via astimezone)."""
+    five_hours_east = timezone(timedelta(hours=5))
+
+    def _est_clock() -> datetime:
+        # 12:00 in +05 == 07:00 UTC.
+        return datetime(2026, 5, 15, 12, 0, tzinfo=five_hours_east)
+
+    spec = _full_draft().to_spec(clock=_est_clock)
+    # ISO string ends in +00:00 (UTC offset).
+    assert spec.authored_at.endswith("+00:00")
+    # And the wall-clock value reflects the UTC conversion.
+    assert "07:00:00" in spec.authored_at
+
+
+def test_to_spec_utc_clock_passes_through_unchanged():
+    """tz-aware UTC clock → authored_at preserves the wall
+    clock unchanged."""
+    spec = _full_draft().to_spec(clock=_fixed_clock)
+    assert spec.authored_at.startswith("2026-05-15T12:00:00")
+    assert spec.authored_at.endswith("+00:00")
+
+
+# ===========================================================================
+# ScheduleSpec superset round-trip (round-1 reviewer slice-1 L74)
+# ===========================================================================
+
+
+def test_draft_round_trips_template_and_parent_hash(tmp_path):
+    """Draft mirrors the full ScheduleSpec field set; template
+    + parent_hash round-trip through write/read."""
+    store = DraftStore(base=tmp_path)
+    draft = _full_draft().model_copy(
+        update={
+            "template": TemplateRef(name="OneOffReminder", version="1"),
+            "parent_hash": "deadbeef" * 8,  # 64 hex chars
+        }
+    )
+
+    store.write("sess1", draft)
+    loaded = store.read("sess1", draft.id)
+
+    assert loaded.template == TemplateRef(
+        name="OneOffReminder", version="1"
+    )
+    assert loaded.parent_hash == "deadbeef" * 8
+
+
+def test_to_spec_passes_through_template_and_parent_hash():
+    """to_spec must forward template + parent_hash to the
+    resulting ScheduleSpec (per L74 fix)."""
+    draft = _full_draft().model_copy(
+        update={
+            "template": TemplateRef(name="OneOffReminder", version="2"),
+            "parent_hash": "f" * 64,
+        }
+    )
+
+    spec = draft.to_spec(clock=_fixed_clock)
+
+    assert spec.template == TemplateRef(
+        name="OneOffReminder", version="2"
+    )
+    assert spec.parent_hash == "f" * 64
+
+
+def test_template_and_parent_hash_optional_default_none():
+    draft = ScheduleSpecDraft(id="sched_minimal")
+    assert draft.template is None
+    assert draft.parent_hash is None
