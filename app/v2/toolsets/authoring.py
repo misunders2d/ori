@@ -41,7 +41,7 @@ Phase 8 slice 5 additions (per ``docs/PHASE_8_PLAN.md`` §4):
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 from google.adk.tools.base_toolset import BaseToolset
 from google.adk.tools.function_tool import FunctionTool
@@ -68,6 +68,10 @@ from app.v2.authoring.setters import (
     schedule_set_failure_policy,
     schedule_set_one_off,
     schedule_set_owner,
+)
+from app.v2.authoring.responses import ToolResponse
+from app.v2.authoring.templates import (
+    SCHEDULE_CREATE_REMINDER_TOOL_NAME,
 )
 from app.v2.descriptors.tool import ToolDescriptor
 from app.v2.registry import ToolRegistry
@@ -215,6 +219,23 @@ AUTHORING_TOOL_DESCRIPTORS: list[ToolDescriptor] = [
         },
         module=f"{_AUTHORING_MODULE}.commit",
     ),
+    # ----- schedule_create_reminder (phase 9 slice 3) -----
+    ToolDescriptor(
+        name=SCHEDULE_CREATE_REMINDER_TOOL_NAME,
+        description=(
+            "Create a OneOff reminder via the v2 template "
+            "pipeline. Wraps draft → dry_run → freeze → "
+            "commit into one agent-facing call; returns "
+            "ok(schedule_id, spec) on success."
+        ),
+        tags={
+            ToolCapabilityTag.DB_WRITE,
+            ToolCapabilityTag.FILESYSTEM_WRITE,
+            ToolCapabilityTag.READ_EXTERNAL,
+            ToolCapabilityTag.USES_OAUTH,
+        },
+        module=f"{_AUTHORING_MODULE}.templates",
+    ),
     # ----- Lifecycle (db_write) -----
     ToolDescriptor(
         name="schedule_pause",
@@ -265,6 +286,40 @@ def register_descriptors(registry: ToolRegistry) -> None:
 
 
 # ---------------------------------------------------------------------------
+# schedule_create_reminder default stub (phase 9 slice 3)
+# ---------------------------------------------------------------------------
+
+
+async def _stub_schedule_create_reminder(
+    at: str,
+    recipient_channel: str,
+    text: str,
+) -> ToolResponse:
+    """Default stub when no production closure is bound to
+    the :class:`AuthoringToolset`. Signature mirrors the
+    production closure so the ADK ``FunctionTool`` schema
+    stays stable regardless of whether the toolset is
+    DI-wired. Raises :class:`NotImplementedError` if
+    invoked — phase-9 cutover (slice 8) replaces the stub
+    with the production closure built via
+    :func:`app.v2.authoring.templates.make_schedule_create_reminder`.
+    """
+    raise NotImplementedError(
+        "schedule_create_reminder is unmounted; phase-9 "
+        "cutover binds the production closure via "
+        "make_schedule_create_reminder(...)"
+    )
+
+
+_stub_schedule_create_reminder.__name__ = (
+    SCHEDULE_CREATE_REMINDER_TOOL_NAME
+)
+_stub_schedule_create_reminder.__qualname__ = (
+    SCHEDULE_CREATE_REMINDER_TOOL_NAME
+)
+
+
+# ---------------------------------------------------------------------------
 # AuthoringToolset — ADK BaseToolset
 # ---------------------------------------------------------------------------
 
@@ -296,6 +351,18 @@ class AuthoringToolset(BaseToolset):
         expected_owner_id: str,
         slack_client: Optional[object] = None,
         cache_base: Optional[object] = None,
+        # Phase 9 slice 3: the schedule_create_reminder
+        # production closure. Built via
+        # ``app.v2.authoring.templates.make_schedule_create_reminder``
+        # at agent mount time (phase-9 cutover slice 8). When
+        # None, the toolset binds the
+        # ``_stub_schedule_create_reminder`` closure (same
+        # ``(at, recipient_channel, text)`` signature so the
+        # FunctionTool schema is stable); the stub raises
+        # NotImplementedError if invoked.
+        schedule_create_reminder: Optional[
+            Callable[[str, str, str], Awaitable[ToolResponse]]
+        ] = None,
     ) -> None:
         # ADK BaseToolset has no documented __init__ args we
         # need to forward; the metadata is constructor-time
@@ -303,6 +370,11 @@ class AuthoringToolset(BaseToolset):
         self._expected_owner_id = expected_owner_id
         self._slack_client = slack_client
         self._cache_base = cache_base
+        self._schedule_create_reminder = (
+            schedule_create_reminder
+            if schedule_create_reminder is not None
+            else _stub_schedule_create_reminder
+        )
 
     async def get_tools(self, readonly_context=None):
         """Return every authoring + lifecycle tool as a
@@ -323,6 +395,7 @@ class AuthoringToolset(BaseToolset):
             FunctionTool(func=schedule_dry_run),
             FunctionTool(func=schedule_freeze),
             FunctionTool(func=schedule_draft_commit),
+            FunctionTool(func=self._schedule_create_reminder),
             FunctionTool(func=schedule_pause),
             FunctionTool(func=schedule_resume),
             FunctionTool(func=schedule_archive),

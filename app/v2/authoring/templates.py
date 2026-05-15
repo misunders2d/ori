@@ -1,0 +1,321 @@
+"""V2 scheduler — template-driven authoring tools.
+
+Phase 9 slice 3 per ``docs/PHASE_9_PLAN.md`` §1.3 + §3.3.
+
+Ships the first end-to-end template authoring tool:
+``schedule_create_reminder``. The agent calls a closure
+that exposes ONLY ``(at, recipient_channel, text)``; every
+DI dependency (store / handshake_store / conn factory /
+cache loader+saver / slack client / clock / id factories
+/ owner) is captured at startup via the
+:func:`make_schedule_create_reminder` factory.
+
+Pipeline (closure body):
+
+1. Parse ``at`` from an ISO 8601 string. Naive →
+   ``validation_failed(naive_at_datetime)``; non-ISO →
+   ``validation_failed(invalid_iso_datetime)``.
+2. Resolve ``recipient_channel`` via the phase-6 cache
+   resolver. Cache absent + refresh fails →
+   ``cache_unavailable``. Cache present + channel name
+   not found → ``not_found``. Multiple matches →
+   ``validation_failed(channel_ambiguous)``.
+3. Build the spec via :func:`build_one_off_reminder`.
+4. Persist the spec as a draft via
+   :meth:`DraftStore.write`.
+5. Run :func:`schedule_dry_run(VALIDATE_ONLY)` to record
+   the handshake.
+6. Run :func:`schedule_freeze` against a fresh DB
+   connection.
+7. Run :func:`schedule_draft_commit` against the same
+   connection; surfaces ``ok(schedule_id, spec)`` on
+   success or forwards the verb's failure shape.
+
+DI design (round-2 reviewer L500 fix): the factory
+returns an async function whose LLM-visible signature is
+EXACTLY ``(at, recipient_channel, text)``. ADK
+``FunctionTool`` introspects that signature when building
+the schema sent to the model; the production wrapper
+factory pattern keeps every DI parameter out of the
+schema. The slice's tests pin this introspection.
+
+References:
+- ``docs/PHASE_9_PLAN.md`` §1.3 + §3.3
+- ``docs/CONTRACTS_V2_DESIGN.md`` §5.5
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from contextlib import closing
+from datetime import datetime
+from typing import Awaitable, Callable, Optional
+
+from pydantic import ValidationError
+
+from app.v2.authoring.commit import schedule_draft_commit
+from app.v2.authoring.drafts import (
+    DraftStore,
+    ScheduleSpecDraft,
+)
+from app.v2.authoring.dry_run import schedule_dry_run
+from app.v2.authoring.freeze import schedule_freeze
+from app.v2.authoring.handshake import (
+    DryRunMode,
+    HandshakeStore,
+)
+from app.v2.authoring.responses import ToolResponse
+from app.v2.authoring.setters import _validation_failed_single
+from app.v2.models.common import UserRef
+from app.v2.registry_cache.errors import (
+    CacheMiss,
+    ChannelAmbiguous,
+    NoCacheAvailable,
+)
+from app.v2.registry_cache.refresh import (
+    SlackChannelsClient,
+    refresh_slack_channels,
+)
+from app.v2.registry_cache.resolver import resolve_channel
+from app.v2.registry_cache.schemas import SlackChannelsCache
+from app.v2.templates.one_off_reminder import build_one_off_reminder
+from app.v2.validation import ValidationIssue
+
+
+SCHEDULE_CREATE_REMINDER_TOOL_NAME = "schedule_create_reminder"
+
+
+def _parse_iso_datetime(value: str) -> tuple[Optional[datetime], Optional[ToolResponse]]:
+    """Parse an ISO 8601 datetime string. Returns
+    ``(parsed, None)`` on success and ``(None,
+    validation_failed(...))`` on failure.
+
+    Naive datetimes surface as ``naive_at_datetime``;
+    non-ISO strings surface as ``invalid_iso_datetime``.
+    """
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError) as exc:
+        return None, _validation_failed_single(
+            code="invalid_iso_datetime",
+            path="at",
+            message=(
+                f"could not parse {value!r} as an ISO 8601 "
+                f"datetime: {exc!s}"
+            ),
+        )
+    if parsed.tzinfo is None or parsed.tzinfo.utcoffset(parsed) is None:
+        return None, _validation_failed_single(
+            code="naive_at_datetime",
+            path="at",
+            message=(
+                f"`at` {value!r} is naive; expected an "
+                "ISO 8601 datetime carrying a UTC offset "
+                "(e.g. '2026-05-15T16:00:00+00:00')"
+            ),
+        )
+    return parsed, None
+
+
+def make_schedule_create_reminder(
+    *,
+    store: DraftStore,
+    handshake_store: HandshakeStore,
+    conn_factory: Callable[[], sqlite3.Connection],
+    cache_loader: Callable[[], Optional[SlackChannelsCache]],
+    cache_saver: Callable[[SlackChannelsCache], None],
+    slack_client: Optional[SlackChannelsClient],
+    expected_owner_id: str,
+    clock: Callable[[], datetime],
+    event_id_factory: Callable[[], str],
+    schedule_id_factory: Callable[[], str],
+    owner: UserRef,
+    session_id: str,
+) -> Callable[[str, str, str], Awaitable[ToolResponse]]:
+    """Build the agent-facing ``schedule_create_reminder``
+    closure with every DI dependency bound.
+
+    The returned closure exposes ONLY the LLM-visible
+    parameters ``(at, recipient_channel, text)``; DI names
+    do not appear in the function schema (round-2 reviewer
+    L500 fix). Tests in
+    :mod:`tests/v2/test_authoring_template_tool` pin the
+    signature via ``inspect.signature`` introspection.
+    """
+
+    async def schedule_create_reminder(
+        at: str,
+        recipient_channel: str,
+        text: str,
+    ) -> ToolResponse:
+        # ---- 1. Parse ``at`` ----
+        parsed_at, error = _parse_iso_datetime(at)
+        if error is not None:
+            return error
+        assert parsed_at is not None  # mypy hint
+
+        # ---- 2. Resolve channel ----
+        cache: Optional[SlackChannelsCache] = cache_loader()
+        if cache is None:
+            if slack_client is None:
+                return ToolResponse.cache_unavailable(
+                    kind="slack_channels",
+                    network_error="no slack_client configured",
+                )
+            try:
+                cache = refresh_slack_channels(
+                    slack_client,
+                    expected_owner_id=expected_owner_id,
+                    clock=clock,
+                )
+            except Exception as exc:  # noqa: BLE001
+                return ToolResponse.cache_unavailable(
+                    kind="slack_channels",
+                    network_error=str(exc),
+                )
+            cache_saver(cache)
+
+        try:
+            entry = resolve_channel(
+                recipient_channel,
+                cache,
+                include_archived=False,
+            )
+        except CacheMiss as exc:
+            # Plan §3.3 maps "channel not found after any
+            # refresh" to ``not_found`` so the LLM gets a
+            # discrete shape it can branch on (vs the
+            # cache_unavailable / validation_failed cases).
+            return ToolResponse.not_found(
+                message=(
+                    f"channel {recipient_channel!r} not "
+                    f"found in the Slack workspace cache: "
+                    f"{exc!s}"
+                ),
+            )
+        except ChannelAmbiguous as exc:
+            return ToolResponse.validation_failed(
+                issues=[
+                    ValidationIssue(
+                        code="channel_ambiguous",
+                        severity="error",
+                        path="recipient_channel",
+                        message=(
+                            f"{exc.name!r} matches multiple "
+                            f"active channels: "
+                            f"{exc.candidate_ids!r}"
+                        ),
+                    )
+                ]
+            )
+        except NoCacheAvailable as exc:
+            # Defence in depth — resolver shouldn't reach
+            # this branch since we refreshed above.
+            return ToolResponse.cache_unavailable(
+                kind="slack_channels",
+                network_error=(
+                    "resolver received cache=None despite "
+                    f"refresh attempt: {exc!s}"
+                ),
+            )
+
+        # Compose the ChannelRef for the builder.
+        from app.v2.models.common import ChannelRef
+
+        recipient = ChannelRef(kind="slack", external_id=entry.id)
+
+        # ---- 3. Build spec ----
+        schedule_id = schedule_id_factory()
+        try:
+            spec = build_one_off_reminder(
+                at=parsed_at,
+                recipient=recipient,
+                text=text,
+                owner=owner,
+                schedule_id=schedule_id,
+                clock=clock,
+            )
+        except ValidationError as exc:
+            # Pydantic OneOffReminderArgs constraints
+            # (empty / oversize text). Caught BEFORE the
+            # ValueError branch because pydantic v2's
+            # ValidationError subclasses ValueError.
+            return _validation_failed_single(
+                code="one_off_reminder_args_invalid",
+                path="text",
+                message=str(exc),
+            )
+        except ValueError as exc:
+            # build_one_off_reminder raises ValueError on
+            # naive `at` / naive `clock`.
+            return _validation_failed_single(
+                code="build_one_off_reminder_failed",
+                path="<root>",
+                message=str(exc),
+            )
+
+        # ---- 4. Persist draft ----
+        draft = ScheduleSpecDraft(
+            id=spec.id,
+            description=spec.description,
+            owner=spec.owner,
+            trigger=spec.trigger,
+            delivery=spec.delivery,
+            failure=spec.failure,
+            audit=spec.audit,
+            status=spec.status,
+            execution_plan_hash=spec.execution_plan_hash,
+            template=spec.template,
+            parent_hash=spec.parent_hash,
+        )
+        store.write(session_id, draft)
+
+        # ---- 5. dry_run ----
+        dry_run_response = await schedule_dry_run(
+            draft.id,
+            DryRunMode.VALIDATE_ONLY,
+            session_id=session_id,
+            store=store,
+            handshake_store=handshake_store,
+            clock=clock,
+        )
+        if dry_run_response.status != "ok":
+            return dry_run_response
+
+        # ---- 6/7. freeze + commit (single conn) ----
+        with closing(conn_factory()) as conn:
+            freeze_response = await schedule_freeze(
+                draft.id,
+                session_id=session_id,
+                store=store,
+                handshake_store=handshake_store,
+                clock=clock,
+            )
+            if freeze_response.status != "ok":
+                return freeze_response
+
+            commit_response = await schedule_draft_commit(
+                draft.id,
+                session_id=session_id,
+                store=store,
+                handshake_store=handshake_store,
+                conn=conn,
+                event_id_factory=event_id_factory,
+                clock=clock,
+            )
+
+        return commit_response
+
+    schedule_create_reminder.__name__ = (
+        SCHEDULE_CREATE_REMINDER_TOOL_NAME
+    )
+    schedule_create_reminder.__qualname__ = (
+        SCHEDULE_CREATE_REMINDER_TOOL_NAME
+    )
+    return schedule_create_reminder
+
+
+__all__ = [
+    "SCHEDULE_CREATE_REMINDER_TOOL_NAME",
+    "make_schedule_create_reminder",
+]

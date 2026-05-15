@@ -85,6 +85,13 @@ _EXPECTED_TAG_MATRIX: dict[str, set[ToolCapabilityTag]] = {
     "schedule_resume": {ToolCapabilityTag.DB_WRITE},
     "schedule_archive": {ToolCapabilityTag.DB_WRITE},
     "schedule_revive": {ToolCapabilityTag.DB_WRITE},
+    # Phase 9 slice 3 — template authoring tool.
+    "schedule_create_reminder": {
+        ToolCapabilityTag.DB_WRITE,
+        ToolCapabilityTag.FILESYSTEM_WRITE,
+        ToolCapabilityTag.READ_EXTERNAL,
+        ToolCapabilityTag.USES_OAUTH,
+    },
 }
 
 
@@ -242,13 +249,13 @@ def test_filesystem_read_alone_does_not_require_admin():
 
 
 @pytest.mark.asyncio
-async def test_get_tools_returns_17_tools_phase_8():
-    """Phase 7 shipped 14 tools; phase 8 slice 5 adds 3
-    (schedule_dry_run / schedule_freeze /
-    schedule_draft_commit). Total = 17."""
+async def test_get_tools_returns_18_tools_phase_9():
+    """Phase 7 shipped 14 tools; phase 8 slice 5 added 3
+    (dry_run / freeze / commit) → 17. Phase 9 slice 3
+    adds schedule_create_reminder → 18."""
     toolset = AuthoringToolset(expected_owner_id="T_TEST")
     tools = await toolset.get_tools()
-    assert len(tools) == 17
+    assert len(tools) == 18
 
 
 @pytest.mark.asyncio
@@ -259,10 +266,11 @@ async def test_get_tools_includes_phase_8_names():
     assert "schedule_dry_run" in names
     assert "schedule_freeze" in names
     assert "schedule_draft_commit" in names
+    assert "schedule_create_reminder" in names
 
 
-def test_descriptors_count_matches_17():
-    assert len(AUTHORING_TOOL_DESCRIPTORS) == 17
+def test_descriptors_count_matches_18():
+    assert len(AUTHORING_TOOL_DESCRIPTORS) == 18
 
 
 def test_dry_run_descriptor_tags():

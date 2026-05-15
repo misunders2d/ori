@@ -49,6 +49,10 @@ from app.v2.authoring.setters import (
     schedule_set_one_off,
     schedule_set_owner,
 )
+from app.v2.authoring.templates import (
+    SCHEDULE_CREATE_REMINDER_TOOL_NAME,
+    make_schedule_create_reminder,
+)
 
 
 __all__ = [
@@ -58,9 +62,11 @@ __all__ = [
     "DryRunMode",
     "HandshakeRecord",
     "HandshakeStore",
+    "SCHEDULE_CREATE_REMINDER_TOOL_NAME",
     "ScheduleSpecDraft",
     "ToolResponse",
     "ToolResponseStatus",
+    "make_schedule_create_reminder",
     "schedule_archive",
     "schedule_draft_commit",
     "schedule_draft_compile",

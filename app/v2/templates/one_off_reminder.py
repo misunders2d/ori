@@ -100,10 +100,12 @@ def build_one_off_reminder(
     reminder.
 
     Args:
-        at: When the reminder fires. MUST be tz-aware UTC
-            (``utcoffset() == timedelta(0)``). Naive
-            datetimes and non-UTC offsets raise
-            ``ValueError`` BEFORE any spec construction.
+        at: When the reminder fires. MUST be tz-aware.
+            Naive datetimes raise ``ValueError`` BEFORE
+            any spec construction. Tz-aware non-UTC
+            datetimes are normalised to UTC via
+            :meth:`datetime.astimezone` so the trigger
+            carries a clean ``+00:00`` wall clock.
         recipient: Slack / Telegram / etc. destination.
             The phase-1 :class:`ChannelRef` carries
             ``kind`` + ``external_id``; the builder uses
@@ -131,7 +133,8 @@ def build_one_off_reminder(
         version="1", args={"text": text})``.
 
     Raises:
-        ValueError: ``at`` is naive or non-UTC.
+        ValueError: ``at`` is naive (tz-aware non-UTC is
+            accepted + normalised, not rejected).
         pydantic.ValidationError: ``text`` violates the
             :class:`OneOffReminderArgs` constraints.
     """
