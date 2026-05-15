@@ -26,6 +26,7 @@ from app.v2.runtime.state_machine import (
     assert_legal_transition,
     is_legal_transition,
 )
+from app.v2.runtime.wakeup import wakeup
 from app.v2.runtime.worker import Worker
 
 
@@ -39,4 +40,5 @@ __all__ = [
     "claim_run",
     "is_legal_transition",
     "scan_stale_runs",
+    "wakeup",
 ]
