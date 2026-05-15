@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic.types import JsonValue
 
 from app.v2.enums import (
     DeliveryFallbackPolicy,
@@ -102,12 +103,41 @@ class TemplateRef(BaseModel):
     Phase 1 makes no opinion about how versioning numbers
     advance — phase 8 ships the first template
     (`OneOffReminder`) and pins this contract then.
+
+    Phase 9 (2026-05-15) adds the optional ``args`` field so
+    emit-only templates can carry per-instance payload (e.g.
+    the ``OneOffReminder`` reminder text) on the spec without
+    an ExecutionPlan. The type is
+    :class:`pydantic.types.JsonValue` — a recursive JSON-
+    primitive union — so non-JSON values (``datetime``,
+    ``set``, custom classes, …) raise
+    :class:`pydantic.ValidationError` at construction and
+    cannot leak into ``ScheduleSpec.compute_hash``.
+
+    Hash drift on pre-amendment specs is avoided by
+    :meth:`ScheduleSpec.canonical_body` stripping the
+    ``args`` key when ``args is None`` (see the
+    ``canonical_body`` body comment). Pre-amendment specs
+    on disk (where the field did not exist) re-validate as
+    ``args=None`` and hash identically to their original
+    form.
+
+    Per-template arg validation runs in the template
+    builder (e.g. ``build_one_off_reminder``) BEFORE the
+    typed-tool flow; this model treats ``args`` as opaque
+    JSON.
+
+    References:
+    - ``docs/CONTRACTS_V2_DESIGN.md`` §5.2 (per-template
+      payload).
+    - ``docs/PHASE_9_PLAN.md`` §0 + §3.1.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     name: str
     version: str
+    args: Optional[dict[str, JsonValue]] = None
 
 
 # ---------------------------------------------------------------------------

@@ -35,6 +35,7 @@ from app.v2.models.common import (
     Delivery,
     FailurePolicy,
     RetryPolicy,
+    TemplateRef,
     UserRef,
 )
 from app.v2.models.schedule import ScheduleSpec
@@ -339,3 +340,124 @@ def test_one_off_reminder_shape():
     assert spec.execution_plan_hash is None
     assert spec.template is None
     assert spec.trigger.type == "one_off"
+
+
+# ===========================================================================
+# TemplateRef.args hash semantics (phase-9 round-3 reviewer L65 fix)
+# ===========================================================================
+
+
+def _baseline_with_template(**ref_overrides):
+    base_ref_kwargs = dict(name="OneOffReminder", version="1")
+    base_ref_kwargs.update(ref_overrides)
+    return ScheduleSpec(
+        **_baseline_kwargs(
+            id="reminder_demo",
+            trigger=OneOffTrigger(
+                at_iso_datetime="2026-05-15T16:00:00+00:00",
+                timezone="UTC",
+            ),
+            template=TemplateRef(**base_ref_kwargs),
+        )
+    )
+
+
+def test_canonical_body_strips_template_args_when_none():
+    """A spec built post-amendment with ``template.args=None``
+    serialises to a canonical body whose template dict has
+    NO ``args`` key — matching the pre-amendment on-disk
+    shape (round-3 reviewer L65)."""
+    spec = _baseline_with_template(args=None)
+    body = spec.canonical_body()
+    assert body["template"] is not None
+    assert "args" not in body["template"]
+
+
+def test_canonical_body_preserves_template_args_when_populated():
+    """Populated args MUST appear in the canonical body so a
+    body change re-hashes."""
+    spec = _baseline_with_template(args={"text": "hi"})
+    body = spec.canonical_body()
+    assert body["template"]["args"] == {"text": "hi"}
+
+
+def test_hash_none_args_matches_pre_amendment_shape():
+    """Pin: post-amendment spec with ``args=None`` hashes
+    IDENTICALLY to a hand-constructed pre-amendment shape
+    (the on-disk JSON that lacks the args key entirely).
+    This is the no-drift guarantee for every pre-phase-9
+    spec on disk.
+    """
+    spec = _baseline_with_template(args=None)
+
+    # Simulate the pre-amendment on-disk shape: build the
+    # canonical body, then strip the args key just in case
+    # (we expect canonical_body() to have done the strip
+    # already, but the explicit pop here documents the
+    # intent: pre-amendment specs had NO args field at all).
+    pre_body = spec.canonical_body()
+    assert "args" not in pre_body["template"]
+
+    # Re-encode + hash via the same code path the
+    # storage layer uses.
+    import hashlib
+    import json
+
+    pre_hash = hashlib.sha256(
+        json.dumps(
+            pre_body, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+
+    assert spec.compute_hash() == pre_hash
+
+
+def test_hash_changes_when_args_populated():
+    """A spec with populated args MUST hash differently
+    from the same spec with ``args=None`` — the args
+    participate in the hash when present."""
+    none_spec = _baseline_with_template(args=None)
+    populated_spec = _baseline_with_template(
+        args={"text": "a reminder"}
+    )
+    assert none_spec.compute_hash() != populated_spec.compute_hash()
+
+
+def test_hash_template_none_unaffected_by_strip_rule():
+    """A spec with ``template=None`` (CustomFlow) is
+    unaffected by the strip rule — the strip only runs
+    when ``template`` is non-None."""
+    spec = ScheduleSpec(
+        **_baseline_kwargs(
+            id="customflow_demo",
+            trigger=OneOffTrigger(
+                at_iso_datetime="2026-05-15T16:00:00+00:00",
+                timezone="UTC",
+            ),
+            template=None,
+        )
+    )
+    body = spec.canonical_body()
+    assert body["template"] is None
+    # Hash deterministic across two computes.
+    assert spec.compute_hash() == spec.compute_hash()
+
+
+def test_hash_args_value_differences_propagate():
+    """Different args values → different hashes."""
+    a = _baseline_with_template(args={"text": "alpha"})
+    b = _baseline_with_template(args={"text": "beta"})
+    assert a.compute_hash() != b.compute_hash()
+
+
+def test_hash_args_key_order_does_not_affect_hash():
+    """JSON sort_keys=True means key insertion order is
+    irrelevant — pin so a future refactor that drops
+    sort_keys would surface."""
+    a = _baseline_with_template(
+        args={"alpha": 1, "beta": 2}
+    )
+    b = _baseline_with_template(
+        args={"beta": 2, "alpha": 1}
+    )
+    assert a.compute_hash() == b.compute_hash()

@@ -153,10 +153,24 @@ class ScheduleSpec(BaseModel):
         """Return the JSON-serialisable dict used for hash
         computation. Excludes ``hash`` and ``authored_at`` so
         re-runs of an idempotent author produce stable hashes.
+
+        Phase-9 amendment (2026-05-15):
+        ``TemplateRef.args`` is stripped from the serialised
+        template dict when ``args is None`` so pre-amendment
+        specs (which had no args key on disk) hash unchanged.
+        Without this strip, ``model_dump`` would emit
+        ``"args": null`` on every template and shift the
+        sorted-JSON output. Populated ``args`` participate
+        in the hash; a body change re-hashes. See
+        ``docs/PHASE_9_PLAN.md`` §0 (round-3 reviewer L65
+        fix).
         """
         d = self.model_dump(mode="json", by_alias=True)
         d.pop("hash", None)
         d.pop("authored_at", None)
+        template = d.get("template")
+        if template is not None and template.get("args") is None:
+            template.pop("args", None)
         return d
 
     def compute_hash(self) -> str:
