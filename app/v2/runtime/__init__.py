@@ -15,6 +15,11 @@ References:
 """
 
 from app.v2.runtime.claim import claim_run
+from app.v2.runtime.recovery import (
+    RecoveredRun,
+    RecoveryError,
+    scan_stale_runs,
+)
 from app.v2.runtime.state_machine import (
     IllegalTransitionError,
     LEGAL_TRANSITIONS,
@@ -26,7 +31,10 @@ from app.v2.runtime.state_machine import (
 __all__ = [
     "IllegalTransitionError",
     "LEGAL_TRANSITIONS",
+    "RecoveredRun",
+    "RecoveryError",
     "assert_legal_transition",
-    "is_legal_transition",
     "claim_run",
+    "is_legal_transition",
+    "scan_stale_runs",
 ]
