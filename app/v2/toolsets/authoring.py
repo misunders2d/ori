@@ -75,6 +75,7 @@ from app.v2.authoring.templates import (
 )
 from app.v2.descriptors.tool import ToolDescriptor
 from app.v2.registry import ToolRegistry
+from app.v2.runtime import _owner_default
 from app.v2.tool_tags import ToolCapabilityTag
 
 
@@ -344,11 +345,17 @@ class AuthoringToolset(BaseToolset):
     def __init__(
         self,
         *,
-        # Round-3 reviewer L365 / Q10 — all DI required, no
-        # env-derived defaults. These are accepted on the
-        # constructor so phase-9 production wiring can supply
-        # the real values; tests instantiate with stubs.
-        expected_owner_id: str,
+        # Phase 9 slice 6 — `expected_owner_id` is optional;
+        # when omitted, falls back to
+        # `_owner_default.DEFAULT_AUTHORING_OWNER_ID`
+        # (env var captured ONCE at import time per phase-9
+        # plan §3.6). Precedence: explicit kwarg > env
+        # fallback > startup error. Both None at construction
+        # time raises RuntimeError so the bot refuses to
+        # start instead of silently mounting against a
+        # missing tenant id. Phase-7 round-2 L365 / Q10
+        # close.
+        expected_owner_id: Optional[str] = None,
         slack_client: Optional[object] = None,
         cache_base: Optional[object] = None,
         # Phase 9 slice 3: the schedule_create_reminder
@@ -364,10 +371,27 @@ class AuthoringToolset(BaseToolset):
             Callable[[str, str, str], Awaitable[ToolResponse]]
         ] = None,
     ) -> None:
+        # Resolve owner id: explicit kwarg wins; otherwise
+        # consult the env-derived default (read via attribute
+        # lookup on the module so tests can monkeypatch the
+        # constant); both None → startup error.
+        resolved = expected_owner_id
+        if resolved is None:
+            resolved = _owner_default.DEFAULT_AUTHORING_OWNER_ID
+        if resolved is None:
+            raise RuntimeError(
+                "AuthoringToolset requires expected_owner_id: "
+                "pass the kwarg explicitly OR set the "
+                "V2_AUTHORING_OWNER_ID environment variable "
+                "before importing this module. The constructor "
+                "refuses to silently mount against a missing "
+                "tenant id (phase-9 plan §3.6 / phase-7 round-2 "
+                "reviewer L365)."
+            )
         # ADK BaseToolset has no documented __init__ args we
         # need to forward; the metadata is constructor-time
         # only for phase-7 hygiene.
-        self._expected_owner_id = expected_owner_id
+        self._expected_owner_id = resolved
         self._slack_client = slack_client
         self._cache_base = cache_base
         self._schedule_create_reminder = (

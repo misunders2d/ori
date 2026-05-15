@@ -392,10 +392,21 @@ def test_authoring_package_does_not_import_slack_sdk_at_load():
 # ===========================================================================
 
 
-def test_expected_owner_id_is_required_keyword_only():
+def test_expected_owner_id_is_keyword_only_optional_with_env_fallback():
+    """Phase 9 slice 6 — ``expected_owner_id`` is keyword-only
+    AND optional. Default is ``None``; when None the
+    constructor falls back to
+    ``_owner_default.DEFAULT_AUTHORING_OWNER_ID``; both None
+    raises ``RuntimeError``. Pins both the signature shape
+    AND the keyword-only kind so a regression that drops
+    the env-fallback story (round-2 L365 close) flips here.
+    """
     sig = inspect.signature(AuthoringToolset.__init__)
     p = sig.parameters["expected_owner_id"]
-    assert p.default is inspect.Parameter.empty
+    assert p.default is None, (
+        "expected_owner_id default must be None to enable the "
+        "phase-9 env-fallback story (slice 6)."
+    )
     assert p.kind == inspect.Parameter.KEYWORD_ONLY
 
 
