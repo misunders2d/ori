@@ -138,11 +138,13 @@ def test_construction_with_explicit_jobstore_url(tmp_path):
     assert b is not None
 
 
-def test_construction_with_zero_misfire_grace_time(tmp_path):
-    """Zero is the boundary. Accepted (no fires after 0 s past
-    due, but the param is still well-formed)."""
-    b = _make_binding(tmp_path, misfire_grace_time=0)
-    assert b is not None
+def test_construction_with_none_misfire_grace_time(tmp_path):
+    """None is accepted -- it flows into APScheduler's
+    ``job_defaults`` as 'no expiry' (always fire, even
+    late). Pin so a future regression that rejects None
+    breaks here."""
+    b = _make_binding(tmp_path, misfire_grace_time=None)
+    assert b._misfire_grace_time is None
 
 
 def test_empty_jobstore_url_rejected(tmp_path):
@@ -150,9 +152,37 @@ def test_empty_jobstore_url_rejected(tmp_path):
         _make_binding(tmp_path, jobstore_url="")
 
 
-def test_negative_misfire_grace_time_rejected(tmp_path):
+@pytest.mark.parametrize("bad", [0, -1, -3600])
+def test_zero_or_negative_misfire_grace_time_rejected(tmp_path, bad):
+    """APScheduler 3.x's ``Job`` class rejects
+    ``misfire_grace_time=0`` (probed: "must be either None
+    or a positive integer"). Negative is nonsense. Mirror
+    the contract at construction so the failure surfaces
+    immediately, not at slice-3 ``add_job`` time."""
     with pytest.raises(ValueError, match="misfire_grace_time"):
-        _make_binding(tmp_path, misfire_grace_time=-1)
+        _make_binding(tmp_path, misfire_grace_time=bad)
+
+
+def test_misfire_grace_time_flows_into_job_defaults(tmp_path):
+    """The construction-time value MUST wire into APScheduler's
+    ``job_defaults`` so every subsequent ``add_job`` inherits
+    it. Without this the slice-3 register() calls would fall
+    back to APScheduler's 1-second default and silently break
+    the design section 4.0.5 misfire-recovery story."""
+    b = _make_binding(tmp_path, misfire_grace_time=1800)
+    # APScheduler stores defaults under ``_job_defaults``.
+    assert b._scheduler._job_defaults.get("misfire_grace_time") == 1800
+
+
+def test_misfire_grace_time_default_is_3600(tmp_path):
+    """Default flows in as 3600 per design section 4.0.5."""
+    b = _make_binding(tmp_path)  # default misfire_grace_time
+    assert b._scheduler._job_defaults.get("misfire_grace_time") == 3600
+
+
+def test_misfire_grace_time_none_flows_into_job_defaults(tmp_path):
+    b = _make_binding(tmp_path, misfire_grace_time=None)
+    assert b._scheduler._job_defaults.get("misfire_grace_time") is None
 
 
 @pytest.mark.parametrize(

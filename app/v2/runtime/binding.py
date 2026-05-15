@@ -100,7 +100,7 @@ class SchedulerBinding:
         run_id_factory: Callable[[], str] = prod_run_id_factory,
         event_id_factory: Callable[[], str] = prod_event_id_factory,
         jobstore_url: str = "sqlite:///data/scheduler-v2-jobs.db",
-        misfire_grace_time: int = 3600,
+        misfire_grace_time: Optional[int] = 3600,
     ) -> None:
         if not callable(wakeup_callable):
             raise TypeError("wakeup_callable must be callable")
@@ -117,13 +117,19 @@ class SchedulerBinding:
                 "jobstore_url must be a non-empty SQLAlchemy URL "
                 "(e.g. 'sqlite:///data/scheduler-v2-jobs.db')"
             )
-        if misfire_grace_time < 0:
+        # APScheduler 3.x's Job class rejects ``misfire_grace_time
+        # = 0`` with TypeError. The accepted values are a strictly
+        # positive int OR None (interpreted as "no expiry --
+        # always fire even if late"). Mirror the upstream contract
+        # at construction so a bad value never reaches a deferred
+        # ``add_job`` call where the failure mode is harder to
+        # diagnose.
+        if misfire_grace_time is not None and misfire_grace_time <= 0:
             raise ValueError(
-                f"misfire_grace_time must be >= 0; got "
-                f"{misfire_grace_time}. APScheduler interprets "
-                "the value as the seconds-past-due window in "
-                "which a missed fire is still eligible to run; "
-                "a negative number is nonsensical."
+                f"misfire_grace_time must be a positive int or "
+                f"None; got {misfire_grace_time!r}. APScheduler "
+                "rejects zero / negative values at add_job time. "
+                "None means 'no expiry' (always fire, even late)."
             )
 
         self._wakeup_callable = wakeup_callable
@@ -135,8 +141,15 @@ class SchedulerBinding:
         self._misfire_grace_time = misfire_grace_time
 
         jobstores = {"default": SQLAlchemyJobStore(url=jobstore_url)}
+        # ``job_defaults`` flows into every ``add_job`` call so
+        # registered jobs inherit the design-required grace
+        # window (section 4.0.5: "up to 1h by default"). Without
+        # this, APScheduler's built-in default of 1 second would
+        # apply -- effectively disabling misfire recovery and
+        # silently breaking the boot-time replay story.
         self._scheduler: AsyncIOScheduler = AsyncIOScheduler(
             jobstores=jobstores,
+            job_defaults={"misfire_grace_time": misfire_grace_time},
         )
         self._started = False
 
