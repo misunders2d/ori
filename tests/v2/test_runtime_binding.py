@@ -528,6 +528,65 @@ async def test_stop_waits_until_scheduler_not_running(tmp_path):
     assert b._scheduler.running is False
 
 
+def test_binding_owns_its_executor(tmp_path):
+    """Slice-7b reviewer regression on b739e98: the binding
+    MUST configure its own APScheduler ThreadPoolExecutor
+    rather than letting AsyncIOScheduler fall back to its
+    default ``AsyncIOExecutor`` (which submits SYNC
+    wakeup_callable invocations via
+    ``loop.run_in_executor(None, ...)`` -- the shared
+    process-wide thread pool that other callers on the same
+    loop also use).
+
+    Pin two facts:
+    - the configured executor is NOT AsyncIOExecutor (the
+      fallback APScheduler would pick if we passed no
+      ``executors=`` kwarg)
+    - the configured executor exposes an owned ``_pool``
+      attribute that ``binding.stop`` can drain via
+      ``asyncio.to_thread(pool.shutdown, True)``
+    """
+    from apscheduler.executors.asyncio import AsyncIOExecutor
+    from apscheduler.executors.pool import ThreadPoolExecutor
+
+    b = _make_binding(tmp_path)
+    executor = b._scheduler._executors["default"]
+    # Must not be the AsyncIOExecutor that would route
+    # through the loop's default thread pool.
+    assert not isinstance(executor, AsyncIOExecutor)
+    # Must be APScheduler's pool-based executor that owns
+    # its own concurrent.futures.ThreadPoolExecutor.
+    assert isinstance(executor, ThreadPoolExecutor)
+    pool = getattr(executor, "_pool", None)
+    assert pool is not None
+    # Sanity-pin the pool is the kind we can drain.
+    import concurrent.futures
+    assert isinstance(pool, concurrent.futures.ThreadPoolExecutor)
+
+
+@pytest.mark.asyncio
+async def test_stop_drains_owned_pool(tmp_path):
+    """Pin: ``binding.stop`` must drain the owned thread
+    pool so its non-daemon worker threads exit before the
+    coroutine returns. Without the drain, even though
+    ``scheduler.running`` flips to False, idle threads in
+    the pool keep the process alive at interpreter exit
+    (reviewer's slice-7b regression on b739e98)."""
+    import concurrent.futures
+
+    b = _make_binding(tmp_path)
+    await b.start()
+    pool = b._scheduler._executors["default"]._pool
+    assert isinstance(pool, concurrent.futures.ThreadPoolExecutor)
+    await b.stop()
+    # After stop, the pool is shut down (cannot accept new
+    # work). Pool.submit on a shut-down pool raises
+    # RuntimeError -- pin the post-stop state by attempting
+    # exactly that and asserting the documented exception.
+    with pytest.raises(RuntimeError, match="cannot schedule"):
+        pool.submit(lambda: None)
+
+
 # ===========================================================================
 # Lifecycle -- pause / resume
 # ===========================================================================

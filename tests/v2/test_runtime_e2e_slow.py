@@ -86,12 +86,26 @@ pytestmark = pytest.mark.slow
 
 
 # ---------------------------------------------------------------------------
-# Module-level fixtures. Counter-based id factories satisfy
-# the binding's serialisability probe at register time --
-# module-level callables + class instances round-trip
-# cleanly; lambdas / closures do not. The clock stays as
-# production ``prod_clock`` flowed through ``boot_runtime``'s
-# default kwargs.
+# Module-level fixtures. The factories MUST be stateless
+# (production uses ``prod_run_id_factory`` /
+# ``prod_event_id_factory`` -- both wrap ``uuid.uuid4().hex``)
+# so the binding's serialisability probe is happy AND the
+# unpickled APScheduler-side copy stays consistent with the
+# original.
+#
+# A per-instance counter (as we tried earlier) was a
+# correctness bug: the boot path passes the SAME factory
+# instance to BOTH the binding's ``register(...)`` (which
+# pickles it into the persisted APScheduler job) AND the
+# Worker (which keeps the original reference). At fire
+# time APScheduler unpickles a FRESH copy with counter=0;
+# wakeup increments the copy's counter; the worker's
+# original counter is still 0. Both emit the same id
+# (``slow-e2e-evt-0001``) -> UNIQUE constraint failed on
+# events.id -> wakeup body succeeds but worker's
+# state-machine event insert raises. Use uuid factories
+# (process-wide unique, no state to pickle) to dodge the
+# whole class of bugs.
 # ---------------------------------------------------------------------------
 
 
@@ -109,28 +123,6 @@ class _MigratedConnFactory:
         conn = sqlite3.connect(self.db_path)
         runner.apply_pending(conn)
         return conn
-
-
-class _RunIdFactory:
-    """Counter-based run id factory. Module-level class
-    (round-trippable via the SQLAlchemy job store) with
-    per-instance state."""
-
-    def __init__(self) -> None:
-        self.i = 0
-
-    def __call__(self) -> str:
-        self.i += 1
-        return f"slow-e2e-run-{self.i:04d}"
-
-
-class _EventIdFactory:
-    def __init__(self) -> None:
-        self.i = 0
-
-    def __call__(self) -> str:
-        self.i += 1
-        return f"slow-e2e-evt-{self.i:04d}"
 
 
 # ---------------------------------------------------------------------------
@@ -211,8 +203,10 @@ async def test_e2e_slow_one_off_fires_on_real_wall_clock(tmp_path):
         factory,
         jobstore_url=f"sqlite:///{tmp_path / 'jobs.db'}",
         poll_interval=timedelta(milliseconds=100),
-        run_id_factory=_RunIdFactory(),
-        event_id_factory=_EventIdFactory(),
+        # Default ``prod_run_id_factory`` /
+        # ``prod_event_id_factory`` (uuid-based) are
+        # stateless -- safe to pickle into the persisted
+        # APScheduler job AND share with the worker.
     )
 
     try:
@@ -376,20 +370,6 @@ _SUBPROCESS_DRIVER = textwrap.dedent(
             return c
 
 
-    class _RIDF:
-        def __init__(self): self.i = 0
-        def __call__(self):
-            self.i += 1
-            return f"sp-run-{self.i:04d}"
-
-
-    class _EIDF:
-        def __init__(self): self.i = 0
-        def __call__(self):
-            self.i += 1
-            return f"sp-evt-{self.i:04d}"
-
-
     async def main():
         primary = sqlite3.connect(str(db_path))
         try:
@@ -436,8 +416,6 @@ _SUBPROCESS_DRIVER = textwrap.dedent(
             factory,
             jobstore_url=jobs_url,
             poll_interval=timedelta(milliseconds=100),
-            run_id_factory=_RIDF(),
-            event_id_factory=_EIDF(),
         )
 
         try:

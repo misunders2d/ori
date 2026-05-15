@@ -83,6 +83,9 @@ from datetime import datetime
 from typing import Callable, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from apscheduler.executors.pool import (
+    ThreadPoolExecutor as APSchedulerThreadPoolExecutor,
+)
 from apscheduler.jobstores.base import JobLookupError
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -241,6 +244,33 @@ class SchedulerBinding:
         self._misfire_grace_time = misfire_grace_time
 
         jobstores = {"default": SQLAlchemyJobStore(url=jobstore_url)}
+        # OWNED executor: an APScheduler ThreadPoolExecutor we
+        # construct + can shut down deterministically. Without
+        # this, AsyncIOScheduler falls back to AsyncIOExecutor,
+        # which for SYNC callables (wakeup_callable is sync)
+        # dispatches via ``loop.run_in_executor(None, run_job,
+        # ...)`` -- that uses asyncio's DEFAULT thread-pool
+        # executor (loop._default_executor), an unbounded
+        # process-wide pool of NON-DAEMON threads that no
+        # single binding has the right to shut down (other
+        # callers on the same loop -- ADK agents, FastAPI
+        # handlers -- may have queued work there). Shutting it
+        # down from binding.stop would poison the parent
+        # process; leaving it alone leaks the threads at
+        # interpreter exit (reviewer's slice-7b regression on
+        # b739e98). The third option is what we do here:
+        # supply our OWN bounded pool that no one else
+        # touches, AsyncIOScheduler routes every sync wakeup
+        # invocation through it, and binding.stop drains it
+        # deterministically.
+        #
+        # ``max_workers=1`` is fine for phase 5: wakeup is an
+        # O(few ms) DB insert; concurrent fires are a phase-9+
+        # concern. We can lift this when production wiring
+        # ships.
+        executors = {
+            "default": APSchedulerThreadPoolExecutor(max_workers=1)
+        }
         # ``job_defaults`` flows into every ``add_job`` call so
         # registered jobs inherit the design-required grace
         # window (section 4.0.5: "up to 1h by default"). Without
@@ -249,6 +279,7 @@ class SchedulerBinding:
         # silently breaking the boot-time replay story.
         self._scheduler: AsyncIOScheduler = AsyncIOScheduler(
             jobstores=jobstores,
+            executors=executors,
             job_defaults={"misfire_grace_time": misfire_grace_time},
         )
         self._started = False
@@ -296,23 +327,21 @@ class SchedulerBinding:
            is idempotent and guarantees the SQLAlchemy
            connection pool / sqlite file handles are released
            regardless of which code path got there first.
-        3. asyncio default-executor shutdown. ``AsyncIOExecutor``
-           (APScheduler's default for AsyncIOScheduler)
-           submits SYNC ``wakeup_callable`` invocations via
-           ``loop.run_in_executor(None, run_job, ...)`` --
-           that uses asyncio's default ``ThreadPoolExecutor``
-           with NON-DAEMON threads. ``AsyncIOExecutor.shutdown``
-           only cancels pending futures; the thread pool
-           itself stays alive (idle threads waiting for more
-           work) and holds the interpreter at exit even after
-           all our futures completed. Calling
-           ``loop.shutdown_default_executor()`` is what
-           actually joins those threads. Without it, the
-           pytest process hangs at interpreter exit even
-           though every test assertion passed and the
-           scheduler reports running=False (reviewer's
-           slice-7b regression: hang despite both prior
-           layers).
+        3. Drain the OWNED executor thread pools. APScheduler's
+           BasePoolExecutor.shutdown(wait=False) (which the
+           deferred _shutdown already called) signals the
+           workers to exit AFTER current work finishes but
+           does NOT join them. Calling ``pool.shutdown(True)``
+           a second time is idempotent and JOINS the threads
+           -- guaranteeing no non-daemon thread leaks past
+           binding.stop. Wrapped in ``asyncio.to_thread`` so
+           it does not block the event loop.
+
+           This is what the constructor's OWNED-executor
+           choice buys us: only OUR pool is drained. The
+           loop's shared default executor (which ADK agents,
+           FastAPI handlers, etc. on the same loop also use)
+           is never touched.
         """
         if not self._started:
             return
@@ -330,7 +359,7 @@ class SchedulerBinding:
                 "binding.stop: AsyncIOScheduler still reports "
                 "running=True after 500 ms; deferred _shutdown "
                 "did not execute. Falling through to belt+braces "
-                "engine.dispose() + default-executor shutdown."
+                "engine.dispose() + owned-pool drain."
             )
         # Layer 2: explicit engine.dispose() on every jobstore.
         # Idempotent against the APScheduler shutdown path
@@ -346,23 +375,21 @@ class SchedulerBinding:
                 _logger.exception(
                     "binding.stop: jobstore engine.dispose failed"
                 )
-        # Layer 3: shut down asyncio's default thread-pool
-        # executor. See docstring for the non-daemon-thread
-        # rationale. ``shutdown_default_executor`` is a
-        # coroutine; if no loop is running (caller invoked
-        # stop without an active loop -- impossible from an
-        # async def but guarded for safety) it raises
-        # RuntimeError which we swallow.
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-        try:
-            await loop.shutdown_default_executor()
-        except Exception:
-            _logger.exception(
-                "binding.stop: loop.shutdown_default_executor failed"
-            )
+        # Layer 3: drain owned thread pools. See docstring
+        # rationale. We touch only OUR pools (every executor
+        # in ``self._scheduler._executors`` was constructed
+        # by this binding's __init__); the loop's shared
+        # default executor is never touched.
+        for executor in list(self._scheduler._executors.values()):
+            pool = getattr(executor, "_pool", None)
+            if pool is None:
+                continue
+            try:
+                await asyncio.to_thread(pool.shutdown, True)
+            except Exception:
+                _logger.exception(
+                    "binding.stop: owned pool.shutdown(wait=True) failed"
+                )
 
     async def pause(self) -> None:
         """Pause the scheduler. No new fires until
