@@ -1,12 +1,31 @@
 """V2 scheduler — registry cache package.
 
 Phase 6 ships the registry cache layer for Slack channels and
-Google Sheets / Docs items per design §5.7. Phase 7 (typed
-authoring tools) will consume the resolver.
+Google Sheets / Docs items per design §5.7. Pure storage +
+lookup layer; no ADK tool surface, no ``boot_runtime``
+integration, no real Slack / Drive client construction. Phase
+7 (typed authoring tools) wires the cache into the authoring
+path and adds the on-demand refresh ADK tool.
 
-Slice 1 surface: errors + schemas + paths. Later slices add
-``loader``, ``refresh``, ``resolver``; the export list grows
-with each slice. ``__init__.py`` is finalised in slice 5.
+Public surface (slice 5 finalisation):
+
+- **Errors:** :class:`RegistryCacheError` + five subclasses
+  (:class:`NoCacheAvailable`, :class:`CacheMiss`,
+  :class:`WorkspaceMismatch`, :class:`NoCacheAndNetworkDown`,
+  :class:`ChannelAmbiguous`).
+- **Schemas:** three cache models
+  (:class:`SlackChannelsCache`, :class:`GoogleSheetsCache`,
+  :class:`GoogleDocsCache`) + three entry classes +
+  :data:`CacheKind` / :data:`CacheFile` aliases.
+- **Paths:** :data:`DEFAULT_CACHE_BASE` + :func:`cache_path`.
+- **Load / save / freshness:** :func:`load_cache`,
+  :func:`save_cache`, :func:`is_stale`.
+- **Refresh primitives:** :class:`SlackChannelsClient`,
+  :class:`GoogleDriveClient` Protocols +
+  :func:`refresh_slack_channels`,
+  :func:`refresh_google_sheets`, :func:`refresh_google_docs`.
+- **Lookup helpers:** :func:`resolve_channel`,
+  :func:`resolve_sheet`, :func:`resolve_doc`.
 
 References:
 - ``docs/CONTRACTS_V2_DESIGN.md`` §5.7

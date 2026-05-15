@@ -5,8 +5,12 @@ and the various trigger / event payloads.
 
 Phase 1 keeps these intentionally light — most fields are simple
 typed primitives. Registry-aware validation (Channel / Sheet
-allowlist enum lookup) lands at phase 3 (registry cache) and
-will tighten the fields to enum-typed values then.
+allowlist enum lookup) lands at phase 6 (registry cache, see
+:mod:`app.v2.registry_cache`) and phase 7 (typed authoring
+tools) will tighten the fields to enum-typed values via the
+resolver call on save. The §12 renumber on 2026-05-15 shifted
+the registry cache to step 6; earlier drafts of this docstring
+pointed at an older step number.
 
 See ``docs/CONTRACTS_V2_DESIGN.md`` §4.0 + ``docs/PHASE_1_PLAN.md``
 §4.3 for the design intent.
@@ -50,28 +54,34 @@ class UserRef(BaseModel):
 
 class ChannelRef(BaseModel):
     """A channel-style destination (Slack channel, Telegram
-    group, etc.). Phase 1 keeps this as raw strings; phase-3
-    registry lookup will replace ``external_id`` with an enum.
+    group, etc.). Phase 1 keeps this as raw strings; the
+    phase-6 registry cache
+    (:mod:`app.v2.registry_cache.resolver`) is the
+    validation seam, wired through the authoring path in
+    phase 7.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     kind: str = Field(
         description="Adapter kind — 'slack', 'telegram', etc. "
-        "Treated opaque in phase 1; future registry will enum "
-        "this.",
+        "Treated opaque in phase 1; the phase-6 registry "
+        "cache resolver enums this at authoring time.",
     )
     external_id: str = Field(
         description="Platform-native channel id (e.g. 'C012ABCDE' "
         "for Slack; numeric chat_id for Telegram). Validated "
-        "against the registry from phase 3 onward.",
+        "against the phase-6 registry cache from phase 7 "
+        "onward.",
     )
 
 
 class SheetRef(BaseModel):
     """A Google Sheets reference. Phase 1 stores ids verbatim;
-    phase-3 registry will replace ``spreadsheet_id`` with an
-    enum constant from the cached Drive listing."""
+    the phase-6 registry cache
+    (:mod:`app.v2.registry_cache.resolver`) is the
+    validation seam, wired through the authoring path in
+    phase 7."""
 
     model_config = ConfigDict(extra="forbid")
 
