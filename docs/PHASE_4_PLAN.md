@@ -663,16 +663,21 @@ def wakeup(
       - the trigger is not yet due
 
     Trigger semantics:
-      - OneOffTrigger: insert one run at the configured
-        at_iso_datetime when ``at_iso_datetime <= now``;
-        cleanup is the registration layer's job (later phase).
-      - CronTrigger: ships in a SEPARATE slice after the
-        OneOff path lands. Cron parsing source is an open
-        question (reviewer to pick between APScheduler's
-        ``CronTrigger.from_crontab`` and ``croniter``).
-        **No in-house cron parser** — using the same parser
-        v1 already trusts avoids a whole class of date-math
-        regressions.
+      - OneOffTrigger (slice 5a): insert one run at the
+        configured at_iso_datetime when
+        ``at_iso_datetime <= now``; cleanup is the
+        registration layer's job (later phase).
+      - CronTrigger (slice 5b — shipped): fires when ``now``
+        aligns exactly with a cron fire instant in the
+        trigger's timezone, computed via APScheduler's
+        forward
+        ``CronTrigger.from_crontab(cron, timezone=tz)
+        .get_next_fire_time(None, now_local)``. UTC-time-line
+        equality is the alignment gate. Numeric DOW, unknown
+        timezone, and APScheduler-rejected cron expressions
+        all raise ``ValueError``. See the closed
+        cron-parsing-decision block below for the DOW
+        name-only constraint rationale.
       - IntervalTrigger / EventTrigger / ConditionalTrigger:
         stubbed in phase 4 — raise NotImplementedError. Real
         wakeup wiring lands when their use cases ship.
@@ -768,7 +773,8 @@ slice** if all earlier slices are clean.
 
 ### 6.5 Wakeup tests
 
-**Slice 5a (OneOff only — no cron parser dependency):**
+**Slice 5a (OneOff path + the trigger-type guards that
+remain unwired through phase 4):**
 
 - OneOff `at_iso_datetime > now` → no insert.
 - OneOff `at_iso_datetime <= now` → insert one pending Run +
@@ -776,16 +782,19 @@ slice** if all earlier slices are clean.
 - Paused schedule + any trigger → no insert.
 - Archived schedule + any trigger → no insert.
 - Unknown schedule id → no insert (returns []).
-- CronTrigger schedule passed to slice-5a wakeup → raises
-  ``NotImplementedError`` (slice 5b not yet shipped). Pinning
-  this so a coder who runs 5a doesn't accidentally implement
-  cron alongside.
 - IntervalTrigger / EventTrigger / ConditionalTrigger →
   NotImplementedError (deliberately, with explicit message
   pointing at the phase that will land them).
 - Injected ``run_id_factory`` / ``event_id_factory`` are
   invoked exactly once per inserted row / event; pin via a
   counter factory.
+
+> Historical (5a-only, removed when 5b landed): an earlier
+> 5a-scope test asserted that CronTrigger raised
+> ``NotImplementedError``. Slice 5b wires cron — that test
+> was deleted alongside the implementation. Search the git
+> log for ``test_cron_trigger_raises_not_implemented`` for
+> the previous shape.
 
 **Slice 5b (Cron, parser = APScheduler):**
 
