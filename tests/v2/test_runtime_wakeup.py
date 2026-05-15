@@ -67,7 +67,18 @@ from app.v2.models.triggers import (
     IntervalTrigger,
     OneOffTrigger,
 )
-from app.v2.runtime import wakeup as wakeup_mod
+import sys
+
+# Reach the wakeup MODULE via sys.modules. The package
+# ``__init__.py`` does ``from app.v2.runtime.wakeup import wakeup``
+# which shadows the submodule attribute — without this dance,
+# ``from app.v2.runtime import wakeup as wakeup_mod`` resolves
+# ``wakeup_mod`` to the function and the hygiene smoke tests
+# below (``vars(wakeup_mod)`` / ``inspect.getsource(wakeup_mod)``)
+# silently vacate.
+import app.v2.runtime  # noqa: F401 — trigger package import
+
+wakeup_mod = sys.modules["app.v2.runtime.wakeup"]
 from app.v2.runtime.wakeup import wakeup
 from app.v2.storage.connection import ConnectionNotReady
 from app.v2.storage.schedules import insert_schedule

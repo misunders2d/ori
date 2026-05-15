@@ -133,7 +133,7 @@ def test_phase_1_allowlist_rejects(guard, path):
 
 
 # ---------------------------------------------------------------------------
-# Forbidden v1 paths (phases 1-7)
+# Forbidden v1 paths (phases 1-8 post-renumber; cutover at phase 9)
 # ---------------------------------------------------------------------------
 
 
@@ -150,19 +150,23 @@ def test_phase_1_allowlist_rejects(guard, path):
         "data/contracts/linux_mastery/v1__abc.json",
     ],
 )
-@pytest.mark.parametrize("phase", [1, 2, 3, 4, 5, 6, 7])
-def test_v1_paths_forbidden_phases_1_to_7(guard, path, phase):
+@pytest.mark.parametrize("phase", [1, 2, 3, 4, 5, 6, 7, 8])
+def test_v1_paths_forbidden_phases_1_to_8(guard, path, phase):
     """The forbidden set must reject for every phase in the
     protected window, even phases that don't yet exist in the
-    PHASE_ALLOWLIST dict."""
+    PHASE_ALLOWLIST dict. Window shifted from 1-7 → 1-8 with
+    the 2026-05-15 §12 renumber that inserted phase 5
+    (APScheduler binding) and pushed cutover from step 8 to
+    step 9."""
     assert guard.is_forbidden(path, phase) is True
 
 
-@pytest.mark.parametrize("phase", [8, 9, 10, 16])
-def test_v1_paths_permissible_from_phase_8(guard, phase):
-    """Phase 8 (first end-to-end OneOffReminder) is the boundary
-    where v1 edits become permissible — compatibility worker lands
-    there; v1 deprecation kicks in from there forward."""
+@pytest.mark.parametrize("phase", [9, 10, 11, 17])
+def test_v1_paths_permissible_from_phase_9(guard, phase):
+    """Phase 9 (first end-to-end OneOffReminder post-renumber)
+    is the boundary where v1 edits become permissible —
+    compatibility worker lands there; v1 deprecation kicks in
+    from there forward."""
     assert guard.is_forbidden("app/contracts/schema.py", phase) is False
     assert guard.is_forbidden("app/tasks.py", phase) is False
 
@@ -212,7 +216,7 @@ def test_evaluate_forbidden_takes_precedence_over_allowlist(guard):
     """If a path is both 'not in allowlist' AND 'forbidden', the
     error message should call it forbidden — the user needs to know
     they're touching a v1 path that's never coming back into scope
-    until phase 8, not just 'add it to allowlist'."""
+    until phase 9, not just 'add it to allowlist'."""
     violations = guard.evaluate(["app/contracts/schema.py"], phase=1)
     assert len(violations) == 1
     assert "forbidden" in violations[0]

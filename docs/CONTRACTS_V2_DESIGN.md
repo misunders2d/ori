@@ -857,6 +857,45 @@ metadata has `write_external | send_message | filesystem_write | privileged`
 when the step's `tool_mode == "read_only"` (default). All writes
 go through emit adapters.
 
+#### 6.2.1 Context-overflow handling (no silent failures)
+
+Provider context-limit errors are typed failure modes, not
+silent retries. When a reasoning step exceeds the model's
+context window:
+
+- The provider-specific error (Anthropic
+  `BadRequestError: prompt is too long`, Google
+  `InvalidArgument: input too long`, OpenAI
+  `context_length_exceeded`, etc.) is caught at the LLM
+  adapter boundary and surfaced as a typed
+  `ContextOverflowError` (or similar) reasoning-failure.
+- The Run row transitions to `status='failed'` with
+  `error` populated by the typed message.
+- The EventLedger receives `reasoning_failed` AND
+  `run_failed` events in the same TX as the status flip,
+  with payload distinguishing context-overflow from other
+  reasoning failures so observability dashboards can
+  count them separately.
+- **No blind retry of the same oversized input.** The
+  retry chain (root_run_id) records the attempt, but a
+  retry's first action MUST go through the
+  failure-policy chain (alert / truncate / abandon),
+  NOT a naive re-fire of the same prompt — which would
+  hit the same limit and burn provider quota in a loop.
+- Routing: failure surfaces through `on_failure_action`
+  per the schedule's `FailurePolicy`. The default
+  ALERT_ADMIN path sends a structured admin alert that
+  names the schedule, the run id, the offending step,
+  and the prompt-size / context-limit ratio so the
+  admin can choose between truncation, summarisation
+  rerun, or schedule revision.
+
+This contract lands when reasoning-step execution ships in
+step 12 (post-renumber). Phase 5's empty-body worker never
+hits it; pinning the contract here so the phase-12
+implementation lands with the failure handling already
+specified rather than as a follow-up patch.
+
 ### 6.3 Emit-only side effects
 
 If a ScheduleSpec needs to write external state, the work happens
