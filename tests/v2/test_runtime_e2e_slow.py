@@ -15,16 +15,31 @@ worker picks it up via its poll loop; the lifecycle walks
 Recipe:
 
   1. Seed an active OneOff with
-     ``at_iso_datetime = now + 2 s``.
+     ``at_iso_datetime = now + 4 s``. The 4 s buffer is
+     generous enough that the OneOff is NOT past-due at
+     ``boot_runtime`` 's clock() read (which would let the
+     boot backfill insert the Run instead of APScheduler's
+     wall-clock fire path -- defeating the test). The
+     immediate post-boot "no Run row yet" assertion below
+     pins this: if backfill ever created the row, the
+     assertion fails before the wait begins.
   2. ``await boot_runtime(...)`` with a short
      ``poll_interval`` so the worker reacts quickly once
      wakeup lands.
-  3. Wait (poll + small sleep) until the run row reaches
-     ``succeeded`` OR a 10-second wall-clock budget elapses.
-  4. Assert lifecycle complete: status=succeeded,
+  3. Assert no Run row exists immediately after boot --
+     confirms the row, when it appears, came from
+     APScheduler's wall-clock fire (the DateTrigger ->
+     module-level ``_fire_for`` -> wakeup chain), not from
+     boot backfill.
+  4. Wait (poll + small sleep) until the run row reaches
+     ``succeeded`` OR a 12-second wall-clock budget elapses.
+  5. Assert lifecycle complete: status=succeeded,
      started_at + completed_at populated, 4 events in the
      expected order.
-  5. ``await shutdown_runtime(handle)``.
+  6. ``await asyncio.wait_for(shutdown_runtime(handle),
+     timeout=5.0)`` -- a hard ceiling so a leaked
+     AsyncIOScheduler thread / engine pool fails loud
+     instead of hanging the test session.
 
 The fast counterpart in ``test_runtime_e2e_fast.py`` is
 what guarantees PR-time confidence in the wiring; this
@@ -161,20 +176,25 @@ def _migrated_factory(tmp_path: Path) -> _MigratedConnFactory:
 @pytest.mark.asyncio
 async def test_e2e_slow_one_off_fires_on_real_wall_clock(tmp_path):
     """End-to-end test against the real APScheduler event
-    loop. Seeds an active OneOff 2 s in the future; boots the
-    runtime; waits up to 10 s for the run row to reach
-    ``succeeded``; asserts the full 4-event ledger and the
-    lifecycle timestamps; shuts down cleanly.
+    loop. Seeds an active OneOff 4 s in the future; boots the
+    runtime; pins that boot backfill did NOT insert the row;
+    waits up to 12 s for the run row to reach ``succeeded``;
+    asserts the full 4-event ledger and the lifecycle
+    timestamps; shuts down cleanly under a hard 5 s timeout.
 
-    Why 2 s + 10 s budget: a few hundred ms of slack for
-    boot + scheduler tick + worker poll + state transitions,
-    well clear of the production poll interval used here
-    (100 ms). The actual fire is single-shot on
-    APScheduler's wall-clock timer.
+    Why 4 s + 12 s budget: a comfortable margin over the
+    measured boot cost on this box (well under 1 s), so
+    ``boot_runtime`` 's ``clock()`` read stays earlier than
+    ``fire_at`` -- the boot backfill skips the schedule
+    (``fire_at > now``), and only APScheduler's wall-clock
+    timer fires the persisted ``DateTrigger`` later. The
+    12 s budget covers fire-time + worker poll (100 ms) +
+    state transitions with margin. The actual fire is
+    single-shot on APScheduler's wall-clock timer.
     """
     factory = _migrated_factory(tmp_path)
 
-    fire_at = datetime.now(timezone.utc) + timedelta(seconds=2)
+    fire_at = datetime.now(timezone.utc) + timedelta(seconds=4)
     spec = _oneoff_spec(schedule_id="slow_e2e", at=fire_at)
     seed_conn = factory()
     try:
@@ -192,9 +212,31 @@ async def test_e2e_slow_one_off_fires_on_real_wall_clock(tmp_path):
     )
 
     try:
-        # Poll until the run row reaches succeeded OR the 10 s
-        # wall-clock budget elapses.
-        deadline = time.monotonic() + 10.0
+        # Pin: no Run row right after boot. Confirms the row
+        # that appears later came from APScheduler's
+        # wall-clock fire path, not from boot backfill. If
+        # this trips, ``fire_at`` was inside the backfill
+        # window at boot time -- bump it OR investigate why
+        # boot took unexpectedly long.
+        post_boot = factory()
+        try:
+            existing = post_boot.execute(
+                "SELECT COUNT(*) FROM runs "
+                "WHERE schedule_id = ?",
+                ("slow_e2e",),
+            ).fetchone()[0]
+            assert existing == 0, (
+                "Boot backfill inserted a Run before "
+                "APScheduler could fire on wall clock. Push "
+                "fire_at farther out so this test exercises "
+                "the wall-clock fire path, not the backfill."
+            )
+        finally:
+            post_boot.close()
+
+        # Poll until the run row reaches succeeded OR the
+        # 12 s wall-clock budget elapses.
+        deadline = time.monotonic() + 12.0
         terminal_row = None
         while time.monotonic() < deadline:
             await asyncio.sleep(0.1)
@@ -253,7 +295,10 @@ async def test_e2e_slow_one_off_fires_on_real_wall_clock(tmp_path):
         finally:
             verify.close()
     finally:
-        # Always tear the runtime down -- a leaked
-        # AsyncIOScheduler thread would poison sibling tests
-        # in the slow lane.
-        await shutdown_runtime(handle)
+        # Always tear the runtime down under a HARD timeout
+        # so a leaked AsyncIOScheduler thread or jobstore
+        # engine pool fails loud instead of hanging the test
+        # session. 5 s is generous -- AsyncIOScheduler's
+        # shutdown(wait=False) + a SQLAlchemy engine dispose
+        # finish in milliseconds on a healthy run.
+        await asyncio.wait_for(shutdown_runtime(handle), timeout=5.0)
