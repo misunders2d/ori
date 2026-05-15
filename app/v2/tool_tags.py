@@ -23,7 +23,7 @@ from typing import AbstractSet
 
 
 class ToolCapabilityTag(str, Enum):
-    """The seven canonical capability tags.
+    """The nine canonical capability tags.
 
     Adding a new tag is a deliberate act — every policy helper
     in this module + every guardrail consuming the tag set must
@@ -32,12 +32,28 @@ class ToolCapabilityTag(str, Enum):
     asserts each value is reachable; a new value that doesn't
     fail the test indicates the helper coverage is also
     extended.
+
+    Phase 7 slice 6 added ``FILESYSTEM_READ`` and ``DB_WRITE``
+    per design §5.4 (round-3 reviewer L785 + L807):
+
+    - ``FILESYSTEM_READ`` — local-file reads the bot owns
+      (draft JSON, cached registry, config). Distinct from
+      ``READ_EXTERNAL`` (third-party API reads). NOT blocking
+      under read-only reasoning.
+    - ``DB_WRITE`` — mutates the v2 SQLite store. Distinct
+      from ``FILESYSTEM_WRITE`` because the SQLite path is
+      internal state the v2 runtime owns; admin-approval
+      gating differs. **Blocking** under read-only
+      reasoning so a future reasoning step with
+      ``tool_mode=read_only`` cannot mutate the v2 store.
     """
 
     READ_EXTERNAL = "read_external"
     WRITE_EXTERNAL = "write_external"
     SEND_MESSAGE = "send_message"
+    FILESYSTEM_READ = "filesystem_read"
     FILESYSTEM_WRITE = "filesystem_write"
+    DB_WRITE = "db_write"
     PRIVILEGED = "privileged"
     COSTLY = "costly"
     USES_OAUTH = "uses_oauth"
@@ -46,12 +62,16 @@ class ToolCapabilityTag(str, Enum):
 # Tags that a reasoning step with ``tool_mode=read_only`` (the
 # default) is forbidden from invoking — they all imply a
 # side-effecting operation, which must be routed through an emit
-# step instead.
+# step instead. Phase 7 slice 6 extended this set with
+# ``DB_WRITE`` (round-3 reviewer L807); ``FILESYSTEM_READ`` is
+# explicitly NOT in this set — local introspection is safe under
+# read-only reasoning.
 _READ_ONLY_BLOCKING_TAGS: frozenset[ToolCapabilityTag] = frozenset(
     {
         ToolCapabilityTag.WRITE_EXTERNAL,
         ToolCapabilityTag.SEND_MESSAGE,
         ToolCapabilityTag.FILESYSTEM_WRITE,
+        ToolCapabilityTag.DB_WRITE,
         ToolCapabilityTag.PRIVILEGED,
     }
 )
@@ -78,9 +98,11 @@ def is_blocked_by_read_only_reasoning(
 
     The guard fires on overlap with any of
     ``write_external``, ``send_message``, ``filesystem_write``,
-    or ``privileged``. ``costly`` and ``uses_oauth`` are not
-    blocking by themselves — they're observational tags that
-    other helpers consume (cost warnings, OAuth flow setup).
+    ``db_write``, or ``privileged``. ``costly``,
+    ``uses_oauth``, ``read_external``, and ``filesystem_read``
+    are not blocking by themselves — they're observational
+    tags that other helpers consume (cost warnings, OAuth flow
+    setup) or designate a read that does not mutate state.
     """
     return bool(set(tags) & _READ_ONLY_BLOCKING_TAGS)
 

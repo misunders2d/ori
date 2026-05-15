@@ -33,7 +33,9 @@ _CANONICAL_VALUES = {
     "read_external",
     "write_external",
     "send_message",
+    "filesystem_read",
     "filesystem_write",
+    "db_write",
     "privileged",
     "costly",
     "uses_oauth",
@@ -46,8 +48,10 @@ _CANONICAL_VALUES = {
 
 
 def test_enum_exposes_all_canonical_values():
-    """Drift guard: phase-2 plan lists exactly seven tags. The
-    enum should expose precisely that set — no surprise
+    """Drift guard: phase-2 plan listed seven tags; phase-7
+    slice 6 added ``filesystem_read`` and ``db_write`` per
+    design §5.4 (round-3 reviewer L785 + L807). The enum
+    should expose precisely the nine-value set — no surprise
     additions, no omissions."""
     actual = {tag.value for tag in ToolCapabilityTag}
     assert actual == _CANONICAL_VALUES
@@ -97,6 +101,7 @@ def test_enum_value_matches_identifier_lowercase():
         ToolCapabilityTag.WRITE_EXTERNAL,
         ToolCapabilityTag.SEND_MESSAGE,
         ToolCapabilityTag.FILESYSTEM_WRITE,
+        ToolCapabilityTag.DB_WRITE,  # phase 7 slice 6 (L807)
         ToolCapabilityTag.PRIVILEGED,
     ],
 )
@@ -108,6 +113,7 @@ def test_read_only_blocks_each_write_side_tag(tag):
     "tag",
     [
         ToolCapabilityTag.READ_EXTERNAL,
+        ToolCapabilityTag.FILESYSTEM_READ,  # phase 7 slice 6 (L785)
         ToolCapabilityTag.COSTLY,
         ToolCapabilityTag.USES_OAUTH,
     ],
@@ -151,8 +157,11 @@ def test_requires_admin_approval_true_for_each_friction_tag(tag):
 
 def test_requires_admin_approval_false_for_non_friction_tags():
     """Tags that are not on the §5.9 list (here: read_external,
-    write_external, send_message, uses_oauth) do not trip the
-    admin approval gate by themselves."""
+    write_external, send_message, uses_oauth,
+    filesystem_read, db_write) do not trip the admin approval
+    gate by themselves. The phase-7 slice 6 additions
+    (filesystem_read, db_write) explicitly do NOT extend the
+    admin-approval set per design §5.4."""
     assert (
         requires_admin_approval(
             {
@@ -160,6 +169,8 @@ def test_requires_admin_approval_false_for_non_friction_tags():
                 ToolCapabilityTag.WRITE_EXTERNAL,
                 ToolCapabilityTag.SEND_MESSAGE,
                 ToolCapabilityTag.USES_OAUTH,
+                ToolCapabilityTag.FILESYSTEM_READ,
+                ToolCapabilityTag.DB_WRITE,
             }
         )
         is False
