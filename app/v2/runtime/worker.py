@@ -68,12 +68,52 @@ import sqlite3
 from datetime import datetime, timedelta
 from typing import Callable, Optional
 
-from app.v2.enums import EventKind, RunStatus
+from app.v2.emit.slack_reminder import (
+    SlackPostResult,
+    SlackProtocol,
+    emit_reminder_to_slack,
+)
+from app.v2.enums import (
+    EventKind,
+    FailureActionType,
+    RunStatus,
+    ScheduleStatus,
+)
 from app.v2.models.event import Event
+from app.v2.models.schedule import ScheduleSpec
 from app.v2.runtime.claim import claim_run
 from app.v2.runtime.state_machine import assert_legal_transition
+from app.v2.storage.events import append_event
 from app.v2.storage.runs import list_claimable_due
+from app.v2.storage.schedules import get_schedule
 from app.v2.storage.transactions import update_run_status_and_append_event
+from app.v2.templates.one_off_reminder import (
+    ONE_OFF_REMINDER_TEMPLATE_NAME,
+)
+
+
+class UnsupportedSpecError(Exception):
+    """Raised by the worker emit branch when a claimed Run's
+    ScheduleSpec is outside the phase-9 emit-only contract.
+
+    Examples:
+    - ``execution_plan_hash`` is set (phase 10 / 12
+      implements ExecutionPlan execution).
+    - ``template is None`` AND ``execution_plan_hash is
+      None`` (CustomFlow without plan; phase 10 / 12
+      implements this path).
+
+    The worker's run_loop catches it and logs; the Run
+    stays in ``RUNNING`` and recovery on next boot
+    promotes it via the phase-4 claimed-stale path.
+    """
+
+
+class UnsupportedFailurePolicyError(Exception):
+    """Raised internally when a FailurePolicy action is not
+    implemented in phase 9. Caught by
+    :meth:`_route_failure_policy` and downgraded to a
+    warning log + alert_admin semantics."""
 
 
 _logger = logging.getLogger(__name__)
@@ -122,6 +162,7 @@ class Worker:
         run_id_factory: Callable[[], str],
         event_id_factory: Callable[[], str],
         claim_batch_size: int = 10,
+        slack_client: Optional[SlackProtocol] = None,
     ) -> None:
         if not worker_id:
             raise ValueError(
@@ -160,6 +201,15 @@ class Worker:
         self._run_id_factory = run_id_factory
         self._event_id_factory = event_id_factory
         self._claim_batch_size = claim_batch_size
+        # Phase 9 slice 5: when set, the worker fetches the
+        # ScheduleSpec via ``get_schedule`` after RUN_STARTED
+        # and dispatches OneOffReminder specs through the
+        # emit branch. When None (backwards-compat with
+        # phase-4 tests that do not seed schedules), the
+        # body stays the empty ``asyncio.sleep(0)`` from
+        # phase 4 and ticks proceed straight to
+        # RUN_SUCCEEDED.
+        self._slack_client = slack_client
 
         self._conn: Optional[sqlite3.Connection] = None
         self._stop_event: Optional[asyncio.Event] = None
@@ -290,10 +340,29 @@ class Worker:
             extra_columns={"started_at": started_at},
         )
 
-        # Empty execution body. The yield gives the event loop
-        # a chance to interleave other workers / shutdown
-        # signals; real reasoning + emit lands in later phases.
-        await asyncio.sleep(0)
+        # ---- Phase 9 slice 5: emit branch dispatch. ----
+        # When ``slack_client`` is None, fall back to the
+        # phase-4 empty-execution body (kept for backwards-
+        # compatibility with phase-4 tests that don't seed
+        # a schedule alongside the Run). When set, fetch
+        # the ScheduleSpec and dispatch through the
+        # OneOffReminder emit path; non-OneOff specs route
+        # to ``run_failed`` reason codes per plan §3.5.
+        if self._slack_client is not None:
+            branch_outcome = await self._dispatch_emit_branch(
+                conn, run
+            )
+            if branch_outcome != "succeeded":
+                # ``_dispatch_emit_branch`` already wrote the
+                # run_failed event + the running → failed
+                # transition; return the run id so callers
+                # observe a tick happened.
+                return run.id
+        else:
+            # Empty execution body. The yield gives the event
+            # loop a chance to interleave other workers /
+            # shutdown signals.
+            await asyncio.sleep(0)
 
         # running → succeeded.
         assert_legal_transition(
@@ -317,6 +386,259 @@ class Worker:
             extra_columns={"completed_at": completed_at},
         )
         return run.id
+
+    async def _dispatch_emit_branch(
+        self,
+        conn: sqlite3.Connection,
+        run,
+    ) -> str:
+        """Phase 9 slice 5 emit dispatch.
+
+        Returns ``"succeeded"`` when the emit fires
+        successfully — caller proceeds with the existing
+        ``running → succeeded`` transition. Returns
+        ``"failed"`` when the branch already wrote a
+        ``run_failed`` event + the ``running → failed``
+        transition — caller returns early.
+
+        Raises :class:`UnsupportedSpecError` when the
+        ScheduleSpec is outside the phase-9 emit-only
+        contract (execution_plan_hash set, or template
+        is None AND no plan). The run_loop catches the
+        raise and logs; the Run stays in RUNNING and
+        recovery picks it up.
+        """
+        spec = get_schedule(conn, run.schedule_id)
+        if spec is None:
+            # Schedule was deleted between Run insert and the
+            # emit dispatch. The events table's FK on
+            # schedule_id makes writing a ``run_failed`` event
+            # impossible (the missing schedule row would fail
+            # the FK at INSERT). Raise instead so the
+            # run_loop logs + leaves the Run in RUNNING;
+            # boot recovery promotes the stale claimed/running
+            # row to FAILED via the phase-4 path. The
+            # ``schedule_not_found_at_claim`` reason is
+            # carried verbatim on the exception so observers
+            # can grep for it.
+            raise UnsupportedSpecError(
+                "schedule_not_found_at_claim: schedule "
+                f"{run.schedule_id!r} missing at claim time; "
+                "recovery on next boot promotes the Run"
+            )
+
+        if spec.status in (
+            ScheduleStatus.ARCHIVED,
+            ScheduleStatus.PAUSED,
+        ):
+            await self._fail_run(
+                conn=conn,
+                run=run,
+                reason="schedule_inactive_at_claim",
+                error_message=(
+                    f"schedule {spec.id!r} status is "
+                    f"{spec.status.value!r} at claim time; "
+                    "defence-in-depth pin (the lifecycle "
+                    "hook should have cancelled pending Runs)"
+                ),
+            )
+            return "failed"
+
+        # ExecutionPlan execution lands in phase 10 / 12.
+        # Defence in depth: a OneOffReminder-template spec
+        # should have execution_plan_hash=None per the
+        # builder; if both are set, treat as out-of-scope.
+        if spec.execution_plan_hash is not None:
+            raise UnsupportedSpecError(
+                f"schedule {spec.id!r} carries "
+                f"execution_plan_hash="
+                f"{spec.execution_plan_hash!r}; ExecutionPlan "
+                "execution lands in phase 10 / 12"
+            )
+
+        if spec.template is None:
+            raise UnsupportedSpecError(
+                f"schedule {spec.id!r} has no template AND "
+                "no execution_plan_hash; CustomFlow without "
+                "template lands in phase 10 / 12"
+            )
+
+        template_name = spec.template.name
+        if template_name != ONE_OFF_REMINDER_TEMPLATE_NAME:
+            await self._fail_run(
+                conn=conn,
+                run=run,
+                reason="schedule_template_changed_at_claim",
+                error_message=(
+                    f"schedule {spec.id!r} template name is "
+                    f"{template_name!r}; phase 9 emits only "
+                    f"{ONE_OFF_REMINDER_TEMPLATE_NAME!r}"
+                ),
+            )
+            return "failed"
+
+        # OneOffReminder emit branch.
+        result = await emit_reminder_to_slack(
+            spec=spec,
+            slack_client=self._slack_client,
+            clock=self._clock,
+        )
+        if result.ok:
+            return "succeeded"
+
+        await self._route_failure_policy(
+            conn=conn,
+            run=run,
+            spec=spec,
+            result=result,
+        )
+        return "failed"
+
+    async def _fail_run(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        run,
+        reason: str,
+        error_message: str,
+    ) -> None:
+        """Write a ``run_failed`` event + transition the
+        Run to FAILED. Used for the schedule-fetch /
+        staleness branches that short-circuit BEFORE the
+        emit attempt (no emit_failed event written — no
+        emit was attempted)."""
+        assert_legal_transition(
+            RunStatus.RUNNING, RunStatus.FAILED
+        )
+        completed_at = self._clock()
+        failed_event = Event(
+            id=self._event_id_factory(),
+            run_id=run.id,
+            schedule_id=run.schedule_id,
+            ts=completed_at,
+            kind=EventKind.RUN_FAILED,
+            payload={
+                "worker_id": self._worker_id,
+                "reason": reason,
+                "error": error_message,
+            },
+            correlates=None,
+        )
+        update_run_status_and_append_event(
+            conn,
+            run_id=run.id,
+            new_status=RunStatus.FAILED,
+            event=failed_event,
+            extra_columns={
+                "completed_at": completed_at,
+                "error": error_message,
+            },
+        )
+
+    async def _route_failure_policy(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        run,
+        spec: ScheduleSpec,
+        result: SlackPostResult,
+    ) -> None:
+        """Emit-failure routing per
+        :class:`FailurePolicy.on_failure_action`. Phase 9
+        implements ``alert_admin`` + ``abort_silent``.
+        ``retry_later`` is downgraded to ``alert_admin``
+        semantics with a WARNING log (phase 10 ships the
+        retry chain)."""
+        emit_failed_event = Event(
+            id=self._event_id_factory(),
+            run_id=run.id,
+            schedule_id=run.schedule_id,
+            ts=self._clock(),
+            kind=EventKind.EMIT_FAILED,
+            payload={
+                "worker_id": self._worker_id,
+                "channel": result.channel,
+                "error": result.error or "",
+            },
+            correlates=None,
+        )
+        append_event(conn, emit_failed_event)
+
+        action = spec.failure.on_failure_action
+        if action == FailureActionType.ABORT_SILENT:
+            # No admin alert; just fail the Run.
+            pass
+        elif action == FailureActionType.ALERT_ADMIN:
+            admin_event = Event(
+                id=self._event_id_factory(),
+                run_id=run.id,
+                schedule_id=run.schedule_id,
+                ts=self._clock(),
+                kind=EventKind.ADMIN_ALERT_SENT,
+                payload={
+                    "worker_id": self._worker_id,
+                    "reason": "emit_failed",
+                    "error": result.error or "",
+                },
+                correlates=emit_failed_event.id,
+            )
+            append_event(conn, admin_event)
+        else:
+            # retry_later / custom — phase 10 / 12 work.
+            # Downgrade to alert_admin semantics so phase 9
+            # operators still see the failure.
+            _logger.warning(
+                "worker %s saw FailurePolicy.%s for "
+                "schedule_id=%r; phase 9 downgrades to "
+                "alert_admin (retry chain lands in phase 10)",
+                self._worker_id,
+                action.value,
+                spec.id,
+            )
+            admin_event = Event(
+                id=self._event_id_factory(),
+                run_id=run.id,
+                schedule_id=run.schedule_id,
+                ts=self._clock(),
+                kind=EventKind.ADMIN_ALERT_SENT,
+                payload={
+                    "worker_id": self._worker_id,
+                    "reason": "emit_failed",
+                    "error": result.error or "",
+                    "downgrade_from": action.value,
+                },
+                correlates=emit_failed_event.id,
+            )
+            append_event(conn, admin_event)
+
+        # Transition Run → FAILED.
+        assert_legal_transition(
+            RunStatus.RUNNING, RunStatus.FAILED
+        )
+        completed_at = self._clock()
+        run_failed_event = Event(
+            id=self._event_id_factory(),
+            run_id=run.id,
+            schedule_id=run.schedule_id,
+            ts=completed_at,
+            kind=EventKind.RUN_FAILED,
+            payload={
+                "worker_id": self._worker_id,
+                "reason": "emit_failed",
+                "error": result.error or "",
+            },
+            correlates=emit_failed_event.id,
+        )
+        update_run_status_and_append_event(
+            conn,
+            run_id=run.id,
+            new_status=RunStatus.FAILED,
+            event=run_failed_event,
+            extra_columns={
+                "completed_at": completed_at,
+                "error": result.error or "",
+            },
+        )
 
     async def _run_loop(self) -> None:
         """The poll loop. Runs until ``stop_event`` is set."""
@@ -354,4 +676,8 @@ class Worker:
             pass
 
 
-__all__ = ["Worker"]
+__all__ = [
+    "UnsupportedFailurePolicyError",
+    "UnsupportedSpecError",
+    "Worker",
+]
