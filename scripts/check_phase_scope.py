@@ -180,6 +180,31 @@ PHASE_ALLOWLIST: dict[int, set[str]] = {
         # Doc-read marker bookkeeping
         ".docs_read_marker",
     },
+    9: {
+        # Code surface carried forward
+        "app/v2/",
+        "tests/v2/",
+        # CI guard machinery (carried forward)
+        "scripts/check_phase_scope.py",
+        "scripts/install_hooks.py",
+        ".githooks/v2_phase_guard.sh",
+        ".githooks/pre-commit",
+        ".github/workflows/v2_phase_guard.yml",
+        # Phase-tracking artefact
+        ".v2-current-phase",
+        # Plan + design docs
+        "docs/PHASE_9_PLAN.md",
+        "docs/CONTRACTS_V2_DESIGN.md",
+        # Doc-read marker bookkeeping
+        ".docs_read_marker",
+        # NEW for phase 9 — first cutover. CoordinatorAgent
+        # mount + boot_runtime integration. v1 paths under
+        # FORBIDDEN_PHASES_1_TO_8 stay out of scope per the
+        # plan even though the gate lifts at phase 9.
+        "app/sub_agents/coordinator_agent.py",
+        "run_bot.py",
+        "app/agent.py",
+    },
     # Future phases populate here as they land.
 }
 
