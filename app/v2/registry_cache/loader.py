@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import pathlib
+import tempfile
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -148,9 +149,13 @@ def save_cache(
     - The tmp file lives in the same parent directory as the
       target so :func:`os.rename` is atomic on the local
       filesystem (POSIX guarantee).
-    - The tmp name carries the current process pid so two
-      concurrent writers do not clobber each other's tmp
-      files.
+    - The tmp name uses :func:`tempfile.mkstemp` to generate
+      a unique suffix per call. Round-2 reviewer slice-2
+      finding: a pid-only suffix collided when two threads
+      in the same process saved the same kind concurrently
+      (one tmp clobbered the other's bytes, and one rename
+      raised ``FileNotFoundError``). The ``mkstemp`` route
+      gives every save its own tmp path.
     - On a successful call the tmp file is renamed to the
       target and no ``.tmp.*`` artifact remains in the
       cache directory.
@@ -164,7 +169,12 @@ def save_cache(
     path = cache_path(kind, base=base)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    tmp_path = path.parent / f"{path.name}.tmp.{os.getpid()}"
+    tmp_fd, tmp_name = tempfile.mkstemp(
+        prefix=f"{path.name}.tmp.",
+        dir=str(path.parent),
+    )
+    os.close(tmp_fd)
+    tmp_path = pathlib.Path(tmp_name)
     tmp_path.write_text(
         snapshot.model_dump_json(indent=2), encoding="utf-8"
     )

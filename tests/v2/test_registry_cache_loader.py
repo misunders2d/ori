@@ -321,6 +321,67 @@ def test_successful_save_leaves_no_tmp_artifact(tmp_path):
     assert contents == ["slack_channels.json"]
 
 
+def test_concurrent_same_pid_saves_do_not_collide(tmp_path):
+    """Round-2 reviewer slice-2 regression: two saves for the
+    same kind in the same process must NOT collide on tmp
+    file paths. The previous pid-only suffix clobbered tmp
+    bytes between threads and caused one ``os.rename`` to
+    raise ``FileNotFoundError``.
+
+    With :func:`tempfile.mkstemp` each save gets a unique tmp
+    name, every rename succeeds, the target reflects one of
+    the winning writes, and no ``.tmp.*`` artifact remains
+    in the directory.
+    """
+    import threading
+
+    errors: list[BaseException] = []
+    barrier = threading.Barrier(8)
+
+    def _writer(idx: int) -> None:
+        try:
+            # All threads land at the barrier first so the
+            # critical section overlaps as much as the GIL
+            # allows.
+            barrier.wait(timeout=5)
+            save_cache(
+                "slack_channels",
+                _slack(workspace_id=f"T_{idx:02d}"),
+                base=tmp_path,
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=_writer, args=(i,)) for i in range(8)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert errors == [], f"concurrent save errors: {errors!r}"
+
+    # Target file present and parsable.
+    target = cache_path("slack_channels", base=tmp_path)
+    assert target.exists()
+    loaded = load_cache("slack_channels", base=tmp_path)
+    assert loaded is not None
+    # workspace_id is one of the eight values written; pin
+    # the shape rather than which specific thread won.
+    assert loaded.workspace_id.startswith("T_")
+
+    # No tmp leftovers after every rename succeeded.
+    tmp_leftovers = [
+        p
+        for p in tmp_path.iterdir()
+        if p.name.startswith("slack_channels.json.tmp.")
+    ]
+    assert tmp_leftovers == [], (
+        f"unexpected tmp leftovers: {tmp_leftovers!r}"
+    )
+
+
 def test_crash_mid_rename_preserves_previous_file(tmp_path, monkeypatch):
     """Simulate ``os.rename`` failing after the tmp file is
     written. The previous good file MUST stay; the tmp file
