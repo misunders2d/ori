@@ -332,11 +332,24 @@ class SchedulerBinding:
       message ``wakeup`` uses.
 
     **APScheduler callback error handling.** When
-    APScheduler fires a job, it invokes a bound method
-    ``_fire_for(schedule_id)`` which calls
-    ``self._wakeup_callable(...)`` inside its own try /
-    except. ANY exception raised by the wakeup callable is
-    caught at this boundary, logged via
+    APScheduler fires a job, it invokes the MODULE-LEVEL
+    ``_fire_for(schedule_id, wakeup_callable, conn_factory,
+    clock, run_id_factory, event_id_factory)`` function
+    (NOT a bound method — APScheduler's SQLAlchemy job
+    store refuses to serialise schedulers, and a bound
+    method on ``SchedulerBinding`` would drag the
+    binding's ``_scheduler`` attribute into the
+    serialised payload; probed in slice-3 implementation:
+    ``TypeError: Schedulers cannot be serialized``).
+    ``register`` passes the binding's injected callables
+    into ``args`` so the persisted job is self-contained.
+    A thin ``SchedulerBinding._fire_for`` instance method
+    wraps the module-level function for direct-call test
+    convenience, but the REGISTERED ``func`` is always the
+    module-level form.
+
+    ANY exception raised by the wakeup callable is caught
+    at this boundary, logged via
     ``logger.exception(...)``, and SWALLOWED — propagating
     it would surface as an APScheduler-internal error and
     could pause the scheduler. The job stays registered;
@@ -360,7 +373,17 @@ class SchedulerBinding:
         run_id_factory: Callable[[], str] = prod_run_id_factory,
         event_id_factory: Callable[[], str] = prod_event_id_factory,
         jobstore_url: str = "sqlite:///data/scheduler-v2-jobs.db",
-        misfire_grace_time: int = 3600,
+        misfire_grace_time: Optional[int] = 3600,
+        # APScheduler 3.x Job rejects misfire_grace_time=0
+        # (probed: "must be either None or a positive
+        # integer"). Optional[int] mirrors that: a positive
+        # int OR None ("no expiry — always fire even late").
+        # The value flows into AsyncIOScheduler(
+        # job_defaults={"misfire_grace_time": ...}) so every
+        # subsequent add_job inherits it (slice-2 fix —
+        # without this APScheduler would default to 1 s,
+        # silently violating design section 4.0.5's "up to
+        # 1h" contract).
     ) -> None: ...
 
     async def start(self, *, paused: bool = False) -> None: ...
@@ -573,7 +596,9 @@ async def boot_runtime(
     max_backfill_age: timedelta = timedelta(hours=24),
     abort_on_recovery_errors: bool = False,
     jobstore_url: str = "sqlite:///data/scheduler-v2-jobs.db",
-    misfire_grace_time: int = 3600,
+    misfire_grace_time: Optional[int] = 3600,
+    # Optional[int] mirrors SchedulerBinding's constructor:
+    # positive int or None ("no expiry"). Zero rejected.
 ) -> RuntimeHandle: ...
 
 

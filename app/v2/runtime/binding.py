@@ -41,9 +41,24 @@ Lifecycle:
 
 APScheduler callback exception handling:
 
-When APScheduler fires a registered job, it invokes a bound
-method ``_fire_for(schedule_id)``. The skeleton in this
-slice catches ``Exception``, logs via
+When APScheduler fires a registered job, it invokes the
+MODULE-LEVEL ``_fire_for(schedule_id, wakeup_callable,
+conn_factory, clock, run_id_factory, event_id_factory)``
+function. The function is module-level (not a bound method)
+because APScheduler's SQLAlchemy job store refuses to
+serialise schedulers, and a bound method on
+``SchedulerBinding`` would drag the binding's
+``_scheduler`` attribute into the serialised payload
+(probed: ``TypeError: Schedulers cannot be serialized``).
+
+``SchedulerBinding.register`` passes the binding's injected
+callables into ``args`` so the persisted job carries
+self-contained, serialisable references. A thin
+``SchedulerBinding._fire_for`` instance method wraps the
+module-level function for direct-call test convenience,
+but the registered ``func`` is always the module-level form.
+
+``_fire_for`` catches ``Exception``, logs via
 ``logger.exception(...)``, and SWALLOWS the error so
 APScheduler's internal callback machinery never sees it.
 ``BaseException`` (``CancelledError`` /

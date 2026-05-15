@@ -19,7 +19,8 @@ Construction:
 - Custom jobstore_url succeeds.
 - Empty jobstore_url -> ValueError.
 - Negative misfire_grace_time -> ValueError.
-- Zero misfire_grace_time accepted (boundary).
+- Zero misfire_grace_time rejected (APScheduler requires
+  positive int or None); None accepted as "no expiry".
 - Non-callable wakeup_callable / conn_factory / clock /
   run_id_factory / event_id_factory -> TypeError naming the
   offending kwarg.
