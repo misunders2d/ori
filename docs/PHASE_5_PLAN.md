@@ -384,14 +384,41 @@ class SchedulerBinding:
         misfire_grace_time: int = 3600,
     ) -> None: ...
 
-    async def start(self) -> None: ...  # wraps sync .start()
+    async def start(self, *, paused: bool = False) -> None: ...
+        # wraps sync ``AsyncIOScheduler.start(paused=...)``.
+        # paused=True means jobs are loaded from the
+        # SQLAlchemy jobstore but no fires happen until
+        # ``resume()`` is called. boot_runtime uses
+        # paused=True so the reconciliation steps (recovery,
+        # backfill, jobstore reconcile, register) can run
+        # without the scheduler firing in parallel.
     async def stop(self) -> None: ...   # wraps sync .shutdown()
+    async def pause(self) -> None: ...
+        # wraps sync ``AsyncIOScheduler.pause()``. Idempotent
+        # against a paused binding; raises if called before
+        # ``start()``.
+    async def resume(self) -> None: ...
+        # wraps sync ``AsyncIOScheduler.resume()``. Idempotent
+        # against an already-running binding. Calling resume
+        # from boot_runtime is what flips a paused start into
+        # a live scheduler.
 
     def register(self, spec: ScheduleSpec) -> None: ...
     def unregister(self, schedule_id: str) -> None: ...
     def reregister(self, spec: ScheduleSpec) -> None: ...
     def list_registered(self) -> list[str]: ...
+    def is_paused(self) -> bool: ...
+        # True between ``start(paused=True)`` / ``pause()`` and
+        # the matching ``resume()``. Tests use this to pin
+        # state transitions without reaching into
+        # APScheduler internals.
 ```
+
+The binding exposes the paused / resumed state via public
+methods + a ``is_paused()`` query so callers (boot,
+lifecycle hooks, tests) NEVER reach into
+``binding._scheduler`` directly. The underlying
+``AsyncIOScheduler`` is private to the binding.
 
 ### 3.2.1 v2 jobstore DB path
 
@@ -590,10 +617,12 @@ Per-step:
    errors via the handle + log).
 4. **Construct + start binding PAUSED.** Construct
    `SchedulerBinding(jobstore_url=..., misfire_grace_time=
-   ...)`; `await binding.start(paused=True)`. The paused
-   start lets the binding's `start()` initialise the
-   scheduler's event loop + load the SQLAlchemy jobstore
-   WITHOUT firing any persisted jobs yet. This is the
+   ...)`; `await binding.start(paused=True)`. The
+   `paused=True` kwarg flows into APScheduler's
+   ``AsyncIOScheduler.start(paused=True)``, which loads
+   the SQLAlchemy jobstore + initialises the event loop
+   WITHOUT firing any persisted jobs yet. After this step,
+   `binding.is_paused()` returns ``True``. This is the
    round-2 reviewer's race fix: a persisted `DateTrigger`
    for a OneOff whose `at_iso_datetime` passed during
    downtime would otherwise fire CONCURRENTLY with the
@@ -625,11 +654,14 @@ Per-step:
    continue. The OneOff register-time guard (§3.2.2
    mechanic 1) filters out already-fired OneOffs at this
    step too — including ones that landed in steps 2 / 5.
-8. **Resume scheduler.** `binding._scheduler.resume()`.
-   APScheduler now replays any persisted job whose
-   `next_run_time` is within `misfire_grace_time` and
-   fires normally on its schedule going forward. Anything
-   beyond grace was handled in step 5 (boot backfill).
+8. **Resume scheduler.** `await binding.resume()`. The
+   binding exposes ``resume`` as a public coroutine so
+   ``boot`` does NOT reach into the private
+   ``_scheduler`` attribute. APScheduler now replays any
+   persisted job whose ``next_run_time`` is within
+   ``misfire_grace_time`` and fires normally on its
+   schedule going forward. Anything beyond grace was
+   handled in step 5 (boot backfill).
 9. **Worker pool.** Construct `worker_count` `Worker`
    instances; each gets its own `conn_factory` call so
    workers have independent connections. Call
@@ -775,6 +807,22 @@ Lifecycle + construction:
 - `start()` / `stop()` are awaitable coroutines; internally
   they call APScheduler's sync `start()` / `shutdown()` —
   pin the bridge.
+- `start(paused=True)` → `is_paused()` returns True
+  immediately after the await. Pre-registered persisted
+  jobs whose `next_run_time` is past do NOT fire until
+  `resume()` is awaited. Pin via spying on the wakeup
+  callable: register a job set to fire immediately,
+  `start(paused=True)`, assert the wakeup spy was NOT
+  called within a short polling budget (50 ms).
+- `await binding.resume()` after a paused start → fires
+  pending jobs; wakeup spy is called. `is_paused()`
+  returns False after.
+- `await binding.pause()` after a running binding →
+  `is_paused()` returns True; new fires stop until next
+  `resume()`. Idempotent against an already-paused binding.
+- `pause()` / `resume()` before `start()` → raises
+  `RuntimeError` (mirrors the lifecycle invariants used by
+  Worker).
 
 Registration:
 
@@ -1026,8 +1074,14 @@ Cross-cutting smoke checks added or carried:
 3. `cron_guard.py` exposes a public `reject_numeric_dow`;
    `wakeup.py` imports from there; phase-4 wakeup tests
    stay green unchanged.
-4. `SchedulerBinding.start()` / `stop()` lifecycle pinned
-   (async coroutine wrappers over APScheduler's sync API).
+4. `SchedulerBinding.start()` / `stop()` / `pause()` /
+   `resume()` lifecycle pinned (async coroutine wrappers
+   over APScheduler's sync API). `start(paused=True)` →
+   `resume()` flow is the documented path for boot
+   reconciliation; tests pin that no fires happen until
+   `resume()` is awaited. `is_paused()` is the public
+   query — callers (boot, tests) never reach into
+   `binding._scheduler`.
 5. `register` translates OneOff + Cron to APScheduler jobs
    with `misfire_grace_time=3600`; raises for unwired
    trigger types; rejects numeric DOW at registration time
