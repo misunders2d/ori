@@ -20,6 +20,7 @@ from app.v2.runtime._defaults import (
     prod_event_id_factory,
     prod_run_id_factory,
 )
+from app.v2.runtime.binding import SchedulerBinding
 from app.v2.runtime.claim import claim_run
 from app.v2.runtime.cron_guard import reject_numeric_dow
 from app.v2.runtime.recovery import (
@@ -42,6 +43,7 @@ __all__ = [
     "LEGAL_TRANSITIONS",
     "RecoveredRun",
     "RecoveryError",
+    "SchedulerBinding",
     "Worker",
     "assert_legal_transition",
     "claim_run",
