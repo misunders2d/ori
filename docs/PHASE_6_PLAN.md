@@ -68,8 +68,10 @@ this §0 in that commit.
    authoring tool's call, not the resolver's).
 
 6. **Error surface** — `app/v2/registry_cache/errors.py`.
-   `RegistryCacheError` base + four subclasses:
-   - `NoCacheAvailable` — cache file absent on disk.
+   `RegistryCacheError` base + five subclasses (round-2
+   stale-count fix — previously read "four"):
+   - `NoCacheAvailable` — cache file absent on disk OR the
+     caller passed `cache=None` into a resolver.
    - `CacheMiss` — cache loaded but id not present.
    - `WorkspaceMismatch` — cached `workspace_id` /
      `account_id` differs from the expected one.
@@ -77,6 +79,9 @@ this §0 in that commit.
      surfaces verbatim when boot couldn't load AND refresh
      can't fetch. Phase 6 ships the class; authoring uses it
      in phase 7.
+   - `ChannelAmbiguous` — name lookup matched multiple
+     active Slack channels. IDs stay canonical; authoring
+     re-prompts.
 
 7. **Stale-comment fix** — `app/v2/models/common.py` lines
    referencing "phase-3 registry" are updated to "phase-6
@@ -146,15 +151,29 @@ class RegistryCacheError(Exception):
 
 
 class NoCacheAvailable(RegistryCacheError):
-    """Cache file does not exist on disk for the requested
-    kind. Authoring layer's authoring-time refresh is expected
-    to populate it. If the network is also unreachable, the
-    authoring layer raises :class:`NoCacheAndNetworkDown`."""
+    """Cache for the requested kind is not available.
 
-    def __init__(self, kind: str, path: str) -> None:
-        super().__init__(
-            f"registry cache for kind={kind!r} missing at {path}"
-        )
+    Two call paths surface this (round-2 reviewer L154 fix):
+
+    - ``loader.load_cache`` callers that want to raise rather
+      than treat ``None`` as "absent" pass the on-disk path
+      via ``path`` so the message is forensically useful.
+    - ``resolver.resolve_*`` raises with ``path=None`` when
+      the caller passed ``cache=None``; the resolver has no
+      file path. The message degrades to ``not provided``
+      so reviewers reading a log can tell the two cases
+      apart without diffing the call site.
+    """
+
+    def __init__(self, kind: str, path: str | None = None) -> None:
+        if path is None:
+            super().__init__(
+                f"registry cache for kind={kind!r} not provided"
+            )
+        else:
+            super().__init__(
+                f"registry cache for kind={kind!r} missing at {path}"
+            )
         self.kind = kind
         self.path = path
 
@@ -223,13 +242,24 @@ class ChannelAmbiguous(RegistryCacheError):
 ### 3.2 `schemas.py`
 
 ```python
-# Shared tz-aware validator — every cache's ``fetched_at``
-# MUST be a tz-aware UTC datetime. Mirrors the runtime
-# invariant from phases 4-5 (naive datetime is a bug).
-def _require_tz_aware(value: datetime) -> datetime:
+# Shared UTC validator — every cache's ``fetched_at``
+# MUST be a UTC datetime (tz-aware with utcoffset == 0).
+# Mirrors the runtime invariant from phases 4-5 (naive
+# datetime is a bug, and non-UTC fetched_at would break
+# the is_stale comparison cross-tz). Round-2 reviewer L229
+# fix: previously accepted any tz-aware offset; tightened
+# to UTC-only.
+def _require_utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
         raise ValueError(
-            "registry_cache fetched_at must be tz-aware (UTC)"
+            "registry_cache fetched_at must be tz-aware UTC "
+            "(got naive datetime)"
+        )
+    if value.utcoffset() != timedelta(0):
+        raise ValueError(
+            "registry_cache fetched_at must be UTC "
+            f"(got utcoffset={value.utcoffset()!r}); convert via "
+            "value.astimezone(timezone.utc) before persistence"
         )
     return value
 
@@ -262,7 +292,7 @@ class SlackChannelsCache(BaseModel):
     @field_validator("fetched_at")
     @classmethod
     def _tz_aware(cls, v: datetime) -> datetime:
-        return _require_tz_aware(v)
+        return _require_utc(v)
 
     @property
     def owner_id(self) -> str:
@@ -292,7 +322,7 @@ class GoogleSheetsCache(BaseModel):
     @field_validator("fetched_at")
     @classmethod
     def _tz_aware(cls, v: datetime) -> datetime:
-        return _require_tz_aware(v)
+        return _require_utc(v)
 
     @property
     def owner_id(self) -> str:
@@ -321,7 +351,7 @@ class GoogleDocsCache(BaseModel):
     @field_validator("fetched_at")
     @classmethod
     def _tz_aware(cls, v: datetime) -> datetime:
-        return _require_tz_aware(v)
+        return _require_utc(v)
 
     @property
     def owner_id(self) -> str:
@@ -340,10 +370,14 @@ CacheFile = Union[
 
 **Reviewer fixes applied here:**
 
-- L223 — `fetched_at` now carries a `field_validator` that
-  rejects naive datetime. Shared `_require_tz_aware`
-  helper is the single producer of the error message so a
-  future change touches one site.
+- L223 + L229 — `fetched_at` now carries a `field_validator`
+  that rejects naive datetime AND non-UTC offsets. Shared
+  `_require_utc` helper is the single producer of both
+  error messages (naive vs. non-UTC) so a future change
+  touches one site. `utcoffset() != timedelta(0)` → raise;
+  the cache invariant is UTC-only (not just "tz-aware"),
+  matching the runtime invariant from phases 4-5 and
+  keeping `is_stale` arithmetic safe.
 - L398 — `GoogleDriveCache` is gone. `GoogleSheetsCache`
   holds `GoogleSheetsEntry` whose `mime_type` is a
   ``Literal["application/vnd.google-apps.spreadsheet"]``;
@@ -591,6 +625,13 @@ fix); no design impact.
 - Each exception subclass exists, has the documented init
   signature, and produces a message containing the supplied
   fields.
+- `NoCacheAvailable` (L154 fix):
+  - With `path="/some/dir/foo.json"` → message ends in
+    `missing at /some/dir/foo.json`; `exc.path` is the
+    string.
+  - With `path=None` (the resolver call path) → message ends
+    in `not provided`; `exc.path is None`.
+  - Both call shapes still surface `exc.kind`.
 - `NoCacheAndNetworkDown` carries both `kind` and
   `network_error` attributes.
 - `ChannelAmbiguous` carries `name` + `candidate_ids` (list of
@@ -604,12 +645,18 @@ fix); no design impact.
 - Each cache model enforces its `Literal[<kind>]`
   discriminator (slack_channels / google_sheets_items /
   google_docs_items). Passing the wrong kind → `ValidationError`.
-- `fetched_at` accepts only tz-aware datetimes via the
-  shared `_require_tz_aware` validator (reviewer L223 fix).
-  Naive datetime → `ValidationError` on EVERY cache model.
-  Pin separately for each of the three models so a future
-  refactor that drops the validator from one of them is a
-  surfaced test failure.
+- `fetched_at` accepts only UTC datetimes via the shared
+  `_require_utc` validator (reviewer L223 + L229 fix).
+  Three sub-pins per cache model so a future refactor that
+  drops the validator from one model is a surfaced test
+  failure:
+  1. Naive datetime → `ValidationError` (no tzinfo).
+  2. Non-UTC offset (e.g. `timezone(timedelta(hours=5))`) →
+     `ValidationError` mentioning utcoffset (L229
+     UTC-only enforcement). Pin all three cache models.
+  3. UTC datetime (tz-aware, `utcoffset() == timedelta(0)`)
+     → accepted; round-trips through `model_dump_json` /
+     `model_validate_json` preserves the value exactly.
 - `GoogleSheetsEntry.mime_type` only accepts the Literal
   spreadsheet MIME; assigning a docs MIME →
   `ValidationError` (reviewer L398 fix). Same for
@@ -643,13 +690,21 @@ Missing file:
 - `load_cache(kind, base=tmp_path)` with no file on disk
   returns `None` (not exception).
 
-Owner-id mismatch (per L295 rename):
+Owner-id mismatch (per L295 rename + L397 log assertion):
 
 - Save with `workspace_id="T_OLD"`, load with
   `expected_owner_id="T_NEW"` → returns `None`. Pin: the file
   is NOT deleted by the loader (manual review path per Q7).
 - Same shape against `GoogleSheetsCache` /
   `GoogleDocsCache` keyed by `account_id`.
+- L397 yellow fix: `caplog.records` (or `caplog.text`)
+  contains a single WARNING-level record naming the kind,
+  expected owner_id, and found owner_id. Pin via
+  `caplog.set_level(logging.WARNING, logger="app.v2.registry_cache.loader")`
+  so a future change that silently drops the log line
+  surfaces. The matching-owner-id load path produces NO
+  warning record (inverse pin so a future change that
+  accidentally logs on every load surfaces too).
 
 Kind-mismatch save guard (per L314 fix):
 
@@ -749,7 +804,10 @@ Channels:
 - `resolve_channel("general", cache)` returns the entry by
   name (no `#`).
 - `resolve_channel("missing", cache)` → `CacheMiss`.
-- `resolve_channel("C012", cache=None)` → `NoCacheAvailable`.
+- `resolve_channel("C012", cache=None)` → `NoCacheAvailable`
+  with `exc.path is None` (per L154 fix). Message ends in
+  `not provided`. Same shape for `resolve_sheet` /
+  `resolve_doc` `cache=None` paths.
 - Archived channels excluded by default (per Q6): cache
   contains one archived + one active entry sharing a name;
   default call returns the active one. Same call with
@@ -955,9 +1013,11 @@ Plan:   docs/PHASE_6_PLAN.md
 8. ~~Authoring-layer composite (`NoCacheAndNetworkDown`).~~
    **CLOSED** (Q8 answer): phase 6 ships the class only;
    phase 7 owns the raise path.
-9. ~~Tz-aware `fetched_at` enforcement.~~ **CLOSED** (L223
-   fix): shared `_require_tz_aware` field validator on every
-   cache model.
+9. ~~Tz-aware `fetched_at` enforcement.~~ **CLOSED** (L223 +
+   L229 fix): shared `_require_utc` field validator on every
+   cache model. UTC-only (utcoffset == 0) — not just
+   tz-aware. Three-pin test per model (naive / non-UTC /
+   UTC accepted).
 10. ~~`save_cache` kind guard.~~ **CLOSED** (L314 fix):
     `save_cache` raises `ValueError` BEFORE any I/O when
     `snapshot.kind != kind`.
@@ -970,10 +1030,30 @@ Plan:   docs/PHASE_6_PLAN.md
     keyword-only parameter on every refresh function;
     package does NOT import `app.v2.runtime._defaults`.
 
+### 9.1.a Closed in round-2 reviewer
+
+13. ~~UTC-only vs tz-aware ambiguity.~~ **CLOSED** (L229
+    fix): `_require_utc` enforces `utcoffset() ==
+    timedelta(0)`; non-UTC offsets raise. Validator renamed
+    from `_require_tz_aware` so the contract is obvious at
+    call sites.
+14. ~~`NoCacheAvailable(kind, path)` requires path the
+    resolver doesn't have.~~ **CLOSED** (L154 fix): `path`
+    is now optional with `default=None`. Loader callers pass
+    the on-disk path; resolver callers pass `None`. Message
+    body switches between `missing at <path>` and `not
+    provided` so logs are unambiguous.
+15. ~~Owner-mismatch log emission unpinned.~~ **CLOSED**
+    (L397 fix): §5.4 now asserts a single WARNING-level
+    `caplog` record on mismatch, no record on matching
+    owner.
+16. ~~Stale subclass count in §1.6.~~ **CLOSED** (L71 nit):
+    "five subclasses" reflecting `ChannelAmbiguous`.
+
 ### 9.2 Still open
 
-None — round-1 reviewer closed every prior open item. New
-items will populate here if reviewer rounds 2+ surface gaps.
+None — round-2 reviewer closed every prior open item. New
+items will populate here if reviewer rounds 3+ surface gaps.
 
 ---
 
