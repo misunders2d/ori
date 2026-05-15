@@ -565,6 +565,27 @@ def test_wakeup_calls_assert_connection_ready(tmp_path):
         )
 
 
+def test_naive_now_wins_over_connection_not_ready(tmp_path):
+    """Validation ordering pin: ``now`` is validated BEFORE
+    ``assert_connection_ready``. A bare/unmigrated conn paired
+    with a naive ``now`` must surface ``NaiveDatetimeError``,
+    not ``ConnectionNotReady`` — argument validation belongs
+    to the caller's bug, not to the DB state. Mirrors the
+    same fix scan_stale_runs landed for its timeout guards."""
+    bare = sqlite3.connect(str(tmp_path / "bare.db"))
+    run_factory, _ = _run_counter()
+    evt_factory, _ = _evt_counter()
+    naive = datetime(2026, 5, 15, 9, 0)
+    with pytest.raises(NaiveDatetimeError, match="now"):
+        wakeup(
+            bare,
+            schedule_id="ghost",
+            now=naive,
+            run_id_factory=run_factory,
+            event_id_factory=evt_factory,
+        )
+
+
 # ===========================================================================
 # Atomicity: Run insert rolls back if event insert fails
 # ===========================================================================

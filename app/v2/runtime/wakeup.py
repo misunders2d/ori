@@ -120,12 +120,17 @@ def wakeup(
     landed). There is no in-flight window where we could read
     "active", get paused, and still insert.
     """
-    assert_connection_ready(conn)
+    # Validate ``now`` BEFORE ``assert_connection_ready``
+    # (which runs PRAGMA / SELECT against the DB), so a
+    # bad-arg caller never touches the database. Same
+    # ordering rule used in scan_stale_runs after the round-4
+    # reviewer fix.
     if now.tzinfo is None:
         raise NaiveDatetimeError(
             f"naive datetime in now: {now!r} — attach tzinfo "
             "(typically datetime.timezone.utc) before passing."
         )
+    assert_connection_ready(conn)
 
     inserted: list[str] = []
     with transaction(conn):
