@@ -53,13 +53,18 @@ class IllegalTransitionError(ValueError):
     """
 
 
-# Exact phase-4 transition set. Reviewer round-3 approved this
-# table; any change must be reviewer-approved + documented in
-# the plan. Adding an entry here without updating the worker /
-# recovery scan that performs it would be a policy bug.
+# Exact transition set. Reviewer round-3 approved the phase-4
+# 5-entry table; phase-7 slice-5a adds the
+# ``(PENDING, CANCELLED)`` entry so the authoring layer's
+# archive helper can route every pending Run through the
+# chokepoint when a schedule is archived. Any further change
+# must be reviewer-approved + documented in the relevant
+# plan. Adding an entry here without a call site that
+# performs it would be a policy bug.
 LEGAL_TRANSITIONS: frozenset[tuple[RunStatus, RunStatus]] = frozenset(
     {
         (RunStatus.PENDING, RunStatus.CLAIMED),    # worker claim
+        (RunStatus.PENDING, RunStatus.CANCELLED),  # phase-7 archive helper
         (RunStatus.CLAIMED, RunStatus.RUNNING),    # worker body start
         (RunStatus.CLAIMED, RunStatus.FAILED),     # recovery claimed-stale
         (RunStatus.RUNNING, RunStatus.SUCCEEDED),  # worker body completed

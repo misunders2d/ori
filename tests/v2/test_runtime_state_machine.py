@@ -5,14 +5,15 @@ Pins per ``docs/PHASE_4_PLAN.md`` §3 + §3.1 + §3.1.1:
 - Every entry in ``LEGAL_TRANSITIONS`` returns True from
   ``is_legal_transition`` and does NOT raise from
   ``assert_legal_transition``.
-- Future transitions §3.1.1 (pending→cancelled,
-  claimed→pending, running→pending) are NOT in
-  ``LEGAL_TRANSITIONS`` and explicitly raise from
-  ``assert_legal_transition``.
+- Remaining future transitions §3.1.1 (claimed→pending,
+  running→pending) are NOT in ``LEGAL_TRANSITIONS`` and
+  explicitly raise from ``assert_legal_transition``.
+  Phase-7 slice 5a admitted ``(PENDING, CANCELLED)`` to
+  the legal set for the archive helper.
 - Any other illegal pair (terminal → anything, self-loops,
   pending → succeeded etc.) raises.
 - ``IllegalTransitionError`` is a ``ValueError`` subclass.
-- ``LEGAL_TRANSITIONS`` is the exact 5-element set.
+- ``LEGAL_TRANSITIONS`` is the exact 6-element set.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from app.v2.runtime.state_machine import (
 _EXPECTED_LEGAL = frozenset(
     {
         (RunStatus.PENDING, RunStatus.CLAIMED),
+        (RunStatus.PENDING, RunStatus.CANCELLED),  # phase-7 slice 5a
         (RunStatus.CLAIMED, RunStatus.RUNNING),
         (RunStatus.CLAIMED, RunStatus.FAILED),
         (RunStatus.RUNNING, RunStatus.SUCCEEDED),
@@ -44,10 +46,11 @@ _EXPECTED_LEGAL = frozenset(
 )
 
 # Future transitions per plan §3.1.1 — these MUST NOT appear in
-# phase-4 LEGAL_TRANSITIONS, otherwise the worker / recovery
-# scan could perform them silently.
+# LEGAL_TRANSITIONS, otherwise the worker / recovery scan
+# could perform them silently. Phase-7 slice 5a removed
+# ``(PENDING, CANCELLED)`` from this list because the archive
+# helper now owns that transition through the chokepoint.
 _FUTURE_FORBIDDEN_PAIRS = [
-    (RunStatus.PENDING, RunStatus.CANCELLED),  # pause/archive admin path
     (RunStatus.CLAIMED, RunStatus.PENDING),    # CLEAR_CLAIM admin tool
     (RunStatus.RUNNING, RunStatus.PENDING),    # retry chain re-status
 ]
@@ -58,10 +61,12 @@ _FUTURE_FORBIDDEN_PAIRS = [
 # ---------------------------------------------------------------------------
 
 
-def test_legal_transitions_is_exact_five_entry_set():
-    """Reviewer round-3 explicitly approved this 5-entry
-    table. Any drift (addition or deletion) must be
-    reviewer-approved + documented in the plan."""
+def test_legal_transitions_is_exact_six_entry_set():
+    """Reviewer round-3 approved a 5-entry table for phase 4.
+    Phase-7 slice 5a added the ``(PENDING, CANCELLED)``
+    transition for the archive helper, bringing the set to
+    six entries. Any further drift must be reviewer-approved
+    + documented in the relevant plan."""
     assert LEGAL_TRANSITIONS == _EXPECTED_LEGAL
 
 
@@ -71,11 +76,11 @@ def test_legal_transitions_is_frozen():
     assert isinstance(LEGAL_TRANSITIONS, frozenset)
 
 
-def test_legal_transitions_size_is_five():
+def test_legal_transitions_size_is_six():
     """Explicit size pin — independent of the contents check —
     so a future regression that swaps an entry rather than
     adds/removes one still shows up here."""
-    assert len(LEGAL_TRANSITIONS) == 5
+    assert len(LEGAL_TRANSITIONS) == 6
 
 
 # ---------------------------------------------------------------------------
