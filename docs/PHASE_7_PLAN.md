@@ -38,14 +38,33 @@ in that commit.
 
 1. **Draft storage** — `app/v2/authoring/drafts.py`.
    File-backed JSON at
-   `tmp/v2_drafts/<session_id>/<draft_id>.json` with atomic
-   `tempfile.mkstemp` + `os.rename` writes (mirrors the
-   phase-6 loader). `DraftStore` class encapsulates the
-   path resolver + CRUD helpers. Pydantic
-   `ScheduleSpecDraft` model — a relaxed superset of
+   `tmp/v2_drafts/<session_id_slug>/<draft_id_slug>.json`
+   with atomic `tempfile.mkstemp` + `os.rename` writes
+   (mirrors the phase-6 loader). `DraftStore` class
+   encapsulates the path resolver + CRUD helpers.
+
+   **Path-traversal fence (round-2 reviewer L41 fix):**
+   `session_id` and `draft_id` are user / LLM-supplied
+   strings; without a fence a value like `"../../etc"`
+   would escape the base directory. Two coordinated checks:
+   - **Slug regex:** every id segment must match
+     `^[A-Za-z0-9_-]{1,128}$`. Anything else raises
+     `ValueError("invalid session_id"|"invalid draft_id")`
+     BEFORE any I/O.
+   - **`Path.resolve()` guard:** after building the target
+     path, `resolved.is_relative_to(base.resolve())` MUST be
+     True. A symlink that points outside the base is
+     refused by this check.
+
+   Pydantic `ScheduleSpecDraft` model — a relaxed superset of
    `ScheduleSpec` whose required fields can be `None`
-   while authoring is in flight; `to_spec()` converts to a
-   `ScheduleSpec` and runs `validate_schedule_spec`.
+   while authoring is in flight; `to_spec(*, clock)` converts
+   to a `ScheduleSpec` (calling `with_fresh_hash()`).
+   `to_spec` does NOT call `validate_schedule_spec` itself —
+   that's the compile-tool's job (round-2 reviewer Q6
+   answer: the chokepoint takes
+   `validate_schedule_spec(spec)` directly with no helper
+   wrapper for the reminder-only flow phase 7 ships).
 
 2. **Setter tools** — `app/v2/authoring/setters.py`.
    Per-field mutation helpers each of which:
@@ -86,38 +105,86 @@ in that commit.
      the setter returns the error in the `ToolResponse` so
      the LLM re-prompts the user.
 
-4. **Compile + commit tools** —
-   `app/v2/authoring/compile.py`.
+4. **Compile + list + discard tools** —
+   `app/v2/authoring/compile.py`. **Commit verb is OUT of
+   phase 7 (round-2 reviewer L95 fix, Q5 answer):** landing
+   a row in the schedules table before phase-8's dry-run +
+   freeze handshake would contradict the design freeze
+   gate AND would bypass the `schedule_created` event
+   ledger entry the EventLedger needs. Phase 7 ships only
+   the verbs that do NOT mutate the v2 DB; phase 8 owns
+   the `freeze + commit + schedule_created event` atomic
+   triplet.
+
    - `schedule_draft_compile(draft_id) -> ToolResponse`:
-     funnels the draft through `validate_schedule_spec` and
-     returns the result. Does NOT freeze (freeze gates on
-     dry-run, phase 8).
-   - `schedule_draft_commit(draft_id, conn) -> ToolResponse`:
-     calls `validate_schedule_spec` then `insert_schedule`
-     (phase-3 storage); on success deletes the draft file.
-     This is the "ScheduleSpec lands in the v2 DB" verb.
-     Until phase 9 cutover, no APScheduler job is registered;
-     the spec sits in the v2 schedules table until a future
-     phase mounts the binding and registers active rows.
-     **Optional reviewer call:** push commit to phase 8 with
-     freeze; default phase-7 includes it for test-rig parity.
+     funnels the draft through `validate_schedule_spec`
+     (with `execution_plans=None, registries=None` —
+     reminder-only flow per Q6) and returns the result.
+     Does NOT write to the v2 DB and does NOT freeze.
+     Returns `ToolResponse.ok(spec=spec.model_dump())` on
+     success so the LLM (and downstream phase-8 freeze)
+     sees the canonical body.
    - `schedule_draft_discard(draft_id) -> ToolResponse`:
      deletes the draft file. Idempotent.
    - `schedule_draft_list(session_id) -> ToolResponse`:
      lists draft ids for a session.
 
 5. **Lifecycle tools** — `app/v2/authoring/lifecycle.py`.
-   Wrap the phase-3 storage helpers with a `ToolResponse`
-   shape:
-   - `schedule_pause(schedule_id, conn)`
-   - `schedule_resume(schedule_id, conn)`
-   - `schedule_archive(schedule_id, conn)`
-   - `schedule_revive(schedule_id, conn)`
+   **Round-2 reviewer L109 + L442 + L598 fix:** lifecycle
+   tools must (a) emit the matching EventLedger event in
+   the SAME transaction as the status update, (b) honour
+   the documented archived→PAUSED revive transition (admin
+   re-approves before resume), and (c) cancel pending Runs
+   when a schedule is archived.
+
+   New helper in `app/v2/storage/schedules.py` (or a thin
+   wrapper module under `app/v2/authoring/`):
+
+   ```python
+   def update_status_with_event(
+       conn: sqlite3.Connection,
+       schedule_id: str,
+       new_status: ScheduleStatus,
+       event_kind: EventKind,
+       *,
+       event_id_factory: Callable[[], str],
+       clock: Callable[[], datetime],
+       cancel_pending_runs: bool = False,
+   ) -> None:
+       """Atomic status flip + EventLedger append. When
+       ``cancel_pending_runs=True`` also flips every pending
+       Run for this schedule to ``cancelled`` and appends a
+       ``run_cancelled`` event for each — all in one
+       transaction. Used by ``schedule_archive``.
+       """
+   ```
+
+   The four authoring tools:
+   - `schedule_pause(schedule_id, conn, *, event_id_factory, clock)`
+     — active → paused. Emits ``schedule_paused``.
+   - `schedule_resume(schedule_id, conn, *, event_id_factory, clock)`
+     — paused → active. Emits ``schedule_resumed``. Refuses
+     when current status is archived (design §11.4: admin
+     must revive to PAUSED first).
+   - `schedule_archive(schedule_id, conn, *, event_id_factory, clock)`
+     — active / paused → archived. Emits
+     ``schedule_archived``. Cancels every pending Run for
+     this schedule (pending → cancelled + ``run_cancelled``
+     event per Run) in the same transaction. Implements the
+     design-required atomic cancel.
+   - `schedule_revive(schedule_id, conn, *, event_id_factory, clock)`
+     — archived → **PAUSED** (round-2 reviewer L442 fix —
+     not directly back to active). Emits
+     ``schedule_revived``. Caller must explicitly call
+     ``schedule_resume`` afterwards to flip to active; the
+     two-step ensures the admin re-approves before fires
+     resume.
 
    Phase 7 does NOT call the phase-5
    `app.v2.runtime.lifecycle` hooks — those fire on the
    binding, which is not mounted in phase 7. Phase 9 cutover
-   wires the hook calls.
+   wires the hook calls alongside the status-and-event
+   helper.
 
 6. **Toolset bundle** — `app/v2/toolsets/authoring.py`.
    ADK `BaseToolset` subclass exposing every authoring tool
@@ -188,6 +255,7 @@ tests/v2/test_authoring_drafts.py
 tests/v2/test_authoring_setters.py
 tests/v2/test_authoring_delivery.py
 tests/v2/test_authoring_compile.py
+tests/v2/test_authoring_lifecycle_helper.py
 tests/v2/test_authoring_lifecycle.py
 tests/v2/test_authoring_toolset.py
 ```
@@ -305,16 +373,34 @@ via `base=tmp_path`.
 ### 3.3 `setters.py`
 
 Each setter is an async function with the documented
-signature; each one:
+signature; each one (round-2 reviewer Q8 answer — validate
+the changed field immediately; full
+``validate_schedule_spec`` only when the draft is complete):
+
 1. Loads via `DraftStore.read`.
-2. Mutates the draft.
-3. Validates the partial draft if `missing_required_fields`
-   is empty (else returns `ToolResponse.not_ready`).
-4. Writes via `DraftStore.write`.
-5. Returns `ToolResponse.ok(draft_id=...)`.
+2. **Per-field validation BEFORE mutation:** construct the
+   field-typed Pydantic model (e.g. `CronTrigger(...)`,
+   `UserRef(...)`, `FailurePolicy(...)`) from the raw
+   arguments. A `ValidationError` here →
+   `ToolResponse.validation_failed` with the pydantic
+   issues mapped to `ValidationIssue` shape. This catches
+   typos (e.g. naive ISO datetime to `set_one_off`, numeric
+   DOW to `set_cron` via the phase-5 `cron_guard`) the
+   moment the LLM passes a bad arg.
+3. Apply the field update to the draft.
+4. If `draft.missing_required_fields()` is empty AND the
+   final-spec rules apply: build the spec via `to_spec` and
+   call `validate_schedule_spec(spec)`. Issues →
+   `ToolResponse.validation_failed`; else proceed.
+5. If the draft is still incomplete: skip the full-spec
+   validate and write the partial draft.
+6. Writes via `DraftStore.write`.
+7. Returns `ToolResponse.ok(draft_id=...)` or
+   `ToolResponse.not_ready(missing_fields=...)` when the
+   write succeeded but the draft is not yet a complete spec.
 
 `schedule_draft_start` is the only setter that creates a
-fresh `ScheduleSpecDraft`.
+fresh `ScheduleSpecDraft` (and writes the seed file).
 
 ### 3.4 `delivery.py`
 
@@ -327,25 +413,35 @@ async def schedule_set_delivery(
     session_id: str,
     store: DraftStore,
     cache_loader: Callable[[], Optional[SlackChannelsCache]],
+    cache_saver: Callable[[SlackChannelsCache], None],
     slack_client: Optional[SlackChannelsClient],
     clock: Callable[[], datetime],
     expected_owner_id: str,
 ) -> ToolResponse:
     """Resolve ``channel_lookup`` against the registry cache.
 
+    All DI args are REQUIRED (round-2 reviewer L365 / Q10):
+    no env-derived defaults sneak into phase 7. The toolset
+    (§3.7) constructs the loader / saver / client closures
+    against its constructor args.
+
     Flow:
     1. ``cache = cache_loader()``.
     2. If ``cache is None``:
-       a. If ``slack_client is None`` → raise
-          ``NoCacheAvailable`` (path=None); the tool catches
-          and returns ``ToolResponse.cache_unavailable``.
+       a. If ``slack_client is None`` → return
+          ``ToolResponse.cache_unavailable(kind="slack_channels",
+          network_error="no client configured")``.
        b. Else: ``refresh_slack_channels(slack_client,
-          expected_owner_id=..., clock=clock)``. On
-          ``Exception`` → wrap as
-          ``NoCacheAndNetworkDown(kind="slack_channels",
-          network_error=str(exc))`` and return
-          ``ToolResponse.cache_unavailable``.
-       c. Save the fresh cache via ``save_cache``.
+          expected_owner_id=expected_owner_id, clock=clock)``.
+          On ``Exception`` → return
+          ``ToolResponse.cache_unavailable(kind="slack_channels",
+          network_error=str(exc))`` (raise path closes the
+          phase-6 Q8 NoCacheAndNetworkDown contract at this
+          layer).
+       c. Save the fresh cache via ``cache_saver(cache)``
+          (Q9 — explicit saver DI; the auto-save side
+          effect stays but the path/saver are caller-supplied
+          so tests can pin or stub).
     3. Call ``resolve_channel(channel_lookup, cache)``:
        - ``CacheMiss`` → return ``ToolResponse.validation_failed``
          with a synthetic ValidationIssue naming the lookup.
@@ -353,17 +449,17 @@ async def schedule_set_delivery(
          ``ToolResponse.validation_failed`` listing the
          candidate ids in the issue payload.
     4. On success, build the ChannelRef with
-       ``external_id = entry.id``, save the draft,
-       return ``ToolResponse.ok(draft_id=...)``.
+       ``external_id = entry.id`` + ``kind = "slack"``, save
+       the draft, return ``ToolResponse.ok(draft_id=...)``.
     """
 ```
 
-The DI shape (`cache_loader`, `slack_client`,
-`expected_owner_id`) makes the function testable without
-real Slack credentials. The phase-9 cutover supplies
-production wiring; phase 7 provides a thin factory that
-defaults to phase-6's `load_cache` + an env-derived
-`expected_owner_id`.
+The DI shape (`cache_loader`, `cache_saver`, `slack_client`,
+`expected_owner_id`, `clock`) makes the function testable
+without real Slack credentials AND without disk I/O if the
+test stubs both loader and saver. Phase 9 cutover supplies
+production wiring; phase 7 does NOT auto-derive any of these
+from env or globals.
 
 ### 3.5 `compile.py`
 
@@ -376,36 +472,30 @@ async def schedule_draft_compile(
     clock: Callable[[], datetime],
 ) -> ToolResponse:
     """Validate the draft and return the canonical
-    ScheduleSpec body (does NOT freeze).
+    ScheduleSpec body (does NOT freeze, does NOT write to
+    the v2 DB — round-2 reviewer L95).
 
     Workflow:
     1. ``draft = store.read(session_id, draft_id)``.
     2. ``missing = draft.missing_required_fields()``. If
        non-empty → ``ToolResponse.not_ready(missing_fields=missing)``.
     3. ``spec = draft.to_spec(clock=clock)``.
-    4. ``result = validate_schedule_spec(spec, registry=...)``.
-       (Registry param comes from the existing phase-3
-       ``RegistrySnapshot`` shape — DI'd.)
-    5. If ``result.issues``: ``ToolResponse.validation_failed``.
+    4. ``result = validate_schedule_spec(spec)`` — no
+       ``execution_plans`` and no ``registries`` (round-2
+       reviewer L386 + Q6: the reminder-only flow phase 7
+       ships does not author ExecutionPlans, so both
+       optional args stay ``None`` and the validator skips
+       the plan / adapter rules). Future plan-backed flows
+       DI'd ``execution_plans`` + ``registries`` then.
+    5. If ``result.ok`` is False:
+       ``ToolResponse.validation_failed(issues=result.issues)``.
     6. Else: ``ToolResponse.ok(spec=spec.model_dump())``.
 
-    Optional follow-up (slice 5 reviewer call): wire
-    ``schedule_draft_commit`` to call this then
-    ``insert_schedule(conn, spec)``. Default: ship the
-    commit verb here so the test rig can land a row; the
-    binding mount remains a phase-9 concern.
+    **Commit verb deferred to phase 8** alongside the
+    freeze + ``schedule_created`` event triplet (round-2
+    reviewer L95 + Q5). Phase 7 ships compile + discard +
+    list only.
     """
-
-
-async def schedule_draft_commit(
-    draft_id: str,
-    *,
-    session_id: str,
-    store: DraftStore,
-    conn: sqlite3.Connection,
-    clock: Callable[[], datetime],
-) -> ToolResponse:
-    """Compile + insert. On success deletes the draft."""
 
 
 async def schedule_draft_discard(
@@ -413,33 +503,109 @@ async def schedule_draft_discard(
     *,
     session_id: str,
     store: DraftStore,
-) -> ToolResponse: ...
+) -> ToolResponse:
+    """Delete the draft file. Idempotent — repeat call
+    returns ``ToolResponse.ok`` with a "already absent"
+    hint in ``message``."""
 
 
 async def schedule_draft_list(
     session_id: str,
     *,
     store: DraftStore,
-) -> ToolResponse: ...
+) -> ToolResponse:
+    """Return the draft ids for ``session_id`` in
+    deterministic order (sorted lexicographically). Empty
+    session → ``ToolResponse.ok`` with an empty list."""
 ```
 
 ### 3.6 `lifecycle.py`
 
+Round-2 reviewer L109 + L442 + L598 fix: every lifecycle
+tool funnels through a single atomic helper that flips the
+status AND appends the matching EventLedger event in one
+transaction. ``schedule_archive`` additionally cancels every
+pending Run in the same transaction.
+
 ```python
 async def schedule_pause(
-    schedule_id: str, *, conn: sqlite3.Connection
+    schedule_id: str,
+    *,
+    conn: sqlite3.Connection,
+    event_id_factory: Callable[[], str],
+    clock: Callable[[], datetime],
 ) -> ToolResponse:
-    """Calls
-    ``app.v2.storage.schedules.update_schedule_status(conn,
-    schedule_id, ScheduleStatus.PAUSED)``. Returns
-    ``ToolResponse.ok(schedule_id=...)`` on success; raises
-    ``ToolResponse.not_found`` shape on missing row.
+    """Active → paused. Atomic status flip + ``schedule_paused``
+    event append.
+
+    Returns ``ToolResponse.ok(schedule_id=...)`` on success;
+    ``ToolResponse.not_found`` on missing row.
+
+    Idempotent against already-paused: the second call still
+    appends a ``schedule_paused`` event (audit trail logs the
+    operator action even if the status was unchanged).
+    Reviewer call open in §9.2 #15.
     """
 
 
-async def schedule_resume(...): ...   # ScheduleStatus.ACTIVE
-async def schedule_archive(...): ...  # ScheduleStatus.ARCHIVED
-async def schedule_revive(...): ...   # archived → active path
+async def schedule_resume(
+    schedule_id: str,
+    *,
+    conn: sqlite3.Connection,
+    event_id_factory: Callable[[], str],
+    clock: Callable[[], datetime],
+) -> ToolResponse:
+    """Paused → active. Atomic status flip +
+    ``schedule_resumed`` event append.
+
+    Refuses (returns ``ToolResponse.validation_failed`` with
+    a synthetic ValidationIssue) when the current status is
+    ``archived`` — design §11.4 / round-2 reviewer L442
+    requires admin to ``schedule_revive`` to PAUSED first
+    so a re-approval gate exists.
+    """
+
+
+async def schedule_archive(
+    schedule_id: str,
+    *,
+    conn: sqlite3.Connection,
+    event_id_factory: Callable[[], str],
+    clock: Callable[[], datetime],
+) -> ToolResponse:
+    """Active / paused → archived. Atomic in one TX:
+
+    1. Flip schedule status to ``archived`` + append
+       ``schedule_archived`` event.
+    2. For every pending Run with ``schedule_id = X``: flip
+       Run status to ``cancelled`` + append a
+       ``run_cancelled`` event with reason
+       ``"schedule_archived"``. Each Run gets its own event
+       id from ``event_id_factory()``.
+
+    The atomic cancellation is the design-required
+    "archived schedules cancel existing pending Runs"
+    behaviour (round-2 reviewer L598). Returns
+    ``ToolResponse.ok`` with a payload field describing
+    how many pending Runs were cancelled.
+    """
+
+
+async def schedule_revive(
+    schedule_id: str,
+    *,
+    conn: sqlite3.Connection,
+    event_id_factory: Callable[[], str],
+    clock: Callable[[], datetime],
+) -> ToolResponse:
+    """Archived → PAUSED (round-2 reviewer L442). The
+    two-step archived → paused → active gate ensures an
+    admin re-approves before any new fires happen.
+
+    Atomic status flip + ``schedule_revived`` event append.
+    Caller must explicitly call ``schedule_resume`` to
+    move the spec to ``active``.
+    """
 ```
 
 Phase 7 does NOT call `app.v2.runtime.lifecycle` hooks; the
@@ -465,10 +631,16 @@ class AuthoringToolset(BaseToolset):
         *,
         store: DraftStore,
         clock: Callable[[], datetime],
+        event_id_factory: Callable[[], str],
+        expected_owner_id: str,           # REQUIRED — no env default (round-2 L365 / Q10).
         slack_client: Optional[SlackChannelsClient] = None,
-        expected_owner_id: Optional[str] = None,
-        registry: RegistrySnapshot,
-    ) -> None: ...
+        cache_base: Optional[pathlib.Path] = None,  # registry-cache base path; DI'd (Q9).
+    ) -> None:
+        """No ``registries`` kwarg — phase 7 calls
+        ``validate_schedule_spec(spec)`` with neither
+        ``execution_plans`` nor ``registries`` (Q6 reminder-
+        only flow). Future plan-backed flows extend this
+        signature."""
 
     async def get_tools(self, ctx=None) -> list[FunctionTool]: ...
 ```
@@ -487,17 +659,28 @@ The toolset uses ADK's `BaseToolset` per the existing
 | 1 | `responses.py` + `drafts.py` (ScheduleSpecDraft + DraftStore) | `test_authoring_responses.py` + `test_authoring_drafts.py` |
 | 2 | `setters.py` (start / set_description / set_owner / set_cron / set_one_off / set_failure_policy) | `test_authoring_setters.py` |
 | 3 | `delivery.py` (set_delivery + resolver wiring + NoCacheAndNetworkDown raise path) | `test_authoring_delivery.py` |
-| 4 | `compile.py` (compile / commit / discard / list) | `test_authoring_compile.py` |
-| 5 | `lifecycle.py` (pause / resume / archive / revive) | `test_authoring_lifecycle.py` |
-| 6 | `app/v2/toolsets/authoring.py` + package smoke | `test_authoring_toolset.py` |
+| 4 | `compile.py` (compile / discard / list — NO commit, per round-2 L95 / Q5) | `test_authoring_compile.py` |
+| 5a | `update_status_with_event` helper in storage + tests | new helper tests in `test_authoring_lifecycle_helper.py` |
+| 5b | `lifecycle.py` (pause / resume / archive / revive) with event-id factory DI, archive cancellation of pending Runs, archived → PAUSED revive | `test_authoring_lifecycle.py` |
+| 6 | `app/v2/toolsets/authoring.py` + ToolDescriptor registration (Q7) + package smoke | `test_authoring_toolset.py` |
 | closeout | acceptance + tag `v2-phase-7-complete` (gated on codex pass) | — |
 
-Slice 6 introduces the new `app/v2/toolsets/` directory. If
-phase-2's `app/v2/registry.py` `ToolRegistry` is the
-canonical surface for tool descriptors, slice 6 also
-registers the new tools' `ToolDescriptor` entries (with
-appropriate metadata tags per design §5.4) so phase-9
-cutover finds them via the registry.
+Slice 5 is split into the **5a helper** (atomic
+`update_status_with_event` over the schedules + events
+tables, with the pending-Run cancellation branch for the
+archive path) and the **5b lifecycle tools** that consume
+it. The split is so the helper's transaction semantics
+(rollback on any single sub-step failure) get focused
+reviewer attention before four tools depend on it.
+
+Slice 6 introduces the new `app/v2/toolsets/` directory.
+Per Q7 answer it ALSO registers every authoring tool as a
+`ToolDescriptor` in `app/v2/registry.py:ToolRegistry` with
+the appropriate metadata tags per design §5.4 (mostly
+`write_external` for the setters/lifecycle/compile, plus
+`uses_oauth` on `schedule_set_delivery` because it can
+trigger a Slack API call). Metadata-only registration —
+no agent mount in phase 7.
 
 ---
 
@@ -528,6 +711,20 @@ plan revision rounds may add pins.
   previous draft (mirror phase-6 pin).
 - Concurrent same-pid writes do not collide (mirror phase-6
   pin via `tempfile.mkstemp`).
+- **Path-traversal fence (L41 fix):**
+  - `DraftStore.read(session_id="../etc", draft_id="x")`
+    → `ValueError("invalid session_id")`.
+  - `DraftStore.write(session_id="ok", draft=Draft(id="../a"))`
+    → `ValueError("invalid draft_id")`.
+  - Absolute-path id (`"/tmp/foo"`) rejected.
+  - Backslash traversal (`"..\\etc"`) rejected.
+  - Empty string rejected.
+  - String of 129 chars (slug regex max 128) rejected.
+  - Symlink that points outside the base directory →
+    `ValueError` from the `is_relative_to(base.resolve())`
+    guard. Test creates `tmp_path/v2_drafts/<session>`
+    pointing at `tmp_path/escape/` and asserts the call
+    refuses.
 - `ScheduleSpecDraft.missing_required_fields` reports the
   unset required fields list.
 - `to_spec` raises when required fields are unset.
@@ -580,29 +777,72 @@ plan revision rounds may add pins.
 
 - Complete draft compiles to a valid `ScheduleSpec`; tool
   returns `ToolResponse.ok` with `spec` dict.
-- Incomplete draft → `ToolResponse.not_ready`.
+- Incomplete draft → `ToolResponse.not_ready` with the
+  `missing_fields` list.
 - Validation failure (e.g. hash drift) →
-  `ToolResponse.validation_failed`.
-- `schedule_draft_commit` inserts the row via
-  `insert_schedule` and deletes the draft file.
-- `schedule_draft_commit` on validation failure leaves the
-  draft file in place; no row inserted.
+  `ToolResponse.validation_failed` carrying the
+  `ValidationIssue` list verbatim.
+- `validate_schedule_spec` is called with `spec` ONLY (no
+  `execution_plans` / no `registries` kwargs — round-2
+  reviewer L386 / Q6). Pin via patching the function with
+  a spy that records the call's args + kwargs.
+- `schedule_draft_compile` does NOT write to the v2 DB.
+  Pin: spy on `insert_schedule` (mocked import); assert
+  zero calls.
+- `schedule_draft_compile` does NOT delete the draft file
+  (compile is non-destructive; phase 8 freeze + commit
+  takes over).
 - `schedule_draft_discard` deletes the draft file;
   idempotent (second call returns `ToolResponse.ok` with a
-  "already absent" hint).
-- `schedule_draft_list` returns the current draft ids;
-  empty list when no drafts.
+  "already absent" hint in `message`).
+- `schedule_draft_list` returns the current draft ids in
+  deterministic order; empty list when no drafts.
+- No `schedule_draft_commit` symbol exists in
+  `app/v2/authoring/compile.py` (round-2 reviewer L95 /
+  Q5 — commit deferred). Pin via
+  `assert not hasattr(compile_mod, "schedule_draft_commit")`.
 
-### 5.6 `test_authoring_lifecycle.py`
+### 5.6a `test_authoring_lifecycle_helper.py`
 
-- Each lifecycle tool updates the schedule status via the
-  phase-3 storage helper; pin by querying the row after.
-- Pause on missing schedule → `ToolResponse.not_found`.
-- Pause on already-paused schedule → idempotent
-  `ToolResponse.ok` (no error).
-- Phase-5 lifecycle hooks are NOT called by phase-7 tools
-  — pin via patching the hook module and asserting zero
-  calls (the binding-mount integration is phase-9 work).
+- `update_status_with_event` flips status AND appends the
+  matching event in one TX. Pin: query schedules + events
+  tables; both reflect the change after the call.
+- Missing schedule_id → `ScheduleNotFoundError`.
+- Helper rolls back on event-insert failure (simulate by
+  monkey-patching `events.insert` to raise after the
+  status update is staged). Pin: schedules row reverts to
+  the pre-call status; no event row exists.
+- Archive variant cancels every pending Run + appends a
+  `run_cancelled` event per Run, all in one TX. Pin via
+  seeding 3 pending Runs and asserting all 3 flip +
+  3 `run_cancelled` events land after one call.
+- Archive variant: a non-pending Run (running / succeeded
+  / failed) is NOT touched by the cancel branch.
+
+### 5.6b `test_authoring_lifecycle.py`
+
+- Each lifecycle tool returns `ToolResponse.ok` on success;
+  pin by querying schedules + events tables.
+- Each lifecycle tool returns `ToolResponse.not_found` for
+  a missing schedule.
+- `schedule_pause` on an already-paused schedule emits
+  another `schedule_paused` event (plan default per §9.2
+  #15 — keep audit trail).
+- `schedule_resume` on an archived schedule →
+  `ToolResponse.validation_failed` with an issue naming the
+  archived → PAUSED requirement (round-2 reviewer L442).
+- `schedule_archive` cancels every pending Run + payload
+  reports the cancelled count.
+- `schedule_revive` flips archived → **PAUSED** (round-2
+  reviewer L442). Subsequent `schedule_resume` then flips
+  PAUSED → active.
+- Phase-5 lifecycle hooks (`app.v2.runtime.lifecycle.*`)
+  are NOT called by phase-7 tools — pin via patching the
+  hook module's `on_schedule_paused/_archived/_resumed/_revised`
+  and asserting zero calls across all four tools.
+- `event_id_factory` is required (no default). Each event
+  insert uses the factory; sequential calls produce
+  distinct ids.
 
 ### 5.7 `test_authoring_toolset.py`
 
@@ -672,34 +912,51 @@ Cross-cutting smoke checks added or carried:
 3. `ScheduleSpecDraft` + `DraftStore` ship with atomic
    mkstemp+rename writes; same-pid concurrent write
    regression test green; AST pin on `to_spec` (no
-   `datetime.now`).
+   `datetime.now`); path-traversal fence (slug regex +
+   `Path.resolve().is_relative_to(base)`) pinned by
+   dedicated tests passing `../`, `..\\`, absolute paths,
+   and symlink-escape inputs.
 4. Six setters (`schedule_draft_start` / `set_description` /
    `set_owner` / `set_cron` / `set_one_off` /
-   `set_failure_policy`) call `validate_schedule_spec`
-   after mutation when the draft is complete; return
+   `set_failure_policy`) validate the changed field
+   immediately (Q8) and call `validate_schedule_spec(spec)`
+   (no `execution_plans`, no `registries` — Q6) after
+   mutation when the draft is complete; return
    `ToolResponse.not_ready` while still in flight.
 5. `schedule_set_delivery` resolves the channel via the
-   phase-6 cache; cache-absent + refresh-failure raises
-   `NoCacheAndNetworkDown` internally and returns
-   `ToolResponse.cache_unavailable` (Q8 raise path closed).
-6. `schedule_draft_compile` / `schedule_draft_commit` /
-   `schedule_draft_discard` / `schedule_draft_list` ship;
-   commit funnels through `validate_schedule_spec` and
-   `insert_schedule`.
-7. Four lifecycle tools update schedule status via the
-   phase-3 storage helper; idempotent; no phase-5 binding
-   hooks called.
-8. `AuthoringToolset` exposes every tool as a
-   `FunctionTool` via `BaseToolset.get_tools`. NOT
-   registered with any agent.
-9. Phase guard `--diff v2-phase-6-complete` clean.
-10. No v1 paths touched. `run_bot.py` untouched.
+   phase-6 cache; cache-absent + refresh-failure surfaces
+   as `ToolResponse.cache_unavailable` (Q8 raise path
+   closed). `cache_loader` / `cache_saver` / `slack_client`
+   / `expected_owner_id` / `clock` all REQUIRED DI args (no
+   env defaults — L365 / Q10).
+6. `schedule_draft_compile` / `schedule_draft_discard` /
+   `schedule_draft_list` ship. **No commit verb in phase
+   7** (round-2 reviewer L95 / Q5 — deferred to phase 8
+   alongside freeze + `schedule_created` event triplet).
+7. `update_status_with_event` helper exists; flips status
+   AND appends the matching EventLedger event in one
+   transaction. Archive variant additionally cancels pending
+   Runs (pending → cancelled + `run_cancelled` event per
+   Run) in the same transaction. Rollback-on-error pinned.
+8. Four lifecycle tools (`schedule_pause` / `_resume` /
+   `_archive` / `_revive`) call the helper.
+   `schedule_revive` transitions archived → **PAUSED**
+   (round-2 reviewer L442); `schedule_resume` refuses when
+   current status is archived. No phase-5 binding hooks
+   called.
+9. `AuthoringToolset` exposes every tool as a
+   `FunctionTool` via `BaseToolset.get_tools`. Every tool
+   has a `ToolDescriptor` registered in
+   `app/v2/registry.py:ToolRegistry` with §5.4 metadata
+   tags (Q7). NOT registered with any agent.
+10. Phase guard `--diff v2-phase-6-complete` clean.
+11. No v1 paths touched. `run_bot.py` untouched.
     `boot_runtime` untouched. `CoordinatorAgent` untouched.
-11. No `datetime.now()` / `uuid.uuid4()` outside
+12. No `datetime.now()` / `uuid.uuid4()` outside
     `_defaults.py`. AST pin on every authoring module.
-12. Full v2 test suite passes (existing 1366 + phase-7
+13. Full v2 test suite passes (existing 1366 + phase-7
     adds); no regressions.
-13. Annotated git tag `v2-phase-7-complete` created and
+14. Annotated git tag `v2-phase-7-complete` created and
     pushed (workflow pre-approved per phase 6 kickoff).
 
 ---
@@ -710,25 +967,32 @@ Cross-cutting smoke checks added or carried:
 v2 phase 7 complete
 
 Typed ADK authoring tools that build ScheduleSpec drafts
-step-by-step. File-backed draft storage with atomic writes;
-field setters that call validate_schedule_spec after every
-mutation; channel-resolution path that funnels through the
-phase-6 registry cache and raises NoCacheAndNetworkDown
-when both cache and refresh are unavailable; compile +
-commit verbs that land a row in the v2 schedules table;
-lifecycle tools (pause / resume / archive / revive) over
-phase-3 storage helpers. Toolset bundle in
+step-by-step. File-backed draft storage with atomic writes
+and a path-traversal fence; field setters that validate the
+changed field immediately and call validate_schedule_spec
+on completion; channel-resolution path that funnels through
+the phase-6 registry cache and surfaces cache-absent +
+refresh-failure as ToolResponse.cache_unavailable; compile /
+discard / list verbs (NO commit — deferred to phase 8 with
+freeze); lifecycle tools (pause / resume / archive / revive)
+over an atomic update_status_with_event helper that emits
+the matching EventLedger event in the same transaction.
+schedule_archive cancels every pending Run in the same TX;
+schedule_revive transitions archived → PAUSED (admin
+re-approves before resume). Toolset bundle in
 app/v2/toolsets/authoring.py exposes every tool as a
-FunctionTool but is NOT mounted on any agent.
+FunctionTool and registers a ToolDescriptor per tool — but
+the toolset is NOT mounted on any agent.
 
 NO production agent mounting. CoordinatorAgent untouched;
-boot_runtime untouched; no binding wiring. ExecutionPlan
-authoring (reasoning + source + emit) deferred to phases
-10 / 12. Dry-run + freeze deferred to phase 8. v1 still owns
-production wakeup until phase 9 cutover.
+boot_runtime untouched; no binding wiring; no env-derived
+defaults. ExecutionPlan authoring (reasoning + source +
+emit) deferred to phases 10 / 12. Dry-run + freeze +
+commit + schedule_created event deferred to phase 8. v1
+still owns production wakeup until phase 9 cutover.
 
 Design: docs/CONTRACTS_V2_DESIGN.md §5.1, §5.5, §5.7,
-        §12 step 7
+        §11.4, §12 step 7
 Plan:   docs/PHASE_7_PLAN.md
 ```
 
@@ -759,48 +1023,63 @@ Plan:   docs/PHASE_7_PLAN.md
    the toolset class; mounting on `CoordinatorAgent` is
    phase 9 cutover work.
 
+### 9.1.a Closed in round-2 reviewer
+
+5. ~~Path-traversal on draft store.~~ **CLOSED** (L41 fix):
+   slug regex `^[A-Za-z0-9_-]{1,128}$` + `Path.resolve()`
+   guard rejecting any target whose resolved path is not
+   relative to `base.resolve()`. Tests cover `../`, `..\\`,
+   absolute paths, and symlink-escape.
+6. ~~`schedule_draft_commit` lands rows before freeze.~~
+   **CLOSED** (L95 / Q5): commit verb DEFERRED to phase 8
+   alongside freeze + `schedule_created` event. Phase 7
+   ships compile + discard + list only.
+7. ~~Lifecycle status flips without events.~~ **CLOSED**
+   (L109): new `update_status_with_event` helper flips
+   status AND appends the matching EventLedger event in
+   one transaction. Pinned by rollback-on-error tests.
+8. ~~`schedule_revive` archived → active.~~ **CLOSED**
+   (L442): archived → **PAUSED** instead. Admin must call
+   `schedule_resume` separately. Two-step gate matches
+   design §11.4.
+9. ~~`schedule_archive` does not cancel pending Runs.~~
+   **CLOSED** (L598): archive variant of the helper
+   cancels every pending Run (pending → cancelled +
+   `run_cancelled` event per Run) in the same TX as the
+   status flip.
+10. ~~`expected_owner_id` env-derived default.~~ **CLOSED**
+    (L365 / Q10): REQUIRED DI on the toolset constructor
+    and on `schedule_set_delivery`. Env wiring is phase-9
+    cutover work.
+11. ~~`validate_schedule_spec(spec, registry=...)` API.~~
+    **CLOSED** (L386 / Q6): actual signature is
+    `validate_schedule_spec(spec, *, execution_plans=None,
+    registries=None)`. Phase 7 calls with both `None` —
+    reminder-only flow. Future plan-backed flows DI both.
+12. ~~`AuthoringToolset` registry integration.~~ **CLOSED**
+    (Q7): phase 7 registers a `ToolDescriptor` in
+    `app/v2/registry.py:ToolRegistry` for every authoring
+    tool with the §5.4 metadata tags. Metadata only — no
+    agent mount.
+13. ~~Setter partial-validation policy.~~ **CLOSED** (Q8):
+    setters validate the changed field immediately;
+    `validate_schedule_spec(spec)` runs ONLY when the
+    draft is complete.
+14. ~~Cache-save side effect.~~ **CLOSED** (Q9): keep the
+    auto-save after a successful refresh. `cache_saver` is
+    an explicit DI parameter on `schedule_set_delivery` so
+    tests stub it and phase-9 wires it.
+
 ### 9.2 Still open
 
-5. **`schedule_draft_commit` scope.** Default phase-7 ships
-   the commit verb so the test rig can land a v2 schedule
-   row without depending on phase-8's freeze. Reviewer call:
-   keep here or push to phase 8 alongside freeze?
-
-6. **Validation chokepoint signature.** The existing
-   `validate_schedule_spec` takes `(spec, registry)`. Phase
-   7 needs a `RegistrySnapshot`. The simplest path: an
-   empty / minimal registry that knows about no plan
-   descriptors (phase 7 doesn't author ExecutionPlans).
-   Reviewer call: ship a phase-7 helper that builds an
-   empty `RegistrySnapshot`, or expect the test rig to
-   construct one?
-
-7. **`AuthoringToolset` registry integration.** Phase-2's
-   `ToolRegistry` lives at `app/v2/registry.py`. Should
-   phase 7 add `ToolDescriptor` entries for every
-   authoring tool, or wait for phase 9 to do that when
-   binding mounts? Default: register descriptors here so
-   phase 9's wiring sees them.
-
-8. **Setter return-shape on a partially populated draft.**
-   Plan default: validation runs ONLY when the draft is
-   complete; otherwise return `not_ready`. Reviewer call:
-   should setters always run partial-validation and return
-   any catchable issues immediately?
-
-9. **`schedule_set_delivery` cache-save side effect.**
-   When the cache is refreshed inside the setter, plan
-   default is to save it to disk via `save_cache` so
-   subsequent setters reuse the fresh state. Reviewer call:
-   keep the side effect or surface a separate
-   `schedule_refresh_channel_cache` tool the LLM calls
-   explicitly?
-
-10. **`expected_owner_id` source.** Production needs a
-    workspace id (Slack T-id). Phase-7 plan defaults to a
-    DI'd `expected_owner_id` constructor arg on the
-    toolset. Reviewer call: env-derived default in phase
-    7, or defer to phase 9 cutover?
+15. **Idempotent-pause event behaviour.** Plan default
+    (§3.6): calling `schedule_pause` on an already-paused
+    schedule still appends a `schedule_paused` event for
+    operator-action audit. Reviewer call: keep, or make
+    the second call a no-op without an event? Default keeps
+    the audit trail; switching to a no-op would need
+    explicit operator action to disambiguate "intentional
+    re-pause" from "accidental double-click".
 
 ---
 
