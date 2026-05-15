@@ -536,6 +536,77 @@ async def test_boot_does_not_backfill_future_one_off(
 
 
 # ===========================================================================
+# Skip-policy enforcement (round-N reviewer): too-old +
+# backfill-failed OneOffs must NOT reach step-7 register
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_boot_excludes_max_age_skipped_one_off_from_register(
+    tmp_path, stub_binding, stub_worker_class
+):
+    """A OneOff older than max_backfill_age is recorded as
+    ``"missed beyond max_backfill_age"`` in step 5. Step 7
+    must NOT register it -- otherwise misfire_grace_time
+    could still let APScheduler fire the past DateTrigger
+    after resume, violating the skip policy. Step 6 also
+    evicts any persisted job for the same id."""
+    factory = _migrated_factory(tmp_path)
+    way_past = _NOW - timedelta(days=2)  # > default 24h
+    _seed_schedule(factory, _one_off(schedule_id="too_old", at=way_past))
+    handle = await boot_runtime(
+        factory,
+        clock=_fixed_clock,
+        run_id_factory=_fixed_run_id,
+        event_id_factory=_fixed_evt_id,
+    )
+    # Skipped at backfill -> registration_errors entry.
+    assert len(handle.registration_errors) == 1
+    assert handle.registration_errors[0].schedule_id == "too_old"
+    # NOT registered in step 7.
+    registered_ids = [s.id for s in stub_binding.registered_specs]
+    assert "too_old" not in registered_ids
+    # Persisted job evicted in step 6.
+    assert "too_old" in stub_binding.unregistered_ids
+
+
+@pytest.mark.asyncio
+async def test_boot_excludes_backfill_failed_one_off_from_register(
+    tmp_path, stub_binding, stub_worker_class, monkeypatch
+):
+    """A OneOff whose wakeup() raises during step 5 backfill
+    is recorded as ``"backfill failed: ..."``. Same skip-
+    policy as max-age: NOT registered in step 7, evicted in
+    step 6."""
+    factory = _migrated_factory(tmp_path)
+    past = _NOW - timedelta(minutes=10)
+    _seed_schedule(factory, _one_off(schedule_id="bad_one", at=past))
+    # Patch boot's local ``wakeup`` reference to raise.
+    monkeypatch.setattr(
+        boot_mod,
+        "wakeup",
+        lambda *a, **k: (_ for _ in ()).throw(
+            RuntimeError("synthetic wakeup failure")
+        ),
+    )
+    handle = await boot_runtime(
+        factory,
+        clock=_fixed_clock,
+        run_id_factory=_fixed_run_id,
+        event_id_factory=_fixed_evt_id,
+    )
+    assert len(handle.registration_errors) == 1
+    err = handle.registration_errors[0]
+    assert err.schedule_id == "bad_one"
+    assert "backfill failed" in err.error_message
+    # Not registered.
+    registered_ids = [s.id for s in stub_binding.registered_specs]
+    assert "bad_one" not in registered_ids
+    # Persisted job evicted.
+    assert "bad_one" in stub_binding.unregistered_ids
+
+
+# ===========================================================================
 # Jobstore reconcile (step 6)
 # ===========================================================================
 
@@ -719,6 +790,139 @@ async def test_shutdown_continues_when_worker_stop_raises(
     stopped_ids = sorted(w.worker_id for w in started if w.stopped)
     assert stopped_ids == ["worker-0", "worker-2"]
     # Binding still stopped despite the worker exception.
+    stub_binding.stop.assert_awaited_once()
+
+
+# ===========================================================================
+# Cleanup on post-start failure (round-N reviewer)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_boot_cleans_up_on_resume_failure(
+    tmp_path, stub_worker_class, monkeypatch
+):
+    """If ``binding.resume()`` raises, boot must stop the
+    binding it started in step 4 before re-raising.
+    Otherwise the caller has no handle to shut it down."""
+    factory = _migrated_factory(tmp_path)
+    binding = _make_stub_binding()
+    binding.resume.side_effect = RuntimeError("synthetic resume failure")
+    monkeypatch.setattr(boot_mod, "SchedulerBinding", lambda **kw: binding)
+
+    with pytest.raises(RuntimeError, match="synthetic resume failure"):
+        await boot_runtime(
+            factory,
+            clock=_fixed_clock,
+            run_id_factory=_fixed_run_id,
+            event_id_factory=_fixed_evt_id,
+        )
+    # Binding was started AND stopped (cleanup ran).
+    binding.start.assert_awaited_once_with(paused=True)
+    binding.stop.assert_awaited_once()
+    # No workers were ever started.
+    assert stub_worker_class.instances == []
+
+
+@pytest.mark.asyncio
+async def test_boot_cleans_up_on_worker_start_failure(
+    tmp_path, stub_binding, monkeypatch
+):
+    """If the Nth worker's ``start()`` raises, boot must
+    stop the (N-1) workers it already started, then stop
+    the binding, then re-raise. Leaking live workers + a
+    running scheduler is the failure mode this fix
+    prevents."""
+    factory = _migrated_factory(tmp_path)
+    started: list = []
+
+    class _WorkerStartRaiser:
+        instances = started
+
+        def __init__(self, **kwargs):
+            self.worker_id = kwargs.get("worker_id")
+            self.started = False
+            self.stopped = False
+            started.append(self)
+
+        async def start(self):
+            # Fail the second worker's start. First worker
+            # had already started -> must be stopped by
+            # cleanup.
+            if self.worker_id == "worker-1":
+                raise RuntimeError("synthetic worker start failure")
+            self.started = True
+
+        async def stop(self):
+            self.stopped = True
+
+    monkeypatch.setattr(boot_mod, "Worker", _WorkerStartRaiser)
+
+    with pytest.raises(RuntimeError, match="synthetic worker start failure"):
+        await boot_runtime(
+            factory,
+            worker_count=3,
+            clock=_fixed_clock,
+            run_id_factory=_fixed_run_id,
+            event_id_factory=_fixed_evt_id,
+        )
+
+    # Three Worker INSTANCES were constructed (boot loops
+    # worker_count times). Only worker-0 was started before
+    # worker-1's start raised.
+    assert len(started) == 2  # third never constructed
+    assert started[0].worker_id == "worker-0"
+    assert started[0].started is True
+    # Cleanup stopped the one running worker.
+    assert started[0].stopped is True
+    # Binding stopped during cleanup.
+    stub_binding.stop.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_boot_cleanup_continues_when_worker_stop_raises(
+    tmp_path, stub_binding, monkeypatch
+):
+    """During cleanup, a worker.stop() failure must NOT
+    prevent the binding from being stopped. Cleanup is
+    best-effort."""
+    factory = _migrated_factory(tmp_path)
+    started: list = []
+
+    class _MixedWorker:
+        instances = started
+
+        def __init__(self, **kwargs):
+            self.worker_id = kwargs.get("worker_id")
+            self.started = False
+            started.append(self)
+
+        async def start(self):
+            # Fail the THIRD start so the first two are
+            # already running when cleanup begins.
+            if self.worker_id == "worker-2":
+                raise RuntimeError("synthetic start failure")
+            self.started = True
+
+        async def stop(self):
+            # worker-0's stop raises; worker-1's stop
+            # succeeds. Cleanup must still call stop on
+            # both, then stop the binding.
+            if self.worker_id == "worker-0":
+                raise RuntimeError("synthetic stop failure")
+
+    monkeypatch.setattr(boot_mod, "Worker", _MixedWorker)
+
+    with pytest.raises(RuntimeError, match="synthetic start failure"):
+        await boot_runtime(
+            factory,
+            worker_count=3,
+            clock=_fixed_clock,
+            run_id_factory=_fixed_run_id,
+            event_id_factory=_fixed_evt_id,
+        )
+    # Despite worker-0's stop() raising, the binding is
+    # still stopped by the cleanup path.
     stub_binding.stop.assert_awaited_once()
 
 

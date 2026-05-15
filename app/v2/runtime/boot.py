@@ -202,132 +202,186 @@ async def boot_runtime(
         )
         await binding.start(paused=True)
 
-        registration_errors: list[RegistrationError] = []
-        backfilled_one_offs: list[BackfilledOneOff] = []
+        # Everything from here on holds live runtime
+        # resources (started scheduler thread + soon also
+        # started workers). Cleanup-on-error must stop them
+        # before the exception propagates, otherwise the
+        # caller has no handle to shut them down. Wrap in a
+        # ``try / except BaseException`` so cancellation
+        # also triggers cleanup; re-raise the original.
+        started_workers: list[Worker] = []
+        try:
+            registration_errors: list[RegistrationError] = []
+            backfilled_one_offs: list[BackfilledOneOff] = []
+            # Per round-N reviewer: a OneOff that was
+            # skipped or failed in step 5 must ALSO be
+            # excluded from step 7 register() AND have its
+            # persisted DateTrigger evicted in step 6.
+            # Without the exclusion, register() would add a
+            # past-due DateTrigger that misfire_grace_time
+            # could let APScheduler still fire after
+            # resume, violating the skip policy.
+            skipped_one_off_ids: set[str] = set()
 
-        # 5. OneOff boot backfill.
-        active_schedules = list_active_schedules(boot_conn)
-        for spec in active_schedules:
-            if not isinstance(spec.trigger, OneOffTrigger):
-                continue
-            fire_at = spec.trigger.at_iso_datetime
-            if fire_at > now:
-                continue  # Future OneOff -- register handles it.
-            if _has_run_row(boot_conn, spec.id):
-                continue  # Already fired -- mechanic 1 skips register too.
-            age = now - fire_at
-            if age > max_backfill_age:
-                msg = (
-                    f"missed beyond max_backfill_age "
-                    f"(age={age}, max={max_backfill_age})"
-                )
-                registration_errors.append(
-                    RegistrationError(
-                        schedule_id=spec.id, error_message=msg
+            # 5. OneOff boot backfill.
+            active_schedules = list_active_schedules(boot_conn)
+            for spec in active_schedules:
+                if not isinstance(spec.trigger, OneOffTrigger):
+                    continue
+                fire_at = spec.trigger.at_iso_datetime
+                if fire_at > now:
+                    continue  # Future OneOff -- register handles it.
+                if _has_run_row(boot_conn, spec.id):
+                    continue  # Already fired -- mechanic 1 skips register too.
+                age = now - fire_at
+                if age > max_backfill_age:
+                    msg = (
+                        f"missed beyond max_backfill_age "
+                        f"(age={age}, max={max_backfill_age})"
                     )
-                )
-                _logger.warning(
-                    "runtime.boot.backfill: skip schedule_id=%r %s",
-                    spec.id,
-                    msg,
-                )
-                continue
-            try:
-                inserted = wakeup(
-                    boot_conn,
-                    schedule_id=spec.id,
-                    now=now,
+                    registration_errors.append(
+                        RegistrationError(
+                            schedule_id=spec.id, error_message=msg
+                        )
+                    )
+                    skipped_one_off_ids.add(spec.id)
+                    _logger.warning(
+                        "runtime.boot.backfill: skip schedule_id=%r %s",
+                        spec.id,
+                        msg,
+                    )
+                    continue
+                try:
+                    inserted = wakeup(
+                        boot_conn,
+                        schedule_id=spec.id,
+                        now=now,
+                        run_id_factory=run_id_factory,
+                        event_id_factory=event_id_factory,
+                    )
+                except Exception as exc:
+                    registration_errors.append(
+                        RegistrationError(
+                            schedule_id=spec.id,
+                            error_message=f"backfill failed: {exc}",
+                        )
+                    )
+                    skipped_one_off_ids.add(spec.id)
+                    _logger.exception(
+                        "runtime.boot.backfill: failed schedule_id=%r",
+                        spec.id,
+                    )
+                    continue
+                for run_id in inserted:
+                    backfilled_one_offs.append(
+                        BackfilledOneOff(
+                            schedule_id=spec.id,
+                            fire_at=fire_at,
+                            run_id=run_id,
+                        )
+                    )
+
+            _logger.info(
+                "runtime.boot.backfill: backfilled=%d skipped=%d",
+                len(backfilled_one_offs),
+                len(skipped_one_off_ids),
+            )
+
+            # 6. Reconcile jobstore: evict persisted jobs
+            # for OneOffs that (a) already fired -- have a
+            # Run row OR (b) were skipped / failed in step
+            # 5. Without (b), a stale persisted DateTrigger
+            # could still fire after resume even though the
+            # skip policy forbids it.
+            for spec in active_schedules:
+                if not isinstance(spec.trigger, OneOffTrigger):
+                    continue
+                if (
+                    _has_run_row(boot_conn, spec.id)
+                    or spec.id in skipped_one_off_ids
+                ):
+                    binding.unregister(spec.id)
+
+            # 7. Register forward-looking schedules. Skip
+            # OneOffs we just skipped in step 5 so we
+            # don't re-add a past-due DateTrigger. Per-spec
+            # try/except so one broken schedule does not
+            # abort the whole boot.
+            register_count = 0
+            for spec in active_schedules:
+                if spec.id in skipped_one_off_ids:
+                    continue
+                try:
+                    binding.register(spec)
+                    register_count += 1
+                except Exception as exc:
+                    registration_errors.append(
+                        RegistrationError(
+                            schedule_id=spec.id,
+                            error_message=str(exc),
+                        )
+                    )
+                    _logger.error(
+                        "runtime.boot.register: schedule_id=%r error=%r",
+                        spec.id,
+                        exc,
+                    )
+            _logger.info(
+                "runtime.boot.register: registered=%d errors=%d",
+                register_count,
+                len(registration_errors),
+            )
+
+            # 8. Resume scheduler. From here APScheduler
+            # fires registered jobs on cadence; misfired
+            # persisted jobs within ``misfire_grace_time``
+            # replay.
+            await binding.resume()
+
+            # 9. Worker pool. Append to ``started_workers``
+            # after each successful ``start()`` so a later
+            # worker-start failure still has the running
+            # ones in the cleanup list.
+            for i in range(worker_count):
+                worker = Worker(
+                    conn_factory=conn_factory,
+                    worker_id=f"worker-{i}",
+                    poll_interval=poll_interval,
+                    clock=clock,
                     run_id_factory=run_id_factory,
                     event_id_factory=event_id_factory,
+                    claim_batch_size=claim_batch_size,
                 )
-            except Exception as exc:
-                registration_errors.append(
-                    RegistrationError(
-                        schedule_id=spec.id,
-                        error_message=f"backfill failed: {exc}",
+                await worker.start()
+                started_workers.append(worker)
+        except BaseException:
+            # Cleanup any live workers + the started
+            # binding so the caller never sees orphaned
+            # runtime resources. BaseException catches
+            # CancelledError too -- the cleanup is what
+            # the contract requires; the original signal
+            # propagates after the cleanup.
+            for worker in started_workers:
+                try:
+                    await worker.stop()
+                except Exception:
+                    _logger.exception(
+                        "runtime.boot.cleanup: worker.stop "
+                        "failed for worker_id=%r",
+                        worker.worker_id,
                     )
-                )
-                _logger.exception(
-                    "runtime.boot.backfill: failed schedule_id=%r",
-                    spec.id,
-                )
-                continue
-            for run_id in inserted:
-                backfilled_one_offs.append(
-                    BackfilledOneOff(
-                        schedule_id=spec.id,
-                        fire_at=fire_at,
-                        run_id=run_id,
-                    )
-                )
-
-        _logger.info(
-            "runtime.boot.backfill: backfilled=%d",
-            len(backfilled_one_offs),
-        )
-
-        # 6. Reconcile jobstore: evict persisted jobs whose
-        # schedule has a Run row in the v2 DB. This step is
-        # what closes the round-2 race window -- without it,
-        # the step-8 resume would fire a stale persisted
-        # DateTrigger and insert a duplicate Run for a OneOff
-        # the step-5 backfill already handled.
-        for spec in active_schedules:
-            if not isinstance(spec.trigger, OneOffTrigger):
-                continue
-            if _has_run_row(boot_conn, spec.id):
-                binding.unregister(spec.id)
-
-        # 7. Register forward-looking schedules. Per-spec
-        # try/except so one broken schedule does not abort
-        # the whole boot.
-        register_count = 0
-        for spec in active_schedules:
             try:
-                binding.register(spec)
-                register_count += 1
-            except Exception as exc:
-                registration_errors.append(
-                    RegistrationError(
-                        schedule_id=spec.id,
-                        error_message=str(exc),
-                    )
+                await binding.stop()
+            except Exception:
+                _logger.exception(
+                    "runtime.boot.cleanup: binding.stop failed"
                 )
-                _logger.error(
-                    "runtime.boot.register: schedule_id=%r error=%r",
-                    spec.id,
-                    exc,
-                )
-        _logger.info(
-            "runtime.boot.register: registered=%d errors=%d",
-            register_count,
-            len(registration_errors),
-        )
-
-        # 8. Resume scheduler. From here APScheduler fires
-        # registered jobs on cadence; misfired persisted
-        # jobs within ``misfire_grace_time`` replay.
-        await binding.resume()
-
-        # 9. Worker pool.
-        workers: list[Worker] = []
-        for i in range(worker_count):
-            worker = Worker(
-                conn_factory=conn_factory,
-                worker_id=f"worker-{i}",
-                poll_interval=poll_interval,
-                clock=clock,
-                run_id_factory=run_id_factory,
-                event_id_factory=event_id_factory,
-                claim_batch_size=claim_batch_size,
-            )
-            await worker.start()
-            workers.append(worker)
+            raise
 
         # 10. Return handle.
         return RuntimeHandle(
             binding=binding,
-            workers=workers,
+            workers=started_workers,
             recovery_result=recovery_result,
             backfilled_one_offs=backfilled_one_offs,
             registration_errors=registration_errors,
