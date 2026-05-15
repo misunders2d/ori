@@ -152,12 +152,17 @@ def scan_stale_runs(
             for both staleness predicates AND the ``due_at`` /
             ``completed_at`` / event ``ts`` of the new rows.
             Naive datetimes raise ``NaiveDatetimeError``.
-        claimed_timeout: positive ``timedelta``. A claimed row
-            is stale when ``claimed_at < now - claimed_timeout``.
-        running_timeout: positive ``timedelta``. A running row
-            is stale when
+        claimed_timeout: strictly positive ``timedelta``. A
+            claimed row is stale when
+            ``claimed_at < now - claimed_timeout``. Zero or
+            negative values raise ``ValueError`` BEFORE any SQL
+            or factory call — a flipped cutoff would mass-fail
+            live claimed rows.
+        running_timeout: strictly positive ``timedelta``. A
+            running row is stale when
             ``started_at < now - running_timeout`` OR
-            ``started_at IS NULL``.
+            ``started_at IS NULL``. Same positive-only guard
+            as ``claimed_timeout``.
         run_id_factory: callable returning a fresh id for each
             new pending Run row inserted by the scan. Injected
             so tests can pin deterministic ids; production
@@ -177,14 +182,49 @@ def scan_stale_runs(
         value).
 
     Raises:
+        ValueError: ``claimed_timeout`` or ``running_timeout``
+            is not strictly positive.
         NaiveDatetimeError: ``now`` was naive (raised before any
             SQL runs).
         ConnectionNotReady: bad connection state.
 
     Does NOT raise on a per-row remediation failure — those
     surface as ``RecoveryError`` items + a ``logger.error`` line.
+
+    Schedule-status note: the scan inserts retry rows
+    unconditionally — it does NOT consult ``schedules.status``.
+    For a paused or archived schedule the retry row stays
+    pending forever because ``claim_run``'s schedule-status
+    predicate refuses it (see ``app/v2/runtime/claim.py``).
+    Phase 4 owns recovery; explicit pause/archive cancellation
+    of pending runs (including recovery-inserted ones) is the
+    ``paused_pending_policy`` open question in
+    ``docs/PHASE_4_PLAN.md`` §12 item 5, deferred to a later
+    pause/archive phase. No execution leaks meanwhile because
+    claim is the only path that promotes pending → claimed.
     """
     assert_connection_ready(conn)
+    # Positive-timeout guard. Without it a negative or zero
+    # timeout flips the cutoff into the future — every claimed
+    # or running row in the table would suddenly satisfy
+    # ``claimed_at < cutoff`` and be remediated as stale,
+    # mass-failing live runs. Validate BEFORE consuming
+    # ``now`` / running any SQL / calling factories so a
+    # bad-config caller sees the error without side effects.
+    if claimed_timeout <= timedelta(0):
+        raise ValueError(
+            f"claimed_timeout must be positive; got "
+            f"{claimed_timeout!r}. Zero or negative cutoffs "
+            "would mark every claimed row stale on the next "
+            "boot scan."
+        )
+    if running_timeout <= timedelta(0):
+        raise ValueError(
+            f"running_timeout must be positive; got "
+            f"{running_timeout!r}. Zero or negative cutoffs "
+            "would mark every running row stale on the next "
+            "boot scan."
+        )
     now_utc = now.astimezone(timezone.utc) if now.tzinfo is not None else None
     if now_utc is None:
         # _to_utc_iso would raise from inside, but we'd rather

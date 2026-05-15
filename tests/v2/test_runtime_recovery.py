@@ -689,6 +689,151 @@ def test_remediation_failure_yields_recovery_error_and_logs(
 
 
 # ===========================================================================
+# Timeout validation (reviewer round-4 blocker — must be > 0)
+# ===========================================================================
+
+
+def test_claimed_timeout_zero_rejected(tmp_path):
+    """Zero cutoff would mark every claimed row stale (cutoff
+    == now). Reject before any SQL or factory call."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn)
+    _seed_run(
+        conn,
+        run_id="claim-1",
+        status="claimed",
+        claimed_at=_NOW - timedelta(minutes=30),
+    )
+    run_id_factory, event_id_factory, state = _make_factories()
+    with pytest.raises(ValueError, match="claimed_timeout"):
+        scan_stale_runs(
+            conn,
+            now=_NOW,
+            claimed_timeout=timedelta(0),
+            running_timeout=timedelta(minutes=30),
+            run_id_factory=run_id_factory,
+            event_id_factory=event_id_factory,
+        )
+    # Side-effect free: row untouched, factories never called.
+    assert _status(conn, "claim-1") == "claimed"
+    assert state == {"run": 0, "evt": 0}
+
+
+def test_claimed_timeout_negative_rejected(tmp_path):
+    """Negative cutoff would flip into the future, mass-failing
+    fresh claimed rows."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn)
+    _seed_run(
+        conn,
+        run_id="claim-1",
+        status="claimed",
+        claimed_at=_NOW - timedelta(minutes=1),
+    )
+    run_id_factory, event_id_factory, state = _make_factories()
+    with pytest.raises(ValueError, match="claimed_timeout"):
+        scan_stale_runs(
+            conn,
+            now=_NOW,
+            claimed_timeout=timedelta(minutes=-5),
+            running_timeout=timedelta(minutes=30),
+            run_id_factory=run_id_factory,
+            event_id_factory=event_id_factory,
+        )
+    assert _status(conn, "claim-1") == "claimed"
+    assert state == {"run": 0, "evt": 0}
+
+
+def test_running_timeout_zero_rejected(tmp_path):
+    conn = _migrate(tmp_path)
+    run_id_factory, event_id_factory, state = _make_factories()
+    with pytest.raises(ValueError, match="running_timeout"):
+        scan_stale_runs(
+            conn,
+            now=_NOW,
+            claimed_timeout=timedelta(minutes=5),
+            running_timeout=timedelta(0),
+            run_id_factory=run_id_factory,
+            event_id_factory=event_id_factory,
+        )
+    assert state == {"run": 0, "evt": 0}
+
+
+def test_running_timeout_negative_rejected(tmp_path):
+    conn = _migrate(tmp_path)
+    run_id_factory, event_id_factory, state = _make_factories()
+    with pytest.raises(ValueError, match="running_timeout"):
+        scan_stale_runs(
+            conn,
+            now=_NOW,
+            claimed_timeout=timedelta(minutes=5),
+            running_timeout=timedelta(minutes=-30),
+            run_id_factory=run_id_factory,
+            event_id_factory=event_id_factory,
+        )
+    assert state == {"run": 0, "evt": 0}
+
+
+# ===========================================================================
+# Inactive-schedule retry insertion (deferred pause/archive policy)
+# ===========================================================================
+
+
+def test_paused_schedule_stale_row_still_remediated_retry_unclaimable(
+    tmp_path,
+):
+    """Recovery inserts a retry row unconditionally — it does
+    NOT consult ``schedules.status``. For a paused or archived
+    schedule the retry row stays pending forever because
+    ``claim_run``'s schedule-status predicate refuses it.
+    Pause/archive cancellation of pending runs (including
+    recovery-inserted ones) is the ``paused_pending_policy``
+    open question in PHASE_4_PLAN §12 item 5, deferred to a
+    later phase.
+
+    This test pins phase-4's current behaviour so a future
+    pause/archive phase that flips it has an explicit failure
+    point to update."""
+    from app.v2.runtime.claim import claim_run
+
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn, status="paused")
+    _seed_run(
+        conn,
+        run_id="paused-stale",
+        status="claimed",
+        claimed_at=_NOW - timedelta(minutes=30),
+    )
+    run_id_factory, event_id_factory, _ = _make_factories()
+    result = scan_stale_runs(
+        conn,
+        now=_NOW,
+        claimed_timeout=timedelta(minutes=5),
+        running_timeout=timedelta(minutes=30),
+        run_id_factory=run_id_factory,
+        event_id_factory=event_id_factory,
+    )
+    # Recovery still queued a retry row.
+    assert len(result) == 1
+    assert isinstance(result[0], RecoveredRun)
+    new = _row(conn, "new-run-1")
+    assert new["status"] == "pending"
+
+    # claim_run refuses the retry because the schedule is
+    # paused — no execution leak.
+    later = _NOW + timedelta(minutes=1)
+    claimed = claim_run(
+        conn,
+        "new-run-1",
+        claimed_by="worker-1",
+        now=later,
+        event_id="probe-evt",
+    )
+    assert claimed is False
+    assert _status(conn, "new-run-1") == "pending"
+
+
+# ===========================================================================
 # Datetime / connection guards
 # ===========================================================================
 
