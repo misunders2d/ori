@@ -195,6 +195,14 @@ PHASE_ALLOWLIST: dict[int, set[str]] = {
         # Plan + design docs
         "docs/PHASE_9_PLAN.md",
         "docs/CONTRACTS_V2_DESIGN.md",
+        # Auto-generated index — the pre-commit hook
+        # regenerates + stages these whenever a structural
+        # change (new module / tool / toolset) lands. v2
+        # slices add modules, so the regenerated index must
+        # be allowed in-scope; CLAUDE.md mandates the index
+        # stays accurate after structural changes.
+        "docs/INDEX.md",
+        "docs/AGENTS_INVENTORY.md",
         # Doc-read marker bookkeeping
         ".docs_read_marker",
         # NEW for phase 9 — first cutover. CoordinatorAgent

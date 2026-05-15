@@ -33,6 +33,15 @@ from app.toolsets import (
 )
 from app.toolsets.planner import PlannerToolset
 from app.toolsets.contracts import ContractToolset
+# Phase 9 slice 8 — v2 authoring toolset mounted ADDITIVELY
+# alongside v1 ContractToolset per round-2 reviewer Q4 /
+# §11.1 deprecation timeline. v1 contract tools stay
+# operational; v2 tools are introduced for new schedules.
+# Wrapped in a try/except so a v2 wiring failure (e.g. env
+# var missing on a fresh deploy) does NOT brick the
+# Coordinator — the agent boots without v2 authoring and
+# logs the failure.
+from app.v2.wiring import build_authoring_toolset
 from app.tools.a2a import get_agent_identity, get_my_a2a_key
 from app.tools.google_search import google_search_agent_tool
 from app.tools.web import web_fetch
@@ -54,6 +63,24 @@ _skills_dir = pathlib.Path(__file__).parent.parent.parent / "skills"
 _scheduling_skill = load_skill_from_dir(_skills_dir / "scheduling-skill")
 _approval_skill = load_skill_from_dir(_skills_dir / "approval-skill")
 _knowledge_graph_skill = load_skill_from_dir(_skills_dir / "knowledge-graph-skill")
+
+# Phase 9 slice 8 — build the v2 authoring toolset once at
+# module load. A wiring failure (missing V2_AUTHORING_OWNER_ID
+# env on a fresh deploy → RuntimeError from the slice-6
+# constructor gate) must NOT brick the Coordinator; v2 is
+# additive in phase 9, so log + continue with v1 only.
+import logging as _logging
+_v2_logger = _logging.getLogger(__name__)
+try:
+    _v2_authoring_toolset = build_authoring_toolset()
+    _v2_authoring_tools = [_v2_authoring_toolset]
+except Exception as _v2_exc:  # noqa: BLE001
+    _v2_logger.warning(
+        "v2 authoring toolset unavailable (continuing with "
+        "v1 contract pipeline only): %s",
+        _v2_exc,
+    )
+    _v2_authoring_tools = []
 
 root_agent = Agent(
     name="CoordinatorAgent",
@@ -93,22 +120,34 @@ root_agent = Agent(
         "is auto-captured via :Person edge; do not pass `author` values. Load "
         "`knowledge-graph-skill` for namespace + access rules.\n\n"
 
-        "SCHEDULING / REMINDER ROUTING: Load `scheduling-skill` for cron format, "
-        "`deliver_to` channel routing, and the contract pipeline. Recurring or "
-        "structured work → contract pipeline (`contract_draft_validate` → "
-        "`contract_dry_run` → `contract_freeze` → `contract_schedule`). One-shot "
-        "'remind me in N minutes' → SchedulingToolset directly. NEVER delegate "
-        "scheduling to ClickUpAgent or AmazonWorkspaceAgent. ClickUp only on "
-        "explicit 'create a ClickUp task' wording; Google Calendar only on "
-        "explicit 'add to calendar / invite'. If ambiguous, default to "
-        "scheduling and ask if a calendar / ClickUp side-effect is also wanted.\n"
-        "- SCHEDULED TASK DETAILS: When the user asks about a scheduled task's "
-        "plan / steps / details / what it does, call `contract_inspect(contract_id)` "
-        "if the task ID starts with `contract:`, OR `contract_list()` to find the "
-        "matching contract first. `list_scheduled_tasks` alone shows only metadata "
-        "(description may be 'Unknown') — that's NOT a sign the details are missing, "
-        "it just means you didn't read the contract. NEVER respond 'I can't read the "
-        "details' on contract-prefixed tasks; inspect the contract.\n\n"
+        "SCHEDULING / REMINDER ROUTING: Load `scheduling-skill` for "
+        "`deliver_to` channel routing. **SCHEDULING LAW: every scheduled "
+        "work item is created via a v2 typed tool.** Templates first: a "
+        "one-shot reminder ('remind me / the channel at <time> to <text>') "
+        "→ `schedule_create_reminder` (the `OneOffReminder` template — it "
+        "wraps draft → `schedule_dry_run` → `schedule_freeze` → "
+        "`schedule_draft_commit` into one call). For ad-hoc workflows no "
+        "template covers: typed-tool authoring `schedule_draft_start` → "
+        "`schedule_dry_run` → `schedule_freeze` → `schedule_draft_commit`. "
+        "Never compose freeform JSON specs, never hand-write a spec dict, "
+        "never use `schedule_recurring_task` / `schedule_one_off_task` for "
+        "new work. The v1 contract pipeline tools remain mounted for "
+        "EXISTING `contract:`-prefixed tasks only (inspect / list / "
+        "revise / unschedule); do NOT create new schedules through them. "
+        "NEVER delegate scheduling to ClickUpAgent or AmazonWorkspaceAgent. "
+        "ClickUp only on explicit 'create a ClickUp task' wording; Google "
+        "Calendar only on explicit 'add to calendar / invite'. If "
+        "ambiguous, default to scheduling and ask if a calendar / ClickUp "
+        "side-effect is also wanted.\n"
+        "- SCHEDULED TASK DETAILS: When the user asks about an EXISTING "
+        "scheduled task's plan / steps / details, call "
+        "`contract_inspect(contract_id)` if the task ID starts with "
+        "`contract:`, OR `contract_list()` to find the matching contract "
+        "first. `list_scheduled_tasks` alone shows only metadata "
+        "(description may be 'Unknown') — that's NOT a sign the details "
+        "are missing, it just means you didn't read the contract. NEVER "
+        "respond 'I can't read the details' on contract-prefixed tasks; "
+        "inspect the contract.\n\n"
 
         "SYSTEM RULES:\n"
         "- You are running model `{current_model}`. State this exactly when asked.\n"
@@ -158,6 +197,12 @@ root_agent = Agent(
         # Toolsets — cross-cutting concerns only
         SchedulingToolset(),
         ContractToolset(),  # contract-driven scheduling — preferred path for recurring tasks
+        # Phase 9 slice 8 — v2 authoring toolset, ADDITIVE.
+        # v1 ContractToolset above stays mounted; v2 tools
+        # (schedule_dry_run / schedule_freeze /
+        # schedule_draft_commit / schedule_create_reminder)
+        # are the forward path for one-off reminders.
+        *_v2_authoring_tools,
         MemoryToolset(),
         SystemToolset(),
         ScratchpadToolset(),
