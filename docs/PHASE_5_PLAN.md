@@ -7,11 +7,11 @@ registration, boot sequence (recovery scan + worker pool
 start), and pause/archive/resume hooks.
 
 This phase deliberately stops short of cutting over from v1.
-The cutover to v2 for production schedules happens at phase 8
-(`OneOffReminder` end-to-end per design §12.1 invariant 3).
-Phase 5 makes the v2 runtime **startable** for tests / dev
-runs, hooks the schedule-status lifecycle into APScheduler,
-and leaves `run_bot.py` untouched.
+The cutover to v2 for production schedules happens at phase 9
+(`OneOffReminder` end-to-end per design §12.1 invariant 3,
+post-renumber). Phase 5 makes the v2 runtime **startable**
+for tests / dev runs, hooks the schedule-status lifecycle
+into APScheduler, and leaves `run_bot.py` untouched.
 
 Read this with:
 - `docs/CONTRACTS_V2_DESIGN.md` §4.0.3 (APScheduler-as-wakeup-
@@ -56,7 +56,7 @@ Alternatives that were considered + rejected:
   because the binding is its own logical change with its
   own tag (`v2-phase-5-complete`); folding it into phase 4
   retroactively muddles the per-phase revert story.
-- **Skip binding until phase 8 cutover** — phase 6 / 7
+- **Skip binding until phase 9 cutover** — phase 6 / 7 / 8
   work (registry cache, authoring tools, dry-run) would
   have no way to exercise the wakeup loop without bespoke
   scaffolding. Rejected on testability grounds.
@@ -153,52 +153,76 @@ authority source.
    job. Phase 5 just ships the callables + their tests so
    later phases can call them.
 
-5. **OneOff dedup mechanism** — phase 4's wakeup is
+5. **OneOff idempotency contract** — phase 4's wakeup is
    intentionally non-idempotent for OneOff (plan §6.2 says
-   "registration layer cleanup owns this"). Phase 5 lands the
-   cleanup: after a OneOff fires, the binding unregisters
-   the APScheduler job. Either by `add_job(..., misfire_grace_time=...,
-   replace_existing=True)` with a self-removing wrapper, or by
-   the `register` helper attaching a tiny post-fire hook that
-   calls `binding.unregister(schedule_id)`. The exact mechanic
-   is an open question (§12 below).
+   "registration layer cleanup owns this"). Phase 5 closes
+   the gap via three coordinated mechanisms, NOT a post-fire
+   wrapper:
 
-6. **Integration test** — end-to-end exercise of the boot
-   sequence against a temp DB:
-   - Seed an active OneOff schedule whose `at_iso_datetime`
-     is a few seconds in the future.
-   - Boot the runtime.
-   - Wait for the worker to process the run.
-   - Assert the run row reaches `succeeded` with all four
-     events (`run_created`, `run_claimed`, `run_started`,
-     `run_succeeded`) in the ledger.
-   - Shut the runtime down cleanly.
-   - This test uses REAL APScheduler — not a mock — so the
-     binding's wiring against `AsyncIOScheduler` is exercised
-     end-to-end. The test allows a small wall-clock budget
-     (~5 s) and is marked `@pytest.mark.slow` for selective
-     skipping in fast-feedback runs.
+   - **APScheduler natural removal.** `DateTrigger`'s
+     `next_run_time` is unset after fire, so APScheduler
+     evicts the job from its job store automatically. No
+     explicit `unregister` call from phase-5 code.
+   - **Register-time DB guard.** `binding.register(spec)`
+     for a OneOff checks the `runs` table for any existing
+     row with this `schedule_id`. If present, the OneOff
+     already fired and is NOT re-registered.
+   - **Boot backfill scan.** During `boot_runtime`,
+     iterate active OneOff schedules whose `at_iso_datetime`
+     is past AND have no existing Run row. Fire `wakeup`
+     once per such schedule. Bounded by
+     `max_backfill_age` (default 24 h); older orphans are
+     logged + skipped.
+
+   The full restart-case matrix is pinned in §3.2.2 below.
+
+6. **Integration test split (round-1 reviewer fix)** —
+   end-to-end exercise of the binding/wakeup/worker chain
+   split across two test files:
+
+   - **Required fast test** (`test_runtime_e2e_fast.py`,
+     default suite): real `SchedulerBinding`, real
+     `Worker`, real SQLite DB. Synthesises the "APScheduler
+     fired" event by calling `binding._fire_for(
+     schedule_id)` directly — no real wall-clock wait. Full
+     wakeup → Run → worker → succeeded lifecycle pinned
+     inside a 1-second polling budget at 10 ms worker
+     ticks.
+   - **Optional slow test** (`test_runtime_e2e_slow.py`,
+     `@pytest.mark.slow`, excluded from required CI):
+     real `AsyncIOScheduler` wall-clock fire of a OneOff
+     2 s in the future, 10 s polling budget. Periodic /
+     nightly smoke check that APScheduler's event-loop
+     integration actually triggers our callback on real
+     time.
+
+   Required CI passes if the fast test passes. The slow
+   test is documented but not gating.
 
 ### Out of scope (phase 5)
 
 - **Any reasoning step execution.** Worker body still empty
-  in phase 5 (lights up at phase 11).
+  in phase 5 (lights up at phase 12 per renumbered design).
 - **Any emit adapter dispatch.** EmitDescriptor runtime
-  ingestion lands in phase 11.
+  ingestion lands in phase 12.
 - **Cutover from v1 to v2 in production.** `run_bot.py` is
   not touched. Design §12.1 invariant 3 still applies; v1
   scheduler stays the sole production wakeup source through
-  phase 7.
-- **Registry cache for channels/sheets/docs** — this was
-  design §12 step 5; with the renumber proposed in §0 it
-  becomes step 6 and lands as phase 6.
-- **Typed ADK authoring tools** — design §12 step 6 (becomes
-  step 7); phase 6 / 7 work.
-- **Source loaders** — phase 9.
+  phase 8 (boundary shifted with the §12 renumber).
+- **Registry cache for channels/sheets/docs** — design §12
+  step 6 post-renumber; lands as phase 6.
+- **Typed ADK authoring tools** — design §12 step 7
+  post-renumber; phase 7 work.
+- **Dry-run handshake + boot self-test** — design §12 step 8
+  post-renumber; phase 8 work.
+- **OneOff end-to-end + emit-only path + v1 cutover** —
+  design §12 step 9 post-renumber; phase 9 work.
+- **Source loaders** — design §12 step 10 post-renumber;
+  phase 10 work.
 - **CustomFlow path** — folded into the authoring-tools
-  phase.
-- **APScheduler job store choice (SQLAlchemy vs Memory)** —
-  see §12 open question 2.
+  phase (7).
+- **APScheduler job store choice** — closed in §9.1:
+  SQLAlchemyJobStore per design §4.0.5.
 
 ---
 
@@ -374,18 +398,20 @@ class SchedulerBinding:
 Design §290 says "Single SQLite database
 `data/ori-scheduler.db` (same file)". That's the
 post-cutover target. During the v1/v2 parallel period
-(through phase 7), v1's APScheduler ALREADY owns the
-`apscheduler_jobs` table in `data/ori-scheduler.db`. Phase
-5 introduces a SECOND APScheduler instance (v2's binding)
-that must NOT share the same job store — collisions on job
-ids would corrupt v1's running production.
+(through phase 8 post-renumber), v1's APScheduler
+ALREADY owns the `apscheduler_jobs` table in
+`data/ori-scheduler.db`. Phase 5 introduces a SECOND
+APScheduler instance (v2's binding) that must NOT share
+the same job store — collisions on job ids would corrupt
+v1's running production.
 
 Phase-5 default: separate file
 `data/scheduler-v2-jobs.db`. v1 keeps
 `data/ori-scheduler.db`; v2's binding uses the new file.
-The phase-8 cutover slice migrates v2 onto
-`data/ori-scheduler.db` (or retires that file in favour
-of v2's path) when v1 is decommissioned.
+The phase-9 cutover slice (post-renumber, when
+`OneOffReminder` fires end-to-end) migrates v2 onto
+`data/ori-scheduler.db` or retires that file in favour
+of v2's path when v1 is decommissioned.
 
 The v2 BUSINESS schema (the `runs` / `schedules` / `events`
 tables from phase 3) lives in a separate file altogether
@@ -562,10 +588,18 @@ Per-step:
    surfaced, raise `RuntimeBootError` with the first
    error's context. Default False (continue, surface
    errors via the handle + log).
-4. **Construct + start binding.** Construct
+4. **Construct + start binding PAUSED.** Construct
    `SchedulerBinding(jobstore_url=..., misfire_grace_time=
-   ...)`; `await binding.start()`. APScheduler's job store
-   replay handles within-grace missed fires here.
+   ...)`; `await binding.start(paused=True)`. The paused
+   start lets the binding's `start()` initialise the
+   scheduler's event loop + load the SQLAlchemy jobstore
+   WITHOUT firing any persisted jobs yet. This is the
+   round-2 reviewer's race fix: a persisted `DateTrigger`
+   for a OneOff whose `at_iso_datetime` passed during
+   downtime would otherwise fire CONCURRENTLY with the
+   step-5 backfill (both inserting Run rows for the same
+   schedule). Pausing during reconciliation closes the
+   window.
 5. **OneOff boot backfill** (§3.2.2 mechanic 2). For each
    active OneOff schedule with `at_iso_datetime <= now`
    AND no existing Run row AND
@@ -576,7 +610,13 @@ Per-step:
    (entry in `registration_errors` with explicit
    "missed beyond max_backfill_age" reason). Failures
    logged + surfaced via `registration_errors`.
-6. **Register forward-looking schedules.** Iterate
+6. **Reconcile jobstore.** After backfill lands, any
+   persisted `DateTrigger` in the SQLAlchemy jobstore
+   whose schedule now has a Run row in the DB is evicted
+   via `binding.unregister(schedule_id)`. This prevents
+   the resumed scheduler from firing a redundant wakeup
+   for a OneOff we just backfilled.
+7. **Register forward-looking schedules.** Iterate
    `list_active_schedules(conn)`. For each spec, call
    `binding.register(spec)` inside a per-spec
    try / except. On failure: log
@@ -584,17 +624,22 @@ Per-step:
    error="..."`), append a `RegistrationError` entry,
    continue. The OneOff register-time guard (§3.2.2
    mechanic 1) filters out already-fired OneOffs at this
-   step too.
-7. **Worker pool.** Construct `worker_count` `Worker`
+   step too — including ones that landed in steps 2 / 5.
+8. **Resume scheduler.** `binding._scheduler.resume()`.
+   APScheduler now replays any persisted job whose
+   `next_run_time` is within `misfire_grace_time` and
+   fires normally on its schedule going forward. Anything
+   beyond grace was handled in step 5 (boot backfill).
+9. **Worker pool.** Construct `worker_count` `Worker`
    instances; each gets its own `conn_factory` call so
    workers have independent connections. Call
    `await worker.start()` on each.
-8. **Close boot connection.** Return `RuntimeHandle`
-   carrying binding + workers + recovery_result +
-   backfilled_one_offs + registration_errors. The caller
-   (production entry, integration test, dev rig) can
-   inspect the handle for boot-health signals and decide
-   whether to alert.
+10. **Close boot connection.** Return `RuntimeHandle`
+    carrying binding + workers + recovery_result +
+    backfilled_one_offs + registration_errors. The caller
+    (production entry, integration test, dev rig) can
+    inspect the handle for boot-health signals and decide
+    whether to alert.
 
 `shutdown_runtime`:
 
@@ -746,10 +791,14 @@ Registration:
   via internal `replace_existing=True`. Pin behaviour
   explicitly so a future flip to "raise on duplicate" is a
   flagged test failure.
-- `reregister(spec)` swaps the trigger atomically; pin via
-  spying on APScheduler's `modify_job` / `remove_job` +
-  `add_job` sequence (no intermediate "no-job" window
-  observable from outside).
+- `reregister(spec)` swaps the trigger atomically via
+  APScheduler's `reschedule_job(job_id, trigger=...)`
+  call — NOT a `remove_job` + `add_job` pair, which would
+  open a window where the job briefly does not exist.
+  Pin via spying on `reschedule_job`; assert it was called
+  exactly once with the new trigger and that
+  `list_registered()` always contains the schedule_id
+  during the operation.
 - `register` then `unregister` → job removed; subsequent
   `list_registered()` does not include it.
 
@@ -870,25 +919,38 @@ invocation (NO real wall-clock wait).**
 Default-suite test (NOT marked slow). Uses real
 `SchedulerBinding`, real `Worker`, real SQLite DB.
 Synthesises the "APScheduler fired the job" event by
-calling `binding._fire_for(schedule_id)` directly:
+calling `binding._fire_for(schedule_id)` directly. No
+`binding.start()` call, no `boot_runtime` — this test
+exercises the wakeup → Run → worker chain without any
+scheduler timing or boot reconciliation.
 
-- Seed an active OneOff (`at_iso_datetime` in the past so
-  the register-time guard for FUTURE oneoffs doesn't kick
-  in — actually use boot backfill or call wakeup
-  directly).
-- Construct binding + register schedule.
-- Call `binding._fire_for(schedule_id)` — this invokes the
-  wakeup, which inserts the pending Run + run_created
-  event.
-- Start a worker; poll the DB until the run reaches
-  `succeeded` OR a 1-second budget elapses. The worker
-  tick interval is set to 10 ms for this test.
-- Assert four events in order; `started_at` /
-  `completed_at` populated.
-- Shut down cleanly.
+Deterministic recipe:
+
+1. Seed an active OneOff schedule with
+   `at_iso_datetime = synthetic_now` (any tz-aware value
+   the test controls; need not be wall-clock-real).
+2. Construct `SchedulerBinding` with a clock that returns
+   `synthetic_now` and counter-based id factories.
+3. Do NOT call `binding.start()` and do NOT call
+   `binding.register(spec)` — both are tested in
+   `test_runtime_binding.py`. The fast e2e test exercises
+   the fire path only.
+4. Call `await binding._fire_for(schedule_id)` directly.
+   This invokes the wakeup (which inserts pending Run +
+   run_created event in the same TX).
+5. Construct a `Worker` with the same clock + factories,
+   `poll_interval=10 ms`. Call `await worker.tick()` once.
+   The single tick walks `pending → claimed → running →
+   succeeded` and emits the three worker-side events.
+6. Inspect the DB directly: assert four events in order
+   (`run_created`, `run_claimed`, `run_started`,
+   `run_succeeded`); assert `started_at` / `completed_at`
+   populated.
+7. No teardown of binding / scheduler needed — neither was
+   started.
 
 This proves the wiring: binding → wakeup → DB → worker →
-DB → final state. No timing dependency.
+DB → final state. No real-time dependency; no flake risk.
 
 **5.5.b `test_runtime_e2e_slow.py` (`@pytest.mark.slow`,
 excluded from required fast CI) — real AsyncIOScheduler
@@ -961,25 +1023,48 @@ Cross-cutting smoke checks added or carried:
    each scoped to one of the slices in §4.
 2. `_defaults.py` ships the three production injectables;
    smoke test pins they're importable + behaviourally sane.
-3. `SchedulerBinding.start()` / `stop()` lifecycle pinned.
-4. `register` translates OneOff + Cron to APScheduler jobs;
-   raises for unwired trigger types; rejects numeric DOW
-   at registration time.
-5. `unregister` / `reregister` work; OneOff post-fire
-   cleanup pinned.
-6. `boot_runtime` runs recovery + registers active schedules
-   + starts workers in the documented order; broken schedules
-   are skipped with logging, not aborts.
-7. `shutdown_runtime` stops workers before stopping the
-   binding; idempotent across double-stop.
-8. Lifecycle hooks delegate to the binding; module surface
-   exposes ONLY the four documented helpers.
-9. End-to-end integration test passes against real
-   `AsyncIOScheduler` within a 5-second budget.
-10. Phase guard clean against `v2-phase-4-complete`.
-11. No v1 scheduler paths touched.
-12. `run_bot.py` untouched — v2 still test-rig only.
-13. Annotated git tag `v2-phase-5-complete` created and
+3. `cron_guard.py` exposes a public `reject_numeric_dow`;
+   `wakeup.py` imports from there; phase-4 wakeup tests
+   stay green unchanged.
+4. `SchedulerBinding.start()` / `stop()` lifecycle pinned
+   (async coroutine wrappers over APScheduler's sync API).
+5. `register` translates OneOff + Cron to APScheduler jobs
+   with `misfire_grace_time=3600`; raises for unwired
+   trigger types; rejects numeric DOW at registration time
+   via `cron_guard.reject_numeric_dow`.
+6. `unregister` / `reregister` work; `reregister` uses
+   APScheduler's `reschedule_job` (atomic — no
+   intermediate no-job window). OneOff register-time DB
+   guard pinned.
+7. `_fire_for` swallows `Exception` (logged via
+   `logger.exception`) and propagates `BaseException`.
+8. `boot_runtime` runs the documented 10-step sequence
+   (recovery → paused binding start → backfill → jobstore
+   reconciliation → register → resume → workers); broken
+   schedules surface as `RegistrationError` items in the
+   handle, not aborts.
+9. `RuntimeHandle` carries `recovery_result`,
+   `backfilled_one_offs`, `registration_errors`. Structured
+   boot-health logging pinned with stable log keys
+   (`runtime.boot.recovery` /
+   `runtime.boot.register` / `runtime.boot.backfill`).
+10. `shutdown_runtime` stops workers before stopping the
+    binding; idempotent across double-stop.
+11. Lifecycle hooks delegate to the binding; module surface
+    exposes ONLY the four documented helpers.
+12. **Required CI:** `test_runtime_e2e_fast.py` passes in
+    the default suite (no `@pytest.mark.slow`); exercises
+    the wakeup → Run → worker → succeeded chain via
+    direct `_fire_for` invocation with no real-time
+    dependency.
+13. **Optional smoke:** `test_runtime_e2e_slow.py` passes
+    under `@pytest.mark.slow` against real
+    `AsyncIOScheduler` within a 10 s wall-clock budget.
+    Not gating on PRs; runs in nightly / pre-release.
+14. Phase guard clean against `v2-phase-4-complete`.
+15. No v1 scheduler paths touched.
+16. `run_bot.py` untouched — v2 still test-rig only.
+17. Annotated git tag `v2-phase-5-complete` created and
     pushed (gated on explicit Sergey approval).
 
 ---
@@ -995,10 +1080,10 @@ registration + worker pool), pause/archive/resume lifecycle
 hooks, production clock + id factories.
 
 NO production cutover. run_bot.py untouched; v1 scheduler
-still owns the production wakeup path until phase 8
-(OneOffReminder end-to-end per design §12.1 invariant 3).
-v2 runtime is now startable in tests / dev rigs against a
-temp DB.
+still owns the production wakeup path until phase 9
+(OneOffReminder end-to-end per design §12.1 invariant 3
+post-renumber). v2 runtime is now startable in tests / dev
+rigs against a temp DB.
 
 Design: docs/CONTRACTS_V2_DESIGN.md §4.0.3, §4.0.5, §12 step 4-5
 Plan:   docs/PHASE_5_PLAN.md
@@ -1057,16 +1142,17 @@ Plan:   docs/PHASE_5_PLAN.md
 
 8. **Production deployment integration.** When does
    `boot_runtime` actually get called from `run_bot.py`?
-   Phase 5 ships the function but no caller. Phase 8
-   cutover adds the caller. In the interim, dev runs invoke
-   `boot_runtime` from a one-off CLI script if needed.
+   Phase 5 ships the function but no caller. Phase 9
+   cutover (post-renumber) adds the caller. In the
+   interim, dev runs invoke `boot_runtime` from a one-off
+   CLI script if needed.
 
 9. **Post-cutover jobstore path.** §3.2.1 defaults to
    `data/scheduler-v2-jobs.db` during the parallel period.
-   Phase 8 cutover decides whether to migrate to
-   `data/ori-scheduler.db` (the design §4.0.5 target) or
-   keep v2 on its separate file forever. Not a phase-5
-   call.
+   Phase 9 cutover (post-renumber) decides whether to
+   migrate to `data/ori-scheduler.db` (the design §4.0.5
+   target) or keep v2 on its separate file forever. Not a
+   phase-5 call.
 
 ---
 
@@ -1086,7 +1172,8 @@ These survive across phases unchanged:
    `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>`.
 8. Leave `app/tools/youtube.py` dirty/uncommitted unless
    reviewer flags otherwise.
-9. No v1 scheduler edits (carried until phase 8 cutover).
+9. No v1 scheduler edits (carried until phase 9 cutover
+   post-renumber).
 10. Every runtime helper still takes injected clock + id
     factories; `_defaults.py` is the ONLY module that wires
     them to wall clock + uuid4.
