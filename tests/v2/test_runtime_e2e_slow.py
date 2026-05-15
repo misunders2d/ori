@@ -51,7 +51,11 @@ plan section 7 acceptance item 13, NOT gating on PRs.
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
 import sqlite3
+import sys
+import textwrap
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -320,3 +324,214 @@ async def test_e2e_slow_one_off_fires_on_real_wall_clock(tmp_path):
             "engine + sqlite handles are leaked and the "
             "process will hang at interpreter exit."
         )
+
+
+# ===========================================================================
+# Subprocess process-exit regression
+# ===========================================================================
+
+
+# Driver script the subprocess test below runs. Mirrors the
+# slow e2e recipe in miniature: seed an active OneOff at
+# now+2s, boot the runtime, wait for succeeded, shut down.
+# If binding.stop leaks asyncio's default thread-pool
+# executor (non-daemon threads from AsyncIOExecutor's
+# run_in_executor path), THIS subprocess hangs at
+# interpreter exit -- the parent's subprocess.run timeout
+# fires and the test fails loud.
+_SUBPROCESS_DRIVER = textwrap.dedent(
+    """
+    import asyncio
+    import sqlite3
+    import sys
+    import time
+    from datetime import datetime, timedelta, timezone
+    from pathlib import Path
+
+    db_dir = Path(sys.argv[1])
+    db_path = db_dir / "v2.db"
+    jobs_url = "sqlite:///" + str(db_dir / "jobs.db")
+
+    from app.v2.enums import (
+        DeliveryFallbackPolicy,
+        FailureActionType,
+        RunStatus,
+        ScheduleStatus,
+    )
+    from app.v2.migrations import runner
+    from app.v2.models.common import (
+        AuditPolicy, Delivery, FailurePolicy, UserRef,
+    )
+    from app.v2.models.schedule import ScheduleSpec
+    from app.v2.models.triggers import OneOffTrigger
+    from app.v2.runtime.boot import boot_runtime, shutdown_runtime
+    from app.v2.storage.schedules import insert_schedule
+
+
+    class _CF:
+        def __init__(self, path): self.path = path
+        def __call__(self):
+            c = sqlite3.connect(self.path)
+            runner.apply_pending(c)
+            return c
+
+
+    class _RIDF:
+        def __init__(self): self.i = 0
+        def __call__(self):
+            self.i += 1
+            return f"sp-run-{self.i:04d}"
+
+
+    class _EIDF:
+        def __init__(self): self.i = 0
+        def __call__(self):
+            self.i += 1
+            return f"sp-evt-{self.i:04d}"
+
+
+    async def main():
+        primary = sqlite3.connect(str(db_path))
+        try:
+            runner.apply_pending(primary)
+        finally:
+            primary.close()
+
+        factory = _CF(str(db_path))
+        fire_at = datetime.now(timezone.utc) + timedelta(seconds=2)
+        spec = ScheduleSpec(
+            id="sp_oneoff",
+            owner=UserRef(
+                platform="telegram",
+                user_id="330959414",
+                display_name="Sergey",
+            ),
+            description="subprocess exit test",
+            trigger=OneOffTrigger(
+                at_iso_datetime=fire_at, timezone="UTC"
+            ),
+            delivery=Delivery(
+                target_session_id="sl_test",
+                fallback_policy=(
+                    DeliveryFallbackPolicy.SESSION_TO_ORIGIN
+                ),
+            ),
+            failure=FailurePolicy(
+                on_failure_action=FailureActionType.ALERT_ADMIN,
+            ),
+            audit=AuditPolicy(),
+            status=ScheduleStatus.ACTIVE,
+            execution_plan_hash=None,
+            authored_at=fire_at.isoformat(),
+        ).with_fresh_hash()
+
+        seed = factory()
+        try:
+            insert_schedule(seed, spec)
+            seed.commit()
+        finally:
+            seed.close()
+
+        handle = await boot_runtime(
+            factory,
+            jobstore_url=jobs_url,
+            poll_interval=timedelta(milliseconds=100),
+            run_id_factory=_RIDF(),
+            event_id_factory=_EIDF(),
+        )
+
+        try:
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline:
+                await asyncio.sleep(0.1)
+                probe = factory()
+                try:
+                    row = probe.execute(
+                        "SELECT status FROM runs "
+                        "WHERE schedule_id = 'sp_oneoff'"
+                    ).fetchone()
+                finally:
+                    probe.close()
+                if row and row[0] == RunStatus.SUCCEEDED.value:
+                    break
+            else:
+                print("DID NOT REACH SUCCEEDED", file=sys.stderr)
+                sys.exit(2)
+        finally:
+            await asyncio.wait_for(
+                shutdown_runtime(handle), timeout=5.0
+            )
+
+        print("OK")
+
+
+    asyncio.run(main())
+    """
+).strip()
+
+
+@pytest.mark.slow
+def test_e2e_slow_subprocess_exits_cleanly(tmp_path):
+    """Reviewer's slice-7b regression: the runtime must
+    cleanly release every resource it touched so a Python
+    process driving boot_runtime + shutdown_runtime exits
+    within a wall-clock budget. If anything leaks --
+    AsyncIOScheduler thread, SQLAlchemy connection pool,
+    asyncio's default ThreadPoolExecutor (non-daemon
+    threads), undisposed engine -- the subprocess hangs at
+    interpreter exit and ``subprocess.run`` 's timeout
+    fires, failing this test loud.
+
+    This is the only test in the suite that asserts the
+    PROCESS itself exits, not just that the test function
+    body returns. The in-process tests catch every other
+    layer; this one catches the leak-past-loop-close
+    failure mode that doesn't surface inside pytest's
+    own event loop.
+
+    Budget: 25 s wall clock (15 s slack over the inner
+    10 s deadline + 5 s shutdown timeout). On a healthy
+    runtime, subprocess.run returns in ~6 s.
+    """
+    driver_path = tmp_path / "driver.py"
+    driver_path.write_text(_SUBPROCESS_DRIVER)
+    env = {**os.environ}
+    # Strip any pytest-specific env vars that confuse the
+    # child interpreter; pass project root as PYTHONPATH so
+    # the child sees ``app.v2.*``.
+    repo_root = str(Path(__file__).resolve().parents[2])
+    env["PYTHONPATH"] = (
+        repo_root
+        + (
+            (os.pathsep + env["PYTHONPATH"])
+            if env.get("PYTHONPATH")
+            else ""
+        )
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, str(driver_path), str(tmp_path)],
+            cwd=repo_root,
+            env=env,
+            timeout=25,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        pytest.fail(
+            "Subprocess driving boot_runtime + "
+            "shutdown_runtime did not exit within 25 s. "
+            "Runtime leaked threads / scheduler state / "
+            "SQLAlchemy engine. stdout=%r stderr=%r"
+            % (exc.stdout, exc.stderr)
+        )
+    assert result.returncode == 0, (
+        "Subprocess returned %d. stdout=%r stderr=%r"
+        % (result.returncode, result.stdout, result.stderr)
+    )
+    assert "OK" in result.stdout, (
+        "Subprocess did not reach the OK line. "
+        "stdout=%r stderr=%r"
+        % (result.stdout, result.stderr)
+    )

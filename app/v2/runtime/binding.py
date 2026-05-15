@@ -277,52 +277,92 @@ class SchedulerBinding:
         """Shut the scheduler down. Idempotent: a no-op if
         ``start()`` was never called.
 
-        Internally calls APScheduler's sync
-        ``shutdown(wait=False)`` and then yields repeatedly
-        until the scheduler observably transitions to
-        ``STATE_STOPPED``.
+        Three-layer cleanup contract:
 
-        Why a yield loop and not a single ``asyncio.sleep(0)``:
-        ``AsyncIOScheduler.shutdown`` is decorated
-        ``@run_in_event_loop`` (see
-        ``apscheduler/schedulers/asyncio.py``). It defers the
-        real shutdown work -- executor shutdown, jobstore
-        shutdown, ``SQLAlchemyJobStore.engine.dispose()`` (the
-        call that releases sqlite file handles + the
-        SQLAlchemy connection pool) -- by scheduling
-        ``_shutdown`` via ``call_soon_threadsafe``. A single
-        ``await asyncio.sleep(0)`` puts the current task
-        back on the ready queue alongside the deferred
-        callback and the order in which they run is not
-        guaranteed -- in pytest-asyncio's per-test loop the
-        loop closes immediately after this coroutine returns,
-        the deferred callback never executes, and the
-        SQLAlchemy engine is never disposed; the process then
-        hangs at interpreter exit waiting on undisposed
-        resources (reviewer's slice-7b regression). Yielding
-        until ``not self._scheduler.running`` guarantees the
-        deferred ``_shutdown`` actually completed before
-        ``stop()`` returns. Budget 500 ms (50 * 10 ms) is
-        well above the real microsecond cost on a healthy
-        loop; if the budget elapses, log + fall through (a
-        runaway scheduler is a separate operational bug).
+        1. APScheduler-level shutdown. Calls
+           ``self._scheduler.shutdown(wait=False)`` then
+           yields repeatedly until
+           ``self._scheduler.running`` flips to False. The
+           deferred ``_shutdown`` is dispatched via
+           ``@run_in_event_loop`` /
+           ``call_soon_threadsafe``; a single
+           ``asyncio.sleep(0)`` is not enough to guarantee it
+           ran. 500 ms budget (50 * 10 ms) is well above the
+           microsecond cost on a healthy loop.
+        2. SQLAlchemyJobStore engine dispose (belt + braces).
+           Even when APScheduler's deferred callback did
+           execute the jobstore.shutdown() path, explicitly
+           dispose every jobstore engine again -- dispose()
+           is idempotent and guarantees the SQLAlchemy
+           connection pool / sqlite file handles are released
+           regardless of which code path got there first.
+        3. asyncio default-executor shutdown. ``AsyncIOExecutor``
+           (APScheduler's default for AsyncIOScheduler)
+           submits SYNC ``wakeup_callable`` invocations via
+           ``loop.run_in_executor(None, run_job, ...)`` --
+           that uses asyncio's default ``ThreadPoolExecutor``
+           with NON-DAEMON threads. ``AsyncIOExecutor.shutdown``
+           only cancels pending futures; the thread pool
+           itself stays alive (idle threads waiting for more
+           work) and holds the interpreter at exit even after
+           all our futures completed. Calling
+           ``loop.shutdown_default_executor()`` is what
+           actually joins those threads. Without it, the
+           pytest process hangs at interpreter exit even
+           though every test assertion passed and the
+           scheduler reports running=False (reviewer's
+           slice-7b regression: hang despite both prior
+           layers).
         """
         if not self._started:
             return
         self._scheduler.shutdown(wait=False)
         self._started = False
-        # Wait for the deferred ``_shutdown`` to actually
-        # transition the scheduler. See docstring rationale.
+        # Layer 1: wait for APScheduler's deferred _shutdown.
+        budget_exhausted = True
         for _ in range(50):
             if not self._scheduler.running:
-                return
+                budget_exhausted = False
+                break
             await asyncio.sleep(0.01)
-        _logger.error(
-            "binding.stop: AsyncIOScheduler still reports "
-            "running=True after 500 ms; deferred _shutdown "
-            "did not execute. Caller risks leaked jobstore "
-            "engine + sqlite file handles."
-        )
+        if budget_exhausted:
+            _logger.error(
+                "binding.stop: AsyncIOScheduler still reports "
+                "running=True after 500 ms; deferred _shutdown "
+                "did not execute. Falling through to belt+braces "
+                "engine.dispose() + default-executor shutdown."
+            )
+        # Layer 2: explicit engine.dispose() on every jobstore.
+        # Idempotent against the APScheduler shutdown path
+        # that already called it. The for-loop is defensive
+        # against a future addition of secondary jobstores.
+        for jobstore in list(self._scheduler._jobstores.values()):
+            engine = getattr(jobstore, "engine", None)
+            if engine is None:
+                continue
+            try:
+                engine.dispose()
+            except Exception:
+                _logger.exception(
+                    "binding.stop: jobstore engine.dispose failed"
+                )
+        # Layer 3: shut down asyncio's default thread-pool
+        # executor. See docstring for the non-daemon-thread
+        # rationale. ``shutdown_default_executor`` is a
+        # coroutine; if no loop is running (caller invoked
+        # stop without an active loop -- impossible from an
+        # async def but guarded for safety) it raises
+        # RuntimeError which we swallow.
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        try:
+            await loop.shutdown_default_executor()
+        except Exception:
+            _logger.exception(
+                "binding.stop: loop.shutdown_default_executor failed"
+            )
 
     async def pause(self) -> None:
         """Pause the scheduler. No new fires until
