@@ -25,6 +25,7 @@ from app.v2.authoring.drafts import (
     DraftStore,
     ScheduleSpecDraft,
 )
+from app.v2.authoring.dry_run import schedule_dry_run
 from app.v2.authoring.handshake import (
     DEFAULT_HANDSHAKE_BASE,
     DryRunMode,
@@ -63,6 +64,7 @@ __all__ = [
     "schedule_draft_discard",
     "schedule_draft_list",
     "schedule_draft_start",
+    "schedule_dry_run",
     "schedule_pause",
     "schedule_resume",
     "schedule_revive",
