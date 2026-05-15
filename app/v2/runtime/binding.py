@@ -110,6 +110,38 @@ from app.v2.runtime.cron_guard import reject_numeric_dow
 _logger = logging.getLogger(__name__)
 
 
+def _looks_serialisable(callable_: Callable) -> bool:
+    """Heuristic check that ``callable_`` will round-trip
+    through the SQLAlchemy job store.
+
+    APScheduler's SQLAlchemyJobStore serialises every value
+    in the registered ``args`` list when ``add_job`` is
+    called against a running scheduler. The conn_factory /
+    clock / id_factory references the binding threads into
+    those args MUST therefore be serialisable. The common
+    failure mode is a closure or lambda whose qualified
+    name carries ``<lambda>`` or ``<locals>`` -- the
+    standard serialiser cannot resolve those by name at
+    deserialisation, so the eventual failure surfaces deep
+    inside APScheduler with an obscure ``Can't pickle
+    <function ...>`` message.
+
+    Catching the failure at the binding's construction with
+    a clear error message is strictly better than letting
+    register() crash later. The check is a NECESSARY but
+    not SUFFICIENT condition for serialisability: classes
+    with non-picklable instance state still slip through
+    and surface at register time, but the lambda /
+    nested-function case (the easy mistake) is caught
+    cheaply here.
+
+    Returns False when the callable's qualname contains
+    ``<lambda>`` or ``<locals>``; True otherwise.
+    """
+    qualname = getattr(callable_, "__qualname__", "")
+    return "<lambda>" not in qualname and "<locals>" not in qualname
+
+
 def _fire_for(
     schedule_id: str,
     wakeup_callable: Callable[..., list[str]],
@@ -204,6 +236,45 @@ class SchedulerBinding:
             raise TypeError("run_id_factory must be callable")
         if not callable(event_id_factory):
             raise TypeError("event_id_factory must be callable")
+        # APScheduler's SQLAlchemy job store serialises every
+        # value in ``args=[...]`` at ``add_job`` time. The
+        # binding threads conn_factory into those args, so
+        # it MUST round-trip through the serialiser. The
+        # easy mistake -- a lambda or a closure -- can't be
+        # resolved by qualified name at deserialisation and
+        # makes register() crash deep inside APScheduler
+        # with an obscure pickling error. Catch the common
+        # case here at construction so the error names the
+        # offending kwarg.
+        #
+        # The check is intentionally scoped to conn_factory
+        # for now: in production the other injectables
+        # (wakeup_callable, clock, id factories) come from
+        # module-level definitions (``prod_clock``,
+        # ``prod_run_id_factory``, ``prod_event_id_factory``,
+        # ``app.v2.runtime.wakeup.wakeup``) -- the
+        # conn_factory is the one users are most likely to
+        # build as a closure over a connection pool / db
+        # path. Tests that exercise ``_fire_for`` directly
+        # (no register, no APScheduler serialisation) still
+        # use nested-function wakeup callables for the
+        # closure capture they need; those paths never
+        # serialise.
+        if not _looks_serialisable(conn_factory):
+            raise ValueError(
+                f"conn_factory must be a module-level "
+                f"callable or a picklable class instance; "
+                f"got {conn_factory!r} with qualname "
+                f"{getattr(conn_factory, '__qualname__', '?')!r}. "
+                "APScheduler's SQLAlchemy job store "
+                "serialises conn_factory at register time; "
+                "lambdas and nested-function closures cannot "
+                "be resolved by name at deserialisation. "
+                "Wrap the logic in a module-level function "
+                "or a picklable class instance (e.g. a class "
+                "whose ``__init__`` stores a db_path and "
+                "``__call__`` opens a connection)."
+            )
         if not jobstore_url:
             raise ValueError(
                 "jobstore_url must be a non-empty SQLAlchemy URL "
@@ -348,7 +419,10 @@ class SchedulerBinding:
         ``replace_existing=True`` -- registering the same
         schedule_id twice is idempotent. The OneOff
         register-time DB guard (mechanic 1 in plan section
-        3.2.2) lands in slice 4.
+        3.2.2) is applied here: a OneOff whose schedule_id
+        already has any Run row in the v2 ``runs`` table is
+        NOT re-registered, because resume would otherwise
+        re-fire the wakeup and insert a duplicate Run.
 
         ``misfire_grace_time`` flows from the binding's
         ``job_defaults`` -- no per-job override here.
@@ -489,12 +563,27 @@ class SchedulerBinding:
         APScheduler via ``cron_guard``; unknown timezone
         rejected; invalid cron rejected).
 
+        Applies the OneOff register-time DB guard (plan
+        section 3.2.2 mechanic 1) when the NEW trigger is
+        a OneOff: if the runs table already contains a row
+        for this schedule_id, ``reregister`` raises
+        ``ValueError`` instead of letting the swap proceed.
+        Without this, a Cron-with-history -> OneOff revision
+        would let APScheduler fire the OneOff on next
+        resume and insert a duplicate Run -- exactly the
+        non-idempotency the register-time guard exists to
+        prevent. Callers (authoring tools) that want a
+        OneOff with the same intent on a schedule that
+        already fired should create a NEW schedule_id
+        instead of reregistering.
+
         Raises:
             RuntimeError: scheduler not started.
             JobLookupError: ``spec.id`` is not currently
                 registered.
             ValueError: invalid cron, numeric DOW, unknown
-                timezone.
+                timezone, OR new trigger is OneOff and the
+                schedule has existing Run rows.
             NotImplementedError: trigger type is interval /
                 event / conditional.
         """
@@ -506,6 +595,16 @@ class SchedulerBinding:
 
         trigger = spec.trigger
         if isinstance(trigger, OneOffTrigger):
+            if self._one_off_already_fired(spec.id):
+                raise ValueError(
+                    f"cannot reregister schedule_id={spec.id!r} "
+                    "to a OneOff trigger -- the v2 runs table "
+                    "already contains a row for this schedule. "
+                    "Resuming the scheduler after this swap "
+                    "would let APScheduler fire the new OneOff "
+                    "and insert a duplicate Run. Create a NEW "
+                    "schedule_id for the revised intent instead."
+                )
             aps_trigger = self._build_one_off_aps_trigger(trigger)
         elif isinstance(trigger, CronTrigger):
             aps_trigger = self._build_cron_aps_trigger(trigger)

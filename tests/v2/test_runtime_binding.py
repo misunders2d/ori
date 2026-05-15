@@ -165,6 +165,31 @@ class _MigratedConnFactory:
         return sqlite3.connect(self.db_path)
 
 
+class _MemoryConnFactoryClass:
+    """Picklable in-memory conn factory. Used by tests that
+    need a conn_factory but don't care about schema (the
+    construction-default-succeeds smoke test, etc)."""
+
+    def __call__(self) -> sqlite3.Connection:
+        return sqlite3.connect(":memory:")
+
+
+_memory_factory_instance = _MemoryConnFactoryClass()
+
+
+class _SpyConnFactory:
+    """Picklable conn factory that yields a class-based
+    ``_ConnSpy`` and lets tests inspect close() state
+    afterwards. Used by ``_fire_for`` direct-invocation
+    tests in slice 2."""
+
+    def __init__(self) -> None:
+        self.conn = _ConnSpy()
+
+    def __call__(self) -> "_ConnSpy":
+        return self.conn
+
+
 def _migrated_conn_factory(tmp_path) -> _MigratedConnFactory:
     """Return a ``_MigratedConnFactory`` whose target DB has
     been migrated to the v2 schema. One file per call (per
@@ -269,8 +294,8 @@ def test_construction_with_defaults_succeeds(tmp_path):
     """All defaults except the two required positionals +
     a tmp jobstore url. Should succeed without error."""
     b = SchedulerBinding(
-        wakeup_callable=lambda conn, **kw: [],
-        conn_factory=lambda: sqlite3.connect(":memory:"),
+        wakeup_callable=_noop_wakeup,
+        conn_factory=_memory_factory_instance,
         jobstore_url=_jobstore_url(tmp_path),
     )
     assert b.is_paused() is False
@@ -293,6 +318,65 @@ def test_construction_with_none_misfire_grace_time(tmp_path):
 def test_empty_jobstore_url_rejected(tmp_path):
     with pytest.raises(ValueError, match="jobstore_url"):
         _make_binding(tmp_path, jobstore_url="")
+
+
+def test_lambda_conn_factory_rejected_at_construction(tmp_path):
+    """Reviewer round-N regression. APScheduler's SQLAlchemy
+    job store serialises conn_factory at ``add_job`` time;
+    a lambda has ``<lambda>`` in its qualname and cannot be
+    resolved by name at deserialisation. Catch the common
+    mistake at construction so the error names the offending
+    kwarg, instead of letting register() crash with an
+    obscure pickling error from deep inside APScheduler."""
+    with pytest.raises(ValueError, match="conn_factory must be"):
+        SchedulerBinding(
+            wakeup_callable=_noop_wakeup,
+            conn_factory=lambda: sqlite3.connect(":memory:"),
+            jobstore_url=_jobstore_url(tmp_path),
+        )
+
+
+def test_closure_conn_factory_rejected_at_construction(tmp_path):
+    """Same as above but with a nested-function closure
+    (not a lambda). The qualname carries ``<locals>`` so
+    the heuristic catches it too. Pin both shapes."""
+
+    def _build_factory():
+        # Defined inside another function -> qualname contains
+        # ``<locals>``.
+        def _inner_factory():
+            return sqlite3.connect(":memory:")
+
+        return _inner_factory
+
+    closure_factory = _build_factory()
+    with pytest.raises(ValueError, match="conn_factory must be"):
+        SchedulerBinding(
+            wakeup_callable=_noop_wakeup,
+            conn_factory=closure_factory,
+            jobstore_url=_jobstore_url(tmp_path),
+        )
+
+
+def test_module_level_function_conn_factory_accepted(tmp_path):
+    """Inverse: a module-level callable passes the check."""
+    b = SchedulerBinding(
+        wakeup_callable=_noop_wakeup,
+        conn_factory=_memory_conn_factory,
+        jobstore_url=_jobstore_url(tmp_path),
+    )
+    assert b is not None
+
+
+def test_class_instance_conn_factory_accepted(tmp_path):
+    """Inverse: a picklable class instance with ``__call__``
+    passes the check too."""
+    b = SchedulerBinding(
+        wakeup_callable=_noop_wakeup,
+        conn_factory=_memory_factory_instance,
+        jobstore_url=_jobstore_url(tmp_path),
+    )
+    assert b is not None
 
 
 @pytest.mark.parametrize("bad", [0, -1, -3600])
@@ -333,9 +417,12 @@ def test_misfire_grace_time_none_flows_into_job_defaults(tmp_path):
     ["wakeup_callable", "conn_factory", "clock", "run_id_factory", "event_id_factory"],
 )
 def test_non_callable_injectable_rejected(tmp_path, field):
+    # conn_factory must be picklable per the slice-4 check;
+    # other slots accept lambdas (closure-based tests use
+    # them).
     kwargs = dict(
         wakeup_callable=lambda conn, **kw: [],
-        conn_factory=lambda: sqlite3.connect(":memory:"),
+        conn_factory=_memory_factory_instance,
         clock=lambda: _NOW,
         run_id_factory=lambda: "r",
         event_id_factory=lambda: "e",
@@ -524,7 +611,7 @@ def test_fire_for_invokes_wakeup_with_documented_kwargs(tmp_path):
     ``now``, ``run_id_factory``, ``event_id_factory``. ``now``
     comes from the injected clock."""
     seen: dict = {}
-    spy_conn = _ConnSpy()
+    spy_factory = _SpyConnFactory()
 
     def wakeup_spy(conn, **kwargs):
         seen["conn"] = conn
@@ -535,7 +622,7 @@ def test_fire_for_invokes_wakeup_with_documented_kwargs(tmp_path):
     fixed_evt_id = lambda: "evt-fixed"
     b = SchedulerBinding(
         wakeup_callable=wakeup_spy,
-        conn_factory=lambda: spy_conn,
+        conn_factory=spy_factory,
         clock=lambda: _NOW,
         run_id_factory=fixed_run_id,
         event_id_factory=fixed_evt_id,
@@ -544,7 +631,7 @@ def test_fire_for_invokes_wakeup_with_documented_kwargs(tmp_path):
 
     b._fire_for("my_schedule")
 
-    assert seen["conn"] is spy_conn
+    assert seen["conn"] is spy_factory.conn
     assert seen["kwargs"] == {
         "schedule_id": "my_schedule",
         "now": _NOW,
@@ -552,7 +639,7 @@ def test_fire_for_invokes_wakeup_with_documented_kwargs(tmp_path):
         "event_id_factory": fixed_evt_id,
     }
     # Connection was closed even though wakeup succeeded.
-    assert spy_conn.closed is True
+    assert spy_factory.conn.closed is True
 
 
 def test_fire_for_swallows_exception_and_logs(tmp_path, caplog):
@@ -560,14 +647,14 @@ def test_fire_for_swallows_exception_and_logs(tmp_path, caplog):
     The error is logged via ``logger.exception`` and the
     method returns None. Pin: the connection is closed even
     on the exception path (finally clause)."""
-    spy_conn = _ConnSpy()
+    spy_factory = _SpyConnFactory()
 
     def wakeup_raises(conn, **kwargs):
         raise RuntimeError("synthetic wakeup failure")
 
     b = SchedulerBinding(
         wakeup_callable=wakeup_raises,
-        conn_factory=lambda: spy_conn,
+        conn_factory=spy_factory,
         jobstore_url=_jobstore_url(tmp_path),
     )
 
@@ -577,7 +664,7 @@ def test_fire_for_swallows_exception_and_logs(tmp_path, caplog):
 
     assert result is None
     # Connection closed via finally.
-    assert spy_conn.closed is True
+    assert spy_factory.conn.closed is True
     # logger.exception ran for the broken schedule.
     assert any(
         r.levelno == logging.ERROR and "broken_schedule" in r.getMessage()
@@ -590,14 +677,14 @@ def test_fire_for_propagates_base_exception(tmp_path):
     CancelledError) MUST propagate out of ``_fire_for`` so
     APScheduler's shutdown path can act on the signal.
     Same contract as Worker._run_loop in phase 4."""
-    spy_conn = _ConnSpy()
+    spy_factory = _SpyConnFactory()
 
     def wakeup_cancels(conn, **kwargs):
         raise asyncio.CancelledError("synthetic cancel")
 
     b = SchedulerBinding(
         wakeup_callable=wakeup_cancels,
-        conn_factory=lambda: spy_conn,
+        conn_factory=spy_factory,
         jobstore_url=_jobstore_url(tmp_path),
     )
 
@@ -605,7 +692,7 @@ def test_fire_for_propagates_base_exception(tmp_path):
         b._fire_for("any_schedule")
     # Connection still closed via finally even though
     # BaseException propagated.
-    assert spy_conn.closed is True
+    assert spy_factory.conn.closed is True
 
 
 def test_fire_for_closes_connection_after_factory_call_succeeds(tmp_path):
@@ -614,14 +701,14 @@ def test_fire_for_closes_connection_after_factory_call_succeeds(tmp_path):
     Already covered above; this is the explicit success
     path so future refactors can't accidentally leave it
     open on the happy path."""
-    spy_conn = _ConnSpy()
+    spy_factory = _SpyConnFactory()
     b = SchedulerBinding(
         wakeup_callable=lambda conn, **kw: [],
-        conn_factory=lambda: spy_conn,
+        conn_factory=spy_factory,
         jobstore_url=_jobstore_url(tmp_path),
     )
     b._fire_for("a_schedule")
-    assert spy_conn.closed is True
+    assert spy_factory.conn.closed is True
 
 
 # ===========================================================================
@@ -1206,6 +1293,75 @@ async def test_reregister_invalid_cron_rejected(tmp_path):
         )
         with pytest.raises(ValueError, match="invalid cron"):
             b.reregister(bad_spec)
+    finally:
+        await b.stop()
+
+
+@pytest.mark.asyncio
+async def test_reregister_to_one_off_with_existing_run_rejected(tmp_path):
+    """Reviewer round-N regression. A schedule that fired
+    under a Cron trigger (so the runs table has rows) being
+    revised to a OneOff trigger must NOT silently slip the
+    OneOff register-time guard. Without rejection, the
+    swapped DateTrigger would fire on next resume and
+    insert a duplicate Run -- exactly the
+    non-idempotency mechanic 1 (plan section 3.2.2) exists
+    to prevent.
+
+    Expected behaviour: reregister rejects with ValueError
+    naming the schedule_id and pointing at the workaround
+    (use a new schedule_id for the revised intent)."""
+    factory = _migrated_conn_factory(tmp_path)
+    b = _make_binding(tmp_path, conn_factory=factory)
+    await b.start(paused=True)
+    try:
+        # Original spec is a Cron schedule.
+        cron_spec = _cron_spec(schedule_id="convert_me")
+        b.register(cron_spec)
+        # Seed: schedule fired -- Run row exists.
+        _seed_run_row(factory, "convert_me")
+        # Now try to revise to a OneOff.
+        one_off = _spec(
+            schedule_id="convert_me",
+            trigger=OneOffTrigger(
+                at_iso_datetime=_NOW + timedelta(hours=1),
+                timezone="UTC",
+            ),
+        )
+        with pytest.raises(ValueError, match="cannot reregister"):
+            b.reregister(one_off)
+        # The original cron job stayed intact (the rejection
+        # is BEFORE the reschedule_job call).
+        job = b._scheduler.get_job("convert_me")
+        assert isinstance(job.trigger, APSchedulerCronTrigger)
+    finally:
+        await b.stop()
+
+
+@pytest.mark.asyncio
+async def test_reregister_to_one_off_with_no_existing_run_proceeds(tmp_path):
+    """Inverse: reregister to OneOff is allowed when the
+    runs table is empty for that schedule_id. The guard is
+    about preventing DUPLICATE fires, not about preventing
+    OneOff swaps generally."""
+    factory = _migrated_conn_factory(tmp_path)
+    b = _make_binding(tmp_path, conn_factory=factory)
+    await b.start(paused=True)
+    try:
+        cron_spec = _cron_spec(schedule_id="fresh_swap")
+        b.register(cron_spec)
+        # No Run row exists -- guard returns False, swap
+        # proceeds.
+        one_off = _spec(
+            schedule_id="fresh_swap",
+            trigger=OneOffTrigger(
+                at_iso_datetime=_NOW + timedelta(hours=1),
+                timezone="UTC",
+            ),
+        )
+        b.reregister(one_off)
+        job = b._scheduler.get_job("fresh_swap")
+        assert isinstance(job.trigger, APSchedulerDateTrigger)
     finally:
         await b.stop()
 
