@@ -20,6 +20,14 @@ from app.v2.authoring.drafts import (
     ScheduleSpecDraft,
 )
 from app.v2.authoring.responses import ToolResponse, ToolResponseStatus
+from app.v2.authoring.setters import (
+    schedule_draft_start,
+    schedule_set_cron,
+    schedule_set_description,
+    schedule_set_failure_policy,
+    schedule_set_one_off,
+    schedule_set_owner,
+)
 
 
 __all__ = [
@@ -28,4 +36,10 @@ __all__ = [
     "ScheduleSpecDraft",
     "ToolResponse",
     "ToolResponseStatus",
+    "schedule_draft_start",
+    "schedule_set_cron",
+    "schedule_set_description",
+    "schedule_set_failure_policy",
+    "schedule_set_one_off",
+    "schedule_set_owner",
 ]
