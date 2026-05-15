@@ -14,6 +14,7 @@ References:
 - ``docs/PHASE_7_PLAN.md``
 """
 
+from app.v2.authoring.commit import schedule_draft_commit
 from app.v2.authoring.compile import (
     schedule_draft_compile,
     schedule_draft_discard,
@@ -61,6 +62,7 @@ __all__ = [
     "ToolResponse",
     "ToolResponseStatus",
     "schedule_archive",
+    "schedule_draft_commit",
     "schedule_draft_compile",
     "schedule_draft_discard",
     "schedule_draft_list",
