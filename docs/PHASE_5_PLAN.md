@@ -101,39 +101,23 @@ authority source.
    §3.2 below — this list is intentionally a brief
    surface map.
 
-3. **Boot sequence module** — `app/v2/runtime/boot.py`. The
-   startup hook ordered per design §4.0.5:
+3. **Boot sequence module** — `app/v2/runtime/boot.py`.
+   Owns `boot_runtime(...)` (the startup hook ordered per
+   design §4.0.5 + the round-2 paused-start race fix) and
+   `shutdown_runtime(...)`. Boot returns a `RuntimeHandle`
+   dataclass carrying the binding + workers + structured
+   boot-health signals (recovery_result,
+   backfilled_one_offs, registration_errors). Canonical
+   signature + the 10-step ordered sequence + tunable
+   defaults (claim_batch_size, max_backfill_age,
+   jobstore_url, misfire_grace_time, worker_count,
+   poll_interval, claimed_timeout, running_timeout,
+   abort_on_recovery_errors) live in §3.3 below — this
+   list is intentionally a brief surface map.
 
-   ```python
-   async def boot_runtime(
-       conn_factory: Callable[[], sqlite3.Connection],
-       *,
-       worker_count: int = 1,
-       claimed_timeout: timedelta = timedelta(minutes=5),
-       running_timeout: timedelta = timedelta(minutes=30),
-       poll_interval: timedelta = timedelta(seconds=10),
-   ) -> "RuntimeHandle": ...
-
-   async def shutdown_runtime(handle: "RuntimeHandle") -> None: ...
-   ```
-
-   Per-step:
-   1. Open boot-only connection; run `scan_stale_runs(...)`
-      with production timeouts.
-   2. Log recovery result (count of `RecoveredRun` vs
-      `RecoveryError` items). Any `RecoveryError` items
-      surface to the caller (the production entry point
-      decides whether to abort boot or continue).
-   3. Construct `SchedulerBinding`; start it.
-   4. Iterate `list_active_schedules(conn)`; register each
-      via `binding.register(spec)`.
-   5. Construct `worker_count` `Worker` instances; start each.
-   6. Return a `RuntimeHandle` carrying the binding + worker
-      list for clean shutdown.
-
-4. **Lifecycle hooks** — `app/v2/runtime/lifecycle.py`. Three
-   helpers the future authoring path will call on schedule-
-   status flips:
+4. **Lifecycle hooks** — `app/v2/runtime/lifecycle.py`.
+   Four helpers the future authoring path will call on
+   schedule-status flips:
 
    ```python
    def on_schedule_paused(binding, schedule_id) -> None: ...
@@ -803,40 +787,35 @@ Lifecycle + construction:
   they call APScheduler's sync `start()` / `shutdown()` —
   pin the bridge.
 - `start(paused=True)` → `is_paused()` returns True
-  immediately after the await. Persisted jobs whose
-  `next_run_time` is past do NOT fire until `resume()` is
-  awaited.
+  immediately after the await. Jobs registered while
+  paused do NOT fire until `resume()` is awaited.
 
-  Recipe (two-phase test because APScheduler persists
-  jobs to the SQLAlchemy jobstore at ``add_job`` time
-  during a running scheduler — adding before ``start()``
-  is rejected by APScheduler):
+  Recipe (single-phase, lifecycle-only):
 
-  1. Phase A — seed the jobstore. Construct binding
-     pointing at a fresh `tmp_path / "v2-jobs.db"`
-     SQLAlchemy URL. `await binding.start()` (paused=False,
-     default). Register a wakeup-spy-bound OneOff with
-     `at_iso_datetime = synthetic_now - 5 s` so its
-     `next_run_time` is past the moment APScheduler starts
-     it. `await binding.stop()`. Jobstore file now
-     contains the persisted job.
-  2. Phase B — paused restart. Construct a fresh binding
-     pointing at the SAME jobstore URL (the same wakeup
-     spy bound). `await binding.start(paused=True)`. The
-     SQLAlchemy jobstore is loaded, but no fires occur.
-     Assert the wakeup spy's call count stays 0 across a
-     50 ms polling budget; assert `is_paused()` is True.
-  3. `await binding.resume()`. The previously-loaded
-     persisted job's misfired DateTrigger fires within
-     `misfire_grace_time`; the wakeup spy gets called.
-     Assert `is_paused()` is False after.
+  1. Construct binding pointing at a fresh `tmp_path /
+     "v2-jobs.db"` SQLAlchemy URL with a wakeup-spy bound.
+  2. `await binding.start(paused=True)`. Assert
+     `is_paused()` is True.
+  3. Register a OneOff schedule with
+     `at_iso_datetime = synthetic_now - 5 s` (past-due)
+     via `binding.register(spec)`. No DB row exists for
+     this schedule so the §3.2.2 register-time guard
+     accepts; the job lands in the SQLAlchemy jobstore.
+     Because the scheduler is paused, the past-due
+     DateTrigger does NOT fire.
+  4. Sleep 50 ms; assert the wakeup spy's call count is 0.
+  5. `await binding.resume()`. The past-due DateTrigger
+     misfires within `misfire_grace_time` and fires once;
+     the wakeup spy gets called.
+  6. Assert `is_paused()` is False after.
 
-  This two-phase recipe is the only deterministic way to
-  pin "persisted jobs do NOT fire under paused start"
-  because APScheduler 3.x will not accept `add_job` on a
-  pre-`start` scheduler — the only way to have persisted
-  jobs at start time is via the SQLAlchemy file from a
-  prior run.
+  Empirical APScheduler 3.x note: `add_job` is accepted
+  before `start()` (the job is held in a pending queue,
+  persisted to SQLAlchemy at `start` time). This test
+  could also seed the job BEFORE `start(paused=True)` and
+  reach the same assertion; the recipe above puts
+  register AFTER start to mirror the production usage
+  pattern (boot does `start(paused=True)` then registers).
 
 - `await binding.pause()` after a running binding →
   `is_paused()` returns True; new fires stop until next
@@ -946,6 +925,30 @@ OneOff backfill (§3.2.2 mechanic 2):
   it (§3.2.2 mechanic 1).
 - OneOff with FUTURE `at_iso_datetime` → not backfilled
   (would be wrong), registered normally in the next step.
+
+Persisted-job race fix (round-2 reviewer; §3.3 step 4 + 6
++ 8):
+
+- Persisted DateTrigger left over from a previous boot
+  whose `at_iso_datetime` is past does NOT race with the
+  step-5 backfill. Two-phase test:
+
+  1. Phase A — seed the jobstore. Open a real
+     `SchedulerBinding` against `tmp_path / "jobs.db"`;
+     `await binding.start(paused=True)` (paused so
+     register can't trip a fire); seed a OneOff in the v2
+     schedules table; `binding.register(spec)` puts a
+     past-due DateTrigger into the SQLAlchemy file; do
+     NOT call `await binding.resume()`; `await
+     binding.stop()`. The SQLAlchemy file now holds a
+     persisted past-due DateTrigger.
+  2. Phase B — boot. Call `await boot_runtime(...)` with
+     the same `jobstore_url`. Pin: exactly ONE Run row
+     for the schedule (from boot backfill at step 5); the
+     persisted DateTrigger was unregistered at step 6
+     (jobstore reconciliation) before resume; no
+     duplicate Run row from the resumed scheduler firing
+     the persisted trigger.
 
 Registration errors:
 
