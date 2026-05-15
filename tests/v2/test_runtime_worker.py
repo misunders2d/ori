@@ -377,6 +377,152 @@ async def test_tick_on_paused_schedule_does_not_claim(tmp_path):
 
 
 # ===========================================================================
+# Starvation regressions (reviewer round-4 blocker 1)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_paused_oldest_does_not_starve_active_newer(tmp_path):
+    """Reviewer round-4 blocker 1 regression.
+
+    Schedule A is paused; its pending row has the oldest
+    due_at. Schedule B is active; its pending row is newer.
+    With a single-row read the tick would forever try to claim
+    the paused row at the head of the queue. The batched scan
+    must step past the refused paused row and claim B's run."""
+    seed = _migrate(tmp_path)
+    _seed_schedule(seed, schedule_id="paused_sched", status="paused")
+    _seed_schedule(seed, schedule_id="active_sched", status="active")
+    older = _NOW - timedelta(minutes=10)
+    newer = _NOW - timedelta(minutes=5)
+    _seed_run(
+        seed,
+        run_id="paused-old",
+        schedule_id="paused_sched",
+        due_at=older,
+    )
+    _seed_run(
+        seed,
+        run_id="active-new",
+        schedule_id="active_sched",
+        due_at=newer,
+    )
+    seed.commit()
+    worker, _ = _make_worker(_conn_factory_for(tmp_path))
+    result = await worker.tick()
+    assert result == "active-new"
+    assert _status(seed, "active-new") == "succeeded"
+    # Paused row stays pending — recovery / pause-policy phase
+    # owns explicit cancellation.
+    assert _status(seed, "paused-old") == "pending"
+
+
+@pytest.mark.asyncio
+async def test_same_schedule_blocked_does_not_starve_different_schedule(
+    tmp_path,
+):
+    """Reviewer round-4 blocker 1 regression, single-flight
+    variant.
+
+    Schedule A already has a running row + an OLDER pending
+    row (blocked by the per-schedule single-flight predicate
+    inside claim_run). Schedule B has a NEWER pending row.
+    The batched tick must skip A's blocked pending and claim
+    B's pending."""
+    seed = _migrate(tmp_path)
+    _seed_schedule(seed, schedule_id="sched_a")
+    _seed_schedule(seed, schedule_id="sched_b")
+    # A has a running row (single-flight will block its pending).
+    seed.execute(
+        "INSERT INTO runs "
+        "(id, schedule_id, fire_reason, due_at, status, attempt, "
+        " root_run_id, started_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "a-running",
+            "sched_a",
+            "scheduled",
+            (_NOW - timedelta(hours=1)).isoformat(),
+            "running",
+            1,
+            "a-running",
+            (_NOW - timedelta(minutes=30)).isoformat(),
+        ),
+    )
+    older = _NOW - timedelta(minutes=10)
+    newer = _NOW - timedelta(minutes=5)
+    _seed_run(
+        seed,
+        run_id="a-pending-old",
+        schedule_id="sched_a",
+        due_at=older,
+    )
+    _seed_run(
+        seed,
+        run_id="b-pending-new",
+        schedule_id="sched_b",
+        due_at=newer,
+    )
+    seed.commit()
+    worker, _ = _make_worker(_conn_factory_for(tmp_path))
+    result = await worker.tick()
+    assert result == "b-pending-new"
+    assert _status(seed, "b-pending-new") == "succeeded"
+    # A's blocked pending stays pending; A's running row stays
+    # running.
+    assert _status(seed, "a-pending-old") == "pending"
+    assert _status(seed, "a-running") == "running"
+
+
+@pytest.mark.asyncio
+async def test_tick_claims_at_most_one_row_even_when_batch_holds_many(
+    tmp_path,
+):
+    """Two active schedules, each with a pending row. The
+    batch read returns both, but the tick claims ONE and
+    returns — the second stays pending for the next tick."""
+    seed = _migrate(tmp_path)
+    _seed_schedule(seed, schedule_id="sched_a")
+    _seed_schedule(seed, schedule_id="sched_b")
+    _seed_run(
+        seed,
+        run_id="a-1",
+        schedule_id="sched_a",
+        due_at=_NOW - timedelta(minutes=10),
+    )
+    _seed_run(
+        seed,
+        run_id="b-1",
+        schedule_id="sched_b",
+        due_at=_NOW - timedelta(minutes=5),
+    )
+    seed.commit()
+    worker, _ = _make_worker(_conn_factory_for(tmp_path))
+    first = await worker.tick()
+    # Oldest claimable wins.
+    assert first == "a-1"
+    assert _status(seed, "a-1") == "succeeded"
+    assert _status(seed, "b-1") == "pending"
+
+
+def test_claim_batch_size_must_be_positive(tmp_path):
+    evt, _ = _evt_counter()
+    run, _ = _run_counter()
+    clock, _ = _fixed_clock()
+    for bad in (0, -1, -10):
+        with pytest.raises(ValueError, match="claim_batch_size"):
+            Worker(
+                conn_factory=_conn_factory_for(tmp_path),
+                worker_id="w",
+                poll_interval=timedelta(seconds=1),
+                clock=clock,
+                run_id_factory=run,
+                event_id_factory=evt,
+                claim_batch_size=bad,
+            )
+
+
+# ===========================================================================
 # State-machine policy gate
 # ===========================================================================
 
@@ -563,6 +709,76 @@ async def test_start_twice_raises(tmp_path):
             await worker.start()
     finally:
         await worker.stop()
+
+
+# ===========================================================================
+# Run-loop signal hygiene (reviewer round-4 blocker 2)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_run_loop_does_not_swallow_cancelled_error(tmp_path):
+    """Reviewer round-4 blocker 2 regression.
+
+    asyncio.CancelledError inherits from BaseException
+    (Python 3.8+) and is the canonical cancel/shutdown
+    signal. The loop's exception handler must catch only
+    Exception, so CancelledError propagates instead of being
+    logged + retried in a tight loop."""
+    seed = _migrate(tmp_path)
+    seed.commit()
+    worker, _ = _make_worker(
+        _conn_factory_for(tmp_path),
+        poll_interval=timedelta(milliseconds=10),
+    )
+
+    async def _fake_tick():
+        raise asyncio.CancelledError("synthetic")
+
+    # Override the bound method on this instance only — the
+    # loop's ``await self.tick()`` will resolve to _fake_tick.
+    worker.tick = _fake_tick  # type: ignore[method-assign]
+
+    await worker.start()
+    task = worker._task
+    assert task is not None
+
+    # Poll for task completion. If the loop swallowed
+    # CancelledError, the task would never finish (stop_event
+    # never set, fake_tick keeps raising forever).
+    done = False
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if task.done():
+            done = True
+            break
+    assert done, (
+        "run loop did not exit on CancelledError — it is "
+        "probably catching BaseException and retrying."
+    )
+    # Task ended with CancelledError. We can't re-await it
+    # without re-raising, so manually unwire the worker's
+    # internal handles in the same shape stop() would after a
+    # clean exit. This is per-test cleanup, not part of the
+    # Worker API.
+    worker._task = None
+    worker._stop_event = None
+    if worker._conn is not None:
+        worker._conn.close()
+        worker._conn = None
+
+
+def test_run_loop_source_does_not_catch_base_exception():
+    """Structural pin to back the behavioural test above. The
+    loop's handler line must NOT be ``except BaseException:``
+    — anything broader than ``except Exception:`` swallows
+    cancel / shutdown signals."""
+    source = inspect.getsource(worker_mod)
+    assert "except BaseException" not in source, (
+        "worker._run_loop must catch Exception, not "
+        "BaseException — broader handlers swallow "
+        "asyncio.CancelledError and KeyboardInterrupt."
+    )
 
 
 # ===========================================================================

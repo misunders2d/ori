@@ -12,11 +12,19 @@ Phase 4's execution body is intentionally empty (literally
 external I/O. Real execution lands in phases 9-11.
 
 Per-tick:
-  1. ``list_pending_due(conn, now=clock(), limit=1)``.
-  2. ``claim_run(conn, run.id, claimed_by=worker_id,
-     now=clock(), event_id=event_id_factory())``. Returns
-     False on a lost race / status mismatch / inactive
-     schedule — the tick exits clean.
+  1. ``list_pending_due(conn, now=clock(), limit=
+     claim_batch_size)``. Reads up to N oldest-due pending
+     rows in one go so the worker can step past pending rows
+     that aren't currently claimable (inactive schedule,
+     same-schedule already claimed/running). Reviewer
+     round-4 blocker: a single-row read would have let the
+     oldest blocked row starve every active pending row
+     behind it on subsequent ticks.
+  2. Walk the batch in due_at order, calling ``claim_run``
+     on each. Refusals (lost race, status mismatch, inactive
+     schedule, same-schedule single-flight) skip to the next
+     candidate. The tick still claims AT MOST ONE row —
+     iteration stops on the first successful claim.
   3. State-machine gate: ``claimed → running``. Then
      ``update_run_status_and_append_event`` writes the
      ``run_started`` event in the same TX as the UPDATE.
@@ -85,6 +93,7 @@ class Worker:
             clock: Callable[[], datetime],
             run_id_factory: Callable[[], str],
             event_id_factory: Callable[[], str],
+            claim_batch_size: int = 10,
         )
 
     ``poll_interval`` must be strictly positive — a zero or
@@ -92,6 +101,11 @@ class Worker:
     yielding. ``worker_id`` must be non-empty — it's the value
     written into ``runs.claimed_by`` and into every emitted
     event's payload, so the audit ledger can attribute work.
+    ``claim_batch_size`` (>= 1, default 10) bounds the per-tick
+    read of pending rows: the tick scans up to this many in
+    due_at order and tries each until one claim succeeds, so a
+    non-claimable head-of-queue row cannot starve active rows
+    behind it.
     """
 
     def __init__(
@@ -103,6 +117,7 @@ class Worker:
         clock: Callable[[], datetime],
         run_id_factory: Callable[[], str],
         event_id_factory: Callable[[], str],
+        claim_batch_size: int = 10,
     ) -> None:
         if not worker_id:
             raise ValueError(
@@ -115,6 +130,15 @@ class Worker:
                 f"poll_interval must be positive; got "
                 f"{poll_interval!r}. Zero would busy-loop the "
                 "event loop without yielding."
+            )
+        if claim_batch_size < 1:
+            raise ValueError(
+                f"claim_batch_size must be >= 1; got "
+                f"{claim_batch_size}. The worker reads up to "
+                "this many oldest-due pending rows per tick and "
+                "tries each in order until one claim succeeds; "
+                "a zero / negative value would mean 'never look "
+                "at any row'."
             )
         if not callable(conn_factory):
             raise TypeError("conn_factory must be callable")
@@ -131,6 +155,7 @@ class Worker:
         self._clock = clock
         self._run_id_factory = run_id_factory
         self._event_id_factory = event_id_factory
+        self._claim_batch_size = claim_batch_size
 
         self._conn: Optional[sqlite3.Connection] = None
         self._stop_event: Optional[asyncio.Event] = None
@@ -197,23 +222,40 @@ class Worker:
         self, conn: sqlite3.Connection
     ) -> Optional[str]:
         now = self._clock()
-        pending = list_pending_due(conn, now=now, limit=1)
+        # Batch read so the worker can step past pending rows
+        # that aren't claimable right now (inactive schedule,
+        # same-schedule already claimed/running). Without this,
+        # the oldest blocked row at the head of the queue would
+        # starve every active row behind it on subsequent ticks
+        # — reviewer round-4 blocker. The tick still claims AT
+        # MOST one row: we stop iterating as soon as one claim
+        # succeeds.
+        pending = list_pending_due(
+            conn, now=now, limit=self._claim_batch_size
+        )
         if not pending:
             return None
-        run = pending[0]
 
-        claim_event_id = self._event_id_factory()
-        claimed = claim_run(
-            conn,
-            run.id,
-            claimed_by=self._worker_id,
-            now=now,
-            event_id=claim_event_id,
-        )
-        if not claimed:
-            # Lost the race, status mismatch, or inactive
-            # schedule. Not an error — the next tick will try
-            # another row.
+        run = None
+        claim_event_id = None
+        for candidate in pending:
+            candidate_event_id = self._event_id_factory()
+            claimed = claim_run(
+                conn,
+                candidate.id,
+                claimed_by=self._worker_id,
+                now=now,
+                event_id=candidate_event_id,
+            )
+            if claimed:
+                run = candidate
+                claim_event_id = candidate_event_id
+                break
+            # Refused (lost race / single-flight / inactive
+            # schedule). The id we generated for this attempt
+            # is discarded — claim_run never wrote it. Try the
+            # next candidate.
+        if run is None:
             return None
 
         # claimed → running. State-machine gate first so a
@@ -273,7 +315,13 @@ class Worker:
             while not self._stop_event.is_set():
                 try:
                     await self.tick()
-                except BaseException:
+                except Exception:
+                    # NEVER catch BaseException here — that
+                    # would swallow asyncio.CancelledError,
+                    # KeyboardInterrupt, and SystemExit, which
+                    # are control signals the loop must respect.
+                    # Only Exception-tier errors are recoverable;
+                    # log + sleep + retry on the next tick.
                     _logger.exception(
                         "worker %s tick crashed; continuing "
                         "after sleep",
