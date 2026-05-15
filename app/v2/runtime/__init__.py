@@ -31,6 +31,12 @@ from app.v2.runtime.boot import (
 )
 from app.v2.runtime.claim import claim_run
 from app.v2.runtime.cron_guard import reject_numeric_dow
+from app.v2.runtime.lifecycle import (
+    on_schedule_archived,
+    on_schedule_paused,
+    on_schedule_resumed,
+    on_schedule_revised,
+)
 from app.v2.runtime.recovery import (
     RecoveredRun,
     RecoveryError,
@@ -61,6 +67,10 @@ __all__ = [
     "boot_runtime",
     "claim_run",
     "is_legal_transition",
+    "on_schedule_archived",
+    "on_schedule_paused",
+    "on_schedule_resumed",
+    "on_schedule_revised",
     "prod_clock",
     "prod_event_id_factory",
     "prod_run_id_factory",

@@ -867,10 +867,11 @@ async def test_boot_cleans_up_on_worker_start_failure(
             event_id_factory=_fixed_evt_id,
         )
 
-    # Three Worker INSTANCES were constructed (boot loops
-    # worker_count times). Only worker-0 was started before
-    # worker-1's start raised.
-    assert len(started) == 2  # third never constructed
+    # Two Worker INSTANCES were constructed: worker-0 (which
+    # started cleanly) and worker-1 (whose start() raised).
+    # The loop never reached worker-2 because the raise
+    # broke out of step 9.
+    assert len(started) == 2
     assert started[0].worker_id == "worker-0"
     assert started[0].started is True
     # Cleanup stopped the one running worker.
