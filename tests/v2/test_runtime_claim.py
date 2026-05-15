@@ -41,6 +41,7 @@ from app.v2.enums import EventKind, RunStatus, ScheduleStatus
 from app.v2.migrations import runner
 from app.v2.runtime import claim as claim_mod
 from app.v2.runtime.claim import claim_run
+from app.v2.runtime.state_machine import IllegalTransitionError
 from app.v2.storage.connection import ConnectionNotReady
 from app.v2.storage.serialization import NaiveDatetimeError
 
@@ -300,6 +301,31 @@ def test_pending_blocked_by_running_on_same_schedule(tmp_path):
     assert _status(conn, "r-pending") == "pending"
 
 
+def test_single_pending_only_row_on_schedule_claims(tmp_path):
+    """Regression for the ``r2.id != runs.id`` clause: when the
+    target row is the ONLY row on its schedule, the single-flight
+    NOT EXISTS predicate must not see the target row as
+    self-blocking. The clause makes this independent of SQLite's
+    UPDATE-WHERE evaluation order.
+
+    (The happy-path test above implicitly covers this; this test
+    pins it explicitly so a future regression that drops the
+    self-exclusion clause has a named, focused failure.)"""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn)
+    _seed_run(conn, run_id="solo-run")
+    # Sanity: no other rows on the schedule.
+    assert conn.execute(
+        "SELECT COUNT(*) FROM runs WHERE schedule_id = 'daily_audit'"
+    ).fetchone()[0] == 1
+
+    ok = claim_run(
+        conn, "solo-run", claimed_by="w", now=_NOW, event_id="evt-solo"
+    )
+    assert ok is True
+    assert _status(conn, "solo-run") == "claimed"
+
+
 def test_cross_schedule_no_interference(tmp_path):
     """A claimed run on schedule A must NOT block claiming
     a pending run on schedule B (single-flight is
@@ -471,6 +497,53 @@ def test_event_insert_failure_rolls_back_claim_update(tmp_path):
     # Pre-existing event row survives (it was outside the TX);
     # only the new event row would have been added.
     assert _event_count(conn) == 1
+
+
+# ===========================================================================
+# State-machine policy gate
+# ===========================================================================
+
+
+def test_claim_consults_state_machine_before_sql(tmp_path, monkeypatch):
+    """``claim_run`` must call ``assert_legal_transition(PENDING,
+    CLAIMED)`` before touching SQL. Reviewer concern: if
+    ``LEGAL_TRANSITIONS`` is ever narrowed in the future and this
+    primitive does not consult the state machine, it would
+    silently keep writing an illegal transition. We pin the
+    dependency by monkey-patching the imported symbol to raise
+    and asserting (a) the error propagates and (b) no row
+    changed.
+
+    The hardcoded endpoints in claim_run mirror the SQL
+    predicate; both ends must move together if the table is
+    ever narrowed."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn)
+    _seed_run(conn)
+
+    calls: list[tuple[RunStatus, RunStatus]] = []
+
+    def _fake_assert(src, dst):
+        calls.append((src, dst))
+        raise IllegalTransitionError(f"forbidden: {src.value}→{dst.value}")
+
+    monkeypatch.setattr(claim_mod, "assert_legal_transition", _fake_assert)
+
+    with pytest.raises(IllegalTransitionError):
+        claim_run(
+            conn,
+            "run-abc",
+            claimed_by="w",
+            now=_NOW,
+            event_id="evt-x",
+        )
+
+    # The gate was called with the exact (PENDING, CLAIMED)
+    # pair the SQL hardcodes.
+    assert calls == [(RunStatus.PENDING, RunStatus.CLAIMED)]
+    # Row untouched.
+    assert _status(conn, "run-abc") == "pending"
+    assert _event_count(conn) == 0
 
 
 # ===========================================================================

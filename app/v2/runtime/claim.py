@@ -7,10 +7,19 @@ predicate. One atomic SQL statement decides whether THIS
 worker owns the run:
 
 1. The targeted row is still ``pending``.
-2. No other run on the same schedule is currently
-   ``claimed`` or ``running`` (single-flight).
+2. No OTHER run on the same schedule is currently
+   ``claimed`` or ``running`` (single-flight; the
+   ``r2.id != runs.id`` clause excludes the target row
+   itself so the predicate is independent of UPDATE-WHERE
+   evaluation ordering in any SQLite version).
 3. The owning schedule is in ``active`` status (so pending
    rows that pre-dated a pause / archive cannot be claimed).
+
+The state-machine policy (``PENDING → CLAIMED``) is asserted
+via ``assert_legal_transition`` before any SQL is run, so
+future tightening of ``LEGAL_TRANSITIONS`` automatically
+disables this primitive rather than silently letting it write
+an illegal transition.
 
 If all three hold, the row flips to ``claimed`` with
 ``claimed_by`` / ``claimed_at`` populated AND a paired
@@ -28,6 +37,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from app.v2.enums import EventKind, RunStatus, ScheduleStatus
+from app.v2.runtime.state_machine import assert_legal_transition
 from app.v2.storage.connection import assert_connection_ready
 from app.v2.storage.serialization import NaiveDatetimeError, encode_json
 from app.v2.storage.transactions import transaction
@@ -69,6 +79,12 @@ def claim_run(
             existing event row (rolls back the claim UPDATE).
     """
     assert_connection_ready(conn)
+    # State-machine policy gate. Asserts that PENDING → CLAIMED
+    # is still a legal phase-4 transition. Hardcoded endpoints
+    # here because the SQL predicate also hardcodes them; if
+    # LEGAL_TRANSITIONS is ever narrowed to remove this pair the
+    # claim primitive must be reviewed (not silently skipped).
+    assert_legal_transition(RunStatus.PENDING, RunStatus.CLAIMED)
     if now.tzinfo is None:
         raise NaiveDatetimeError(
             f"naive datetime in now: {now!r} — attach tzinfo "
@@ -83,6 +99,7 @@ def claim_run(
         "AND NOT EXISTS ("
         "    SELECT 1 FROM runs r2 "
         "    WHERE r2.schedule_id = runs.schedule_id "
+        "    AND r2.id != runs.id "
         "    AND r2.status IN (?, ?)"
         ") "
         "AND EXISTS ("
