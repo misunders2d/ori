@@ -334,8 +334,26 @@ class SchedulerBinding:
            does NOT join them. Calling ``pool.shutdown(True)``
            a second time is idempotent and JOINS the threads
            -- guaranteeing no non-daemon thread leaks past
-           binding.stop. Wrapped in ``asyncio.to_thread`` so
-           it does not block the event loop.
+           binding.stop.
+
+           Why a synchronous call and NOT
+           ``asyncio.to_thread(pool.shutdown, True)``:
+           ``asyncio.to_thread`` dispatches via
+           ``loop.run_in_executor(None, ...)`` -- which
+           lazily constructs ``loop._default_executor`` (a
+           shared process-wide ThreadPoolExecutor with
+           NON-DAEMON threads) on the first call. After the
+           shutdown work completes, the default executor's
+           worker thread idles in the pool waiting for more
+           work and the process hangs at interpreter exit
+           (reviewer's slice-7b regression on 185a836: we
+           "owned" our APScheduler pool but reintroduced
+           the leak via ``to_thread``). Calling
+           ``pool.shutdown(True)`` directly briefly blocks
+           the event loop while the join happens; that's
+           acceptable on the shutdown path (the pool has
+           ``max_workers=1`` and any in-flight wakeup is an
+           O(few ms) sync DB insert).
 
            This is what the constructor's OWNED-executor
            choice buys us: only OUR pool is drained. The
@@ -376,16 +394,17 @@ class SchedulerBinding:
                     "binding.stop: jobstore engine.dispose failed"
                 )
         # Layer 3: drain owned thread pools. See docstring
-        # rationale. We touch only OUR pools (every executor
-        # in ``self._scheduler._executors`` was constructed
-        # by this binding's __init__); the loop's shared
-        # default executor is never touched.
+        # rationale (and the must-not-use-to_thread warning).
+        # We touch only OUR pools (every executor in
+        # ``self._scheduler._executors`` was constructed by
+        # this binding's __init__); the loop's shared default
+        # executor is never touched.
         for executor in list(self._scheduler._executors.values()):
             pool = getattr(executor, "_pool", None)
             if pool is None:
                 continue
             try:
-                await asyncio.to_thread(pool.shutdown, True)
+                pool.shutdown(wait=True)
             except Exception:
                 _logger.exception(
                     "binding.stop: owned pool.shutdown(wait=True) failed"
