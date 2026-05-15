@@ -27,6 +27,13 @@ from app.v2.registry_cache.loader import (
     save_cache,
 )
 from app.v2.registry_cache.paths import DEFAULT_CACHE_BASE, cache_path
+from app.v2.registry_cache.refresh import (
+    GoogleDriveClient,
+    SlackChannelsClient,
+    refresh_google_docs,
+    refresh_google_sheets,
+    refresh_slack_channels,
+)
 from app.v2.registry_cache.schemas import (
     CacheFile,
     CacheKind,
@@ -47,6 +54,7 @@ __all__ = [
     "DEFAULT_CACHE_BASE",
     "GoogleDocsCache",
     "GoogleDocsEntry",
+    "GoogleDriveClient",
     "GoogleSheetsCache",
     "GoogleSheetsEntry",
     "NoCacheAndNetworkDown",
@@ -54,9 +62,13 @@ __all__ = [
     "RegistryCacheError",
     "SlackChannelEntry",
     "SlackChannelsCache",
+    "SlackChannelsClient",
     "WorkspaceMismatch",
     "cache_path",
     "is_stale",
     "load_cache",
+    "refresh_google_docs",
+    "refresh_google_sheets",
+    "refresh_slack_channels",
     "save_cache",
 ]
