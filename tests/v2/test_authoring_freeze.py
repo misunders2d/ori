@@ -203,6 +203,46 @@ async def test_cron_without_handshake_returns_non_oneoff_not_dry_run_required(
 
 
 @pytest.mark.asyncio
+async def test_cron_without_plan_hash_returns_non_oneoff_not_validation_failure(
+    tmp_path,
+):
+    """Reviewer slice-3 verdict: gate ordering bug — if the
+    non-OneOff gate runs AFTER validate_schedule_spec, a
+    cron draft without execution_plan_hash trips the
+    reminder-only rule (`missing_execution_plan_for_complex_
+    trigger`) and masks the L87 code the LLM needs to see.
+
+    Pin: cron + no execution_plan_hash + no handshake →
+    non_oneoff_trigger_blocked_until_real_mode. Pre-fix this
+    asserted the validation code; post-fix it asserts the
+    non-OneOff code per plan §3.3 + Q4."""
+    drafts, handshakes = _stores(tmp_path)
+    bad = _oneoff_draft().model_copy(
+        update={
+            "trigger": CronTrigger(cron="0 9 * * MON", timezone="UTC"),
+            # NO execution_plan_hash — would trip reminder-only
+            # rule if the gate ran after validate_schedule_spec.
+        }
+    )
+    drafts.write("sess1", bad)
+
+    r = await schedule_freeze(
+        "sched_alpha",
+        session_id="sess1",
+        store=drafts,
+        handshake_store=handshakes,
+        clock=_fixed_clock,
+    )
+
+    assert r.status == "validation_failed"
+    codes = {i.code for i in r.issues}
+    assert "non_oneoff_trigger_blocked_until_real_mode" in codes
+    # The masked validation code must NOT appear — gate
+    # short-circuited before the validation chokepoint.
+    assert "missing_execution_plan_for_complex_trigger" not in codes
+
+
+@pytest.mark.asyncio
 async def test_interval_with_fresh_handshake_blocked(tmp_path):
     drafts, handshakes = await _seed_dry_run(tmp_path, _interval_draft())
 

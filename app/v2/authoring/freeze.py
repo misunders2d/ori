@@ -22,9 +22,11 @@ Failure shapes (in order of precedence):
 - Missing draft → :meth:`ToolResponse.not_found`.
 - Incomplete draft → :meth:`ToolResponse.not_ready`.
 - to_spec naive-clock failure → ``to_spec_failed``.
-- Validation failure → :meth:`ToolResponse.validation_failed`.
 - Non-OneOff trigger →
-  ``non_oneoff_trigger_blocked_until_real_mode``.
+  ``non_oneoff_trigger_blocked_until_real_mode``. Runs
+  BEFORE validation so an unrelated validation issue
+  cannot mask the LLM-visible reason.
+- Validation failure → :meth:`ToolResponse.validation_failed`.
 - Missing handshake → ``dry_run_required``.
 - Expired handshake → ``dry_run_expired`` with elapsed
   seconds in the message.
@@ -80,12 +82,15 @@ async def schedule_freeze(
        Non-empty → :meth:`ToolResponse.not_ready`.
     3. Call :meth:`ScheduleSpecDraft.to_spec(clock=clock)`.
        Naive-clock failure → ``to_spec_failed``.
-    4. Call :func:`validate_schedule_spec(spec)` with NO
-       kwargs. Issues → :meth:`ToolResponse.validation_failed`.
-    5. **Trigger-type gate** (L87 / Q4): if
+    4. **Trigger-type gate** (L87 / Q4): if
        ``spec.trigger.type != "one_off"`` →
        ``validation_failed(non_oneoff_trigger_blocked_until_real_mode)``.
-       Runs BEFORE the handshake check.
+       Runs BEFORE validation AND the handshake check so an
+       unrelated validation issue (e.g. cron without
+       ``execution_plan_hash`` → reminder-only rule) cannot
+       mask the non-OneOff code the LLM needs.
+    5. Call :func:`validate_schedule_spec(spec)` with NO
+       kwargs. Issues → :meth:`ToolResponse.validation_failed`.
     6. Read the handshake via :meth:`HandshakeStore.read`.
        FileNotFoundError → ``validation_failed(dry_run_required)``.
     7. Expiry check: ``handshake.is_expired(now=clock())`` →
@@ -121,14 +126,13 @@ async def schedule_freeze(
             message=str(exc),
         )
 
-    # ---- 4. validation chokepoint ----
-    result = validate_schedule_spec(spec)
-    if not result.ok:
-        return ToolResponse.validation_failed(
-            issues=list(result.issues)
-        )
-
-    # ---- 5. Trigger-type gate (BEFORE handshake check) ----
+    # ---- 4. Trigger-type gate (BEFORE validation +
+    # handshake checks). Phase 8 is OneOff-only per round-1
+    # reviewer L87 / Q4. Gate must run immediately after
+    # to_spec — running it after validate_schedule_spec
+    # would let an unrelated validation failure (e.g. cron
+    # without execution_plan_hash → reminder-only rule)
+    # mask the non-OneOff code the LLM needs to see. ----
     trigger_type = getattr(spec.trigger, "type", None)
     if trigger_type != _ONEOFF_TRIGGER_TYPE:
         return _validation_failed_single(
@@ -139,6 +143,13 @@ async def schedule_freeze(
                 f"{trigger_type!r} requires the `real` dry-run "
                 "mode (phase 10 / 12)"
             ),
+        )
+
+    # ---- 5. validation chokepoint ----
+    result = validate_schedule_spec(spec)
+    if not result.ok:
+        return ToolResponse.validation_failed(
+            issues=list(result.issues)
         )
 
     # ---- 6. Handshake presence ----
