@@ -239,6 +239,76 @@ async def test_happy_path_delivery_target_is_channel_external_id(tmp_path):
 
 
 # ===========================================================================
+# Forwarding pin (slice-3 reviewer follow-up)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_duplicate_commit_forwards_downstream_response(tmp_path):
+    """Second `schedule_create_reminder` call against the
+    same factory id surfaces `duplicate_schedule_id` from
+    `schedule_draft_commit` verbatim. Pins that the wrapper
+    cannot collapse / mask the downstream ToolResponse
+    (round-3 reviewer follow-up risk on §5.2)."""
+    closure, drafts, handshakes, conn_factory, _ = _build_closure(
+        tmp_path, cache=_populated_cache()
+    )
+
+    first = await closure(_FIRE_AT_ISO, "general", "first")
+    assert first.status == "ok"
+
+    second = await closure(_FIRE_AT_ISO, "general", "second")
+
+    assert second.status == "validation_failed"
+    assert any(
+        i.code == "duplicate_schedule_id" for i in second.issues
+    )
+
+
+@pytest.mark.asyncio
+async def test_dry_run_failure_forwards_verbatim(tmp_path, monkeypatch):
+    """Monkeypatch the validate_schedule_spec called by
+    `schedule_dry_run` to inject a synthetic validation
+    issue; the wrapper must surface the underlying
+    `validation_failed` response and never advance to
+    freeze / commit. Pins forwarding from dry_run."""
+    closure, drafts, handshakes, *_ = _build_closure(
+        tmp_path, cache=_populated_cache()
+    )
+
+    from app.v2.authoring import dry_run as dry_run_mod
+    from app.v2.validation import (
+        ValidationIssue,
+        ValidationResult,
+    )
+
+    sentinel_issue = ValidationIssue(
+        code="synthetic_dry_run_failure",
+        severity="error",
+        path="<root>",
+        message="injected by regression test",
+    )
+
+    def _fake_validate(spec):
+        return ValidationResult(issues=[sentinel_issue])
+
+    monkeypatch.setattr(
+        dry_run_mod, "validate_schedule_spec", _fake_validate
+    )
+
+    response = await closure(_FIRE_AT_ISO, "general", "hi")
+
+    assert response.status == "validation_failed"
+    assert any(
+        i.code == "synthetic_dry_run_failure"
+        for i in response.issues
+    )
+    # No handshake written (dry_run short-circuited).
+    with pytest.raises(FileNotFoundError):
+        handshakes.read("sess1", "sched_reminder_alpha")
+
+
+# ===========================================================================
 # `at` parsing failures
 # ===========================================================================
 

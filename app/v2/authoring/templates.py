@@ -282,18 +282,25 @@ def make_schedule_create_reminder(
         if dry_run_response.status != "ok":
             return dry_run_response
 
-        # ---- 6/7. freeze + commit (single conn) ----
-        with closing(conn_factory()) as conn:
-            freeze_response = await schedule_freeze(
-                draft.id,
-                session_id=session_id,
-                store=store,
-                handshake_store=handshake_store,
-                clock=clock,
-            )
-            if freeze_response.status != "ok":
-                return freeze_response
+        # ---- 6. Freeze (DB-free; runs BEFORE conn open
+        # per round-3 reviewer slice-3 fix — freeze takes no
+        # connection and surfaces handshake / trigger /
+        # hash-drift gates without touching SQLite. Opening
+        # conn_factory() ahead of freeze would mask a freeze
+        # failure behind a DB-outage exception if the
+        # connection opens fails). ----
+        freeze_response = await schedule_freeze(
+            draft.id,
+            session_id=session_id,
+            store=store,
+            handshake_store=handshake_store,
+            clock=clock,
+        )
+        if freeze_response.status != "ok":
+            return freeze_response
 
+        # ---- 7. Commit (DB write) ----
+        with closing(conn_factory()) as conn:
             commit_response = await schedule_draft_commit(
                 draft.id,
                 session_id=session_id,
