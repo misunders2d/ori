@@ -72,8 +72,20 @@ plan-revision commit and update this §0 in that commit.
    carries forward.
 
 3. **`schedule_freeze`** — `app/v2/authoring/freeze.py`.
-   Re-validates the draft → spec, then checks the freshest
+   Re-validates the draft → spec, then runs the
+   trigger-type gate, then checks the freshest
    `HandshakeRecord`:
+   - **Trigger-type gate (round-1 reviewer L87 fix +
+     Q4):** if `spec.trigger.type != "one_off"` →
+     `ToolResponse.validation_failed` code
+     `non_oneoff_trigger_blocked_until_real_mode` BEFORE
+     the handshake check. Phase 8 is OneOff-only;
+     `mocked_inputs` / `real` dry-run modes are stubs, and
+     design §5.6 says cron / interval require `real`.
+     Refusing the freeze outright is the only sound
+     behaviour — `validate_only` alone cannot certify a
+     cron schedule. Phase 10 / 12 lift this gate when
+     `real` ships.
    - Missing handshake → `ToolResponse.validation_failed`
      code `dry_run_required`.
    - Expired handshake (`now > expires_at`) →
@@ -84,35 +96,67 @@ plan-revision commit and update this §0 in that commit.
      `body_hash_drift`. The author mutated the draft after
      the dry-run; they must re-run dry_run before
      freezing.
-   - Mode insufficient — design §5.6 says "real" is
-     required for production cron schedules; phase 8 ships
-     `validate_only` only, so reminder-only OneOff specs
-     accept `validate_only` here. Cron / interval flows
-     come back to bite us when phases 10/12 add the real
-     mode; the gate is in place for that day. Plan note in
-     §9.2.
    - Success: return `ToolResponse.ok(spec=spec.model_dump())`.
      The freeze itself does NOT touch the DB; it just
      verifies the handshake remains valid for the commit
      verb. The handshake stays on disk.
 
 4. **`schedule_draft_commit`** — `app/v2/authoring/commit.py`.
-   The commit verb deferred from phase 7. Atomic in one TX:
-   - Re-validate via `schedule_freeze` shape (same gate +
-     hash + expiry).
-   - `insert_schedule(conn, spec)` — phase-3 storage helper.
+   The commit verb deferred from phase 7.
+
+   **Pre-flight gates** (same as `schedule_freeze`):
+   - Trigger-type gate: non-OneOff → `validation_failed`
+     code `non_oneoff_trigger_blocked_until_real_mode`
+     (round-1 reviewer L87 / Q4). Pre-flight; runs before
+     any DB I/O.
+   - Handshake presence / expiry / hash drift checks
+     (same codes as freeze).
+
+   **Atomic in one TX** (only reached after gates pass):
+   - `insert_schedule(conn, spec)` — phase-3 storage
+     helper. Surfaces ``sqlite3.IntegrityError`` on a
+     duplicate id; the tool catches it and maps to
+     ``validation_failed`` code `duplicate_schedule_id`
+     (round-1 reviewer Q8 confirmed shape).
    - `append_event(conn, Event(kind=SCHEDULE_CREATED, ...))`.
      The event id comes from the DI'd `event_id_factory`;
-     `ts` from `clock()`; `payload` carries
-     `{"hash": spec.hash, "template": spec.template.name or
-     None}`.
+     `ts` from `clock()`; `payload` is exactly
+     ``{"hash": spec.hash, "template": <name or None>}``
+     (round-1 reviewer Q6 confirmed shape).
    - Commit the TX.
-   - Delete the draft file + the handshake file on success.
-     Failures roll back the DB TX AND leave both files in
-     place for retry / forensics.
 
-   Returns `ToolResponse.ok(schedule_id=spec.id,
-   spec=spec.model_dump())`.
+   **Post-commit cleanup (round-1 reviewer L99 + L99
+   model):** best-effort with WARNING log on failure. After
+   the DB TX commits successfully:
+   - Attempt `store.delete(session_id, draft_id)`. Any
+     ``Exception`` is caught, logged at WARNING level on
+     the module's logger
+     (``app.v2.authoring.commit``) with the schedule id +
+     the offending path, and DOES NOT raise; the schedule
+     is already on disk and the EventLedger entry is the
+     source of truth.
+   - Same for `handshake_store.delete(session_id,
+     draft_id)`. Independent try/except so a draft-delete
+     failure does not prevent the handshake cleanup
+     attempt.
+
+   The post-commit cleanup is explicitly **best-effort**:
+   the response is still ``ToolResponse.ok(schedule_id,
+   spec)`` even when one or both file deletes fail. A
+   regression test pins the WARNING log emission so a
+   future change that silences the failure surfaces.
+
+   Failure of the pre-flight gates OR of the DB TX:
+   - Rolls back the DB TX.
+   - Leaves the draft + handshake files in place for retry
+     / forensics.
+   - Returns the `ToolResponse.validation_failed` shape
+     produced by the failing gate (or a
+     `validation_failed(duplicate_schedule_id)` for the
+     storage path).
+
+   Successful response: ``ToolResponse.ok(schedule_id=spec.id,
+   spec=spec.model_dump())``.
 
 5. **Toolset extension** —
    `app/v2/toolsets/authoring.py` gains three new
@@ -388,9 +432,18 @@ ToolDescriptor tag matrix additions (slice 5):
 
 ### 5.3 `test_authoring_freeze.py`
 
-- Fresh handshake matching current draft → ok with spec.
+- Fresh handshake matching current OneOff draft → ok with
+  spec.
+- **Cron-trigger draft (round-1 reviewer L87 / Q4 fix):**
+  even with a fresh matching handshake → `validation_failed`
+  with code `non_oneoff_trigger_blocked_until_real_mode`.
+  The gate runs BEFORE the handshake check; pin by ALSO
+  asserting the response with no handshake at all surfaces
+  the same code (not `dry_run_required`).
+- Interval-trigger draft (if reachable from the
+  ScheduleSpecDraft model) → same code as cron.
 - No handshake → `validation_failed` with code
-  `dry_run_required`.
+  `dry_run_required` (OneOff path only).
 - Expired handshake → `validation_failed` with code
   `dry_run_expired`; message includes elapsed seconds.
 - Hash drift (draft mutated after dry-run) →
@@ -404,11 +457,18 @@ ToolDescriptor tag matrix additions (slice 5):
 
 ### 5.4 `test_authoring_commit.py`
 
-- Happy path: complete draft + fresh handshake + matching
-  hash → `ok(schedule_id, spec)`; row visible in
+- Happy path: complete OneOff draft + fresh handshake +
+  matching hash → `ok(schedule_id, spec)`; row visible in
   `schedules` table; `schedule_created` event visible in
   `events` table with the documented payload; draft file
   removed; handshake file removed.
+- **Cron-trigger draft (round-1 reviewer L87 / Q4 fix):**
+  even with a fresh matching handshake →
+  `validation_failed` code
+  `non_oneoff_trigger_blocked_until_real_mode`. Pre-flight
+  gate runs BEFORE the DB I/O; pin via patching
+  `insert_schedule` + `append_event` and asserting zero
+  calls. Draft + handshake unchanged.
 - No handshake → `validation_failed(dry_run_required)`;
   no row inserted; draft + handshake unchanged.
 - Expired handshake → `validation_failed(dry_run_expired)`;
@@ -418,16 +478,39 @@ ToolDescriptor tag matrix additions (slice 5):
 - Missing draft → `not_found`.
 - Validation-failing spec (somehow re-broken after
   handshake) → `validation_failed`; no row, no event.
-- Transaction rollback: monkey-patch `append_event` to
-  raise after `insert_schedule`; pin schedules row
-  reverted, no event inserted, draft + handshake stay on
-  disk for retry.
+- Transaction rollback on event-insert failure:
+  monkey-patch `append_event` to raise after
+  `insert_schedule`; pin schedules row reverted, no event
+  inserted, draft + handshake stay on disk for retry.
 - Duplicate id: insert into a DB that already has the
   schedule → `sqlite3.IntegrityError` → tool surfaces as
   `validation_failed` with code `duplicate_schedule_id`;
   draft + handshake stay on disk.
-- `schedule_created` event payload contains `hash` +
-  `template` keys.
+- `schedule_created` event payload contains exactly the
+  documented keys: `hash` matches spec.hash; `template` is
+  either the template name or None for CustomFlow specs
+  (round-1 reviewer Q6).
+
+**Post-commit cleanup (round-1 reviewer L99 fix):**
+
+- Draft-delete failure post-commit: monkey-patch
+  `DraftStore.delete` to raise after `insert_schedule`
+  and `append_event` succeed. Pin:
+  - Schedule row + event row both present (DB TX
+    committed).
+  - Response is still `ToolResponse.ok` (best-effort
+    cleanup).
+  - `caplog` records exactly one WARNING entry on
+    logger `app.v2.authoring.commit` naming the
+    schedule id + the offending path.
+  - Handshake delete still attempted (handshake gone /
+    or its own WARNING if it also fails — see next).
+- Handshake-delete failure post-commit: same shape,
+  WARNING on the same logger; response stays ok.
+- Both deletes failing in sequence: TWO WARNING entries;
+  response stays ok; schedule + event present.
+- Inverse pin: clean commit emits ZERO WARNING records
+  (the best-effort branch only logs on failure).
 
 ### 5.5 `test_authoring_toolset.py` updates
 
@@ -501,26 +584,41 @@ Cross-cutting smoke checks:
    and `body_hash == spec.hash`.
 5. `schedule_dry_run` `mocked_inputs` and `real` return
    `validation_failed(mode_not_implemented_in_phase_8)`.
-6. `schedule_freeze` enforces handshake presence,
-   freshness, and matching hash; surfaces `dry_run_required`
-   / `dry_run_expired` / `body_hash_drift` codes; does not
-   mutate DB or files.
-7. `schedule_draft_commit` runs `insert_schedule` AND
-   appends a `schedule_created` event in one TX; deletes
-   draft + handshake on success; rollback on any failure
-   leaves both files in place.
-8. `schedule_created` event payload contains the spec hash
-   + the template name (or None).
-9. AuthoringToolset.get_tools returns 17 FunctionTool
-   instances; descriptor registry covers all 17.
-10. Phase guard `--diff v2-phase-7-complete` clean.
-11. No v1 paths touched. `run_bot.py` / `boot_runtime` /
+6. `schedule_freeze` enforces (in order) the trigger-type
+   gate, handshake presence, freshness, and matching hash;
+   surfaces `non_oneoff_trigger_blocked_until_real_mode` /
+   `dry_run_required` / `dry_run_expired` /
+   `body_hash_drift` codes; does not mutate DB or files.
+7. `schedule_draft_commit` runs the same trigger-type +
+   handshake gates AS PRE-FLIGHT, then `insert_schedule`
+   AND appends a `schedule_created` event in one TX;
+   post-commit best-effort cleanup deletes draft +
+   handshake (WARNING log on each delete failure; response
+   stays `ok`); pre-commit gate failures + DB rollback
+   leave both files in place.
+8. Cron / interval drafts are rejected outright at freeze
+   AND commit (round-1 reviewer L87 / Q4 — phase 8 is
+   OneOff-only until `real` dry-run lands).
+9. `schedule_created` event payload contains exactly
+   `{"hash": spec.hash, "template": <name or None>}`
+   (round-1 reviewer Q6).
+10. Post-commit cleanup is best-effort: draft + handshake
+    delete failures emit a single WARNING-level log on
+    `app.v2.authoring.commit` per failed delete; the
+    `ToolResponse` stays `ok` because the EventLedger is
+    the source of truth (round-1 reviewer L99 fix). Test
+    pin: monkeypatch the deletes to raise; assert log +
+    response shape.
+11. AuthoringToolset.get_tools returns 17 FunctionTool
+    instances; descriptor registry covers all 17.
+12. Phase guard `--diff v2-phase-7-complete` clean.
+13. No v1 paths touched. `run_bot.py` / `boot_runtime` /
     `CoordinatorAgent` untouched.
-12. No `datetime.now()` / `uuid.uuid4()` outside
+14. No `datetime.now()` / `uuid.uuid4()` outside
     `_defaults.py`. AST pin on every phase-8 module.
-13. Full v2 test suite passes (existing 1574 + phase-8
+15. Full v2 test suite passes (existing 1574 + phase-8
     adds); no regressions.
-14. Annotated git tag `v2-phase-8-complete` created and
+16. Annotated git tag `v2-phase-8-complete` created and
     pushed (workflow pre-approved per phase 5/6/7 pattern).
 
 ---
@@ -544,6 +642,16 @@ mocked_inputs and real modes return mode_not_implemented_in_
 phase_8 with a hint at the ExecutionPlan dependency. Boot
 self-test (design §6.7) stays deferred; admin-alert wiring
 lands with the phase-9 cutover.
+
+Freeze + commit are OneOff-only in phase 8: cron / interval
+drafts are refused outright with code
+non_oneoff_trigger_blocked_until_real_mode. Design §5.6
+requires `real` mode for cron schedules; phase 10 / 12 lift
+the gate alongside the `real` body.
+
+Post-commit cleanup is best-effort: draft + handshake delete
+failures log WARNING and the response stays `ok` (EventLedger
+is the source of truth).
 
 NO production agent mounting. CoordinatorAgent untouched;
 boot_runtime untouched; no binding wiring. ExecutionPlan
@@ -570,39 +678,38 @@ Plan:   docs/PHASE_8_PLAN.md
    stubbed with explicit error code so phase 10 / 12 can
    flip the body in a focused commit.
 
+### 9.1.a Closed in round-2 reviewer
+
+4. ~~Cron-freeze permissiveness gap.~~ **CLOSED** (L87 /
+   Q4): `schedule_freeze` AND `schedule_draft_commit` now
+   refuse non-OneOff triggers outright with code
+   `non_oneoff_trigger_blocked_until_real_mode`. Phase
+   10 / 12 lift the gate when `real` dry-run ships.
+5. ~~Handshake file retention.~~ **CLOSED** (Q5): keep
+   for a later phase. Phase 8 ships no retention sweep.
+6. ~~`schedule_created` payload schema.~~ **CLOSED**
+   (Q6): exactly `{"hash": spec.hash, "template":
+   <name|None>}`. No `owner` / `authored_at` / full body
+   in phase 8; a later phase may extend via the per-kind
+   payload model.
+7. ~~`as_of_datetime` storage on `validate_only`.~~
+   **CLOSED** (Q7): stored on the handshake record
+   verbatim; phase-8 behaviour ignores it. Future modes
+   consume it.
+8. ~~Duplicate-id commit response shape.~~ **CLOSED**
+   (Q8): `validation_failed(duplicate_schedule_id)` is
+   the right shape.
+9. ~~Post-commit cleanup gap.~~ **CLOSED** (L99): the
+   commit verb does best-effort cleanup with WARNING log
+   on failure; response stays `ok` because the
+   EventLedger is the source of truth. Regression test
+   pins the WARNING emission.
+
 ### 9.2 Still open
 
-4. **`schedule_freeze` minimum mode for cron.** Design
-   §5.6 says "real is required for production cron
-   schedules". Phase 8 ships only `validate_only`; cron
-   freezes therefore succeed today even though design
-   says they should require `real`. Reviewer: keep the
-   permissive freeze for phase 8 (reminder-only flow) or
-   refuse cron freezes outright until phase 12 ships
-   `real`? Default: permissive; pin in §10 as a known gap.
-
-5. **Handshake file retention.** Default deletes
-   handshake on commit success; failed commits leave it
-   for retry. Reviewer: time-bound retention (e.g. 24h
-   sweep) here, or punt to a later phase?
-
-6. **`schedule_created` event payload schema.** Default
-   `{"hash": spec.hash, "template": <name|None>}`.
-   Reviewer: should it also carry `authored_at`, `owner`,
-   or a JSON snapshot of the full body for replay?
-   Schema impact later: phase-2's per-kind payload models
-   could pin this once shipped.
-
-7. **`as_of_datetime` storage on `validate_only` mode.**
-   Plan stores it verbatim on the record; behaviour-no-op
-   in this mode. Reviewer: store None instead so the
-   record reflects what the mode actually used?
-
-8. **Duplicate-id commit response shape.** Default surfaces
-   the storage `IntegrityError` as
-   `validation_failed(duplicate_schedule_id)`. Reviewer:
-   right shape, or should the tool catch + map to a
-   distinct `not_found`-like "already exists" status?
+None — round-2 reviewer closed every prior open item.
+New items will populate here if reviewer rounds 3+
+surface gaps.
 
 ---
 
@@ -627,8 +734,8 @@ Same as phase 7 plan §10. Restated for self-containment:
 10. Every runtime / authoring helper takes injected clock
     + id factories; `_defaults.py` is the ONLY module that
     wires them to wall clock + uuid4.
-11. **Known design gap (Q4):** phase 8 ships only
-    `validate_only` mode; cron freezes succeed today even
-    though design §5.6 says cron requires `real`. The gate
-    is in place for the day phases 10 / 12 ship the
-    `real` mode.
+11. **OneOff-only freeze / commit until phase 10 / 12 ships
+    `real` dry-run mode** (round-1 reviewer L87 / Q4): cron
+    / interval drafts are refused outright at freeze AND
+    commit. Phase 12 lifts the gate alongside the `real`
+    dry-run body.
