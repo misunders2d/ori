@@ -427,6 +427,185 @@ async def test_non_utc_clock_normalised_to_utc_on_record(tmp_path):
 
 
 # ===========================================================================
+# String-mode coverage (slice-2 fix-up — reviewer bug)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_string_mode_validate_only_happy_path(tmp_path):
+    """LLM may pass the raw string 'validate_only' rather
+    than the enum. Coercion accepts it."""
+    drafts, handshakes = _stores(tmp_path)
+    drafts.write("sess1", _complete_draft())
+
+    r = await schedule_dry_run(
+        "sched_alpha",
+        "validate_only",  # raw string
+        session_id="sess1",
+        store=drafts,
+        handshake_store=handshakes,
+        clock=_fixed_clock,
+    )
+
+    assert r.status == "ok"
+    record = handshakes.read("sess1", "sched_alpha")
+    assert record.mode is DryRunMode.VALIDATE_ONLY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode_str", ["mocked_inputs", "real"]
+)
+async def test_string_mode_stubbed_modes_refused(tmp_path, mode_str):
+    """The reviewer bug: raw string 'real' / 'mocked_inputs'
+    must hit the mode_not_implemented_in_phase_8 gate before
+    any draft read. Pin via monkeypatched read."""
+    drafts, handshakes = _stores(tmp_path)
+    drafts.write("sess1", _complete_draft())
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("DraftStore.read must not be called")
+
+    object.__setattr__(drafts, "read", _boom)
+
+    r = await schedule_dry_run(
+        "sched_alpha",
+        mode_str,
+        session_id="sess1",
+        store=drafts,
+        handshake_store=handshakes,
+        clock=_fixed_clock,
+    )
+
+    assert r.status == "validation_failed"
+    assert any(
+        i.code == "mode_not_implemented_in_phase_8" for i in r.issues
+    )
+    assert any(mode_str in i.message for i in r.issues)
+    # No handshake written.
+    with pytest.raises(FileNotFoundError):
+        handshakes.read("sess1", "sched_alpha")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_mode",
+    [
+        "garbage",
+        "validateonly",  # close but wrong
+        "VALIDATE_ONLY",  # case sensitive
+        "",
+        42,
+        None,
+    ],
+)
+async def test_unknown_mode_returns_invalid_dry_run_mode(tmp_path, bad_mode):
+    drafts, handshakes = _stores(tmp_path)
+    drafts.write("sess1", _complete_draft())
+
+    # Also pin that the gate runs before any I/O.
+    def _boom(*args, **kwargs):
+        raise RuntimeError("DraftStore.read must not be called")
+
+    object.__setattr__(drafts, "read", _boom)
+
+    r = await schedule_dry_run(
+        "sched_alpha",
+        bad_mode,
+        session_id="sess1",
+        store=drafts,
+        handshake_store=handshakes,
+        clock=_fixed_clock,
+    )
+
+    assert r.status == "validation_failed"
+    assert any(i.code == "invalid_dry_run_mode" for i in r.issues)
+    with pytest.raises(FileNotFoundError):
+        handshakes.read("sess1", "sched_alpha")
+
+
+# ===========================================================================
+# as_of_datetime UTC enforcement (slice-2 fix-up — reviewer risk)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_as_of_datetime_naive_returns_validation_failed(tmp_path):
+    """Naive as_of_datetime → validation_failed(as_of_datetime_not_utc).
+    Must NOT raise pydantic ValidationError to the caller."""
+    drafts, handshakes = _stores(tmp_path)
+    drafts.write("sess1", _complete_draft())
+
+    r = await schedule_dry_run(
+        "sched_alpha",
+        DryRunMode.VALIDATE_ONLY,
+        session_id="sess1",
+        store=drafts,
+        handshake_store=handshakes,
+        clock=_fixed_clock,
+        as_of_datetime=datetime(2026, 5, 15, 10, 0),  # naive
+    )
+
+    assert r.status == "validation_failed"
+    assert any(i.code == "as_of_datetime_not_utc" for i in r.issues)
+    assert any("naive" in i.message for i in r.issues)
+    # No handshake written.
+    with pytest.raises(FileNotFoundError):
+        handshakes.read("sess1", "sched_alpha")
+
+
+@pytest.mark.asyncio
+async def test_as_of_datetime_non_utc_returns_validation_failed(tmp_path):
+    """Non-UTC tz-aware as_of_datetime →
+    validation_failed(as_of_datetime_not_utc) with conversion
+    hint. Must NOT raise pydantic ValidationError."""
+    drafts, handshakes = _stores(tmp_path)
+    drafts.write("sess1", _complete_draft())
+
+    five_east = timezone(timedelta(hours=5))
+
+    r = await schedule_dry_run(
+        "sched_alpha",
+        DryRunMode.VALIDATE_ONLY,
+        session_id="sess1",
+        store=drafts,
+        handshake_store=handshakes,
+        clock=_fixed_clock,
+        as_of_datetime=datetime(2026, 5, 15, 12, 0, tzinfo=five_east),
+    )
+
+    assert r.status == "validation_failed"
+    assert any(i.code == "as_of_datetime_not_utc" for i in r.issues)
+    assert any("astimezone" in i.message for i in r.issues)
+    with pytest.raises(FileNotFoundError):
+        handshakes.read("sess1", "sched_alpha")
+
+
+@pytest.mark.asyncio
+async def test_as_of_datetime_utc_passes_through(tmp_path):
+    """Sanity pin: UTC as_of_datetime accepted + stored
+    verbatim (carries forward the existing pin under new
+    guard ordering)."""
+    drafts, handshakes = _stores(tmp_path)
+    drafts.write("sess1", _complete_draft())
+
+    as_of = _UTC_NOW - timedelta(hours=3)
+    r = await schedule_dry_run(
+        "sched_alpha",
+        DryRunMode.VALIDATE_ONLY,
+        session_id="sess1",
+        store=drafts,
+        handshake_store=handshakes,
+        clock=_fixed_clock,
+        as_of_datetime=as_of,
+    )
+    assert r.status == "ok"
+
+    record = handshakes.read("sess1", "sched_alpha")
+    assert record.as_of_datetime == as_of
+
+
+# ===========================================================================
 # Module hygiene
 # ===========================================================================
 

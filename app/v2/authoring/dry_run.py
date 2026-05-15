@@ -50,7 +50,7 @@ from app.v2.validation import validate_schedule_spec
 
 async def schedule_dry_run(
     draft_id: str,
-    mode: DryRunMode,
+    mode: "DryRunMode | str",
     *,
     session_id: str,
     store: DraftStore,
@@ -100,7 +100,24 @@ async def schedule_dry_run(
     written, no draft read attempted — the mode check runs
     first).
     """
-    # Mode gate first: stubbed modes refuse before any I/O.
+    # Mode coercion FIRST: the LLM may pass a raw string
+    # rather than the enum instance. Coerce + reject unknown
+    # values before any I/O. ``DryRunMode(mode)`` is a no-op
+    # for enum input and raises ``ValueError`` on unknown
+    # strings (and on non-str / non-enum inputs).
+    try:
+        mode = DryRunMode(mode)
+    except (ValueError, KeyError, TypeError):
+        return _validation_failed_single(
+            code="invalid_dry_run_mode",
+            path="mode",
+            message=(
+                f"unknown dry-run mode {mode!r}; expected one of "
+                f"{sorted(m.value for m in DryRunMode)!r}"
+            ),
+        )
+
+    # Mode gate: stubbed modes refuse before any I/O.
     if mode is DryRunMode.MOCKED_INPUTS or mode is DryRunMode.REAL:
         return _validation_failed_single(
             code="mode_not_implemented_in_phase_8",
@@ -112,6 +129,37 @@ async def schedule_dry_run(
                 "schedules in phase 8."
             ),
         )
+
+    # ``as_of_datetime`` UTC gate: refuse naive + non-UTC
+    # offsets explicitly so the LLM gets a clean shape
+    # instead of an uncaught pydantic ValidationError when
+    # the record is built. HandshakeRecord's field validator
+    # rejects both shapes; surface that constraint as a
+    # validation_failed at the tool layer.
+    if as_of_datetime is not None:
+        if (
+            as_of_datetime.tzinfo is None
+            or as_of_datetime.tzinfo.utcoffset(as_of_datetime) is None
+        ):
+            return _validation_failed_single(
+                code="as_of_datetime_not_utc",
+                path="as_of_datetime",
+                message=(
+                    "as_of_datetime must be tz-aware UTC (got "
+                    "naive datetime)"
+                ),
+            )
+        if as_of_datetime.utcoffset() != timedelta(0):
+            return _validation_failed_single(
+                code="as_of_datetime_not_utc",
+                path="as_of_datetime",
+                message=(
+                    "as_of_datetime must be UTC (got "
+                    f"utcoffset={as_of_datetime.utcoffset()!r}); "
+                    "convert via value.astimezone(timezone.utc) "
+                    "before passing"
+                ),
+            )
 
     # validate_only path.
     try:
