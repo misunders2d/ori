@@ -544,6 +544,152 @@ async def test_retry_later_downgrades_to_admin_alert_with_warning(
 
 
 # ===========================================================================
+# Atomicity (round-3 reviewer slice-5 fix)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_route_failure_policy_atomic_rollback_on_run_update_failure(
+    tmp_path,
+    monkeypatch,
+):
+    """Round-3 reviewer slice-5 fix: _route_failure_policy
+    wraps emit_failed + admin_alert_sent + run UPDATE +
+    run_failed in ONE transaction. If the run UPDATE
+    raises mid-TX, every prior event row rolls back AND
+    the Run stays in RUNNING.
+
+    Pre-fix the helper appended emit_failed +
+    admin_alert_sent via standalone calls, then dispatched
+    to ``update_run_status_and_append_event`` which opened
+    its OWN TX. A failure on the final write left the
+    prior events committed → EventLedger / run status
+    diverged."""
+    factory, _ = _conn_factory(tmp_path)
+    spec = _build_spec(failure_action=FailureActionType.ALERT_ADMIN)
+    _seed_schedule_and_run(factory, spec=spec)
+
+    # Move Run to RUNNING (matches post-claim state).
+    conn = factory()
+    try:
+        conn.execute(
+            "UPDATE runs SET status = 'running' WHERE id = ?",
+            ("run-abc",),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Monkeypatch conn.execute on the worker's connection
+    # to raise specifically on the UPDATE runs statement
+    # (which fires AFTER the emit_failed +
+    # admin_alert_sent events). The transaction must
+    # rollback every prior insert.
+    from app.v2.runtime import worker as worker_mod
+
+    real_append = worker_mod.append_event
+    appended_before_failure: list[str] = []
+
+    def _tracking_append(conn_arg, event):
+        appended_before_failure.append(event.kind.value)
+        return real_append(conn_arg, event)
+
+    monkeypatch.setattr(
+        worker_mod, "append_event", _tracking_append
+    )
+
+    client = _StubSlackClient(
+        response={"ok": False, "error": "channel_not_found"}
+    )
+    worker = _make_worker(factory, client)
+    run = Run(
+        id="run-abc",
+        schedule_id=spec.id,
+        execution_plan_hash=None,
+        fire_reason=FireReason.SCHEDULED,
+        due_at=_NOW,
+        status=RunStatus.RUNNING,
+        attempt=1,
+        root_run_id="run-abc",
+    )
+
+    # Wrapper class around the real sqlite3 connection
+    # that raises on the UPDATE runs statement. sqlite3
+    # Connection attributes are read-only so we can't
+    # monkeypatch ``conn.execute`` directly; the wrapper
+    # delegates every other attribute via __getattr__.
+    class _FailingExecuteConn:
+        def __init__(self, real_conn: sqlite3.Connection) -> None:
+            object.__setattr__(self, "_real", real_conn)
+
+        def execute(self, sql, *args, **kwargs):
+            if "UPDATE runs" in sql:
+                raise sqlite3.IntegrityError(
+                    "simulated post-events failure"
+                )
+            return self._real.execute(sql, *args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+        def __setattr__(self, name, value):
+            # ``transaction(conn)`` sets isolation_level; the
+            # wrapper forwards to the real connection.
+            if name == "_real":
+                object.__setattr__(self, name, value)
+            else:
+                setattr(self._real, name, value)
+
+    real_conn = factory()
+    wrapped = _FailingExecuteConn(real_conn)
+    try:
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="simulated post-events failure",
+        ):
+            await worker._route_failure_policy(
+                conn=wrapped,
+                run=run,
+                spec=spec,
+                result=SlackPostResult(
+                    ok=False,
+                    channel=spec.delivery.target_session_id,
+                    error="channel_not_found",
+                ),
+            )
+    finally:
+        real_conn.close()
+
+    # Pin the in-flight tracking: append_event WAS called
+    # for emit_failed + admin_alert_sent BEFORE the
+    # UPDATE raised. If those weren't tracked the test
+    # itself would not be exercising the rollback path.
+    assert "emit_failed" in appended_before_failure
+    assert "admin_alert_sent" in appended_before_failure
+
+    # ROLLBACK assertion: zero event rows persisted for
+    # the run despite the in-flight appends.
+    persisted_events = _read_events(factory, "run-abc")
+    persisted_kinds = {e.kind.value for e in persisted_events}
+    assert "emit_failed" not in persisted_kinds, (
+        f"emit_failed leaked through rollback: "
+        f"{persisted_kinds!r}"
+    )
+    assert "admin_alert_sent" not in persisted_kinds, (
+        f"admin_alert_sent leaked through rollback: "
+        f"{persisted_kinds!r}"
+    )
+    assert "run_failed" not in persisted_kinds, (
+        f"run_failed leaked through rollback: "
+        f"{persisted_kinds!r}"
+    )
+
+    # Run status stays at RUNNING — caller / recovery
+    # promotes it via the stale-claim path.
+    assert _read_run_status(factory, "run-abc") == "running"
+
+
+# ===========================================================================
 # UnsupportedSpec branches
 # ===========================================================================
 

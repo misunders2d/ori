@@ -65,7 +65,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 from app.v2.emit.slack_reminder import (
@@ -86,7 +86,10 @@ from app.v2.runtime.state_machine import assert_legal_transition
 from app.v2.storage.events import append_event
 from app.v2.storage.runs import list_claimable_due
 from app.v2.storage.schedules import get_schedule
-from app.v2.storage.transactions import update_run_status_and_append_event
+from app.v2.storage.transactions import (
+    transaction,
+    update_run_status_and_append_event,
+)
 from app.v2.templates.one_off_reminder import (
     ONE_OFF_REMINDER_TEMPLATE_NAME,
 )
@@ -548,7 +551,26 @@ class Worker:
         implements ``alert_admin`` + ``abort_silent``.
         ``retry_later`` is downgraded to ``alert_admin``
         semantics with a WARNING log (phase 10 ships the
-        retry chain)."""
+        retry chain).
+
+        **Atomicity (round-3 reviewer slice-5 fix):** the
+        helper writes 2-3 events plus the
+        ``running → failed`` Run UPDATE inside ONE
+        explicit ``transaction(conn)`` block. Any raise
+        inside the block rolls back every write — the
+        EventLedger never carries an ``emit_failed`` /
+        ``admin_alert_sent`` event for a Run that still
+        reads ``running``. Pre-fix this helper called
+        ``update_run_status_and_append_event`` last, which
+        opens its own TX; an event-id collision on the
+        final write left the prior events committed and
+        Run status stuck at ``running``.
+        """
+        # Pre-compute every event + timestamps OUTSIDE the
+        # transaction so failures in the factories surface
+        # before any write lands. Each Event constructor
+        # validates the payload shape; a malformed payload
+        # raises here, not mid-TX.
         emit_failed_event = Event(
             id=self._event_id_factory(),
             run_id=run.id,
@@ -562,12 +584,11 @@ class Worker:
             },
             correlates=None,
         )
-        append_event(conn, emit_failed_event)
 
         action = spec.failure.on_failure_action
+        admin_event: Optional[Event] = None
         if action == FailureActionType.ABORT_SILENT:
-            # No admin alert; just fail the Run.
-            pass
+            admin_event = None
         elif action == FailureActionType.ALERT_ADMIN:
             admin_event = Event(
                 id=self._event_id_factory(),
@@ -582,7 +603,6 @@ class Worker:
                 },
                 correlates=emit_failed_event.id,
             )
-            append_event(conn, admin_event)
         else:
             # retry_later / custom — phase 10 / 12 work.
             # Downgrade to alert_admin semantics so phase 9
@@ -609,9 +629,7 @@ class Worker:
                 },
                 correlates=emit_failed_event.id,
             )
-            append_event(conn, admin_event)
 
-        # Transition Run → FAILED.
         assert_legal_transition(
             RunStatus.RUNNING, RunStatus.FAILED
         )
@@ -629,16 +647,37 @@ class Worker:
             },
             correlates=emit_failed_event.id,
         )
-        update_run_status_and_append_event(
-            conn,
-            run_id=run.id,
-            new_status=RunStatus.FAILED,
-            event=run_failed_event,
-            extra_columns={
-                "completed_at": completed_at,
-                "error": result.error or "",
-            },
-        )
+
+        # ---- Atomic write block ----
+        # All 2-3 events + the Run UPDATE live in one
+        # explicit transaction. Any raise inside the block
+        # triggers ROLLBACK; no partial state lands.
+        with transaction(conn):
+            append_event(conn, emit_failed_event)
+            if admin_event is not None:
+                append_event(conn, admin_event)
+            cursor = conn.execute(
+                "UPDATE runs SET status = ?, completed_at = ?, "
+                "error = ? WHERE id = ?",
+                (
+                    RunStatus.FAILED.value,
+                    completed_at.astimezone(timezone.utc).isoformat(),
+                    result.error or "",
+                    run.id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                # Defensive: the run row should exist by the
+                # time we get here (caller saw it transition
+                # to RUNNING). If it vanished, raise so the
+                # transaction rolls back the events we just
+                # inserted. Recovery picks up from RUNNING.
+                raise RuntimeError(
+                    f"_route_failure_policy: runs row "
+                    f"{run.id!r} vanished mid-TX; rolling "
+                    "back emit_failed + admin_alert events"
+                )
+            append_event(conn, run_failed_event)
 
     async def _run_loop(self) -> None:
         """The poll loop. Runs until ``stop_event`` is set."""
