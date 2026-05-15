@@ -370,9 +370,12 @@ async def test_tick_on_paused_schedule_does_not_claim(tmp_path):
     result = await worker.tick()
     assert result is None
     assert _status(seed, "r-1") == "pending"
-    # event_id_factory was called once (for the would-be claim
-    # event) but the claim itself was refused and rolled back —
-    # so no events landed.
+    # list_claimable_due's schedule-status predicate drops the
+    # paused row at the SQL layer — the worker never even tries
+    # to claim, so event_id_factory was never called. (Before
+    # the round-5 pre-filter the worker would have generated +
+    # discarded one id per attempted-then-refused claim.)
+    assert counters["evt"]["i"] == 0
     assert seed.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
 
 

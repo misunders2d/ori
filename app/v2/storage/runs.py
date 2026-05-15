@@ -1,24 +1,39 @@
 """CRUD over the ``runs`` table.
 
-Phase 3 slice 5 per ``docs/PHASE_3_PLAN.md`` §5.3.
+Phase 3 slice 5 per ``docs/PHASE_3_PLAN.md`` §5.3. Phase 4
+slice 4 (round-5 reviewer fix) added the read-only
+``list_claimable_due`` helper that mirrors the predicates the
+runtime ``claim_run`` enforces.
 
-Surface is deliberately neutral — no claim semantics, no
-single-flight predicate, no source-status guard. Phase 4
-introduces the worker that owns claim ownership; phase 3 just
-exposes the data plane:
+Mutation surface stays NEUTRAL — no claim-ownership update,
+no source-status guard in any UPDATE. Phase 4's runtime layer
+owns the claim transition itself; this module exposes the
+data plane that backs it:
 
 - :func:`insert_run` — write a Pydantic ``Run`` to the table.
 - :func:`get_run` — read a row back into a Pydantic ``Run``.
 - :func:`list_pending_due` — READ-ONLY query of pending runs
   with ``due_at <= now``, ordered by ``due_at``. Never claims.
+  Returns every pending row including ones the runtime cannot
+  currently claim (paused/archived schedule, single-flight
+  blocked); used by diagnostic / replay tools that want the
+  unfiltered queue.
+- :func:`list_claimable_due` — READ-ONLY worker-selection
+  query layered on top of the same scan. Adds the same
+  schedule-status + single-flight predicates ``claim_run``
+  enforces so non-claimable rows never reach the worker
+  batch. This is a SELECTION filter, not a mutation —
+  ``claim_run`` is still the race-safe gate.
 - :func:`list_runs_in_chain` — retry chain via
   ``WHERE root_run_id = ?``, ordered by ``attempt``.
 - :func:`mark_run_status` — unpredicated ``UPDATE runs SET
-  status = ? WHERE id = ?``. No source-status check.
+  status = ? WHERE id = ?``. No source-status check; no
+  claim-ownership check.
 
 References:
 - ``docs/CONTRACTS_V2_DESIGN.md`` §4.0.2 + §4.0.4
 - ``docs/PHASE_3_PLAN.md`` §5.3
+- ``docs/PHASE_4_PLAN.md`` §6.1.1 (claimable-due rationale)
 """
 
 from __future__ import annotations

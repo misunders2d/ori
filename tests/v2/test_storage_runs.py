@@ -1,10 +1,16 @@
 """Tests for ``app.v2.storage.runs``.
 
-Pins per ``docs/PHASE_3_PLAN.md`` §9.6:
+Pins per ``docs/PHASE_3_PLAN.md`` §9.6 plus the phase-4 §6.1.1
+addition for ``list_claimable_due``:
 
 - Insert + get round-trip (all fields incl. optional datetimes).
 - ``list_pending_due`` orders by ``due_at`` ASC, respects
   ``limit``, excludes non-pending statuses.
+- ``list_claimable_due`` filters out pending rows on
+  paused/archived schedules and rows whose schedule has a
+  claimed/running sibling (same predicates claim_run
+  enforces). Selection filter only — no mutation, no
+  ownership claim.
 - ``list_runs_in_chain`` returns chain in attempt order.
 - ``mark_run_status`` writes status + extras; unpredicated
   (no source-status filter — pinned via failed → cancelled).
@@ -17,9 +23,13 @@ Pins per ``docs/PHASE_3_PLAN.md`` §9.6:
 - ``assert_connection_ready`` called per helper.
 - Drift guard: runs allowlist == transactions allowlist.
 
-**Explicitly forbidden in phase 3 tests:** ``pending →
-claimed`` transition, single-flight scenarios, "two workers
-race" simulations. Those land in phase 4 with the worker.
+**Mutation surface remains phase-3-neutral:** still no
+``pending → claimed`` UPDATE in any helper, still no
+"two workers race" mutation scenarios — those land in
+phase 4's runtime ``claim_run``. ``list_claimable_due`` is a
+SELECT-only filter, so the predicates it shares with
+``claim_run`` are read-side mirrors of the runtime mutation,
+not a claim path themselves.
 
 Smoke:
 - Module imports no I/O libs.
@@ -970,6 +980,25 @@ def test_runs_module_has_no_io_imports():
     assert not leaked, (
         f"runs module imports I/O libs: {sorted(leaked)}."
     )
+
+
+def test_list_claimable_due_is_reexported_from_package():
+    """The package contract says callers import from
+    ``app.v2.storage``. Drift guard: a public helper that
+    lives only in the submodule but is missing from the
+    package surface counts as broken contract."""
+    import app.v2.storage as storage_pkg
+
+    assert hasattr(storage_pkg, "list_claimable_due"), (
+        "app.v2.storage must re-export list_claimable_due "
+        "(see app/v2/storage/__init__.py)."
+    )
+    assert "list_claimable_due" in storage_pkg.__all__, (
+        "list_claimable_due must appear in app.v2.storage.__all__."
+    )
+    # And it must be the same object as the submodule symbol.
+    from app.v2.storage.runs import list_claimable_due as direct
+    assert storage_pkg.list_claimable_due is direct
 
 
 def test_runs_module_has_no_dispatch_callables():
