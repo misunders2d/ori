@@ -34,6 +34,11 @@ from app.v2.registry_cache.refresh import (
     refresh_google_sheets,
     refresh_slack_channels,
 )
+from app.v2.registry_cache.resolver import (
+    resolve_channel,
+    resolve_doc,
+    resolve_sheet,
+)
 from app.v2.registry_cache.schemas import (
     CacheFile,
     CacheKind,
@@ -70,5 +75,8 @@ __all__ = [
     "refresh_google_docs",
     "refresh_google_sheets",
     "refresh_slack_channels",
+    "resolve_channel",
+    "resolve_doc",
+    "resolve_sheet",
     "save_cache",
 ]
