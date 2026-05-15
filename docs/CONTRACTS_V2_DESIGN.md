@@ -714,13 +714,27 @@ binary `mutates: bool`:
 - `read_external` (BQ, Sheets read, Keepa)
 - `write_external` (Sheets append, Drive write, Slack post, Telegram send)
 - `send_message` (user-facing delivery)
+- `filesystem_read` (read a file the bot owns on its own host —
+  config, draft JSON, cached registry. Distinct from
+  `read_external` because the bytes never traverse a third-party
+  API. Added 2026-05-15 with phase 7 authoring tools so
+  compile / list tools that read draft files have a real tag.
+  NOT blocking under read-only reasoning — local introspection
+  is safe.)
 - `filesystem_write`
+- `db_write` (mutates the v2 SQLite store. Added 2026-05-15
+  with phase 7 lifecycle tools. Distinct from
+  `filesystem_write` because the SQLite path is internal state
+  the v2 runtime owns; admin-approval gating differs from
+  arbitrary local-file writes. **Blocking under read-only
+  reasoning** — any reasoning step with `tool_mode=read_only`
+  must NOT mutate the v2 store.)
 - `privileged` (admin-only ops)
 - `costly` (billable: BQ, LLM calls)
 - `uses_oauth`
 
 Policy composition examples:
-- Reasoning `tool_mode=read_only` blocks `write_external | send_message | filesystem_write | privileged`
+- Reasoning `tool_mode=read_only` blocks `write_external | send_message | filesystem_write | db_write | privileged`
 - Cost-aware authoring warns on `costly`
 - Auth-aware loaders compose with `uses_oauth`
 

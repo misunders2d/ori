@@ -25,10 +25,29 @@ Read this with:
 
 ## 0. Design-doc amendment
 
-None expected. §5.1 + §5.5 already specify the tool list +
-chokepoint contract. If reviewer rounds surface a gap, apply
-the amendment as a plan-revision commit and update this §0
-in that commit.
+**Applied in this revision (round-3 reviewer L807):** design
+§5.4 gains TWO new metadata tags so the phase-7 tools have
+real tags to register against:
+
+- ``filesystem_read`` — local file reads the bot owns
+  (draft JSON, cached registry, config). Distinct from
+  ``read_external`` (third-party API reads). NOT blocking
+  under read-only reasoning.
+- ``db_write`` — mutates the v2 SQLite store. Distinct from
+  ``filesystem_write`` because the SQLite path is internal
+  state the v2 runtime owns; admin-approval gating differs.
+  **Blocking under read-only reasoning** so a reasoning
+  step with ``tool_mode=read_only`` cannot mutate the v2
+  store via a future tool that carries this tag.
+
+The amended §5.4 also extends the
+``Reasoning tool_mode=read_only blocks …`` policy line to
+include ``db_write``.
+
+Same commit applies both changes (this revision of
+PHASE_7_PLAN.md + the CONTRACTS_V2_DESIGN.md §5.4 edits) so
+reviewers read the intent change against its authority
+source.
 
 ---
 
@@ -782,31 +801,33 @@ replaced):
 | `schedule_set_one_off` | `filesystem_write` | mutates draft file. |
 | `schedule_set_failure_policy` | `filesystem_write` | mutates draft file. |
 | `schedule_set_delivery` | `read_external` + `uses_oauth` + `filesystem_write` | may trigger a Slack API call (read_external + uses_oauth) and saves the refreshed cache + the draft (filesystem_write). |
-| `schedule_draft_compile` | `read_only` | reads the draft file; validates; returns. No mutations. |
+| `schedule_draft_compile` | `filesystem_read` (new tag — see §0) | reads the draft file; validates; returns. No mutations. |
 | `schedule_draft_discard` | `filesystem_write` | deletes a draft file. |
-| `schedule_draft_list` | `read_only` | enumerates session dir; no mutations. |
-| `schedule_pause` | `db_write` (new tag — see below) | mutates v2 schedules + events tables. |
+| `schedule_draft_list` | `filesystem_read` | enumerates session dir; no mutations. |
+| `schedule_pause` | `db_write` (new tag — see §0) | mutates v2 schedules + events tables. |
 | `schedule_resume` | `db_write` | same. |
 | `schedule_archive` | `db_write` | mutates schedules + events + runs tables (atomic). |
 | `schedule_revive` | `db_write` | same. |
 
-The phase-3 / phase-2 tag set is `read_external` /
-`write_external` / `send_message` / `filesystem_write` /
-`privileged` / `costly` / `uses_oauth`. The lifecycle
-tools need an explicit DB-write tag so the validation
-chokepoint can compose policies (e.g. "reasoning steps
-cannot run lifecycle tools"). Two options for that tag:
+Both `filesystem_read` and `db_write` are new
+`ToolCapabilityTag` enum values landing in slice 6 of this
+phase. Their canonical definitions live in design §5.4 (see
+§0 design-doc amendment).
 
-- **Option A**: add `db_write` as a new metadata tag in
-  `app/v2/tool_tags.py`. Simple; one-line addition to
-  the existing enum-style tag set.
-- **Option B**: reuse `write_external` for the lifecycle
-  tools too (the v2 sqlite DB IS external state from the
-  reasoner's perspective). Semantically arguable.
+Slice 6 also updates ``app/v2/tool_tags.py``:
 
-Plan default: **Option A** — add the `db_write` tag in
-slice 6, alongside the descriptor registrations. Tests
-pin the exact tag set per tool.
+- Adds the two enum values.
+- Extends ``_READ_ONLY_BLOCKING_TAGS`` to include
+  ``DB_WRITE`` (db mutations break read-only reasoning).
+  ``FILESYSTEM_READ`` is NOT added (local introspection is
+  safe under read-only).
+- ``_ADMIN_APPROVAL_TAGS`` is NOT extended — ``db_write``
+  alone does not trigger admin approval; the existing
+  ``privileged`` tag still gates ops that need explicit
+  admin sign-off.
+
+Tests pin the exact tag set per tool AND the policy-helper
+behaviour for the new tags.
 
 Metadata-only registration — no agent mount in phase 7.
 
@@ -1019,8 +1040,22 @@ plan revision rounds may add pins.
   `app/v2/registry.py:ToolRegistry` with the exact tag set
   from §4. Pin via a parametrised test that walks the
   expected `name -> tags` table and asserts equality.
-- `db_write` is a recognised tag in `app/v2/tool_tags.py`
-  (round-3 reviewer L676). Pin via importing the tag set.
+- **New tags exist (round-3 reviewer L785 + L807):**
+  - ``ToolCapabilityTag.FILESYSTEM_READ`` is a valid
+    enum value.
+  - ``ToolCapabilityTag.DB_WRITE`` is a valid enum value.
+- **Read-only blocking policy update (round-3 reviewer
+  L807):**
+  - ``is_blocked_by_read_only_reasoning({DB_WRITE})`` →
+    True.
+  - ``is_blocked_by_read_only_reasoning({FILESYSTEM_READ})`` →
+    False.
+  - ``is_blocked_by_read_only_reasoning({FILESYSTEM_READ,
+    DB_WRITE})`` → True (set intersection still hits).
+- **Admin-approval policy unchanged:**
+  - ``requires_admin_approval({DB_WRITE})`` → False (the
+    new tag does not extend the admin-approval set).
+  - ``requires_admin_approval({FILESYSTEM_READ})`` → False.
 - Smoke: import every public symbol from
   `app.v2.authoring` and `app.v2.toolsets.authoring`;
   no module imports `slack_sdk` / `googleapiclient` at
@@ -1267,10 +1302,28 @@ Plan:   docs/PHASE_7_PLAN.md
     explicit per-tool tag matrix in §4; new `db_write`
     metadata tag added to `app/v2/tool_tags.py` in slice 6.
 
+### 9.1.c Closed in round-4 reviewer
+
+20. ~~``read_only`` is not a real ToolCapabilityTag.~~
+    **CLOSED** (L785): new ``filesystem_read`` enum value
+    added; compile + list tools tagged with it. Design
+    §5.4 amended in the same revision (this commit).
+21. ~~``db_write`` not in read-only blocking set.~~
+    **CLOSED** (L807): ``_READ_ONLY_BLOCKING_TAGS`` now
+    contains ``DB_WRITE``. Test pin via
+    ``is_blocked_by_read_only_reasoning({DB_WRITE})`` →
+    True.
+22. ~~Design §5.4 not amended for new tags.~~ **CLOSED**
+    (L807 yellow): design §5.4 + this plan revised in the
+    SAME commit (see §0). Both tags land in
+    ``app/v2/tool_tags.py`` in slice 6 alongside the
+    policy-helper extension.
+
 ### 9.2 Still open
 
-None — round-3 reviewer closed every prior open item. New
-items will populate here if reviewer rounds 4+ surface gaps.
+None — round-4 reviewer closed every prior open item. New
+items will populate here if reviewer rounds 5+ surface
+gaps.
 
 ---
 
