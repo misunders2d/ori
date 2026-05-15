@@ -60,15 +60,21 @@ def _fixed_clock() -> datetime:
 
 class _StubSlackClient:
     """In-memory replacement for the
-    :class:`SlackChannelsClient` Protocol."""
+    :class:`SlackChannelsClient` Protocol.
+
+    Strict signature — :meth:`list_conversations` accepts NO
+    kwargs (round-3 reviewer archive-policy fix). If refresh
+    accidentally regresses to passing ``exclude_archived``,
+    the call surfaces a ``TypeError`` here.
+    """
 
     def __init__(self, rows, *, exc=None) -> None:
         self._rows = rows
         self._exc = exc
-        self.calls: list[dict] = []
+        self.call_count = 0
 
-    def list_conversations(self, *, exclude_archived=False):
-        self.calls.append({"exclude_archived": exclude_archived})
+    def list_conversations(self):
+        self.call_count += 1
         if self._exc is not None:
             raise self._exc
         return list(self._rows)
@@ -211,6 +217,63 @@ def test_slack_two_channels_in_order():
     ]
     assert cache.channels[0].is_private is False
     assert cache.channels[1].is_archived is True
+
+
+# ===========================================================================
+# Archive policy — cache holds archived + active (round-3 reviewer)
+# ===========================================================================
+
+
+def test_slack_cache_holds_archived_and_active_entries():
+    """Round-3 reviewer slice-3 archive-policy pin: the cache
+    mirrors the full ``conversations.list`` result; the
+    resolver (slice 4) filters by ``is_archived`` at lookup
+    time. Phase 6 must NOT pre-filter archived entries at
+    refresh time, otherwise the resolver's ``include_archived``
+    knob has nothing to work with."""
+    client = _StubSlackClient(
+        [
+            {"id": "C001", "name": "general", "is_archived": False},
+            {"id": "C999", "name": "old-team", "is_archived": True},
+        ]
+    )
+    cache = refresh_slack_channels(
+        client, expected_owner_id="T", clock=_fixed_clock
+    )
+
+    ids = [c.id for c in cache.channels]
+    assert ids == ["C001", "C999"]
+    # Both entries kept verbatim.
+    assert [c.is_archived for c in cache.channels] == [False, True]
+
+
+def test_refresh_does_not_pass_exclude_archived_kwarg():
+    """Strict-stub regression: if refresh ever passes a
+    keyword to ``list_conversations``, the stub's bare
+    signature raises ``TypeError`` and the test surfaces.
+    Belt-and-braces against a future change that re-introduces
+    the kwarg."""
+    client = _StubSlackClient([{"id": "C001", "name": "x"}])
+
+    # Successful call → no kwargs leaked.
+    refresh_slack_channels(
+        client, expected_owner_id="T", clock=_fixed_clock
+    )
+
+    assert client.call_count == 1
+
+
+def test_protocol_does_not_expose_exclude_archived():
+    """Pin the Protocol's surface so a future change that
+    re-introduces ``exclude_archived`` is a deliberate
+    decision (and updates this test)."""
+    sig = inspect.signature(SlackChannelsClient.list_conversations)
+    # Only ``self`` parameter exposed.
+    params = [
+        name for name, p in sig.parameters.items()
+        if p.kind != inspect.Parameter.VAR_KEYWORD
+    ]
+    assert "exclude_archived" not in params
 
 
 def test_slack_empty_iterable_yields_empty_channels():

@@ -485,11 +485,18 @@ parameter with no default, so the package stays decoupled
 from the runtime layer. Production callers (phase 7) pass
 `prod_clock`; tests pass a synthetic clock.
 
+**Archive policy (round-3 reviewer):** the cache mirrors
+the FULL ``conversations.list`` result — archived + active
+entries land in :attr:`SlackChannelsCache.channels`
+verbatim. The resolver filters by ``is_archived`` at lookup
+time via :func:`resolve_channel`'s ``include_archived``
+keyword (default ``False`` per Q6). The Protocol therefore
+exposes no archive-filter knob; any such filter belongs to
+the production wrapper or the resolver, not the cache layer.
+
 ```python
 class SlackChannelsClient(Protocol):
-    def list_conversations(
-        self, *, exclude_archived: bool = False
-    ) -> Iterable[Mapping[str, Any]]:
+    def list_conversations(self) -> Iterable[Mapping[str, Any]]:
         ...
 
 
@@ -504,8 +511,12 @@ def refresh_slack_channels(
 
     ``expected_owner_id`` is recorded as the snapshot's
     ``workspace_id``. ``clock()`` populates ``fetched_at``;
-    the value must be tz-aware UTC (pinned by the schema
+    the value must be UTC-only (pinned by the schema
     validator).
+
+    The cache mirrors the FULL conversations.list result —
+    archived + active. See the SlackChannelsClient docstring
+    for the archive policy.
 
     NEVER writes to disk — the caller decides via
     :func:`save_cache`. Pure function over the client's
@@ -1052,10 +1063,25 @@ Plan:   docs/PHASE_6_PLAN.md
 16. ~~Stale subclass count in §1.6.~~ **CLOSED** (L71 nit):
     "five subclasses" reflecting `ChannelAmbiguous`.
 
+### 9.1.b Closed in round-3 reviewer (slice 3)
+
+17. ~~Slack archive policy at refresh time.~~ **CLOSED**
+    (slice-3 round-3 fix): the cache mirrors the FULL
+    ``conversations.list`` result — archived + active —
+    verbatim. The resolver filters by ``is_archived`` at
+    lookup time via ``include_archived`` (default ``False``).
+    ``SlackChannelsClient.list_conversations`` accepts no
+    archive-filter kwarg; any such filter belongs to the
+    production wrapper or the resolver, not the cache layer.
+    Tests pin (a) the cache shape carries an archived entry
+    and (b) the Protocol signature has no
+    ``exclude_archived`` parameter.
+
 ### 9.2 Still open
 
-None — round-2 reviewer closed every prior open item. New
-items will populate here if reviewer rounds 3+ surface gaps.
+None — round-3 reviewer closed the slice-3 archive policy.
+New items will populate here if reviewer rounds 4+ surface
+gaps.
 
 ---
 

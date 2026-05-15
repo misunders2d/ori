@@ -61,13 +61,22 @@ _DOCS_SOURCE = (
 class SlackChannelsClient(Protocol):
     """Minimal Slack adapter surface this package depends on.
 
+    **Archive policy (round-3 reviewer):** the cache mirrors
+    the FULL ``conversations.list`` result — archived AND
+    active entries land in :attr:`SlackChannelsCache.channels`
+    verbatim. The resolver (:mod:`app.v2.registry_cache.resolver`,
+    slice 4) filters by ``is_archived`` at lookup time via its
+    ``include_archived`` keyword (default ``False`` per Q6).
+    Any archive-filter knob therefore lives at the production
+    wrapper or the resolver — not on this Protocol.
+
     Production callers (phase 7) wrap ``slack_sdk``'s
     ``conversations.list`` paginator under this Protocol;
     tests pass an in-memory stub.
     """
 
     def list_conversations(
-        self, *, exclude_archived: bool = False
+        self,
     ) -> Iterable[Mapping[str, Any]]:  # pragma: no cover - protocol stub
         ...
 
@@ -103,6 +112,12 @@ def refresh_slack_channels(
     NOT override it). ``clock()`` populates ``fetched_at``;
     the value must be UTC-only or the schema validator
     rejects on construction.
+
+    The cache mirrors the FULL ``conversations.list`` result
+    — archived + active entries — per the
+    :class:`SlackChannelsClient` archive policy. Archive
+    filtering happens at lookup time in the resolver (slice
+    4).
 
     NEVER writes to disk — the caller decides via
     :func:`app.v2.registry_cache.loader.save_cache`.
