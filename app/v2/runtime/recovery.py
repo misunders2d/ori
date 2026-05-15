@@ -203,14 +203,15 @@ def scan_stale_runs(
     pause/archive phase. No execution leaks meanwhile because
     claim is the only path that promotes pending → claimed.
     """
-    assert_connection_ready(conn)
     # Positive-timeout guard. Without it a negative or zero
     # timeout flips the cutoff into the future — every claimed
     # or running row in the table would suddenly satisfy
     # ``claimed_at < cutoff`` and be remediated as stale,
-    # mass-failing live runs. Validate BEFORE consuming
-    # ``now`` / running any SQL / calling factories so a
-    # bad-config caller sees the error without side effects.
+    # mass-failing live runs. Validate BEFORE
+    # ``assert_connection_ready`` (which runs read-only DB
+    # checks), BEFORE consuming ``now``, BEFORE running any
+    # SQL, and BEFORE calling factories so a bad-config caller
+    # sees the error with no side effects at all.
     if claimed_timeout <= timedelta(0):
         raise ValueError(
             f"claimed_timeout must be positive; got "
@@ -225,6 +226,7 @@ def scan_stale_runs(
             "would mark every running row stale on the next "
             "boot scan."
         )
+    assert_connection_ready(conn)
     now_utc = now.astimezone(timezone.utc) if now.tzinfo is not None else None
     if now_utc is None:
         # _to_utc_iso would raise from inside, but we'd rather
