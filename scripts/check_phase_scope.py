@@ -5,7 +5,9 @@ Enforces docs/PHASE_1_PLAN.md §6 and docs/CONTRACTS_V2_DESIGN.md §12.1:
 
   1. Phase commits stay small.
   2. Phase 1 ≠ runtime behavior.
-  3. Old scheduler stays untouched through phase 7.
+  3. Old scheduler stays untouched through phase 8 (boundary
+     shifted from 7 with the 2026-05-15 §12 renumber that
+     inserted "APScheduler binding + boot sequence" at step 5).
 
 Run modes:
 
@@ -128,10 +130,12 @@ PHASE_ALLOWLIST: dict[int, set[str]] = {
 }
 
 # Anything matching one of these prefixes / paths is BLOCKED for
-# phases 1 through 7. Phase 8 (first end-to-end OneOffReminder) is
+# phases 1 through 8. Phase 9 (first end-to-end OneOffReminder) is
 # the boundary at which v1 edits become permissible — see
-# docs/CONTRACTS_V2_DESIGN.md §12.1 invariant 3.
-FORBIDDEN_PHASES_1_TO_7: set[str] = {
+# docs/CONTRACTS_V2_DESIGN.md §12.1 invariant 3. The boundary shifted
+# from "1-through-7 / phase 8 cutover" to "1-through-8 / phase 9
+# cutover" with the 2026-05-15 §12 renumber.
+FORBIDDEN_PHASES_1_TO_8: set[str] = {
     "app/contracts/",
     "app/tasks.py",
     "app/contracts/executor.py",
@@ -164,10 +168,10 @@ def is_allowed(path: str, phase: int) -> bool:
 
 def is_forbidden(path: str, phase: int) -> bool:
     """Return True iff ``path`` matches a forbidden v1 path AND the
-    phase is in the protected window (1..7)."""
-    if phase >= 8:
+    phase is in the protected window (1..8)."""
+    if phase >= 9:
         return False
-    return any(_matches(path, entry) for entry in FORBIDDEN_PHASES_1_TO_7)
+    return any(_matches(path, entry) for entry in FORBIDDEN_PHASES_1_TO_8)
 
 
 # ---------------------------------------------------------------------------

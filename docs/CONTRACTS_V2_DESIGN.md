@@ -1311,31 +1311,33 @@ so revert is a single git command.
 2. **Adapter / source / loader input-output Pydantic models + tool metadata tags**: per-adapter request/response shapes. No runtime use yet.
 3. **Storage layer**: SQLite migrations, WAL mode, basic CRUD helpers + tests.
 4. **APScheduler-as-wakeup-only + Run claim**: wakeup callback that inserts pending Runs in TX with `run_created` events. Worker pool loop that claims runs. Boot recovery scan. State-machine transitions implemented + tested with no execution body (Runs go pending → claimed → running → succeeded with empty execution).
-5. **Registry cache for channels/sheets/docs**: cache + lazy refresh + no-cache-and-network-down handling.
-6. **Typed ADK tools**: build ScheduleSpec drafts via tool calls. CustomFlow path lands here. Each tool calls `validate_schedule_spec` after its mutation.
-7. **Dry-run handshake + boot self-test**: three modes + `as_of_datetime` + freeze records snapshot + boot self-test gating.
-8. **OneOff trigger + `OneOffReminder` template + emit-only path**: first end-to-end working schedule. Reminders fire via the new path, no ExecutionPlan, no source.
-9. **Source loaders + snapshot infrastructure**: `source_literal`, `source_drive_file`, `source_local_file`, `source_slack_thread`. Per-source cache + fallback + drift + retention + on_oversize.
-10. **Source templates**: `RecurringSeriesFromSource`, `ChannelDigest`. Phase-1 completion.
-11. **Read-only reasoning + emit-only writes enforcement**: tool-metadata-driven runtime block.
-12. **Cross-fire state with locks + CAS**: state_read / state_write primitives backed by `schedule_state` table + CAS.
-13. **Idempotency + cancellation**: per-emit idempotency keys; paused/archived enforcement; `paused_pending_policy`.
-14. **Observability**: `schedule_status`, `schedule_diff`, `schedule_replay`, background failure monitor over EventLedger.
-15. **Migration tooling**: v1 contract → v2 wrap; legacy job → ScheduleSpec import; ledger backfill.
-16. **Phase 2+**: interval / conditional / branch / loop / parallel triggers and steps.
+5. **APScheduler binding + boot sequence** (renumber 2026-05-15, deferred out of step 4 per Sergey's phase-4 closeout call): `SchedulerBinding` wrapping `AsyncIOScheduler` against `SQLAlchemyJobStore` + `misfire_grace_time` per §4.0.5; `boot_runtime` runs recovery → binding start → OneOff backfill → register active schedules → start worker pool, in that order; `lifecycle.py` exposes pause / archive / resume / revise hooks the future authoring path will call. Still NO production cutover — `run_bot.py` untouched; v1 scheduler stays the production wakeup source until step 9 (OneOffReminder end-to-end).
+6. **Registry cache for channels/sheets/docs**: cache + lazy refresh + no-cache-and-network-down handling.
+7. **Typed ADK tools**: build ScheduleSpec drafts via tool calls. CustomFlow path lands here. Each tool calls `validate_schedule_spec` after its mutation.
+8. **Dry-run handshake + boot self-test**: three modes + `as_of_datetime` + freeze records snapshot + boot self-test gating.
+9. **OneOff trigger + `OneOffReminder` template + emit-only path**: first end-to-end working schedule. Reminders fire via the new path, no ExecutionPlan, no source.
+10. **Source loaders + snapshot infrastructure**: `source_literal`, `source_drive_file`, `source_local_file`, `source_slack_thread`. Per-source cache + fallback + drift + retention + on_oversize.
+11. **Source templates**: `RecurringSeriesFromSource`, `ChannelDigest`. Phase-1 completion.
+12. **Read-only reasoning + emit-only writes enforcement**: tool-metadata-driven runtime block.
+13. **Cross-fire state with locks + CAS**: state_read / state_write primitives backed by `schedule_state` table + CAS.
+14. **Idempotency + cancellation**: per-emit idempotency keys; paused/archived enforcement; `paused_pending_policy`.
+15. **Observability**: `schedule_status`, `schedule_diff`, `schedule_replay`, background failure monitor over EventLedger.
+16. **Migration tooling**: v1 contract → v2 wrap; legacy job → ScheduleSpec import; ledger backfill.
+17. **Phase 2+**: interval / conditional / branch / loop / parallel triggers and steps.
 
 Dependencies (so order isn't arbitrary):
 - Step 4 depends on 1, 3.
-- Step 6 depends on 1, 2, 3, 5.
-- Step 7 depends on 4, 6.
-- Step 8 depends on 4, 6, 7.
-- Step 9 depends on 1, 2, 5.
-- Step 10 depends on 9 + 8 (templates need both source infra and the ScheduleSpec authoring loop).
-- Step 11 depends on 2.
-- Step 12 depends on 3.
-- Step 13 depends on 4, 11, 12.
-- Step 14 depends on most of the above.
-- Step 15 can land in parallel with later phases.
+- Step 5 depends on 4 (binding wraps phase-4 runtime).
+- Step 7 depends on 1, 2, 3, 6.
+- Step 8 depends on 4, 7.
+- Step 9 depends on 4, 5, 7, 8 (first cutover; needs binding + authoring + dry-run all live).
+- Step 10 depends on 1, 2, 6.
+- Step 11 depends on 10 + 9 (templates need both source infra and the ScheduleSpec authoring loop).
+- Step 12 depends on 2.
+- Step 13 depends on 3.
+- Step 14 depends on 4, 12, 13.
+- Step 15 depends on most of the above.
+- Step 16 can land in parallel with later phases.
 
 ### 12.1 Phase commit discipline (mandatory)
 
@@ -1354,11 +1356,12 @@ they can't drift between design and execution:
    migration skeleton + lifecycle/state-transition tests +
    invariant tests, ONLY. No worker execution code. No new
    APScheduler callbacks wired. No agent-facing tools registered.
-   The runtime path lights up at phase 4 (wakeup callback +
-   worker pool) and only against an empty execution body — the
-   first actual emit fires in phase 8 (`OneOffReminder` template
+   The runtime path lights up at step 4 (wakeup callback +
+   worker pool, empty body), gains production wiring at step 5
+   (binding + boot sequence, still test-rig-only), and the
+   first actual emit fires at step 9 (`OneOffReminder` template
    end-to-end). Anything that produces side effects in
-   production before phase 8 is out-of-scope for the merge that
+   production before step 9 is out-of-scope for the merge that
    introduces it.
 
 3. **Old scheduler stays untouched until v2 fires end-to-end in
@@ -1366,7 +1369,7 @@ they can't drift between design and execution:
    `app/contracts/executor.py`, `app/scheduler_instance.py`, or
    any v1 contract under `data/contracts/*` until the new Run
    path can fire a `OneOffReminder` template end-to-end in
-   tests (phase 8 completion). The compatibility worker (§11.1)
+   tests (step 9 completion). The compatibility worker (§11.1)
    only LANDS at that point. Touching v1 before then risks
    destabilising production-running schedules
    (`linux_mastery_30_days_v2`, `ai_pilot_*`,
@@ -1378,9 +1381,11 @@ These three invariants are CI-enforceable:
   heuristic; manual override allowed with explicit justification).
 - Invariant 2: phase-1 PR cannot import from a "runtime" module
   set (defined in `pyproject.toml` per-phase configuration).
-- Invariant 3: phase-1-through-7 PRs cannot edit files under
+- Invariant 3: phase-1-through-8 PRs cannot edit files under
   `app/contracts/`, `app/tasks.py`, `app/contracts/executor.py`,
-  `app/scheduler_instance.py`, `data/contracts/`.
+  `app/scheduler_instance.py`, `data/contracts/` (boundary
+  shifted from 1-through-7 with the 2026-05-15 §12 renumber;
+  cutover moved from step 8 to step 9).
 
 Violation = CI red. Lifted only at the phase boundary where the
 invariant is no longer load-bearing.
