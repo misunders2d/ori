@@ -320,46 +320,24 @@ def test_empty_jobstore_url_rejected(tmp_path):
         _make_binding(tmp_path, jobstore_url="")
 
 
-def test_lambda_conn_factory_rejected_at_construction(tmp_path):
-    """Reviewer round-N regression. APScheduler's SQLAlchemy
-    job store serialises conn_factory at ``add_job`` time;
-    a lambda has ``<lambda>`` in its qualname and cannot be
-    resolved by name at deserialisation. Catch the common
-    mistake at construction so the error names the offending
-    kwarg, instead of letting register() crash with an
-    obscure pickling error from deep inside APScheduler."""
-    with pytest.raises(ValueError, match="conn_factory must be"):
-        SchedulerBinding(
-            wakeup_callable=_noop_wakeup,
-            conn_factory=lambda: sqlite3.connect(":memory:"),
-            jobstore_url=_jobstore_url(tmp_path),
-        )
+def test_lambda_conn_factory_accepted_at_construction(tmp_path):
+    """Construction does NOT pickle-check args. The check
+    happens at register() time -- before APScheduler's
+    ``add_job`` would otherwise crash deep with an obscure
+    error. Direct-invocation paths (tests that call
+    ``_fire_for`` without going through APScheduler) thus
+    keep working with closure-based callables."""
+    b = SchedulerBinding(
+        wakeup_callable=_noop_wakeup,
+        conn_factory=lambda: sqlite3.connect(":memory:"),
+        jobstore_url=_jobstore_url(tmp_path),
+    )
+    assert b is not None
 
 
-def test_closure_conn_factory_rejected_at_construction(tmp_path):
-    """Same as above but with a nested-function closure
-    (not a lambda). The qualname carries ``<locals>`` so
-    the heuristic catches it too. Pin both shapes."""
-
-    def _build_factory():
-        # Defined inside another function -> qualname contains
-        # ``<locals>``.
-        def _inner_factory():
-            return sqlite3.connect(":memory:")
-
-        return _inner_factory
-
-    closure_factory = _build_factory()
-    with pytest.raises(ValueError, match="conn_factory must be"):
-        SchedulerBinding(
-            wakeup_callable=_noop_wakeup,
-            conn_factory=closure_factory,
-            jobstore_url=_jobstore_url(tmp_path),
-        )
-
-
-def test_module_level_function_conn_factory_accepted(tmp_path):
-    """Inverse: a module-level callable passes the check."""
+def test_module_level_function_conn_factory_accepted_at_construction(tmp_path):
+    """Inverse pin: module-level callables also pass
+    construction with no checks running."""
     b = SchedulerBinding(
         wakeup_callable=_noop_wakeup,
         conn_factory=_memory_conn_factory,
@@ -368,9 +346,9 @@ def test_module_level_function_conn_factory_accepted(tmp_path):
     assert b is not None
 
 
-def test_class_instance_conn_factory_accepted(tmp_path):
+def test_class_instance_conn_factory_accepted_at_construction(tmp_path):
     """Inverse: a picklable class instance with ``__call__``
-    passes the check too."""
+    also passes construction."""
     b = SchedulerBinding(
         wakeup_callable=_noop_wakeup,
         conn_factory=_memory_factory_instance,
@@ -993,6 +971,132 @@ async def test_register_event_trigger_raises_not_implemented(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_register_with_lambda_conn_factory_rejected(tmp_path):
+    """Reviewer round-N regression. APScheduler's SQLAlchemy
+    job store pickles ``args`` at ``add_job`` time; a lambda
+    cannot be resolved by qualified name at deserialisation.
+    ``register`` probes ``pickle.dumps`` on every persisted
+    arg BEFORE calling add_job so the failure surfaces here
+    with the offending kwarg named."""
+    b = SchedulerBinding(
+        wakeup_callable=_noop_wakeup,
+        conn_factory=lambda: sqlite3.connect(":memory:"),
+        jobstore_url=_jobstore_url(tmp_path),
+    )
+    await b.start(paused=True)
+    try:
+        spec = _one_off_spec(schedule_id="lambda_conn")
+        with pytest.raises(ValueError, match="conn_factory is not picklable"):
+            b.register(spec)
+        assert b.list_registered() == []
+    finally:
+        await b.stop()
+
+
+@pytest.mark.asyncio
+async def test_register_with_lambda_wakeup_callable_rejected(tmp_path):
+    """Reviewer round-N: the picklability check covers EVERY
+    persisted arg, not just conn_factory. A lambda
+    wakeup_callable fails the same way at add_job time."""
+    b = SchedulerBinding(
+        wakeup_callable=lambda conn, **kw: [],
+        conn_factory=_memory_conn_factory,
+        jobstore_url=_jobstore_url(tmp_path),
+    )
+    await b.start(paused=True)
+    try:
+        spec = _one_off_spec(schedule_id="lambda_wakeup")
+        with pytest.raises(ValueError, match="wakeup_callable is not picklable"):
+            b.register(spec)
+        assert b.list_registered() == []
+    finally:
+        await b.stop()
+
+
+@pytest.mark.asyncio
+async def test_register_with_lambda_clock_rejected(tmp_path):
+    b = SchedulerBinding(
+        wakeup_callable=_noop_wakeup,
+        conn_factory=_memory_conn_factory,
+        clock=lambda: _NOW,
+        jobstore_url=_jobstore_url(tmp_path),
+    )
+    await b.start(paused=True)
+    try:
+        spec = _one_off_spec(schedule_id="lambda_clock")
+        with pytest.raises(ValueError, match="clock is not picklable"):
+            b.register(spec)
+    finally:
+        await b.stop()
+
+
+@pytest.mark.asyncio
+async def test_register_with_lambda_run_id_factory_rejected(tmp_path):
+    b = SchedulerBinding(
+        wakeup_callable=_noop_wakeup,
+        conn_factory=_memory_conn_factory,
+        run_id_factory=lambda: "r",
+        jobstore_url=_jobstore_url(tmp_path),
+    )
+    await b.start(paused=True)
+    try:
+        spec = _one_off_spec(schedule_id="lambda_run")
+        with pytest.raises(ValueError, match="run_id_factory is not picklable"):
+            b.register(spec)
+    finally:
+        await b.stop()
+
+
+@pytest.mark.asyncio
+async def test_register_with_lambda_event_id_factory_rejected(tmp_path):
+    b = SchedulerBinding(
+        wakeup_callable=_noop_wakeup,
+        conn_factory=_memory_conn_factory,
+        event_id_factory=lambda: "e",
+        jobstore_url=_jobstore_url(tmp_path),
+    )
+    await b.start(paused=True)
+    try:
+        spec = _one_off_spec(schedule_id="lambda_evt")
+        with pytest.raises(ValueError, match="event_id_factory is not picklable"):
+            b.register(spec)
+    finally:
+        await b.stop()
+
+
+@pytest.mark.asyncio
+async def test_register_with_unpicklable_class_instance_rejected(tmp_path):
+    """Reviewer round-N: a qualname-only heuristic would
+    let a class instance through even if its internal state
+    is not picklable. Real ``pickle.dumps`` probe catches
+    these too. Construct a class instance whose ``__dict__``
+    holds a lambda -- pickling fails on the attribute, not
+    the class itself."""
+
+    class _UnpicklableFactory:
+        def __init__(self):
+            # Lambda attribute -> unpicklable instance state.
+            self._inner = lambda: sqlite3.connect(":memory:")
+
+        def __call__(self):
+            return self._inner()
+
+    bad = _UnpicklableFactory()
+    b = SchedulerBinding(
+        wakeup_callable=_noop_wakeup,
+        conn_factory=bad,
+        jobstore_url=_jobstore_url(tmp_path),
+    )
+    await b.start(paused=True)
+    try:
+        spec = _one_off_spec(schedule_id="unpicklable_class")
+        with pytest.raises(ValueError, match="conn_factory is not picklable"):
+            b.register(spec)
+    finally:
+        await b.stop()
+
+
+@pytest.mark.asyncio
 async def test_register_conditional_trigger_raises_not_implemented(tmp_path):
     b = _make_binding(tmp_path)
     await b.start(paused=True)
@@ -1293,6 +1397,34 @@ async def test_reregister_invalid_cron_rejected(tmp_path):
         )
         with pytest.raises(ValueError, match="invalid cron"):
             b.reregister(bad_spec)
+    finally:
+        await b.stop()
+
+
+@pytest.mark.asyncio
+async def test_reregister_unknown_id_with_one_off_history_raises_job_lookup_error(
+    tmp_path,
+):
+    """Reviewer round-N regression. ``reregister`` MUST
+    confirm the job exists BEFORE applying the OneOff
+    history guard. Without the ordering fix, an unknown
+    schedule_id paired with a OneOff trigger + an
+    existing Run row raises ``ValueError`` ("cannot
+    reregister to OneOff ...") instead of the documented
+    ``JobLookupError`` -- the caller misroutes to "create
+    a new schedule_id" when the real fix is to call
+    ``register()`` instead of ``reregister()``."""
+    factory = _migrated_conn_factory(tmp_path)
+    b = _make_binding(tmp_path, conn_factory=factory)
+    await b.start(paused=True)
+    try:
+        # Seed a Run row for an id we never register.
+        _seed_run_row(factory, "ghost")
+        spec = _one_off_spec(schedule_id="ghost")
+        # Unknown id + OneOff history. The existence check
+        # MUST fire first -> JobLookupError.
+        with pytest.raises(JobLookupError):
+            b.reregister(spec)
     finally:
         await b.stop()
 

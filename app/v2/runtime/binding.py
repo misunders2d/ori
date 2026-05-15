@@ -77,6 +77,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import pickle  # noqa: S403 -- used for picklability probe of args
 import sqlite3
 from datetime import datetime
 from typing import Callable, Optional
@@ -108,38 +109,6 @@ from app.v2.runtime.cron_guard import reject_numeric_dow
 
 
 _logger = logging.getLogger(__name__)
-
-
-def _looks_serialisable(callable_: Callable) -> bool:
-    """Heuristic check that ``callable_`` will round-trip
-    through the SQLAlchemy job store.
-
-    APScheduler's SQLAlchemyJobStore serialises every value
-    in the registered ``args`` list when ``add_job`` is
-    called against a running scheduler. The conn_factory /
-    clock / id_factory references the binding threads into
-    those args MUST therefore be serialisable. The common
-    failure mode is a closure or lambda whose qualified
-    name carries ``<lambda>`` or ``<locals>`` -- the
-    standard serialiser cannot resolve those by name at
-    deserialisation, so the eventual failure surfaces deep
-    inside APScheduler with an obscure ``Can't pickle
-    <function ...>`` message.
-
-    Catching the failure at the binding's construction with
-    a clear error message is strictly better than letting
-    register() crash later. The check is a NECESSARY but
-    not SUFFICIENT condition for serialisability: classes
-    with non-picklable instance state still slip through
-    and surface at register time, but the lambda /
-    nested-function case (the easy mistake) is caught
-    cheaply here.
-
-    Returns False when the callable's qualname contains
-    ``<lambda>`` or ``<locals>``; True otherwise.
-    """
-    qualname = getattr(callable_, "__qualname__", "")
-    return "<lambda>" not in qualname and "<locals>" not in qualname
 
 
 def _fire_for(
@@ -236,45 +205,13 @@ class SchedulerBinding:
             raise TypeError("run_id_factory must be callable")
         if not callable(event_id_factory):
             raise TypeError("event_id_factory must be callable")
-        # APScheduler's SQLAlchemy job store serialises every
-        # value in ``args=[...]`` at ``add_job`` time. The
-        # binding threads conn_factory into those args, so
-        # it MUST round-trip through the serialiser. The
-        # easy mistake -- a lambda or a closure -- can't be
-        # resolved by qualified name at deserialisation and
-        # makes register() crash deep inside APScheduler
-        # with an obscure pickling error. Catch the common
-        # case here at construction so the error names the
-        # offending kwarg.
-        #
-        # The check is intentionally scoped to conn_factory
-        # for now: in production the other injectables
-        # (wakeup_callable, clock, id factories) come from
-        # module-level definitions (``prod_clock``,
-        # ``prod_run_id_factory``, ``prod_event_id_factory``,
-        # ``app.v2.runtime.wakeup.wakeup``) -- the
-        # conn_factory is the one users are most likely to
-        # build as a closure over a connection pool / db
-        # path. Tests that exercise ``_fire_for`` directly
-        # (no register, no APScheduler serialisation) still
-        # use nested-function wakeup callables for the
-        # closure capture they need; those paths never
-        # serialise.
-        if not _looks_serialisable(conn_factory):
-            raise ValueError(
-                f"conn_factory must be a module-level "
-                f"callable or a picklable class instance; "
-                f"got {conn_factory!r} with qualname "
-                f"{getattr(conn_factory, '__qualname__', '?')!r}. "
-                "APScheduler's SQLAlchemy job store "
-                "serialises conn_factory at register time; "
-                "lambdas and nested-function closures cannot "
-                "be resolved by name at deserialisation. "
-                "Wrap the logic in a module-level function "
-                "or a picklable class instance (e.g. a class "
-                "whose ``__init__`` stores a db_path and "
-                "``__call__`` opens a connection)."
-            )
+        # NOTE: picklability of conn_factory / wakeup_callable
+        # / clock / id factories is validated at register()
+        # / reregister() time via real pickle.dumps probe in
+        # ``_check_persisted_args_picklable``. Construction
+        # stays cheap so direct-invocation paths (``_fire_for``
+        # called by tests without going through APScheduler)
+        # do not require picklable callables.
         if not jobstore_url:
             raise ValueError(
                 "jobstore_url must be a non-empty SQLAlchemy URL "
@@ -440,6 +377,16 @@ class SchedulerBinding:
                 "register()."
             )
 
+        # Picklability of every persisted arg comes FIRST.
+        # A lambda conn_factory would crash the OneOff DB
+        # guard below ("SELECT 1 FROM runs ...") with an
+        # unrelated error; failing here names the bad field
+        # cleanly. Slice-3 register did the check just
+        # before ``add_job``; slice-4 reviewer push moved it
+        # to cover every arg (not just conn_factory) and
+        # the round-N fix promoted it ahead of the guard.
+        self._check_persisted_args_picklable(spec.id)
+
         trigger = spec.trigger
         if isinstance(trigger, OneOffTrigger):
             # OneOff register-time DB guard (plan section
@@ -500,7 +447,8 @@ class SchedulerBinding:
         # serialised payload (APScheduler refuses that).
         # The injected callables flow through ``args`` so the
         # persisted job carries serialisable references to
-        # them.
+        # them. Picklability was validated above; ``add_job``
+        # can serialise safely from here.
         self._scheduler.add_job(
             _fire_for,
             trigger=aps_trigger,
@@ -593,8 +541,21 @@ class SchedulerBinding:
                 "reregister()."
             )
 
+        # Confirm the job exists BEFORE running any trigger
+        # validation or the OneOff history guard. Without
+        # this ordering, an unknown schedule_id paired with
+        # a OneOff trigger + an existing Run row would raise
+        # ValueError ("cannot reregister to OneOff ...")
+        # instead of the documented JobLookupError -- the
+        # caller would then misroute to "create a new
+        # schedule_id" when the real fix is to call
+        # register() instead of reregister().
+        if self._scheduler.get_job(spec.id) is None:
+            raise JobLookupError(spec.id)
+
         trigger = spec.trigger
         if isinstance(trigger, OneOffTrigger):
+            aps_trigger = self._build_one_off_aps_trigger(trigger)
             if self._one_off_already_fired(spec.id):
                 raise ValueError(
                     f"cannot reregister schedule_id={spec.id!r} "
@@ -605,7 +566,6 @@ class SchedulerBinding:
                     "and insert a duplicate Run. Create a NEW "
                     "schedule_id for the revised intent instead."
                 )
-            aps_trigger = self._build_one_off_aps_trigger(trigger)
         elif isinstance(trigger, CronTrigger):
             aps_trigger = self._build_cron_aps_trigger(trigger)
         elif isinstance(trigger, IntervalTrigger):
@@ -706,6 +666,64 @@ class SchedulerBinding:
             return row is not None
         finally:
             conn.close()
+
+    def _check_persisted_args_picklable(self, schedule_id: str) -> None:
+        """Probe ``pickle.dumps`` on every value the binding
+        passes into APScheduler's ``args=[...]`` list.
+
+        APScheduler's SQLAlchemyJobStore pickles the args at
+        ``add_job`` time. Any non-picklable value -- lambda,
+        nested-function closure, class instance with a
+        non-picklable attribute (e.g. a class that holds a
+        lambda) -- fails deep inside APScheduler's
+        serialiser with an obscure ``Can't pickle ...``
+        message that does not name the offending arg.
+
+        Probe each persisted value individually so the
+        raised ``ValueError`` names the bad field. Catches
+        every shape the qualname-only heuristic missed
+        (most notably picklable-looking class instances
+        whose internal state is not serialisable).
+
+        Picklability is a NECESSARY condition; passing here
+        means APScheduler's subsequent serialisation will
+        not blow up at this level. Production wiring uses
+        module-level callables (``prod_clock``,
+        ``prod_run_id_factory``, ``prod_event_id_factory``,
+        ``app.v2.runtime.wakeup.wakeup``) + an explicit
+        ``_MigratedConnFactory``-style picklable class for
+        the conn factory -- the typical test fixture shape.
+        """
+        # schedule_id is a str -- always picklable; included
+        # in the probe loop for completeness so a future
+        # refactor that adds a non-str id type surfaces here.
+        args_by_name = (
+            ("schedule_id", schedule_id),
+            ("wakeup_callable", self._wakeup_callable),
+            ("conn_factory", self._conn_factory),
+            ("clock", self._clock),
+            ("run_id_factory", self._run_id_factory),
+            ("event_id_factory", self._event_id_factory),
+        )
+        for name, value in args_by_name:
+            try:
+                pickle.dumps(value)
+            except (
+                pickle.PicklingError,
+                TypeError,
+                AttributeError,
+            ) as exc:
+                raise ValueError(
+                    f"{name} is not picklable -- "
+                    f"APScheduler's SQLAlchemy job store "
+                    f"serialises persisted job args at "
+                    f"register() time and would fail with: "
+                    f"{type(exc).__name__}: {exc}. Wrap the "
+                    "logic in a module-level function or a "
+                    "picklable class instance (e.g. a class "
+                    "whose ``__init__`` stores simple state "
+                    "and ``__call__`` does the work)."
+                ) from exc
 
     # ------------------------------------------------------------------
     # APScheduler callback
