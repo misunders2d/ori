@@ -582,6 +582,22 @@ Templates compile to a ScheduleSpec (+ optional ExecutionPlan) via
 the same internal pathway as CustomFlow. Same Pydantic validation,
 same dry-run handshake, same diff, same freeze, same audit.
 
+**Per-template payload — `TemplateRef.args`** (added 2026-05-15
+in the phase-9 plan landing per `docs/PHASE_9_PLAN.md` §0):
+emit-only templates (e.g. `OneOffReminder`) need a place to carry
+per-instance payload (the reminder text) without an
+ExecutionPlan. `TemplateRef` therefore carries an optional
+`args: Optional[dict[str, JsonValue]] = None` field. The type is
+`pydantic.types.JsonValue` (recursive JSON-primitive union) so
+non-JSON values cannot leak in and break the canonical hash.
+`ScheduleSpec.compute_hash` includes `template.args` in its
+JSON-serialised payload so a body change re-hashes; pre-amendment
+specs (where `args=None`) round-trip with no hash drift.
+Per-template arg validation runs inside the template builder
+(`OneOffReminder.build(at, recipient, text, …)`) BEFORE the
+typed-tool flow; the validator at the ScheduleSpec layer treats
+`args` as opaque JSON.
+
 Future templates (`WeeklyAuditWithSheetLog`, `ConditionalAlert`,
 `YouTubeSummary`) added as patterns crystallize from real demand.
 CustomFlow → Template promotion: surface a hint when a CustomFlow

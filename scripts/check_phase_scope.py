@@ -199,7 +199,7 @@ PHASE_ALLOWLIST: dict[int, set[str]] = {
         ".docs_read_marker",
         # NEW for phase 9 — first cutover. CoordinatorAgent
         # mount + boot_runtime integration. v1 paths under
-        # FORBIDDEN_PHASES_1_TO_8 stay out of scope per the
+        # FORBIDDEN_PHASES_PRE_CUTOVER stay out of scope per the
         # plan even though the gate lifts at phase 9.
         "app/sub_agents/coordinator_agent.py",
         "run_bot.py",
@@ -209,12 +209,15 @@ PHASE_ALLOWLIST: dict[int, set[str]] = {
 }
 
 # Anything matching one of these prefixes / paths is BLOCKED for
-# phases 1 through 8. Phase 9 (first end-to-end OneOffReminder) is
-# the boundary at which v1 edits become permissible — see
-# docs/CONTRACTS_V2_DESIGN.md §12.1 invariant 3. The boundary shifted
-# from "1-through-7 / phase 8 cutover" to "1-through-8 / phase 9
-# cutover" with the 2026-05-15 §12 renumber.
-FORBIDDEN_PHASES_1_TO_8: set[str] = {
+# phases 1 through 8 ("pre-cutover"). Phase 9 (first end-to-end
+# OneOffReminder) is the boundary at which v1 edits become
+# permissible — see docs/CONTRACTS_V2_DESIGN.md §12.1 invariant 3.
+# The boundary shifted from "1-through-7 / phase 8 cutover" to
+# "1-through-8 / phase 9 cutover" with the 2026-05-15 §12 renumber.
+# Constant renamed FORBIDDEN_PHASES_1_TO_8 →
+# FORBIDDEN_PHASES_PRE_CUTOVER in the phase-9 round-2 revision
+# to remove the post-renumber off-by-one confusion.
+FORBIDDEN_PHASES_PRE_CUTOVER: set[str] = {
     "app/contracts/",
     "app/tasks.py",
     "app/contracts/executor.py",
@@ -250,7 +253,7 @@ def is_forbidden(path: str, phase: int) -> bool:
     phase is in the protected window (1..8)."""
     if phase >= 9:
         return False
-    return any(_matches(path, entry) for entry in FORBIDDEN_PHASES_1_TO_8)
+    return any(_matches(path, entry) for entry in FORBIDDEN_PHASES_PRE_CUTOVER)
 
 
 # ---------------------------------------------------------------------------
@@ -337,7 +340,7 @@ def evaluate(files: list[str], phase: int) -> list[str]:
     for f in files:
         if is_forbidden(f, phase):
             violations.append(
-                f"{f} — forbidden in phases 1-7 (v1 scheduler path; "
+                f"{f} — forbidden in phases 1-8 (v1 scheduler path; "
                 "see docs/CONTRACTS_V2_DESIGN.md §12.1 invariant 3)"
             )
             continue
