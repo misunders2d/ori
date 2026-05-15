@@ -88,6 +88,7 @@ import app.v2.runtime  # noqa: F401 -- trigger package import
 
 binding_mod = sys.modules["app.v2.runtime.binding"]
 
+from apscheduler.jobstores.base import JobLookupError
 from apscheduler.triggers.cron import (
     CronTrigger as APSchedulerCronTrigger,
 )
@@ -130,11 +131,11 @@ def _jobstore_url(tmp_path) -> str:
 
 # Module-level callables (not lambdas) so the binding state
 # is serialisable. APScheduler's SQLAlchemy job store
-# serialises the registered ``func`` -- a bound method on a
-# SchedulerBinding -- which transitively serialises the
-# binding's instance dict. Lambda-bound closures defined
-# inside ``_make_binding`` fail with ``Can't get local
-# object``; module-level functions resolve cleanly.
+# serialises the registered ``func`` and the args list,
+# which transitively serialises the conn_factory + clock +
+# id_factory references. Lambda-bound closures fail with
+# ``Can't get local object``; module-level callables or
+# picklable class instances resolve cleanly.
 
 
 def _noop_wakeup(conn, **kwargs):
@@ -143,7 +144,40 @@ def _noop_wakeup(conn, **kwargs):
 
 
 def _memory_conn_factory():
+    """Opens an in-memory SQLite. Useful for ``_fire_for``
+    tests that don't touch the v2 runs table (direct method
+    invocation). NOT suitable for ``register(OneOff)``
+    tests because the OneOff DB guard queries
+    ``SELECT 1 FROM runs`` -- the in-memory DB has no
+    schema."""
     return sqlite3.connect(":memory:")
+
+
+class _MigratedConnFactory:
+    """Picklable connection factory pointing at a migrated
+    v2 SQLite file. Used by tests that exercise the
+    OneOff DB guard (which queries the ``runs`` table)."""
+
+    def __init__(self, db_path: str) -> None:
+        self.db_path = db_path
+
+    def __call__(self) -> sqlite3.Connection:
+        return sqlite3.connect(self.db_path)
+
+
+def _migrated_conn_factory(tmp_path) -> _MigratedConnFactory:
+    """Return a ``_MigratedConnFactory`` whose target DB has
+    been migrated to the v2 schema. One file per call (per
+    test, when tmp_path is the pytest fixture)."""
+    from app.v2.migrations import runner as _runner
+
+    db_path = tmp_path / "v2.db"
+    primary = sqlite3.connect(str(db_path))
+    try:
+        _runner.apply_pending(primary)
+    finally:
+        primary.close()
+    return _MigratedConnFactory(str(db_path))
 
 
 def _fixed_clock():
@@ -160,13 +194,16 @@ def _fixed_evt_id():
 
 def _make_binding(tmp_path, **overrides) -> SchedulerBinding:
     """Construct a binding with sensible test defaults.
-    Overrides replace individual kwargs.
 
-    Uses module-level callables so the binding instance is
-    serialisable by the SQLAlchemy job store."""
+    Defaults to a MIGRATED conn_factory pointing at a
+    fresh per-test SQLite file so the OneOff register-time
+    guard (which queries the ``runs`` table) does not
+    explode on a missing schema. Tests that don't care
+    about the schema can override with
+    ``conn_factory=_memory_conn_factory``."""
     kwargs = dict(
         wakeup_callable=_noop_wakeup,
-        conn_factory=_memory_conn_factory,
+        conn_factory=_migrated_conn_factory(tmp_path),
         clock=_fixed_clock,
         run_id_factory=_fixed_run_id,
         event_id_factory=_fixed_evt_id,
@@ -726,17 +763,26 @@ async def test_register_uses_module_level_fire_for_with_six_args(tmp_path):
     job is self-contained."""
     from app.v2.runtime.binding import _fire_for as fire_for_module
 
-    b = _make_binding(tmp_path)
+    factory = _migrated_conn_factory(tmp_path)
+    b = _make_binding(tmp_path, conn_factory=factory)
     await b.start(paused=True)
     try:
         spec = _one_off_spec(schedule_id="route_me")
         b.register(spec)
         job = b._scheduler.get_job("route_me")
+        # Module-level callables preserve identity across the
+        # SQLAlchemy jobstore round-trip (pickle uses
+        # qualified-name references for them).
         assert job.func is fire_for_module
         args = list(job.args)
         assert args[0] == spec.id
         assert args[1] is _noop_wakeup
-        assert args[2] is _memory_conn_factory
+        # ``factory`` is a _MigratedConnFactory instance.
+        # SQLAlchemy jobstore round-trips it via pickle, so
+        # the post-deserialise object is a NEW instance with
+        # the same state -- use attribute equality, not ``is``.
+        assert isinstance(args[2], _MigratedConnFactory)
+        assert args[2].db_path == factory.db_path
         assert args[3] is _fixed_clock
         assert args[4] is _fixed_run_id
         assert args[5] is _fixed_evt_id
@@ -871,6 +917,311 @@ async def test_register_conditional_trigger_raises_not_implemented(tmp_path):
         with pytest.raises(NotImplementedError, match="'conditional'"):
             b.register(spec)
         assert b.list_registered() == []
+    finally:
+        await b.stop()
+
+
+# ===========================================================================
+# OneOff register-time DB guard (slice 4, plan section 3.2.2 mechanic 1)
+# ===========================================================================
+
+
+def _seed_run_row(factory, schedule_id: str) -> None:
+    """Insert a minimal Run row for ``schedule_id`` via the
+    given factory. The runs table needs a schedule row to
+    satisfy the FK, but the OneOff guard only checks the
+    runs table itself -- so we satisfy the FK by inserting
+    a matching schedule row too."""
+    conn = factory()
+    try:
+        # Insert schedule row to satisfy FK.
+        conn.execute(
+            "INSERT INTO schedules "
+            "(id, owner, description, trigger_json, delivery_json, "
+            " failure_json, audit_json, status, authored_at, hash) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                schedule_id,
+                "{}",
+                "guard test schedule",
+                "{}",
+                "{}",
+                "{}",
+                "{}",
+                "active",
+                _NOW_ISO,
+                f"hash-{schedule_id}",
+            ),
+        )
+        # Insert run row.
+        conn.execute(
+            "INSERT INTO runs "
+            "(id, schedule_id, fire_reason, due_at, status, attempt, "
+            " root_run_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                f"existing-run-for-{schedule_id}",
+                schedule_id,
+                "scheduled",
+                _NOW.isoformat(),
+                "succeeded",
+                1,
+                f"existing-run-for-{schedule_id}",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_register_one_off_with_no_existing_run_proceeds(tmp_path):
+    """Empty runs table -> guard returns False -> OneOff
+    registers normally."""
+    factory = _migrated_conn_factory(tmp_path)
+    b = _make_binding(tmp_path, conn_factory=factory)
+    await b.start(paused=True)
+    try:
+        spec = _one_off_spec(schedule_id="fresh_oneoff")
+        b.register(spec)
+        assert b.list_registered() == ["fresh_oneoff"]
+    finally:
+        await b.stop()
+
+
+@pytest.mark.asyncio
+async def test_register_one_off_with_existing_run_skipped(tmp_path):
+    """Plan section 3.2.2 mechanic 1. A OneOff schedule with
+    any existing Run row in the DB has already fired (or is
+    in-flight). register() must NOT re-add the APScheduler
+    job, because resume() would otherwise re-fire it and
+    insert a duplicate Run."""
+    factory = _migrated_conn_factory(tmp_path)
+    b = _make_binding(tmp_path, conn_factory=factory)
+    await b.start(paused=True)
+    try:
+        _seed_run_row(factory, "already_fired")
+        spec = _one_off_spec(schedule_id="already_fired")
+        # register() returns silently (no exception); job NOT
+        # added to APScheduler.
+        b.register(spec)
+        assert b.list_registered() == []
+    finally:
+        await b.stop()
+
+
+@pytest.mark.asyncio
+async def test_register_cron_with_existing_run_still_registers(tmp_path):
+    """The OneOff guard is OneOff-only. Cron triggers fire
+    repeatedly so an existing Run row is the EXPECTED state,
+    not a duplicate-fire risk. Pin so a future broadening of
+    the guard to cover cron schedules surfaces here."""
+    factory = _migrated_conn_factory(tmp_path)
+    b = _make_binding(tmp_path, conn_factory=factory)
+    await b.start(paused=True)
+    try:
+        _seed_run_row(factory, "cron_with_history")
+        spec = _cron_spec(schedule_id="cron_with_history")
+        b.register(spec)
+        assert b.list_registered() == ["cron_with_history"]
+    finally:
+        await b.stop()
+
+
+# ===========================================================================
+# unregister (slice 4)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_unregister_before_start_raises(tmp_path):
+    b = _make_binding(tmp_path)
+    with pytest.raises(RuntimeError, match="not running"):
+        b.unregister("anything")
+
+
+@pytest.mark.asyncio
+async def test_unregister_removes_registered_job(tmp_path):
+    b = _make_binding(tmp_path)
+    await b.start(paused=True)
+    try:
+        spec = _one_off_spec(schedule_id="to_remove")
+        b.register(spec)
+        assert b.list_registered() == ["to_remove"]
+        b.unregister("to_remove")
+        assert b.list_registered() == []
+    finally:
+        await b.stop()
+
+
+@pytest.mark.asyncio
+async def test_unregister_unknown_schedule_is_idempotent(tmp_path):
+    """Plan section 3.3 step 6 (jobstore reconciliation)
+    needs to evict persisted DateTriggers whose schedule
+    has a Run row. The list of "to evict" comes from the
+    DB; the binding may not have any of them registered
+    yet. unregister must be a no-op for unknown ids."""
+    b = _make_binding(tmp_path)
+    await b.start(paused=True)
+    try:
+        # Should not raise.
+        b.unregister("never_registered")
+        assert b.list_registered() == []
+    finally:
+        await b.stop()
+
+
+# ===========================================================================
+# reregister (slice 4)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_reregister_before_start_raises(tmp_path):
+    b = _make_binding(tmp_path)
+    with pytest.raises(RuntimeError, match="not running"):
+        b.reregister(_one_off_spec())
+
+
+@pytest.mark.asyncio
+async def test_reregister_swaps_trigger_atomically_via_reschedule_job(
+    tmp_path, monkeypatch
+):
+    """Plan section 5.2: reregister uses APScheduler's
+    ``reschedule_job(job_id, trigger=...)`` -- a single-call
+    atomic trigger swap, NOT remove_job + add_job which
+    would open a window where the job briefly does not
+    exist. Spy on the scheduler's reschedule_job to pin
+    the call mechanism + assert no remove_job during the
+    swap (the job stays registered throughout)."""
+    b = _make_binding(tmp_path)
+    await b.start(paused=True)
+    try:
+        original = _one_off_spec(
+            schedule_id="swap_me",
+            at=_NOW + timedelta(hours=1),
+        )
+        b.register(original)
+        assert b.list_registered() == ["swap_me"]
+
+        reschedule_calls: list[tuple] = []
+        remove_calls: list[str] = []
+
+        real_reschedule = b._scheduler.reschedule_job
+        real_remove = b._scheduler.remove_job
+
+        def _spy_reschedule(job_id, **kwargs):
+            reschedule_calls.append((job_id, kwargs))
+            return real_reschedule(job_id, **kwargs)
+
+        def _spy_remove(job_id, *args, **kwargs):
+            remove_calls.append(job_id)
+            return real_remove(job_id, *args, **kwargs)
+
+        monkeypatch.setattr(b._scheduler, "reschedule_job", _spy_reschedule)
+        monkeypatch.setattr(b._scheduler, "remove_job", _spy_remove)
+
+        # Reregister with a DIFFERENT trigger type (cron).
+        new_spec = _spec(
+            schedule_id="swap_me",
+            trigger=CronTrigger(cron="0 18 * * *", timezone="UTC"),
+        )
+        b.reregister(new_spec)
+
+        # reschedule_job called exactly once for our id.
+        assert len(reschedule_calls) == 1
+        assert reschedule_calls[0][0] == "swap_me"
+        # remove_job NEVER called -- the swap is atomic.
+        assert remove_calls == []
+        # Job still registered (no intermediate "gone" window).
+        assert b.list_registered() == ["swap_me"]
+        # Trigger type swapped to cron.
+        job = b._scheduler.get_job("swap_me")
+        assert isinstance(job.trigger, APSchedulerCronTrigger)
+    finally:
+        await b.stop()
+
+
+@pytest.mark.asyncio
+async def test_reregister_unknown_schedule_raises_job_lookup_error(tmp_path):
+    """Reregister assumes the schedule is already registered.
+    Unknown id surfaces APScheduler's JobLookupError so the
+    caller knows to register() instead."""
+    b = _make_binding(tmp_path)
+    await b.start(paused=True)
+    try:
+        spec = _one_off_spec(schedule_id="not_yet_registered")
+        with pytest.raises(JobLookupError):
+            b.reregister(spec)
+    finally:
+        await b.stop()
+
+
+@pytest.mark.asyncio
+async def test_reregister_cron_numeric_dow_rejected(tmp_path):
+    """Same cron_guard rejection at reregister time as at
+    register time."""
+    b = _make_binding(tmp_path)
+    await b.start(paused=True)
+    try:
+        b.register(_one_off_spec(schedule_id="cron_swap"))
+        bad_spec = _spec(
+            schedule_id="cron_swap",
+            trigger=CronTrigger(cron="0 18 * * 1-5", timezone="UTC"),
+        )
+        with pytest.raises(ValueError, match="numeric day-of-week"):
+            b.reregister(bad_spec)
+    finally:
+        await b.stop()
+
+
+@pytest.mark.asyncio
+async def test_reregister_unknown_timezone_rejected(tmp_path):
+    b = _make_binding(tmp_path)
+    await b.start(paused=True)
+    try:
+        b.register(_one_off_spec(schedule_id="tz_swap"))
+        bad_spec = _spec(
+            schedule_id="tz_swap",
+            trigger=OneOffTrigger(
+                at_iso_datetime=_NOW + timedelta(hours=2),
+                timezone="Not/A_Real_Zone",
+            ),
+        )
+        with pytest.raises(ValueError, match="unknown timezone"):
+            b.reregister(bad_spec)
+    finally:
+        await b.stop()
+
+
+@pytest.mark.asyncio
+async def test_reregister_invalid_cron_rejected(tmp_path):
+    b = _make_binding(tmp_path)
+    await b.start(paused=True)
+    try:
+        b.register(_one_off_spec(schedule_id="cron_swap"))
+        bad_spec = _spec(
+            schedule_id="cron_swap",
+            trigger=CronTrigger(cron="99 18 * * *", timezone="UTC"),
+        )
+        with pytest.raises(ValueError, match="invalid cron"):
+            b.reregister(bad_spec)
+    finally:
+        await b.stop()
+
+
+@pytest.mark.asyncio
+async def test_reregister_interval_trigger_raises_not_implemented(tmp_path):
+    b = _make_binding(tmp_path)
+    await b.start(paused=True)
+    try:
+        b.register(_one_off_spec(schedule_id="t"))
+        bad = _spec(
+            schedule_id="t",
+            trigger=IntervalTrigger(every_seconds=60),
+        )
+        with pytest.raises(NotImplementedError, match="'interval'"):
+            b.reregister(bad)
     finally:
         await b.stop()
 

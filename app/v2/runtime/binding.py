@@ -82,6 +82,7 @@ from datetime import datetime
 from typing import Callable, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from apscheduler.jobstores.base import JobLookupError
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.schedulers.base import STATE_PAUSED
@@ -367,6 +368,22 @@ class SchedulerBinding:
 
         trigger = spec.trigger
         if isinstance(trigger, OneOffTrigger):
+            # OneOff register-time DB guard (plan section
+            # 3.2.2 mechanic 1). If any Run row exists for
+            # this schedule_id, the OneOff already fired
+            # (or is in-flight) and we MUST NOT re-register
+            # it -- doing so would cause a duplicate fire
+            # on the next resume. Cron triggers fire
+            # repeatedly so this guard does NOT apply to
+            # them; the existing-run check is OneOff-only.
+            if self._one_off_already_fired(spec.id):
+                _logger.info(
+                    "OneOff schedule_id=%r has an existing "
+                    "Run row -- skipping register to avoid a "
+                    "duplicate fire.",
+                    spec.id,
+                )
+                return
             aps_trigger = self._build_one_off_aps_trigger(trigger)
         elif isinstance(trigger, CronTrigger):
             aps_trigger = self._build_cron_aps_trigger(trigger)
@@ -433,6 +450,96 @@ class SchedulerBinding:
             return []
         return [job.id for job in self._scheduler.get_jobs()]
 
+    def unregister(self, schedule_id: str) -> None:
+        """Remove the APScheduler job for ``schedule_id``.
+
+        Idempotent: a no-op when no job with that id is
+        registered. The boot sequence's jobstore-
+        reconciliation step (plan section 3.3 step 6)
+        relies on this idempotency to evict persisted
+        DateTriggers whose schedule now has a Run row in
+        the DB.
+
+        Raises ``RuntimeError`` if the scheduler is not
+        started.
+        """
+        if not self._started:
+            raise RuntimeError(
+                "scheduler not running -- call start() before "
+                "unregister()."
+            )
+        try:
+            self._scheduler.remove_job(schedule_id)
+        except JobLookupError:
+            # Idempotent -- not-yet-registered is fine.
+            pass
+
+    def reregister(self, spec: ScheduleSpec) -> None:
+        """Atomically swap the trigger for an existing job.
+
+        Calls APScheduler's ``reschedule_job(job_id,
+        trigger=...)`` -- a single-call atomic trigger swap.
+        NOT a ``remove_job`` + ``add_job`` pair, which would
+        open a window where the job briefly does not exist
+        and a concurrent fire (or boot replay) would race.
+
+        Translates the spec's Trigger to the corresponding
+        APScheduler trigger using the same helpers
+        ``register`` uses (numeric DOW rejected pre-
+        APScheduler via ``cron_guard``; unknown timezone
+        rejected; invalid cron rejected).
+
+        Raises:
+            RuntimeError: scheduler not started.
+            JobLookupError: ``spec.id`` is not currently
+                registered.
+            ValueError: invalid cron, numeric DOW, unknown
+                timezone.
+            NotImplementedError: trigger type is interval /
+                event / conditional.
+        """
+        if not self._started:
+            raise RuntimeError(
+                "scheduler not running -- call start() before "
+                "reregister()."
+            )
+
+        trigger = spec.trigger
+        if isinstance(trigger, OneOffTrigger):
+            aps_trigger = self._build_one_off_aps_trigger(trigger)
+        elif isinstance(trigger, CronTrigger):
+            aps_trigger = self._build_cron_aps_trigger(trigger)
+        elif isinstance(trigger, IntervalTrigger):
+            raise NotImplementedError(
+                f"Wakeup for trigger type {trigger.type!r} is "
+                "not implemented in phase 5. The variant is "
+                "shape-only until its use case ships in a "
+                "later phase."
+            )
+        elif isinstance(trigger, EventTrigger):
+            raise NotImplementedError(
+                f"Wakeup for trigger type {trigger.type!r} is "
+                "not implemented in phase 5. The variant is "
+                "shape-only until its use case ships in a "
+                "later phase."
+            )
+        elif isinstance(trigger, ConditionalTrigger):
+            raise NotImplementedError(
+                f"Wakeup for trigger type {trigger.type!r} is "
+                "not implemented in phase 5. The variant is "
+                "shape-only until its use case ships in a "
+                "later phase."
+            )
+        else:
+            raise NotImplementedError(
+                f"Unknown trigger type "
+                f"{type(trigger).__name__!r} -- binding "
+                "dispatch is missing a branch. Add the "
+                "variant in app/v2/runtime/binding.py."
+            )
+
+        self._scheduler.reschedule_job(spec.id, trigger=aps_trigger)
+
     # ------------------------------------------------------------------
     # Trigger translation helpers
     # ------------------------------------------------------------------
@@ -475,6 +582,31 @@ class SchedulerBinding:
             raise ValueError(
                 f"unknown timezone {tz_name!r}: {exc}."
             ) from exc
+
+    def _one_off_already_fired(self, schedule_id: str) -> bool:
+        """Return True iff the v2 ``runs`` table has ANY row
+        for ``schedule_id``.
+
+        Plan section 3.2.2 mechanic 1: a OneOff schedule
+        with an existing Run row has already fired (or is
+        in-flight). Re-registering it would let APScheduler
+        fire the wakeup again on the next resume, creating
+        a duplicate Run row -- exactly the non-idempotency
+        the phase-4 wakeup flagged.
+
+        Opens a short-lived connection via the binding's
+        ``conn_factory`` so the check uses the same DB the
+        worker / wakeup / recovery share.
+        """
+        conn = self._conn_factory()
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM runs WHERE schedule_id = ? LIMIT 1",
+                (schedule_id,),
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
 
     # ------------------------------------------------------------------
     # APScheduler callback
