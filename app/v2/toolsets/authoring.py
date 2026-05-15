@@ -16,7 +16,7 @@ ADK ``BaseToolset``. Two surfaces:
   these via :func:`register_descriptors` on a
   :class:`ToolRegistry`.
 
-Tag matrix per §4 (phase-7 plan):
+Tag matrix per §4 (phase-7 plan, extended by phase-8 slice 5):
 
 - Draft setters (start / description / owner / cron /
   one_off / failure_policy): ``filesystem_write``.
@@ -27,6 +27,16 @@ Tag matrix per §4 (phase-7 plan):
 - ``schedule_draft_discard``: ``filesystem_write``.
 - Lifecycle tools (pause / resume / archive / revive):
   ``db_write`` (round-3 L807 new tag).
+
+Phase 8 slice 5 additions (per ``docs/PHASE_8_PLAN.md`` §4):
+
+- ``schedule_dry_run``: ``filesystem_read`` +
+  ``filesystem_write`` (reads draft; writes handshake).
+- ``schedule_freeze``: ``filesystem_read`` (reads draft +
+  handshake; no DB write, no file write).
+- ``schedule_draft_commit``: ``db_write`` +
+  ``filesystem_write`` (DB insert + deletes draft +
+  handshake on success).
 """
 
 from __future__ import annotations
@@ -36,12 +46,15 @@ from typing import Optional
 from google.adk.tools.base_toolset import BaseToolset
 from google.adk.tools.function_tool import FunctionTool
 
+from app.v2.authoring.commit import schedule_draft_commit
 from app.v2.authoring.compile import (
     schedule_draft_compile,
     schedule_draft_discard,
     schedule_draft_list,
 )
 from app.v2.authoring.delivery import schedule_set_delivery
+from app.v2.authoring.dry_run import schedule_dry_run
+from app.v2.authoring.freeze import schedule_freeze
 from app.v2.authoring.lifecycle import (
     schedule_archive,
     schedule_pause,
@@ -158,6 +171,50 @@ AUTHORING_TOOL_DESCRIPTORS: list[ToolDescriptor] = [
         tags={ToolCapabilityTag.FILESYSTEM_WRITE},
         module=f"{_AUTHORING_MODULE}.compile",
     ),
+    # ----- Dry-run + freeze + commit (phase 8 slice 5) -----
+    ToolDescriptor(
+        name="schedule_dry_run",
+        description=(
+            "Validate the draft against the §5.5 chokepoint "
+            "and record a 60-second dry-run handshake. "
+            "validate_only is fully implemented in phase 8; "
+            "mocked_inputs / real return "
+            "mode_not_implemented_in_phase_8 until phases "
+            "10 / 12 ship the source-loader path."
+        ),
+        tags={
+            ToolCapabilityTag.FILESYSTEM_READ,
+            ToolCapabilityTag.FILESYSTEM_WRITE,
+        },
+        module=f"{_AUTHORING_MODULE}.dry_run",
+    ),
+    ToolDescriptor(
+        name="schedule_freeze",
+        description=(
+            "Verify the dry-run handshake is fresh + "
+            "hash-matches the current draft body and return "
+            "the canonical spec. No DB or file mutation; "
+            "phase-8 OneOff-only (non-OneOff triggers refused "
+            "with non_oneoff_trigger_blocked_until_real_mode)."
+        ),
+        tags={ToolCapabilityTag.FILESYSTEM_READ},
+        module=f"{_AUTHORING_MODULE}.freeze",
+    ),
+    ToolDescriptor(
+        name="schedule_draft_commit",
+        description=(
+            "Atomic insert_schedule + append_event("
+            "schedule_created) in one transaction; on success "
+            "best-effort delete of draft + handshake files "
+            "(WARNING log on cleanup failure). Phase-8 "
+            "OneOff-only."
+        ),
+        tags={
+            ToolCapabilityTag.DB_WRITE,
+            ToolCapabilityTag.FILESYSTEM_WRITE,
+        },
+        module=f"{_AUTHORING_MODULE}.commit",
+    ),
     # ----- Lifecycle (db_write) -----
     ToolDescriptor(
         name="schedule_pause",
@@ -263,6 +320,9 @@ class AuthoringToolset(BaseToolset):
             FunctionTool(func=schedule_draft_compile),
             FunctionTool(func=schedule_draft_list),
             FunctionTool(func=schedule_draft_discard),
+            FunctionTool(func=schedule_dry_run),
+            FunctionTool(func=schedule_freeze),
+            FunctionTool(func=schedule_draft_commit),
             FunctionTool(func=schedule_pause),
             FunctionTool(func=schedule_resume),
             FunctionTool(func=schedule_archive),

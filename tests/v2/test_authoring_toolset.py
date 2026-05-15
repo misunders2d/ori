@@ -67,6 +67,19 @@ _EXPECTED_TAG_MATRIX: dict[str, set[ToolCapabilityTag]] = {
     "schedule_draft_list": {ToolCapabilityTag.FILESYSTEM_READ},
     # Discard → filesystem_write.
     "schedule_draft_discard": {ToolCapabilityTag.FILESYSTEM_WRITE},
+    # Phase 8 slice 5 additions:
+    # Dry-run reads draft + writes handshake.
+    "schedule_dry_run": {
+        ToolCapabilityTag.FILESYSTEM_READ,
+        ToolCapabilityTag.FILESYSTEM_WRITE,
+    },
+    # Freeze reads draft + handshake; no mutation.
+    "schedule_freeze": {ToolCapabilityTag.FILESYSTEM_READ},
+    # Commit: DB insert + draft/handshake delete.
+    "schedule_draft_commit": {
+        ToolCapabilityTag.DB_WRITE,
+        ToolCapabilityTag.FILESYSTEM_WRITE,
+    },
     # Lifecycle → db_write.
     "schedule_pause": {ToolCapabilityTag.DB_WRITE},
     "schedule_resume": {ToolCapabilityTag.DB_WRITE},
@@ -221,6 +234,104 @@ def test_filesystem_read_alone_does_not_require_admin():
         )
         is False
     )
+
+
+# ===========================================================================
+# Phase 8 slice 5 — 17 tool count + new descriptor pins
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_get_tools_returns_17_tools_phase_8():
+    """Phase 7 shipped 14 tools; phase 8 slice 5 adds 3
+    (schedule_dry_run / schedule_freeze /
+    schedule_draft_commit). Total = 17."""
+    toolset = AuthoringToolset(expected_owner_id="T_TEST")
+    tools = await toolset.get_tools()
+    assert len(tools) == 17
+
+
+@pytest.mark.asyncio
+async def test_get_tools_includes_phase_8_names():
+    toolset = AuthoringToolset(expected_owner_id="T_TEST")
+    tools = await toolset.get_tools()
+    names = {tool.name for tool in tools}
+    assert "schedule_dry_run" in names
+    assert "schedule_freeze" in names
+    assert "schedule_draft_commit" in names
+
+
+def test_descriptors_count_matches_17():
+    assert len(AUTHORING_TOOL_DESCRIPTORS) == 17
+
+
+def test_dry_run_descriptor_tags():
+    d = next(
+        d
+        for d in AUTHORING_TOOL_DESCRIPTORS
+        if d.name == "schedule_dry_run"
+    )
+    assert d.tags == {
+        ToolCapabilityTag.FILESYSTEM_READ,
+        ToolCapabilityTag.FILESYSTEM_WRITE,
+    }
+
+
+def test_freeze_descriptor_tags():
+    d = next(
+        d
+        for d in AUTHORING_TOOL_DESCRIPTORS
+        if d.name == "schedule_freeze"
+    )
+    assert d.tags == {ToolCapabilityTag.FILESYSTEM_READ}
+
+
+def test_commit_descriptor_tags():
+    d = next(
+        d
+        for d in AUTHORING_TOOL_DESCRIPTORS
+        if d.name == "schedule_draft_commit"
+    )
+    assert d.tags == {
+        ToolCapabilityTag.DB_WRITE,
+        ToolCapabilityTag.FILESYSTEM_WRITE,
+    }
+
+
+def test_commit_tag_set_blocks_read_only_reasoning():
+    """schedule_draft_commit carries DB_WRITE +
+    FILESYSTEM_WRITE → both block read-only reasoning per
+    the phase-7 policy. Pin against the set."""
+    commit_d = next(
+        d
+        for d in AUTHORING_TOOL_DESCRIPTORS
+        if d.name == "schedule_draft_commit"
+    )
+    assert is_blocked_by_read_only_reasoning(commit_d.tags) is True
+
+
+def test_dry_run_tag_set_blocks_read_only_reasoning():
+    """schedule_dry_run carries FILESYSTEM_WRITE (it writes
+    the handshake file) → blocks read-only reasoning. The
+    handshake file IS a mutation even though no DB or
+    network touches happen."""
+    dr_d = next(
+        d
+        for d in AUTHORING_TOOL_DESCRIPTORS
+        if d.name == "schedule_dry_run"
+    )
+    assert is_blocked_by_read_only_reasoning(dr_d.tags) is True
+
+
+def test_freeze_tag_set_does_not_block_read_only_reasoning():
+    """schedule_freeze is read-only — only FILESYSTEM_READ.
+    Read-only reasoning agents can run it freely."""
+    fr_d = next(
+        d
+        for d in AUTHORING_TOOL_DESCRIPTORS
+        if d.name == "schedule_freeze"
+    )
+    assert is_blocked_by_read_only_reasoning(fr_d.tags) is False
 
 
 # ===========================================================================
