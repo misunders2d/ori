@@ -21,6 +21,11 @@ from app.v2.registry_cache.errors import (
     RegistryCacheError,
     WorkspaceMismatch,
 )
+from app.v2.registry_cache.loader import (
+    is_stale,
+    load_cache,
+    save_cache,
+)
 from app.v2.registry_cache.paths import DEFAULT_CACHE_BASE, cache_path
 from app.v2.registry_cache.schemas import (
     CacheFile,
@@ -51,4 +56,7 @@ __all__ = [
     "SlackChannelsCache",
     "WorkspaceMismatch",
     "cache_path",
+    "is_stale",
+    "load_cache",
+    "save_cache",
 ]
