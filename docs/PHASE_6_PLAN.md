@@ -901,8 +901,10 @@ Cross-cutting smoke checks added or carried:
 3. `schemas.py` ships three cache models
    (`SlackChannelsCache`, `GoogleSheetsCache`,
    `GoogleDocsCache`) with `extra="forbid"`, shared
-   tz-aware `fetched_at` validator, MIME-literal entry
-   classes, and a uniform `owner_id` property.
+   UTC-only `fetched_at` validator (round-2 reviewer L904
+   wording fix — the invariant is utcoffset == 0, not just
+   tz-aware), MIME-literal entry classes, and a uniform
+   `owner_id` property.
 4. `paths.py` resolves filenames `slack_channels.json` /
    `google_sheets_items.json` / `google_docs_items.json`
    under `DEFAULT_CACHE_BASE = data/cache/registry/`.
