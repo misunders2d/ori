@@ -65,19 +65,95 @@ import logging
 import sqlite3
 from datetime import datetime
 from typing import Callable, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.schedulers.base import STATE_PAUSED
+from apscheduler.triggers.cron import (
+    CronTrigger as APSchedulerCronTrigger,
+)
+from apscheduler.triggers.date import DateTrigger as APSchedulerDateTrigger
 
+from app.v2.models.schedule import ScheduleSpec
+from app.v2.models.triggers import (
+    ConditionalTrigger,
+    CronTrigger,
+    EventTrigger,
+    IntervalTrigger,
+    OneOffTrigger,
+)
 from app.v2.runtime._defaults import (
     prod_clock,
     prod_event_id_factory,
     prod_run_id_factory,
 )
+from app.v2.runtime.cron_guard import reject_numeric_dow
 
 
 _logger = logging.getLogger(__name__)
+
+
+def _fire_for(
+    schedule_id: str,
+    wakeup_callable: Callable[..., list[str]],
+    conn_factory: Callable[[], sqlite3.Connection],
+    clock: Callable[[], datetime],
+    run_id_factory: Callable[[], str],
+    event_id_factory: Callable[[], str],
+) -> None:
+    """Module-level callback that APScheduler invokes when a
+    registered job fires.
+
+    Module-level (not a method) so the SQLAlchemy job store
+    can serialise it cleanly. APScheduler refuses to
+    serialise any object whose ``__self__`` references a
+    scheduler -- which a bound method on ``SchedulerBinding``
+    would, via the binding's ``_scheduler`` attribute.
+
+    ``SchedulerBinding.register`` passes the binding's
+    injected callables into ``args`` at register time so the
+    APScheduler job carries (schedule_id, wakeup_callable,
+    conn_factory, clock, run_id_factory, event_id_factory) as
+    serialisable references. In production every entry is a
+    module-level function (``app.v2.runtime.wakeup.wakeup``,
+    ``prod_clock``, ``prod_run_id_factory``,
+    ``prod_event_id_factory`` + user-provided
+    conn_factory). For tests the same shape applies --
+    fixture callables MUST be module-level.
+
+    Opens a per-fire connection via ``conn_factory``, invokes
+    ``wakeup_callable`` with the phase-4 kwargs, closes the
+    connection in a ``finally`` clause. Catches ``Exception``
+    (logged via ``logger.exception``, swallowed). Propagates
+    ``BaseException`` (``CancelledError`` /
+    ``KeyboardInterrupt`` / ``SystemExit``) so APScheduler's
+    shutdown path receives cancel signals cleanly.
+    """
+    try:
+        conn = conn_factory()
+        try:
+            wakeup_callable(
+                conn,
+                schedule_id=schedule_id,
+                now=clock(),
+                run_id_factory=run_id_factory,
+                event_id_factory=event_id_factory,
+            )
+        finally:
+            conn.close()
+    except Exception:
+        # NEVER catch BaseException here. CancelledError /
+        # KeyboardInterrupt / SystemExit must propagate to
+        # APScheduler's shutdown path so the scheduler
+        # exits cleanly. Same contract as Worker._run_loop
+        # in phase 4.
+        _logger.exception(
+            "wakeup for schedule_id=%r failed; the job "
+            "stays registered and APScheduler will fire "
+            "again on its next cadence.",
+            schedule_id,
+        )
 
 
 class SchedulerBinding:
@@ -226,46 +302,190 @@ class SchedulerBinding:
         return self._scheduler.state == STATE_PAUSED
 
     # ------------------------------------------------------------------
+    # Registration (slice 3)
+    # ------------------------------------------------------------------
+
+    def register(self, spec: ScheduleSpec) -> None:
+        """Translate ``spec.trigger`` to an APScheduler job
+        and ``add_job`` it.
+
+        - ``OneOffTrigger`` -> ``apscheduler.triggers.date
+          .DateTrigger(run_date=spec.trigger.at_iso_datetime,
+          timezone=ZoneInfo(spec.trigger.timezone))``.
+        - ``CronTrigger`` -> ``apscheduler.triggers.cron
+          .CronTrigger.from_crontab(spec.trigger.cron,
+          timezone=ZoneInfo(spec.trigger.timezone))``.
+          Numeric DOW is rejected by ``cron_guard
+          .reject_numeric_dow`` BEFORE APScheduler sees the
+          expression -- APScheduler would otherwise accept
+          numeric DOW with Monday=0 semantics, silently
+          diverging from Unix cron's Sunday=0.
+        - ``IntervalTrigger`` / ``EventTrigger`` /
+          ``ConditionalTrigger`` -> ``NotImplementedError``
+          (same per-type messages as ``wakeup`` uses).
+
+        The APScheduler job id == ``spec.id`` so callers can
+        ``unregister(spec.id)`` directly. ``args=[spec.id]``
+        is passed so APScheduler calls ``_fire_for(spec.id)``
+        at fire time.
+
+        ``replace_existing=True`` -- registering the same
+        schedule_id twice is idempotent. The OneOff
+        register-time DB guard (mechanic 1 in plan section
+        3.2.2) lands in slice 4.
+
+        ``misfire_grace_time`` flows from the binding's
+        ``job_defaults`` -- no per-job override here.
+
+        Raises:
+            RuntimeError: scheduler not started.
+            ValueError: invalid cron expression, numeric DOW,
+                or unknown timezone.
+            NotImplementedError: trigger type is interval /
+                event / conditional.
+        """
+        if not self._started:
+            raise RuntimeError(
+                "scheduler not running -- call start() before "
+                "register()."
+            )
+
+        trigger = spec.trigger
+        if isinstance(trigger, OneOffTrigger):
+            aps_trigger = self._build_one_off_aps_trigger(trigger)
+        elif isinstance(trigger, CronTrigger):
+            aps_trigger = self._build_cron_aps_trigger(trigger)
+        elif isinstance(trigger, IntervalTrigger):
+            raise NotImplementedError(
+                f"Wakeup for trigger type {trigger.type!r} is "
+                "not implemented in phase 5. The variant is "
+                "shape-only until its use case ships in a "
+                "later phase."
+            )
+        elif isinstance(trigger, EventTrigger):
+            raise NotImplementedError(
+                f"Wakeup for trigger type {trigger.type!r} is "
+                "not implemented in phase 5. The variant is "
+                "shape-only until its use case ships in a "
+                "later phase."
+            )
+        elif isinstance(trigger, ConditionalTrigger):
+            raise NotImplementedError(
+                f"Wakeup for trigger type {trigger.type!r} is "
+                "not implemented in phase 5. The variant is "
+                "shape-only until its use case ships in a "
+                "later phase."
+            )
+        else:
+            # Defensive: every Trigger union member has its
+            # own branch above. A new variant landing without
+            # a wakeup branch surfaces here loud.
+            raise NotImplementedError(
+                f"Unknown trigger type "
+                f"{type(trigger).__name__!r} -- binding "
+                "dispatch is missing a branch. Add the "
+                "variant in app/v2/runtime/binding.py."
+            )
+
+        # APScheduler registers the MODULE-LEVEL ``_fire_for``
+        # (not the binding method) so the SQLAlchemy job
+        # store can serialise the job without dragging the
+        # binding's ``_scheduler`` attribute into the
+        # serialised payload (APScheduler refuses that).
+        # The injected callables flow through ``args`` so the
+        # persisted job carries serialisable references to
+        # them.
+        self._scheduler.add_job(
+            _fire_for,
+            trigger=aps_trigger,
+            args=[
+                spec.id,
+                self._wakeup_callable,
+                self._conn_factory,
+                self._clock,
+                self._run_id_factory,
+                self._event_id_factory,
+            ],
+            id=spec.id,
+            replace_existing=True,
+        )
+
+    def list_registered(self) -> list[str]:
+        """Return the ids of every job currently registered
+        with the underlying scheduler. Empty when not
+        started."""
+        if not self._started:
+            return []
+        return [job.id for job in self._scheduler.get_jobs()]
+
+    # ------------------------------------------------------------------
+    # Trigger translation helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_one_off_aps_trigger(
+        trigger: OneOffTrigger,
+    ) -> APSchedulerDateTrigger:
+        tz = SchedulerBinding._resolve_zone_info(trigger.timezone)
+        return APSchedulerDateTrigger(
+            run_date=trigger.at_iso_datetime,
+            timezone=tz,
+        )
+
+    @staticmethod
+    def _build_cron_aps_trigger(
+        trigger: CronTrigger,
+    ) -> APSchedulerCronTrigger:
+        # Reject numeric DOW BEFORE APScheduler sees the
+        # expression. Reviewer round-1 finding: relying on
+        # APScheduler to reject is invalid -- APScheduler
+        # ACCEPTS numeric DOW with Monday=0 semantics.
+        reject_numeric_dow(trigger.cron)
+        tz = SchedulerBinding._resolve_zone_info(trigger.timezone)
+        try:
+            return APSchedulerCronTrigger.from_crontab(
+                trigger.cron, timezone=tz
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"invalid cron expression {trigger.cron!r}: "
+                f"{exc}"
+            ) from exc
+
+    @staticmethod
+    def _resolve_zone_info(tz_name: str) -> ZoneInfo:
+        try:
+            return ZoneInfo(tz_name)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(
+                f"unknown timezone {tz_name!r}: {exc}."
+            ) from exc
+
+    # ------------------------------------------------------------------
     # APScheduler callback
     # ------------------------------------------------------------------
 
     def _fire_for(self, schedule_id: str) -> None:
-        """Invoked by APScheduler when a registered job fires.
+        """Thin wrapper around the module-level ``_fire_for``
+        function. Lets tests + direct callers invoke the fire
+        path through the binding instance with the binding's
+        bound callables, instead of having to thread all six
+        positional args themselves.
 
-        Opens a per-fire connection via ``conn_factory``,
-        invokes ``wakeup_callable`` with the injected
-        clock + id factories, closes the connection, swallows
-        any ``Exception`` after logging. ``BaseException``
-        (``CancelledError`` / shutdown signals) propagates.
-
-        Slice-2 skeleton: ``register`` is not yet shipped, so
-        APScheduler never invokes this method in production.
-        Tests call it directly to pin the contract.
+        APScheduler registers the MODULE-LEVEL ``_fire_for``
+        (not this method) -- see :meth:`register`. The
+        scheduler refuses to serialise instance methods on a
+        class that holds a scheduler attribute, which this
+        class does.
         """
-        try:
-            conn = self._conn_factory()
-            try:
-                self._wakeup_callable(
-                    conn,
-                    schedule_id=schedule_id,
-                    now=self._clock(),
-                    run_id_factory=self._run_id_factory,
-                    event_id_factory=self._event_id_factory,
-                )
-            finally:
-                conn.close()
-        except Exception:
-            # NEVER catch BaseException here. CancelledError /
-            # KeyboardInterrupt / SystemExit must propagate to
-            # APScheduler's shutdown path so the scheduler
-            # exits cleanly. Same contract as
-            # Worker._run_loop in phase 4.
-            _logger.exception(
-                "wakeup for schedule_id=%r failed; the job "
-                "stays registered and APScheduler will fire "
-                "again on its next cadence.",
-                schedule_id,
-            )
+        _fire_for(
+            schedule_id,
+            self._wakeup_callable,
+            self._conn_factory,
+            self._clock,
+            self._run_id_factory,
+            self._event_id_factory,
+        )
 
 
 __all__ = ["SchedulerBinding"]
