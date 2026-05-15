@@ -27,9 +27,12 @@ Inverse smoke pin:
 
 from __future__ import annotations
 
+import ast
 import inspect
 import re
+import textwrap
 from datetime import datetime, timedelta, timezone
+from typing import Callable
 
 import pytest
 
@@ -42,6 +45,39 @@ from app.v2.runtime._defaults import (
 
 
 _UUID4_HEX_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _function_body_calls(fn: Callable, dotted_name: str) -> bool:
+    """Return True iff the function's BODY (not docstring) calls
+    ``dotted_name`` (e.g. ``"datetime.now"`` or ``"uuid.uuid4"``).
+
+    AST walk so the check is robust against docstring substrings.
+    ``inspect.getsource(fn)`` returns ``def NAME(...): \n DOCSTRING
+    \n BODY``; the AST parse turns the docstring into a string
+    Expr at the top of ``func_def.body`` and turns real calls into
+    ``ast.Call`` nodes. Walking only ``ast.Call`` nodes ignores
+    string expressions entirely.
+    """
+    src = textwrap.dedent(inspect.getsource(fn))
+    tree = ast.parse(src)
+    # The first statement is the function we just inspected.
+    func_def = tree.body[0]
+    assert isinstance(func_def, (ast.FunctionDef, ast.AsyncFunctionDef))
+    target = dotted_name.split(".")
+    for node in ast.walk(func_def):
+        if not isinstance(node, ast.Call):
+            continue
+        chain: list[str] = []
+        f = node.func
+        # Walk attribute chain: datetime.now -> Attribute(Name('datetime'), 'now')
+        while isinstance(f, ast.Attribute):
+            chain.insert(0, f.attr)
+            f = f.value
+        if isinstance(f, ast.Name):
+            chain.insert(0, f.id)
+        if chain == target:
+            return True
+    return False
 
 
 # ===========================================================================
@@ -150,44 +186,71 @@ def test_defaults_module_imports_uuid():
     )
 
 
-def test_prod_clock_source_calls_datetime_now():
-    """Inverse smoke: ``prod_clock``'s function body DOES
-    contain ``datetime.now(``. Every other runtime module's
-    forbid-side check rejects that substring at the module
-    level; this one asserts it lives here at the function
-    level so a regression that quietly stops actually
-    calling ``datetime.now`` surfaces here.
+def test_prod_clock_body_calls_datetime_now():
+    """Inverse smoke: ``prod_clock``'s function BODY (not its
+    docstring) contains a call to ``datetime.now``. AST-based
+    check so a regression that gutted the body while leaving
+    the docstring (which mentions ``datetime.now()`` for
+    explanation) would actually flip the assertion.
 
-    Scope the inspection to the function body (not the
-    module) -- module-level docstrings contain the literal
-    ``datetime.now(`` and would make a module-source check
-    vacuous (the docstring would satisfy the assertion even
-    if the function were gutted). ``inspect.getsource(
-    prod_clock)`` returns only the function definition +
-    body, so the check is load-bearing."""
-    source = inspect.getsource(prod_clock)
-    assert "datetime.now(" in source, (
-        "prod_clock must call ``datetime.now(...)`` -- it is "
-        "the production wiring for the v2 runtime's clock."
+    A naive substring check (``"datetime.now(" in
+    inspect.getsource(prod_clock)``) is vacuously satisfied
+    by the docstring text; AST walk over ``ast.Call`` nodes
+    skips ``Expr(Constant(str))`` docstring nodes."""
+    assert _function_body_calls(prod_clock, "datetime.now"), (
+        "prod_clock must call ``datetime.now(...)`` in its body "
+        "(verified via AST walk; not satisfied by docstring "
+        "mentions). It is the production wiring for the v2 "
+        "runtime's clock."
     )
 
 
-def test_prod_factory_sources_call_uuid4():
-    """Mirror of the prod_clock check for the id factories:
-    each factory body must actually call ``uuid.uuid4`` so
-    the regression-detection is at the function-source level,
-    not the module-source level (which contains docstring
-    substrings)."""
+def test_prod_factory_bodies_call_uuid4():
+    """Mirror of the prod_clock AST check for the id factories.
+
+    Both factory docstrings mention ``uuid.uuid4().hex`` for
+    explanation; an ``inspect.getsource(...) "uuid.uuid4(" in
+    source`` check would pass even if the bodies were stubbed
+    to return a constant. AST walk pins the actual call."""
     for fn, name in (
         (prod_run_id_factory, "prod_run_id_factory"),
         (prod_event_id_factory, "prod_event_id_factory"),
     ):
-        source = inspect.getsource(fn)
-        assert "uuid.uuid4(" in source, (
-            f"{name} must call ``uuid.uuid4(...)`` -- it is "
-            "the production wiring for the v2 runtime's id "
-            "stream."
+        assert _function_body_calls(fn, "uuid.uuid4"), (
+            f"{name} must call ``uuid.uuid4(...)`` in its "
+            "body (verified via AST walk; not satisfied by "
+            "docstring mentions). It is the production wiring "
+            "for the v2 runtime's id stream."
         )
+
+
+def test_function_body_calls_helper_ignores_docstring():
+    """Self-test the AST helper: a function whose ONLY mention
+    of the target call is in its docstring must return False.
+    Pin so a future regression of the helper that falls back
+    to substring search would flip here."""
+    def docstring_only():
+        """Mentions datetime.now( and uuid.uuid4( only in text.
+
+        Body does nothing.
+        """
+        return None
+
+    assert _function_body_calls(docstring_only, "datetime.now") is False
+    assert _function_body_calls(docstring_only, "uuid.uuid4") is False
+
+
+def test_function_body_calls_helper_finds_real_call():
+    """Self-test the AST helper: a function that actually calls
+    the target returns True. Belt-and-braces alongside the
+    docstring-only false case above."""
+    def calls_for_real():
+        from datetime import datetime, timezone
+        return datetime.now(timezone.utc)
+
+    assert _function_body_calls(calls_for_real, "datetime.now") is True
+    # Negative: helper does not false-match a sibling attribute.
+    assert _function_body_calls(calls_for_real, "datetime.utcnow") is False
 
 
 def test_defaults_module_exposes_three_callables():
