@@ -14,6 +14,7 @@ References:
 - ``docs/PHASE_7_PLAN.md``
 """
 
+from app.v2.authoring.delivery import schedule_set_delivery
 from app.v2.authoring.drafts import (
     DEFAULT_DRAFT_BASE,
     DraftStore,
@@ -38,6 +39,7 @@ __all__ = [
     "ToolResponseStatus",
     "schedule_draft_start",
     "schedule_set_cron",
+    "schedule_set_delivery",
     "schedule_set_description",
     "schedule_set_failure_policy",
     "schedule_set_one_off",
