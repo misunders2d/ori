@@ -1148,6 +1148,194 @@ async def test_shutdown_runtime_works_against_never_activated_handle(
 
 
 @pytest.mark.asyncio
+async def test_boot_threads_slack_client_into_every_worker(
+    tmp_path, stub_binding, stub_worker_class
+):
+    """Slice-7 round-2 reviewer 🔴 BUG fix: production boot
+    MUST pass ``slack_client`` through to every Worker.
+    Without this, the slice-5 OneOffReminder emit branch is
+    dead code and reminders silently succeed without
+    ``chat_postMessage`` ever firing.
+
+    Pin: every Worker constructed in ``boot_runtime`` records
+    the same non-None ``slack_client`` reference."""
+    factory = _migrated_factory(tmp_path)
+
+    class _StubSlackClient:
+        async def chat_postMessage(self, *, channel, text):
+            return {"ok": True, "channel": channel, "ts": "1.0"}
+
+    stub_client = _StubSlackClient()
+    await boot_runtime(
+        factory,
+        worker_count=3,
+        slack_client=stub_client,
+        clock=_fixed_clock,
+        run_id_factory=_fixed_run_id,
+        event_id_factory=_fixed_evt_id,
+    )
+    # Every Worker constructor received the same client.
+    assert len(stub_worker_class.instances) == 3
+    for w in stub_worker_class.instances:
+        assert w.init_kwargs.get("slack_client") is stub_client
+
+
+@pytest.mark.asyncio
+async def test_boot_without_slack_client_passes_none_to_worker(
+    tmp_path, stub_binding, stub_worker_class
+):
+    """Backwards-compat: omitting ``slack_client`` continues
+    to pass None through (kept for phase-4 tests + the
+    empty-body fallback path)."""
+    factory = _migrated_factory(tmp_path)
+    await boot_runtime(
+        factory,
+        clock=_fixed_clock,
+        run_id_factory=_fixed_run_id,
+        event_id_factory=_fixed_evt_id,
+    )
+    assert len(stub_worker_class.instances) >= 1
+    for w in stub_worker_class.instances:
+        assert w.init_kwargs.get("slack_client") is None
+
+
+@pytest.mark.asyncio
+async def test_activate_cleans_up_workers_when_worker_n_start_fails(
+    tmp_path, stub_binding, monkeypatch
+):
+    """Slice-7 round-2 reviewer 🟡 RISK fix: if worker N's
+    ``start()`` raises during ``activate()``, the workers
+    that already started must be stopped before the
+    exception propagates. ``_activated`` must stay False so
+    the caller can retry / shutdown cleanly."""
+    factory = _migrated_factory(tmp_path)
+    started: list = []
+
+    class _FailingNthWorker:
+        instances = started
+
+        def __init__(self, **kwargs):
+            self.worker_id = kwargs.get("worker_id")
+            self.started = False
+            self.stopped = False
+            started.append(self)
+
+        async def start(self):
+            if self.worker_id == "worker-2":
+                raise RuntimeError("synthetic worker-2 start failure")
+            self.started = True
+
+        async def stop(self):
+            self.stopped = True
+
+    monkeypatch.setattr(boot_mod, "Worker", _FailingNthWorker)
+
+    handle = await boot_runtime(
+        factory,
+        autostart=False,
+        worker_count=3,
+        clock=_fixed_clock,
+        run_id_factory=_fixed_run_id,
+        event_id_factory=_fixed_evt_id,
+    )
+    # autostart=False: no workers started yet.
+    assert all(w.started is False for w in started)
+
+    with pytest.raises(RuntimeError, match="synthetic worker-2 start failure"):
+        await handle.activate()
+
+    # Workers 0 + 1 started → should now be stopped.
+    by_id = {w.worker_id: w for w in started}
+    assert by_id["worker-0"].started and by_id["worker-0"].stopped
+    assert by_id["worker-1"].started and by_id["worker-1"].stopped
+    # Worker 2 never finished starting → never stopped.
+    assert by_id["worker-2"].stopped is False
+    # binding.resume never called (we failed before).
+    stub_binding.resume.assert_not_awaited()
+    # Handle flag NOT flipped → caller can shutdown / retry.
+    assert handle._activated is False
+
+
+@pytest.mark.asyncio
+async def test_activate_cleans_up_workers_when_binding_resume_fails(
+    tmp_path, stub_worker_class, monkeypatch
+):
+    """If every worker started but ``binding.resume()``
+    raises, every started worker is stopped before the
+    exception propagates. The binding is NOT auto-stopped
+    here (caller's ``shutdown_runtime`` owns binding teardown)
+    so the handle is still usable."""
+    factory = _migrated_factory(tmp_path)
+    binding = _make_stub_binding()
+    binding.resume.side_effect = RuntimeError("synthetic resume failure")
+    monkeypatch.setattr(boot_mod, "SchedulerBinding", lambda **kw: binding)
+
+    handle = await boot_runtime(
+        factory,
+        autostart=False,
+        worker_count=2,
+        clock=_fixed_clock,
+        run_id_factory=_fixed_run_id,
+        event_id_factory=_fixed_evt_id,
+    )
+    assert all(w.started is False for w in stub_worker_class.instances)
+
+    with pytest.raises(RuntimeError, match="synthetic resume failure"):
+        await handle.activate()
+
+    # Every worker started → stopped during cleanup.
+    for w in stub_worker_class.instances:
+        assert w.started and w.stopped
+    # Handle flag NOT flipped.
+    assert handle._activated is False
+
+
+@pytest.mark.asyncio
+async def test_activate_cleanup_swallows_worker_stop_errors(
+    tmp_path, stub_binding, monkeypatch
+):
+    """If a worker's cleanup ``stop()`` itself raises during
+    activate() failure handling, the original exception
+    still propagates (the cleanup error is logged but does
+    not mask the cause)."""
+    factory = _migrated_factory(tmp_path)
+    started: list = []
+
+    class _WorkerWithFailingStop:
+        instances = started
+
+        def __init__(self, **kwargs):
+            self.worker_id = kwargs.get("worker_id")
+            self.started = False
+            self.stopped = False
+            started.append(self)
+
+        async def start(self):
+            if self.worker_id == "worker-1":
+                raise RuntimeError("synthetic worker-1 start failure")
+            self.started = True
+
+        async def stop(self):
+            # Cleanup of started worker-0 itself raises.
+            raise RuntimeError("synthetic stop failure on cleanup")
+
+    monkeypatch.setattr(boot_mod, "Worker", _WorkerWithFailingStop)
+    handle = await boot_runtime(
+        factory,
+        autostart=False,
+        worker_count=2,
+        clock=_fixed_clock,
+        run_id_factory=_fixed_run_id,
+        event_id_factory=_fixed_evt_id,
+    )
+
+    with pytest.raises(RuntimeError, match="synthetic worker-1 start failure"):
+        await handle.activate()
+    # Handle flag NOT flipped despite cleanup turbulence.
+    assert handle._activated is False
+
+
+@pytest.mark.asyncio
 async def test_boot_step_ordering_preserved_when_autostart_false(
     tmp_path, stub_binding, stub_worker_class
 ):

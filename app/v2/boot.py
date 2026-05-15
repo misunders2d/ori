@@ -37,7 +37,9 @@ import logging
 import os
 import sqlite3
 from pathlib import Path
+from typing import Optional
 
+from app.v2.emit.slack_reminder import SlackProtocol
 from app.v2.migrations.runner import apply_pending
 from app.v2.runtime.boot import RuntimeHandle, boot_runtime
 
@@ -69,7 +71,11 @@ def _open_conn(db_path: str) -> sqlite3.Connection:
     return conn
 
 
-async def boot_v2_runtime(db_path: str) -> RuntimeHandle:
+async def boot_v2_runtime(
+    db_path: str,
+    *,
+    slack_client: Optional[SlackProtocol] = None,
+) -> RuntimeHandle:
     """Bootstrap the v2 scheduler from ``run_bot.py``.
 
     Args:
@@ -77,6 +83,15 @@ async def boot_v2_runtime(db_path: str) -> RuntimeHandle:
             SQLite file backing the v2 ``schedules`` /
             ``runs`` / ``events`` tables. Created + WAL-
             migrated on first boot.
+        slack_client: Optional :class:`SlackProtocol`
+            implementation threaded into every Worker.
+            Production callers MUST supply a non-None
+            client -- otherwise the slice-5 OneOffReminder
+            emit branch is dead code and reminders silently
+            succeed without ``chat_postMessage`` ever
+            firing (slice-7 round-2 reviewer 🔴 fix). The
+            wrapper passes this straight through to
+            :func:`boot_runtime`.
 
     Returns: A :class:`RuntimeHandle` with
         ``_activated=False``. The caller MUST drive
@@ -105,7 +120,11 @@ async def boot_v2_runtime(db_path: str) -> RuntimeHandle:
     def conn_factory() -> sqlite3.Connection:
         return _open_conn(db_path)
 
-    handle = await boot_runtime(conn_factory, autostart=False)
+    handle = await boot_runtime(
+        conn_factory,
+        autostart=False,
+        slack_client=slack_client,
+    )
     return handle
 
 

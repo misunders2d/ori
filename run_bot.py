@@ -249,10 +249,25 @@ async def main():
     # If v2 boot fails (migration error, locked db, etc.) we
     # log + continue with v1 only -- v2 is additive in phase
     # 9 and a failure here must NOT brick the daemon.
+    #
+    # The LazySlackTransportClient is built BEFORE boot so
+    # every Worker receives a non-None ``slack_client``;
+    # without this the slice-5 OneOffReminder emit branch is
+    # dead code and reminders silently succeed without
+    # chat_postMessage ever firing (slice-7 round-2
+    # reviewer 🔴 fix). The client reads SLACK_BOT_TOKEN at
+    # emit time so a hot-reloaded token surfaces without
+    # re-boot.
     v2_handle = None
+    v2_slack_client = None
     try:
         from app.v2.boot import boot_v2_runtime
-        v2_handle = await boot_v2_runtime(_V2_STATE_DB_PATH)
+        from app.v2.transports.slack import LazySlackTransportClient
+        v2_slack_client = LazySlackTransportClient()
+        v2_handle = await boot_v2_runtime(
+            _V2_STATE_DB_PATH,
+            slack_client=v2_slack_client,
+        )
     except Exception as exc:
         logger.warning(
             "v2 runtime boot failed (continuing with v1 only): %s",
@@ -438,6 +453,15 @@ async def main():
                 await shutdown_runtime(v2_handle)
             except Exception as exc:
                 logger.warning("v2 runtime shutdown failed: %s", exc)
+        # Release the Slack transport's httpx pool. Safe to
+        # call even when no request was ever made.
+        if v2_slack_client is not None:
+            try:
+                await v2_slack_client.close()
+            except Exception as exc:
+                logger.warning(
+                    "v2 slack client close failed: %s", exc
+                )
         scheduler.shutdown()
 
         # Clear crash file on clean exit (0), update (100) or rollback (101)

@@ -117,3 +117,45 @@ async def test_handle_workers_unstarted_until_activate(tmp_path):
     finally:
         from app.v2.runtime.boot import shutdown_runtime
         await shutdown_runtime(handle)
+
+
+@pytest.mark.asyncio
+async def test_slack_client_threaded_into_every_worker(tmp_path):
+    """Slice-7 round-2 reviewer 🔴 fix: the wrapper MUST
+    thread its ``slack_client`` kwarg through to every
+    Worker. Without this, production reminders silently
+    succeed without ``chat_postMessage`` firing."""
+
+    class _StubSlackClient:
+        async def chat_postMessage(self, *, channel, text):
+            return {"ok": True}
+
+    stub = _StubSlackClient()
+    db_path = str(tmp_path / "v2-state.db")
+    handle = await boot_v2_runtime(db_path, slack_client=stub)
+    try:
+        assert len(handle.workers) >= 1
+        for w in handle.workers:
+            # Worker stores the client on ``_slack_client``;
+            # pinning the private attr is acceptable because
+            # the emit-branch dispatch reads it as the worker
+            # contract (slice 5 reviewer pin pattern).
+            assert w._slack_client is stub
+    finally:
+        from app.v2.runtime.boot import shutdown_runtime
+        await shutdown_runtime(handle)
+
+
+@pytest.mark.asyncio
+async def test_wrapper_without_slack_client_passes_none(tmp_path):
+    """Backwards-compat: omitting the kwarg keeps
+    ``_slack_client=None`` on every worker (phase-4 empty-
+    body fallback)."""
+    db_path = str(tmp_path / "v2-state.db")
+    handle = await boot_v2_runtime(db_path)
+    try:
+        for w in handle.workers:
+            assert w._slack_client is None
+    finally:
+        from app.v2.runtime.boot import shutdown_runtime
+        await shutdown_runtime(handle)

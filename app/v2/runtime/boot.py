@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Callable, Optional, Union
 
+from app.v2.emit.slack_reminder import SlackProtocol
 from app.v2.models.triggers import OneOffTrigger
 from app.v2.runtime._defaults import (
     prod_clock,
@@ -128,6 +129,19 @@ class RuntimeHandle:
         available to claim the resulting Run row -- avoids
         the race where a misfire_grace_time replay fires the
         instant resume() returns but no worker is yet polling.
+
+        Cleanup-on-failure (slice-7 round-2 reviewer
+        🟡 RISK fix): if a ``worker.start()`` call OR the
+        final ``binding.resume()`` raises, every worker that
+        already started in this call is stopped before the
+        exception propagates. The binding is left paused
+        (resume either never fired OR failed mid-way); the
+        ``_activated`` flag stays ``False`` so the caller
+        can retry ``activate()`` after fixing the failure --
+        or invoke ``shutdown_runtime`` to tear everything
+        down. Without this cleanup, a mid-pool failure would
+        leak running workers polling against an inconsistent
+        state.
         """
         if self._activated:
             raise RuntimeAlreadyActivatedError(
@@ -137,9 +151,27 @@ class RuntimeHandle:
                 "returning; pass autostart=False to defer "
                 "activation until transports are ready."
             )
-        for worker in self.workers:
-            await worker.start()
-        await self.binding.resume()
+        started: list[Worker] = []
+        try:
+            for worker in self.workers:
+                await worker.start()
+                started.append(worker)
+            await self.binding.resume()
+        except BaseException:
+            # Stop already-started workers before re-raising
+            # so the caller never sees orphaned poll loops.
+            # Per-worker stop() failures are logged but do
+            # NOT mask the original exception.
+            for worker in started:
+                try:
+                    await worker.stop()
+                except Exception:
+                    _logger.exception(
+                        "runtime.activate.cleanup: worker.stop "
+                        "failed for worker_id=%r",
+                        worker.worker_id,
+                    )
+            raise
         self._activated = True
         _logger.info("runtime.boot.activated")
 
@@ -186,6 +218,7 @@ async def boot_runtime(
     clock: Callable[[], datetime] = prod_clock,
     run_id_factory: Callable[[], str] = prod_run_id_factory,
     event_id_factory: Callable[[], str] = prod_event_id_factory,
+    slack_client: Optional[SlackProtocol] = None,
 ) -> RuntimeHandle:
     """Run the v2 runtime startup sequence.
 
@@ -210,6 +243,16 @@ async def boot_runtime(
             activation via ``RuntimeHandle.activate()`` once
             Slack / Telegram transports are ready (phase 9
             round-3 reviewer L311 + L320 fix).
+        slack_client: Optional :class:`SlackProtocol`
+            implementation threaded into every Worker. When
+            ``None`` (default), workers fall back to the
+            phase-4 empty-execution body (kept for backwards-
+            compat with phase-4 tests). Production callers
+            MUST pass a non-None client -- otherwise the
+            slice-5 OneOffReminder emit branch is dead code
+            and reminders silently succeed without
+            ``chat_postMessage`` ever firing (slice-7 round-2
+            reviewer fix).
 
     Raises:
         RuntimeBootError: ``abort_on_recovery_errors=True``
@@ -444,6 +487,7 @@ async def boot_runtime(
                     run_id_factory=run_id_factory,
                     event_id_factory=event_id_factory,
                     claim_batch_size=claim_batch_size,
+                    slack_client=slack_client,
                 )
                 if autostart:
                     await worker.start()
