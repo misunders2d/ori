@@ -383,13 +383,13 @@ async def test_tick_on_paused_schedule_does_not_claim(tmp_path):
 
 @pytest.mark.asyncio
 async def test_paused_oldest_does_not_starve_active_newer(tmp_path):
-    """Reviewer round-4 blocker 1 regression.
+    """Reviewer round-4 starvation regression.
 
     Schedule A is paused; its pending row has the oldest
     due_at. Schedule B is active; its pending row is newer.
-    With a single-row read the tick would forever try to claim
-    the paused row at the head of the queue. The batched scan
-    must step past the refused paused row and claim B's run."""
+    The claimable-due read filters the paused row out of the
+    batch entirely, so the tick processes B's run on its
+    first attempt."""
     seed = _migrate(tmp_path)
     _seed_schedule(seed, schedule_id="paused_sched", status="paused")
     _seed_schedule(seed, schedule_id="active_sched", status="active")
@@ -408,13 +408,63 @@ async def test_paused_oldest_does_not_starve_active_newer(tmp_path):
         due_at=newer,
     )
     seed.commit()
-    worker, _ = _make_worker(_conn_factory_for(tmp_path))
+    worker, counters = _make_worker(_conn_factory_for(tmp_path))
     result = await worker.tick()
     assert result == "active-new"
     assert _status(seed, "active-new") == "succeeded"
     # Paused row stays pending — recovery / pause-policy phase
     # owns explicit cancellation.
     assert _status(seed, "paused-old") == "pending"
+    # No wasted event ids: the pre-filter dropped paused-old
+    # so claim_run was only invoked for active-new (1 claim +
+    # 1 run_started + 1 run_succeeded = 3 ids).
+    assert counters["evt"]["i"] == 3
+
+
+@pytest.mark.asyncio
+async def test_eleven_blocked_older_does_not_starve_active(tmp_path):
+    """Reviewer round-5 starvation regression.
+
+    With the default ``claim_batch_size=10`` and ELEVEN
+    paused-schedule pending rows older than the one active
+    row, a naive bounded-batch reader would only see the 11
+    blocked rows every tick and the active row would starve
+    forever. The claimable-due pre-filter rejects all 11
+    blocked rows at the SQL layer, so the batch contains only
+    the active row and the tick processes it on the first
+    attempt."""
+    seed = _migrate(tmp_path)
+    _seed_schedule(seed, schedule_id="paused_sched", status="paused")
+    _seed_schedule(seed, schedule_id="active_sched", status="active")
+    # 11 older pending rows on the paused schedule.
+    for i in range(11):
+        due = _NOW - timedelta(minutes=60 - i)
+        _seed_run(
+            seed,
+            run_id=f"paused-{i:02d}",
+            schedule_id="paused_sched",
+            due_at=due,
+        )
+    # One newer pending row on the active schedule.
+    _seed_run(
+        seed,
+        run_id="active-new",
+        schedule_id="active_sched",
+        due_at=_NOW - timedelta(minutes=1),
+    )
+    seed.commit()
+    # Use the default claim_batch_size=10 — that's the value
+    # the round-5 reviewer pointed at.
+    worker, counters = _make_worker(_conn_factory_for(tmp_path))
+    result = await worker.tick()
+    assert result == "active-new"
+    assert _status(seed, "active-new") == "succeeded"
+    # All 11 paused rows untouched.
+    for i in range(11):
+        assert _status(seed, f"paused-{i:02d}") == "pending"
+    # No wasted event ids — pre-filter dropped all blocked
+    # rows; only the active row's lifecycle consumed ids.
+    assert counters["evt"]["i"] == 3
 
 
 @pytest.mark.asyncio

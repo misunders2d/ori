@@ -571,15 +571,27 @@ class Worker:
         await worker.stop()    # cooperative shutdown
 
     Per-tick:
-        1. list_pending_due(now=clock(), limit=1)
-        2. claim_run(..., now=clock(), event_id=event_id_factory())
-        3. on True: mark_run_status(claimed → running) via
-           update_run_status_and_append_event with
-           kind=run_started, event id from event_id_factory().
+        1. list_claimable_due(now=clock(), limit=claim_batch_size)
+           — see §6.1.1 for the deviation from the original
+           `list_pending_due(limit=1)` design.
+        2. For each candidate in the batch (in due_at order):
+           call claim_run(..., now=clock(),
+           event_id=event_id_factory()). Stop on the first
+           successful claim. Refusals here are race losses
+           only (the §6.1.1 pre-filter eliminates structural
+           refusal cases) — the tick walks to the next
+           candidate.
+        3. on True: update_run_status_and_append_event walks
+           the row claimed → running with kind=run_started,
+           event id from event_id_factory(), and stamps
+           started_at=clock(). Gated by
+           assert_legal_transition(CLAIMED, RUNNING).
         4. (empty body — await asyncio.sleep(0))
-        5. update_run_status_and_append_event(running →
-           succeeded, kind=run_succeeded, event id from
-           event_id_factory()).
+        5. update_run_status_and_append_event walks running →
+           succeeded with kind=run_succeeded, event id from
+           event_id_factory(), and stamps
+           completed_at=clock(). Gated by
+           assert_legal_transition(RUNNING, SUCCEEDED).
         6. Sleep poll_interval.
         7. Exit cleanly when stop() called.
 
@@ -587,6 +599,45 @@ class Worker:
     is a no-op marker for the lifecycle to flow through.
     """
 ```
+
+### 6.1.1 Claimable-due pre-filter (round-5 deviation)
+
+The original plan said `list_pending_due(limit=1)`. That
+turned out to be load-bearing for starvation: a non-claimable
+row at the head of the pending queue (paused/archived
+schedule, or same-schedule already claimed/running) would
+re-appear on every tick and the worker would never reach
+active pending rows behind it. Bumping to a bounded batch
+narrowed but did not fix the bug — N+1 blocked rows still
+starve everything behind them.
+
+The fix (per reviewer round-5):
+
+1. Phase 3 storage layer gains
+   ``list_claimable_due(conn, *, now, limit)`` — strictly
+   stronger than ``list_pending_due``. SQL filters add
+   ``EXISTS schedules WHERE status='active'`` and
+   ``NOT EXISTS runs r2 WHERE r2.schedule_id =
+   runs.schedule_id AND r2.id != runs.id AND r2.status IN
+   ('claimed', 'running')`` — exactly the predicates
+   ``claim_run`` itself enforces.
+2. Worker constructor gains
+   ``claim_batch_size: int = 10`` (must be >= 1). The tick
+   reads up to that many claimable-due rows and walks the
+   batch in due_at order until ``claim_run`` succeeds. The
+   batch is purely for race resilience now — non-claimable
+   rows never enter it at the SQL layer.
+3. ``claim_run`` remains the race-safe final gate. Refusals
+   inside the worker loop are race losses (another worker
+   won between our read and our claim) — not structural
+   blocks.
+
+Regression tests pin both halves: a storage-level set
+asserts ``list_claimable_due`` filters paused / archived /
+single-flight-blocked rows; a worker-level test seeds 11
+paused-older pending rows + 1 active-newer row with the
+default ``claim_batch_size=10`` and asserts the worker still
+processes the active row on the first tick.
 
 ### 6.2 Wakeup callback
 

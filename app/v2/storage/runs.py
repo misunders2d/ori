@@ -27,7 +27,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from app.v2.enums import RunStatus
+from app.v2.enums import RunStatus, ScheduleStatus
 from app.v2.models.run import Run
 from app.v2.storage.connection import assert_connection_ready
 from app.v2.storage.serialization import NaiveDatetimeError
@@ -253,6 +253,89 @@ def list_pending_due(
     return [_row_to_run(row) for row in rows]
 
 
+def list_claimable_due(
+    conn: sqlite3.Connection,
+    *,
+    now: datetime,
+    limit: int,
+) -> list[Run]:
+    """Return pending runs that COULD be claimed right now.
+
+    Strictly stronger filter than :func:`list_pending_due`. In
+    addition to ``status='pending' AND due_at <= now``, this
+    query rejects:
+
+    - pending rows whose owning schedule is paused or archived
+      (only ``schedules.status='active'`` qualifies; matches
+      ``claim_run``'s schedule-status predicate);
+    - pending rows on a schedule that already has a
+      ``claimed`` or ``running`` row (matches ``claim_run``'s
+      single-flight ``NOT EXISTS`` predicate, including the
+      ``r2.id != runs.id`` self-exclusion clause).
+
+    The worker uses this read instead of
+    :func:`list_pending_due` so a non-claimable row at the head
+    of the pending queue cannot starve active rows behind it.
+    Without this filter, the worker would batch-read the
+    oldest pending rows, every claim attempt would refuse, and
+    the same blocked head-of-queue rows would be re-read each
+    tick — pending rows further back would never execute. The
+    reviewer round-5 starvation scenario (11 paused-older +
+    1 active-newer with a 10-row batch cap) is exactly this
+    failure mode.
+
+    This is a TIME-OF-CHECK read. ``claim_run`` remains the
+    race-safe gate: a row returned here can still be lost to
+    another worker that claims first. The worker handles
+    refusal by skipping to the next row in the batch.
+
+    ``now`` MUST be timezone-aware (rejected as
+    ``NaiveDatetimeError`` otherwise); ``limit`` MUST be >= 1
+    (``ValueError`` otherwise — same guard as
+    :func:`list_pending_due`).
+    """
+    assert_connection_ready(conn)
+    if now.tzinfo is None:
+        raise NaiveDatetimeError(
+            f"naive datetime in now: {now!r} — "
+            "list_claimable_due requires a timezone-aware "
+            "cursor so the comparison against stored "
+            "ISO-with-offset timestamps is well-defined."
+        )
+    if limit < 1:
+        raise ValueError(
+            f"limit must be >= 1; got {limit}. SQLite treats "
+            "LIMIT -1 as 'no limit', and a 0 / negative limit "
+            "almost certainly indicates a caller bug."
+        )
+
+    rows = conn.execute(
+        f"{_SELECT_SQL} "
+        "WHERE status = ? AND due_at <= ? "
+        "AND EXISTS ("
+        "    SELECT 1 FROM schedules s "
+        "    WHERE s.id = runs.schedule_id "
+        "    AND s.status = ?"
+        ") "
+        "AND NOT EXISTS ("
+        "    SELECT 1 FROM runs r2 "
+        "    WHERE r2.schedule_id = runs.schedule_id "
+        "    AND r2.id != runs.id "
+        "    AND r2.status IN (?, ?)"
+        ") "
+        "ORDER BY due_at ASC LIMIT ?",
+        (
+            RunStatus.PENDING.value,
+            now.astimezone(timezone.utc).isoformat(),
+            ScheduleStatus.ACTIVE.value,
+            RunStatus.CLAIMED.value,
+            RunStatus.RUNNING.value,
+            limit,
+        ),
+    ).fetchall()
+    return [_row_to_run(row) for row in rows]
+
+
 def list_runs_in_chain(
     conn: sqlite3.Connection,
     root_run_id: str,
@@ -343,6 +426,7 @@ __all__ = [
     "ALLOWED_EXTRA_RUN_COLUMNS",
     "insert_run",
     "get_run",
+    "list_claimable_due",
     "list_pending_due",
     "list_runs_in_chain",
     "mark_run_status",

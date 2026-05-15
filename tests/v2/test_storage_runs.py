@@ -45,6 +45,7 @@ from app.v2.storage.runs import (
     ALLOWED_EXTRA_RUN_COLUMNS,
     get_run,
     insert_run,
+    list_claimable_due,
     list_pending_due,
     list_runs_in_chain,
     mark_run_status,
@@ -303,6 +304,271 @@ def test_list_pending_due_rejects_naive_now(tmp_path):
 def test_list_pending_due_empty(tmp_path):
     conn = _migrate(tmp_path)
     assert list_pending_due(conn, now=_NOW, limit=10) == []
+
+
+# ===========================================================================
+# list_claimable_due — stricter sibling of list_pending_due used
+# by the phase-4 worker. Mirrors claim_run's predicates so
+# non-claimable rows never reach the worker batch in the first
+# place (reviewer round-5 starvation fix).
+# ===========================================================================
+
+
+def _seed_paused_schedule(conn, schedule_id="paused_sched"):
+    conn.execute(
+        "INSERT INTO schedules "
+        "(id, owner, description, trigger_json, delivery_json, "
+        " failure_json, audit_json, status, authored_at, hash) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            schedule_id,
+            "{}",
+            "test paused schedule",
+            "{}",
+            "{}",
+            "{}",
+            "{}",
+            "paused",
+            _NOW.isoformat(),
+            f"hash-{schedule_id}",
+        ),
+    )
+
+
+def _seed_archived_schedule(conn, schedule_id="archived_sched"):
+    conn.execute(
+        "INSERT INTO schedules "
+        "(id, owner, description, trigger_json, delivery_json, "
+        " failure_json, audit_json, status, authored_at, hash) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            schedule_id,
+            "{}",
+            "test archived schedule",
+            "{}",
+            "{}",
+            "{}",
+            "{}",
+            "archived",
+            _NOW.isoformat(),
+            f"hash-{schedule_id}",
+        ),
+    )
+
+
+def test_list_claimable_due_returns_same_as_pending_when_unblocked(tmp_path):
+    """With no blocking conditions the two queries return the
+    same rows in the same order."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn)
+    for i, rid in enumerate(["r-a", "r-b", "r-c"]):
+        insert_run(
+            conn,
+            _baseline_run(
+                id=rid,
+                root_run_id=rid,
+                due_at=_NOW - timedelta(seconds=10 - i),
+            ),
+        )
+    pending = list_pending_due(conn, now=_NOW, limit=10)
+    claimable = list_claimable_due(conn, now=_NOW, limit=10)
+    assert [r.id for r in claimable] == [r.id for r in pending]
+
+
+def test_list_claimable_due_excludes_paused_schedule_pending(tmp_path):
+    """A pending row on a paused schedule must NOT appear —
+    claim_run's schedule-status predicate would refuse it. The
+    worker pre-filter mirrors that here."""
+    conn = _migrate(tmp_path)
+    _seed_paused_schedule(conn)
+    insert_run(
+        conn,
+        _baseline_run(
+            id="paused-pending",
+            schedule_id="paused_sched",
+            root_run_id="paused-pending",
+        ),
+    )
+    assert list_claimable_due(conn, now=_NOW, limit=10) == []
+
+
+def test_list_claimable_due_excludes_archived_schedule_pending(tmp_path):
+    conn = _migrate(tmp_path)
+    _seed_archived_schedule(conn)
+    insert_run(
+        conn,
+        _baseline_run(
+            id="archived-pending",
+            schedule_id="archived_sched",
+            root_run_id="archived-pending",
+        ),
+    )
+    assert list_claimable_due(conn, now=_NOW, limit=10) == []
+
+
+def test_list_claimable_due_excludes_pending_when_other_run_claimed(tmp_path):
+    """Schedule already has a claimed row on it. The pending
+    row on the SAME schedule is single-flight-blocked and must
+    NOT appear."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn)
+    insert_run(
+        conn,
+        _baseline_run(
+            id="r-claimed",
+            root_run_id="r-claimed",
+            status=RunStatus.CLAIMED,
+            claimed_by="other-worker",
+            claimed_at=_NOW,
+            due_at=_NOW - timedelta(seconds=60),
+        ),
+    )
+    insert_run(
+        conn,
+        _baseline_run(
+            id="r-pending",
+            root_run_id="r-pending",
+            due_at=_NOW - timedelta(seconds=30),
+        ),
+    )
+    rows = list_claimable_due(conn, now=_NOW, limit=10)
+    assert rows == []
+
+
+def test_list_claimable_due_excludes_pending_when_other_run_running(tmp_path):
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn)
+    insert_run(
+        conn,
+        _baseline_run(
+            id="r-running",
+            root_run_id="r-running",
+            status=RunStatus.RUNNING,
+            started_at=_NOW,
+            due_at=_NOW - timedelta(seconds=60),
+        ),
+    )
+    insert_run(
+        conn,
+        _baseline_run(
+            id="r-pending",
+            root_run_id="r-pending",
+            due_at=_NOW - timedelta(seconds=30),
+        ),
+    )
+    assert list_claimable_due(conn, now=_NOW, limit=10) == []
+
+
+def test_list_claimable_due_returns_pending_on_different_schedule(tmp_path):
+    """Single-flight is per-schedule. A claimed row on schedule
+    A must not hide a pending row on schedule B."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn, schedule_id="sched_a")
+    _seed_schedule(conn, schedule_id="sched_b")
+    insert_run(
+        conn,
+        _baseline_run(
+            id="a-claimed",
+            schedule_id="sched_a",
+            root_run_id="a-claimed",
+            status=RunStatus.CLAIMED,
+            claimed_by="w",
+            claimed_at=_NOW,
+        ),
+    )
+    insert_run(
+        conn,
+        _baseline_run(
+            id="b-pending",
+            schedule_id="sched_b",
+            root_run_id="b-pending",
+        ),
+    )
+    rows = list_claimable_due(conn, now=_NOW, limit=10)
+    assert [r.id for r in rows] == ["b-pending"]
+
+
+def test_list_claimable_due_does_not_block_pending_by_terminal_siblings(tmp_path):
+    """Failed / succeeded / cancelled siblings do NOT block a
+    pending row — they're terminal, not in-flight."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn)
+    for prior_id, prior_status in [
+        ("r-failed", RunStatus.FAILED),
+        ("r-succeeded", RunStatus.SUCCEEDED),
+        ("r-cancelled", RunStatus.CANCELLED),
+    ]:
+        insert_run(
+            conn,
+            _baseline_run(
+                id=prior_id,
+                root_run_id=prior_id,
+                status=prior_status,
+                due_at=_NOW - timedelta(seconds=60),
+            ),
+        )
+    insert_run(
+        conn,
+        _baseline_run(
+            id="r-pending",
+            root_run_id="r-pending",
+            due_at=_NOW - timedelta(seconds=30),
+        ),
+    )
+    rows = list_claimable_due(conn, now=_NOW, limit=10)
+    assert [r.id for r in rows] == ["r-pending"]
+
+
+def test_list_claimable_due_orders_by_due_at_asc(tmp_path):
+    """Same order contract as list_pending_due — oldest due
+    row first so the worker drains the queue head-first."""
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn)
+    for rid, offset_sec in [("r-c", 1), ("r-a", 30), ("r-b", 15)]:
+        insert_run(
+            conn,
+            _baseline_run(
+                id=rid,
+                root_run_id=rid,
+                due_at=_NOW - timedelta(seconds=offset_sec),
+            ),
+        )
+    rows = list_claimable_due(conn, now=_NOW, limit=10)
+    assert [r.id for r in rows] == ["r-a", "r-b", "r-c"]
+
+
+def test_list_claimable_due_respects_limit(tmp_path):
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn)
+    for i in range(5):
+        insert_run(
+            conn,
+            _baseline_run(
+                id=f"r-{i}",
+                root_run_id=f"r-{i}",
+                due_at=_NOW - timedelta(seconds=i),
+            ),
+        )
+    assert len(list_claimable_due(conn, now=_NOW, limit=3)) == 3
+
+
+def test_list_claimable_due_rejects_naive_now(tmp_path):
+    conn = _migrate(tmp_path)
+    naive = datetime(2026, 5, 15, 9, 0)
+    with pytest.raises(NaiveDatetimeError, match="now"):
+        list_claimable_due(conn, now=naive, limit=10)
+
+
+def test_list_claimable_due_rejects_zero_or_negative_limit(tmp_path):
+    conn = _migrate(tmp_path)
+    for bad in (0, -1):
+        with pytest.raises(ValueError, match="limit"):
+            list_claimable_due(conn, now=_NOW, limit=bad)
+
+
+def test_list_claimable_due_empty(tmp_path):
+    conn = _migrate(tmp_path)
+    assert list_claimable_due(conn, now=_NOW, limit=10) == []
 
 
 # ---------------------------------------------------------------------------

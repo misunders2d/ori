@@ -12,19 +12,21 @@ Phase 4's execution body is intentionally empty (literally
 external I/O. Real execution lands in phases 9-11.
 
 Per-tick:
-  1. ``list_pending_due(conn, now=clock(), limit=
-     claim_batch_size)``. Reads up to N oldest-due pending
-     rows in one go so the worker can step past pending rows
-     that aren't currently claimable (inactive schedule,
-     same-schedule already claimed/running). Reviewer
-     round-4 blocker: a single-row read would have let the
-     oldest blocked row starve every active pending row
-     behind it on subsequent ticks.
+  1. ``list_claimable_due(conn, now=clock(),
+     limit=claim_batch_size)``. Pre-filtered read that matches
+     ``claim_run``'s predicates: ``status='pending'``,
+     ``due_at <= now``, owning schedule is ``active``, and no
+     other run on the schedule is currently ``claimed`` or
+     ``running``. Without the pre-filter (reviewer round-4 /
+     round-5 starvation), non-claimable rows at the head of
+     the pending queue would block every active row behind
+     them every tick.
   2. Walk the batch in due_at order, calling ``claim_run``
-     on each. Refusals (lost race, status mismatch, inactive
-     schedule, same-schedule single-flight) skip to the next
-     candidate. The tick still claims AT MOST ONE row —
-     iteration stops on the first successful claim.
+     on each. Refusals are now only race-loss events (another
+     worker claimed the row between our read and our claim)
+     — the pre-filter eliminates the structural refusal
+     cases. The tick still claims AT MOST ONE row — iteration
+     stops on the first successful claim.
   3. State-machine gate: ``claimed → running``. Then
      ``update_run_status_and_append_event`` writes the
      ``run_started`` event in the same TX as the UPDATE.
@@ -70,7 +72,7 @@ from app.v2.enums import EventKind, RunStatus
 from app.v2.models.event import Event
 from app.v2.runtime.claim import claim_run
 from app.v2.runtime.state_machine import assert_legal_transition
-from app.v2.storage.runs import list_pending_due
+from app.v2.storage.runs import list_claimable_due
 from app.v2.storage.transactions import update_run_status_and_append_event
 
 
@@ -102,10 +104,12 @@ class Worker:
     written into ``runs.claimed_by`` and into every emitted
     event's payload, so the audit ledger can attribute work.
     ``claim_batch_size`` (>= 1, default 10) bounds the per-tick
-    read of pending rows: the tick scans up to this many in
-    due_at order and tries each until one claim succeeds, so a
-    non-claimable head-of-queue row cannot starve active rows
-    behind it.
+    read of claimable pending rows. The read itself filters out
+    structurally non-claimable rows (paused/archived schedule,
+    same-schedule already claimed/running) so head-of-queue
+    starvation cannot occur. The batch only matters for race
+    resilience — if another worker claims a candidate first,
+    the tick walks the rest of the batch before sleeping.
     """
 
     def __init__(
@@ -222,15 +226,18 @@ class Worker:
         self, conn: sqlite3.Connection
     ) -> Optional[str]:
         now = self._clock()
-        # Batch read so the worker can step past pending rows
-        # that aren't claimable right now (inactive schedule,
-        # same-schedule already claimed/running). Without this,
-        # the oldest blocked row at the head of the queue would
-        # starve every active row behind it on subsequent ticks
-        # — reviewer round-4 blocker. The tick still claims AT
-        # MOST one row: we stop iterating as soon as one claim
-        # succeeds.
-        pending = list_pending_due(
+        # ``list_claimable_due`` returns ONLY rows that pass
+        # the same predicates ``claim_run`` enforces (active
+        # schedule, no other claimed/running on the schedule)
+        # — paused/archived rows and single-flight-blocked
+        # rows never appear in the batch. Without this filter
+        # an unbounded run of blocked head-of-queue rows would
+        # starve active rows behind them every tick (reviewer
+        # round-5 blocker). ``claim_run`` is still the race-
+        # safe gate: another worker may claim a row between
+        # this read and our claim attempt, in which case the
+        # tick walks to the next candidate in the batch.
+        pending = list_claimable_due(
             conn, now=now, limit=self._claim_batch_size
         )
         if not pending:
@@ -251,10 +258,13 @@ class Worker:
                 run = candidate
                 claim_event_id = candidate_event_id
                 break
-            # Refused (lost race / single-flight / inactive
-            # schedule). The id we generated for this attempt
-            # is discarded — claim_run never wrote it. Try the
-            # next candidate.
+            # Refused. With the claimable-due pre-filter in
+            # step 1, the structural refusal cases (inactive
+            # schedule, same-schedule already claimed/running)
+            # don't appear here — refusal at this point means
+            # another worker won a race in the gap between our
+            # read and our claim. The generated event_id is
+            # discarded; claim_run never wrote it.
         if run is None:
             return None
 
