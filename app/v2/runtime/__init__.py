@@ -21,6 +21,14 @@ from app.v2.runtime._defaults import (
     prod_run_id_factory,
 )
 from app.v2.runtime.binding import SchedulerBinding
+from app.v2.runtime.boot import (
+    BackfilledOneOff,
+    RegistrationError,
+    RuntimeBootError,
+    RuntimeHandle,
+    boot_runtime,
+    shutdown_runtime,
+)
 from app.v2.runtime.claim import claim_run
 from app.v2.runtime.cron_guard import reject_numeric_dow
 from app.v2.runtime.recovery import (
@@ -39,13 +47,18 @@ from app.v2.runtime.worker import Worker
 
 
 __all__ = [
+    "BackfilledOneOff",
     "IllegalTransitionError",
     "LEGAL_TRANSITIONS",
     "RecoveredRun",
     "RecoveryError",
+    "RegistrationError",
+    "RuntimeBootError",
+    "RuntimeHandle",
     "SchedulerBinding",
     "Worker",
     "assert_legal_transition",
+    "boot_runtime",
     "claim_run",
     "is_legal_transition",
     "prod_clock",
@@ -53,5 +66,6 @@ __all__ = [
     "prod_run_id_factory",
     "reject_numeric_dow",
     "scan_stale_runs",
+    "shutdown_runtime",
     "wakeup",
 ]

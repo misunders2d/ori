@@ -349,9 +349,14 @@ class SchedulerBinding:
           (same per-type messages as ``wakeup`` uses).
 
         The APScheduler job id == ``spec.id`` so callers can
-        ``unregister(spec.id)`` directly. ``args=[spec.id]``
-        is passed so APScheduler calls ``_fire_for(spec.id)``
-        at fire time.
+        ``unregister(spec.id)`` directly. The six-element
+        ``args`` list (``[spec.id, wakeup_callable,
+        conn_factory, clock, run_id_factory,
+        event_id_factory]``) is passed so APScheduler calls
+        the MODULE-LEVEL ``_fire_for`` with the same shape
+        at fire time -- see the module docstring for why
+        the callback is module-level and not a bound
+        method.
 
         ``replace_existing=True`` -- registering the same
         schedule_id twice is idempotent. The OneOff
