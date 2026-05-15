@@ -99,10 +99,15 @@ def wakeup(
       layer's job; phase-4 wakeup itself never dedups —
       calling it twice on a still-active past OneOff would
       create two Run rows.
-    - ``CronTrigger``: raises ``NotImplementedError`` (slice 5b).
+    - ``CronTrigger``: fires when ``now`` aligns exactly with
+      a cron fire instant via APScheduler's forward
+      ``get_next_fire_time(None, now_local)``. Raises
+      ``ValueError`` for numeric day-of-week, unknown
+      timezone, or a cron expression APScheduler refuses.
     - ``IntervalTrigger`` / ``EventTrigger`` /
       ``ConditionalTrigger``: raise ``NotImplementedError``
-      with explicit per-type message.
+      with explicit per-type message — these stay unwired
+      through phase 4.
 
     Args:
         conn: caller-owned migrated SQLite connection. MUST NOT
@@ -121,8 +126,14 @@ def wakeup(
     Raises:
         NaiveDatetimeError: ``now`` was naive.
         ConnectionNotReady: bad connection state.
-        NotImplementedError: trigger type is not wired in
-            phase 4 slice 5a.
+        ValueError: cron expression is invalid, the cron's
+            day-of-week field contains a digit (numeric DOW
+            is rejected per the slice-5b name-only constraint),
+            or the trigger's timezone string cannot be
+            resolved by ``ZoneInfo``.
+        NotImplementedError: trigger type is ``interval``,
+            ``event``, or ``conditional`` (these stay unwired
+            through phase 4).
 
     Notes on schedule-status TOCTOU: both the
     ``get_schedule`` read and the subsequent inserts run
@@ -289,10 +300,24 @@ def _reject_numeric_dow(cron_expr: str) -> None:
     types ``0 18 * * 1-5`` expecting "Mon-Fri Unix-style" would
     silently get "Tue-Sat APScheduler-style". To eliminate the
     ambiguity, v2 cron triggers MUST express the DOW field as
-    ``*``, ``?``, or named days (``MON``, ``TUE``, ...) with
-    range / list / step syntax (``MON-FRI``, ``MON,WED,FRI``).
-    Any digit in the DOW field is rejected at the wakeup layer
-    before ``from_crontab`` ever sees the expression.
+    ``*`` or named days (``MON``, ``TUE``, ...) with range or
+    list syntax (``MON-FRI``, ``MON,WED,FRI``). Any digit in
+    the DOW field is rejected at the wakeup layer before
+    ``from_crontab`` ever sees the expression.
+
+    Step syntax (``MON-FRI/2``, ``*/2``) is rejected too —
+    the ``/N`` step always contains a digit and the choice of
+    rejecting "any digit anywhere in DOW" keeps the rule
+    simple and unambiguous. Authors that need bi-weekly DOW
+    semantics can express it via the day-of-month field or
+    the schedule's caller logic.
+
+    ``?`` is NOT in the allow-list because APScheduler's
+    ``CronTrigger`` refuses it for ``day_of_week`` (probed
+    against APScheduler 3.11.x: ``Unrecognized expression
+    "?" for field "day_of_week"``); listing it here would
+    only confuse authors who try it and hit a parser error
+    one layer down.
 
     Note: this rule applies to the DOW (5th) field only — the
     other four fields (minute / hour / day-of-month / month)
@@ -322,9 +347,11 @@ def _reject_numeric_dow(cron_expr: str) -> None:
             "APScheduler interprets numeric DOW as Monday=0 "
             "while standard Unix cron uses Sunday=0 — to "
             "avoid the ambiguity, v2 cron triggers MUST use "
-            "'*' / '?' / named days (MON, TUE...) with range "
-            "(MON-FRI), list (MON,WED,FRI), or named step "
-            "syntax. No numeric components."
+            "'*' or named days (MON, TUE, ...) with range "
+            "(MON-FRI) or list (MON,WED,FRI) syntax. No "
+            "numeric components anywhere in the DOW field — "
+            "step syntax ('MON-FRI/2', '*/2') is rejected "
+            "for the same reason."
         )
 
 

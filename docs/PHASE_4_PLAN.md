@@ -704,10 +704,15 @@ day-of-week as ``Monday=0`` while standard Unix cron uses
 ``0 18 * * 1-5`` = "Mon-Fri" would silently get "Tue-Sat".
 To eliminate the ambiguity, v2 cron triggers MUST express the
 DOW field as ``*`` or named days (``MON``, ``TUE``, ...) with
-range / list / step syntax — any digit in field 5 is rejected
-at the wakeup layer BEFORE APScheduler sees the expression.
-APScheduler does NOT accept ``?`` for day_of_week, so that
-form is also unavailable in practice.
+range or list syntax (``MON-FRI``, ``MON,WED,FRI``). Any
+digit in field 5 is rejected at the wakeup layer BEFORE
+APScheduler sees the expression — step syntax
+(``MON-FRI/2``, ``*/2``) is therefore rejected too because
+its ``/N`` operand always contains a digit. Authors that
+need bi-weekly DOW semantics express it via the day-of-month
+field or the schedule's caller logic. APScheduler also does
+NOT accept ``?`` for day_of_week, so that form is
+unavailable in practice.
 
 ### 6.2.1 Clock + id-factory injection rule (cross-cutting)
 
