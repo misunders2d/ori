@@ -302,15 +302,13 @@ def test_pending_blocked_by_running_on_same_schedule(tmp_path):
 
 
 def test_single_pending_only_row_on_schedule_claims(tmp_path):
-    """Regression for the ``r2.id != runs.id`` clause: when the
-    target row is the ONLY row on its schedule, the single-flight
-    NOT EXISTS predicate must not see the target row as
-    self-blocking. The clause makes this independent of SQLite's
-    UPDATE-WHERE evaluation order.
-
-    (The happy-path test above implicitly covers this; this test
-    pins it explicitly so a future regression that drops the
-    self-exclusion clause has a named, focused failure.)"""
+    """Behavioural pin: when the target row is the ONLY row on
+    its schedule, the single-flight NOT EXISTS predicate must
+    not block the claim. This test alone does NOT prove the
+    ``r2.id != runs.id`` clause is present — current SQLite
+    evaluates the target row as pre-update ``pending`` so a
+    regression that dropped the clause would still pass here.
+    The structural test below pins the clause itself."""
     conn = _migrate(tmp_path)
     _seed_schedule(conn)
     _seed_run(conn, run_id="solo-run")
@@ -324,6 +322,26 @@ def test_single_pending_only_row_on_schedule_claims(tmp_path):
     )
     assert ok is True
     assert _status(conn, "solo-run") == "claimed"
+
+
+def test_claim_sql_self_exclusion_clause_present():
+    """Structural pin for ``r2.id != runs.id`` in the
+    single-flight subquery. The behavioural happy-path test
+    cannot distinguish "clause present" from "clause absent
+    but SQLite happens to read pre-update state" — both would
+    pass today. This test reads the module source and asserts
+    the clause literally exists, so a regression that removes
+    it fails here with a clear, focused message rather than
+    silently relying on SQLite's WHERE-evaluation ordering."""
+    source = inspect.getsource(claim_mod)
+    assert "r2.id != runs.id" in source, (
+        "claim_run's single-flight predicate must explicitly "
+        "exclude the target row via 'r2.id != runs.id'. Without "
+        "it the predicate's correctness depends on SQLite's "
+        "UPDATE-WHERE evaluation order (target row read as "
+        "pre-update), which is brittle to triggers, future "
+        "SQLite versions, and any UPDATE-FROM rewrites."
+    )
 
 
 def test_cross_schedule_no_interference(tmp_path):
