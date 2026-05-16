@@ -54,6 +54,12 @@ from app.v2.sources.literal import (
     literal_source,
     register_literal,
 )
+from app.v2.sources.local_file import (
+    SOURCE_LOCAL_FILE_ID,
+    LocalFileSource,
+    local_file_source,
+    register_local_file,
+)
 from app.v2.sources.registry import (
     SOURCE_LOADERS,
     SourceLoaderRegistry,
@@ -66,6 +72,7 @@ from app.v2.sources.registry import (
 #: registries atomically (see registry.register_source_loader).
 _BUILTIN_SOURCES = (
     (SOURCE_LITERAL_ID, register_literal),
+    (SOURCE_LOCAL_FILE_ID, register_local_file),
 )
 
 
@@ -128,4 +135,8 @@ __all__ = [
     "LiteralSource",
     "literal_source",
     "register_literal",
+    "SOURCE_LOCAL_FILE_ID",
+    "LocalFileSource",
+    "local_file_source",
+    "register_local_file",
 ]
