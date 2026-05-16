@@ -305,10 +305,14 @@ JSON.
    `get_schedule(conn, run.schedule_id)`:
 
    - `get_schedule` returns `None` (schedule removed
-     between Run insert and claim) → emit
-     `run_failed` with reason
-     `schedule_not_found_at_claim`; status =
-     `failed`. NO emit fires.
+     between Run insert and claim) → RAISE
+     `UnsupportedSpecError(schedule_not_found_at_claim)`;
+     Run left in `running` for the phase-4 recovery /
+     stale-claim path to promote. A `run_failed` event
+     CANNOT be written here: the `events.schedule_id`
+     FK references the now-deleted schedule row and
+     would reject the INSERT, so the branch surfaces
+     the race by raising instead. NO emit fires.
    - Spec status is `archived` or `paused` → emit
      `run_failed(schedule_inactive_at_claim)`; status
      = `failed`. (A pending Run for a paused / archived
@@ -506,10 +510,25 @@ JSON.
       call with the expected channel + text.
     - `run_succeeded` event present in the
       EventLedger.
-    - Schedule-fetch failure pins (round-1 reviewer
+    - Schedule-fetch failure pin (round-1 reviewer
       L201): seed a Run for a schedule that has been
-      deleted between insert and claim → assert
-      `run_failed(schedule_not_found_at_claim)`.
+      deleted between Run insert and the emit branch's
+      re-fetch → the branch RAISES
+      `UnsupportedSpecError(schedule_not_found_at_claim)`
+      and leaves the Run in RUNNING for the phase-4
+      recovery / stale-claim path to promote. It does
+      **not** write a `run_failed` event: the
+      `events.schedule_id` FK would reject the row
+      because the schedule it references is gone, so
+      the branch cannot persist a terminal event and
+      must surface the race by raising instead.
+      Asserted: `pytest.raises(UnsupportedSpecError,
+      match="schedule_not_found_at_claim")`, no Slack
+      call, Run status stays `running`. (The
+      *archived* / *paused* staleness siblings — where
+      the schedule row still EXISTS — DO write
+      `run_failed(schedule_inactive_at_claim)`; the
+      deleted-row case is the FK-constrained outlier.)
 
 ### Out of scope (phase 9)
 
@@ -702,13 +721,12 @@ execute pipeline.
 # slice 5):
 schedule = get_schedule(conn, run.schedule_id)
 if schedule is None:
-    _emit_run_failed(
-        conn,
-        run,
-        reason="schedule_not_found_at_claim",
-        ...,
+    # Cannot write run_failed: events.schedule_id FK
+    # references the deleted row. Raise; recovery
+    # promotes the RUNNING Run via the stale-claim path.
+    raise UnsupportedSpecError(
+        "schedule_not_found_at_claim"
     )
-    return
 if schedule.status in (ScheduleStatus.ARCHIVED,
                        ScheduleStatus.PAUSED):
     _emit_run_failed(
@@ -878,9 +896,11 @@ async def main() -> None:
   callback invoked synchronously (NOT real
   APScheduler timing per reviewer Q10) → Run claim →
   emit → `run_succeeded`.
-- Schedule-fetch failure pins (L201): delete the
-  schedule between Run insert and claim; assert
-  `schedule_not_found_at_claim`.
+- Schedule-fetch failure pin (L201): delete the
+  schedule between Run insert and the emit branch's
+  re-fetch; assert `UnsupportedSpecError` is raised
+  with `schedule_not_found_at_claim`, no Slack call,
+  Run left `running` for recovery.
 
 ---
 
@@ -964,9 +984,10 @@ slice review.
 ### 5.4 `test_runtime_worker_emit_branch.py`
 
 Schedule-fetch + staleness pins (L201):
-- Run with deleted schedule → emit
-  `run_failed(schedule_not_found_at_claim)`; no
-  Slack call.
+- Run with deleted schedule → RAISE
+  `UnsupportedSpecError(schedule_not_found_at_claim)`;
+  Run left `running`; no `run_failed` event (events
+  FK); no Slack call.
 - Run with archived schedule → emit
   `run_failed(schedule_inactive_at_claim)`; no Slack
   call.

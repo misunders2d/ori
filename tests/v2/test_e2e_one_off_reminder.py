@@ -170,6 +170,30 @@ def _build_closure(tmp_path: Path, clock: _FreezeClock, event_ids):
     return closure, factory
 
 
+def _run_event_kinds_rowid_ordered(factory, run_id: str) -> list[str]:
+    """Raw event ``kind`` values for ``run_id`` in INSERTION
+    order (``rowid`` ASC, the autoincrement PK).
+
+    ``list_events_for_run`` orders by ``ts`` only; in this
+    e2e the wakeup leg (run_created) and the worker leg
+    (claimed/started/succeeded) all stamp the SAME frozen
+    instant, so a ``ts`` sort is a tie and would NOT pin a
+    deterministic sequence. ``rowid`` is the write order and
+    is what makes the full RUN_CREATED → RUN_CLAIMED →
+    RUN_STARTED → RUN_SUCCEEDED sequence assertion sound
+    (slice-9-fix codex 🟡)."""
+    conn = factory()
+    try:
+        rows = conn.execute(
+            "SELECT kind FROM events WHERE run_id = ? "
+            "ORDER BY rowid ASC",
+            (run_id,),
+        ).fetchall()
+        return [r[0] for r in rows]
+    finally:
+        conn.close()
+
+
 def _read_run_status(factory, run_id: str) -> str:
     conn = factory()
     try:
@@ -244,6 +268,16 @@ async def test_e2e_one_off_reminder_happy_path(tmp_path):
 
     assert inserted == ["run-e2e-1"]
     assert _read_run_status(factory, "run-e2e-1") == "pending"
+    # The wakeup leg wrote the RUN_CREATED ledger event (the
+    # e2e doc/test claims this is pinned — assert it for
+    # real, not just the Run row + status).
+    post_wakeup_kinds = [
+        e.kind for e in _read_events(factory, "run-e2e-1")
+    ]
+    assert EventKind.RUN_CREATED in post_wakeup_kinds, (
+        f"wakeup must write a RUN_CREATED event; got "
+        f"{post_wakeup_kinds!r}"
+    )
 
     # --- 4. Worker claims the due Run, dispatches the emit
     #        branch, posts to Slack, writes run_succeeded. ------
@@ -260,10 +294,18 @@ async def test_e2e_one_off_reminder_happy_path(tmp_path):
         {"channel": _CHANNEL_ID, "text": _REMINDER_TEXT}
     ]
 
-    run_kinds = [e.kind for e in _read_events(factory, "run-e2e-1")]
-    assert EventKind.RUN_CLAIMED in run_kinds
-    assert EventKind.RUN_STARTED in run_kinds
-    assert EventKind.RUN_SUCCEEDED in run_kinds
+    # Full insertion-ordered run event ledger pinned end to
+    # end: wakeup wrote RUN_CREATED, the worker claim loop
+    # wrote RUN_CLAIMED → RUN_STARTED → RUN_SUCCEEDED. Pin
+    # the exact rowid-ordered sequence (not membership) so a
+    # regression that drops, reorders, or doubles a
+    # lifecycle event flips here (slice-9-fix codex 🟡).
+    assert _run_event_kinds_rowid_ordered(factory, "run-e2e-1") == [
+        EventKind.RUN_CREATED.value,
+        EventKind.RUN_CLAIMED.value,
+        EventKind.RUN_STARTED.value,
+        EventKind.RUN_SUCCEEDED.value,
+    ]
 
 
 def _read_events(factory, run_id: str):
