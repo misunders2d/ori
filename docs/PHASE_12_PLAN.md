@@ -176,6 +176,63 @@ RECOMMENDED dispositions (reviewer may revise):
 - **Cross-fire state, idempotency, observability, migration
   tooling** — §12 steps 13–16.
 
+### 1.1 Registry-threading map + fail-safe degeneration + §11.1 backward-compat (round-2 🟡 pin)
+
+The round-1 wording *"enforced at every §5.5 chokepoint"* was
+imprecise. The exact reality, pinned here:
+
+**(a) Registry-threading map.** `validate_schedule_spec(spec,
+*, execution_plans=None, registries: Optional[RegistrySnapshot]
+= None)` (`validation.py:481`). Tool→tag resolution rides
+`RegistrySnapshot.tools` (a `ToolRegistry`, `validation.py:108`)
+— the SAME seam `_validate_referenced_adapters`
+(`validation.py:397`) already uses (it guards on
+`if registries.tools is not None`). Shipped call sites (ALL
+pass NO kwargs ⇒ `registries=None` today):
+
+| Call site | `registries` | `_validate_reasoning_tool_mode` behaviour |
+|---|---|---|
+| `dry_run.py:185` | `None` | fail-safe: every referenced tool unresolved ⇒ a `read_only` reasoning step ⇒ BLOCK |
+| `commit.py:205` | `None` | same |
+| `compile.py:91` | `None` | same |
+| `freeze.py:170` | `None` | same |
+| `setters.py:151` | `None` | same |
+| (future) a caller that threads a populated `RegistrySnapshot.tools` | populated | per-tool tag lookup; only genuinely write-tagged tools in a `read_only` step BLOCK |
+
+No shipped call site threads a registry. A future slice/phase
+that wants per-tool resolution must pass
+`registries=RegistrySnapshot(tools=…)` explicitly; the rule's
+signature is registry-ready from day one.
+
+**(b) Fail-safe degeneration is INTENDED, documented
+behaviour — not an accident.** With `registries=None` (every
+shipped path), the §5.4 fail-safe (Q2: unresolved/untagged ⇒
+treat write-capable ⇒ BLOCK) means the rule **blanket-rejects
+ANY reasoning-bearing plan whose reasoning step is
+`tool_mode=read_only`** at every §5.5 chokepoint. This is
+deliberately over-block-safe and is **defense-in-depth
+consistent with the phase-11 worker boundary** (the worker
+already `_fail_run`s every reasoning-bearing plan via
+`reasoning_unsupported_pending_step_12`). A reasoning-bearing
+plan cannot author OR fire until BOTH a populated tool
+registry is threaded AND the reasoning executor lands — both
+out of phase-12 scope. A slice-2 test pins this degeneration
+explicitly (registries=None ⇒ blanket block) so it can never
+silently regress to allow-by-default.
+
+**(c) §11.1 backward-compat — precise pin.**
+`_validate_reasoning_tool_mode` iterates ONLY
+`ExecutionPlan.reasoning` steps of reasoning-BEARING plans. A
+spec with no `execution_plan_hash`, an emit-only ExecutionPlan
+(`reasoning == []`), or any non-reasoning spec is **NEVER
+touched** by the rule (it returns an empty issue list before
+inspecting anything). Therefore OneOff / `RecurringSeriesFromSource`
+/ every shipped phase-9–11 emit path is byte/behaviour-
+unchanged: they carry no reasoning steps, so the new rule is a
+no-op for them. A slice-2 regression pin asserts the full
+phase-9–11 emit/OneOff suite is green and that an emit-only
+spec collects ZERO reasoning issues.
+
 ---
 
 ## 2. New file paths (provisional — finalised per slice)
@@ -188,9 +245,10 @@ RECOMMENDED dispositions (reviewer may revise):
 - `tests/v2/test_phase12_import_hygiene.py` — AST pin (mirror
   phase-11 slice-8, alias-robust).
 - Extensions only (no new file): `app/v2/validation.py` (new
-  `_validate_reasoning_tool_mode` rule + codes), the authoring
-  friction path (slice 3), `app/v2/runtime/worker.py` (the
-  seam, slice 4).
+  `_validate_reasoning_tool_mode` rule + codes — iterates
+  ONLY reasoning-bearing plans' reasoning steps, §1.1c), the
+  authoring friction path (slice 3), `app/v2/runtime/worker.py`
+  (the seam, slice 4).
 
 ## 3. Module APIs (sketch — finalised per slice)
 
@@ -230,11 +288,24 @@ mid-phase.
    boundary regression-pinned unchanged.
 5. **closeout** — full `tests/v2`, §7 acceptance walk, phase
    guards, `gen_docs` regen+stage, REPO-WIDE semantic-intent
-   stale-wording sweep (the phase-9/10/11 lesson), the ONE
-   `docs/CONTRACTS_V2_DESIGN.md` reconciliation pass (§12 step
-   12 scope/shipped, §5.4 / §5.9 / D6 LIVE notes), annotated
-   tag `v2-phase-12-complete` (gated on reviewer CLOSEOUT
-   PASS).
+   stale-wording / inconsistency sweep (the phase-9/10/11
+   lesson), the ONE `docs/CONTRACTS_V2_DESIGN.md` reconciliation
+   pass (§12 step 12 scope/shipped, §5.4 / §5.9 / D6 LIVE
+   notes; §5.9 records which triggers shipped vs deferred per
+   Q5), annotated tag `v2-phase-12-complete` (gated on
+   reviewer CLOSEOUT PASS).
+
+   **Closeout sweep checklist (round-1 🔵 — fix before tag):**
+   - `app/v2/enums.py` `ToolMode` docstring (~line 322) lists
+     only 4 read-only-blocking tags
+     (`write_external` / `send_message` / `filesystem_write` /
+     `privileged`) but `tool_tags.py:_READ_ONLY_BLOCKING_TAGS`
+     enforces 5 (adds `DB_WRITE`). Reconcile the docstring to
+     the enforced set (single source of truth =
+     `_READ_ONLY_BLOCKING_TAGS`) so docstring ≡ code before
+     the tag.
+   - Any other ToolMode / tag-set wording that drifts from
+     `tool_tags.py` (semantic-intent scan, not literal-token).
 
 ## 5. Test inventory (highlights)
 
@@ -275,14 +346,27 @@ mid-phase.
 
 1. Branch ahead of `v2-phase-11-complete` by N small per-slice
    commits.
-2. A `tool_mode=read_only` reasoning step referencing a
+2. With a populated `RegistrySnapshot.tools` threaded, a
+   `tool_mode=read_only` reasoning step referencing a
    `write_external` / `send_message` / `filesystem_write` /
-   `db_write` / `privileged` tool is REJECTED at
-   `validate_schedule_spec` (⇒ every §5.5 chokepoint);
-   `filesystem_read` / `read_external` do NOT block.
-3. An unresolved / untagged referenced tool fails safe
-   (blocked) with a distinct `ValidationIssue` code — never
-   silently allowed (§5.4 fail-safe).
+   `db_write` / `privileged` tool is REJECTED by
+   `_validate_reasoning_tool_mode`; `filesystem_read` /
+   `read_external` do NOT block. The rule rides
+   `validate_schedule_spec` so it is enforced at every §5.5
+   chokepoint that threads a registry (none ship today —
+   §1.1a).
+3. Fail-safe degeneration pinned (§1.1b): with
+   `registries=None` (every shipped call site — §1.1a) the
+   §5.4 fail-safe BLOCKS any `read_only` reasoning-bearing
+   plan with a distinct `ValidationIssue` code — never
+   silently allowed; an unresolved / untagged referenced tool
+   is treated write-capable ⇒ blocked. A slice-2 test pins
+   the registries=None blanket-block (no allow-by-default
+   regression).
+3a. §11.1 backward-compat (§1.1c): an emit-only / non-reasoning
+   spec collects ZERO reasoning issues — the rule returns
+   early before inspecting; OneOff / phase-9–11 emit path
+   byte/behaviour-unchanged (full prior suite green).
 4. `tool_mode=write_allowed` step / `privileged` / `costly` /
    `filesystem_write` tool trips the existing admin-approval
    friction (Q5 subset).
@@ -344,12 +428,51 @@ Design: docs/CONTRACTS_V2_DESIGN.md §12 step 12, §5.4, §5.5,
 Plan:   docs/PHASE_12_PLAN.md
 ```
 
-## 9. claude-reviewer round-1 disposition (OPEN)
+## 9. claude-reviewer round-1 disposition (CLOSED — Q1–Q6 ALL RATIFIED)
 
-Q1–Q6 above await round-1 adjudication. Decisions will be
-baked here verbatim (the phase-10/11 disposition-log
-discipline) so a future drift is caught against the decision,
-not re-litigated.
+Round 1 on `9b29c80`: 🟡 HOLD — Q1–Q6 ALL recommended
+dispositions RATIFIED; one 🟡 (§1.1, fixed in round-2 revision)
++ one 🔵 (closeout sweep, §4 slice 5 / §10). Baked here
+verbatim (the phase-10/11 disposition-log discipline) so a
+future drift is caught against the decision, not re-litigated.
+
+- **Q1 = (a).** Static authoring/validation enforcement (the
+  §5.5 chokepoint) + a build-the-layer runtime guard (pure,
+  tested, seam-wired, NOT fired e2e) + KEEP the phase-11
+  `_fail_run` boundary. **Static enforcement IS the step-12
+  deliverable — no executor needed.**
+- **Q2 = ratified.** Reuse the `_validate_referenced_adapters`
+  `RegistrySnapshot.tools` seam. **SECURITY CONDITION:** the
+  §5.4 fail-safe — an unresolved OR untagged referenced tool
+  is treated write-capable ⇒ BLOCKED, pinned by test.
+- **Q3 = ratified.** No executor; the boundary is NOT
+  un-reserved; the worker still `_fail_run`s reasoning-bearing
+  plans. **CONDITION:** the reason CODE
+  `reasoning_unsupported_pending_step_12` stays BYTE-IDENTICAL;
+  only the human-readable message text may change.
+- **Q4 = ratified.** Enforcement scoped STRICTLY to
+  `ReasoningStep.tool_mode` vs the step's referenced tool
+  tags. Emit adapters are the sanctioned write path — do NOT
+  tag-enforce them (would break every shipped emit).
+- **Q5 = ratified.** Wire ONLY the tag-driven §5.9 subset
+  (`privileged` / `costly` / `filesystem_write` +
+  `tool_mode=write_allowed` step). The 4 orthogonal triggers
+  (dynamic target, emit > 3, unused adapter, `require_reapprove`
+  + shape-change) OUT OF SCOPE. **CONDITION:** the closeout
+  design reconciliation MUST record which §5.9 triggers
+  shipped vs deferred (§5.9 must not read as fully-wired).
+- **Q6 = ratified.** The new rule rides
+  `validate_schedule_spec` as ONE independent additive
+  `_validate_*` (a freeze-only check is bypassable).
+  **CONDITION:** the rule MUST be independent +
+  NON-short-circuiting — all-issues-collected preserved (a
+  malformed plan still surfaces ALL issues, not only the
+  reasoning one); the slice-2 *all-issues-collected proof*
+  pins it.
+
+Cross-phase invariants confirmed UNTOUCHED by the reviewer:
+phase 12 = validation + `tool_tags` layer; does NOT touch
+sources / resolver / cache / dirfd / snapshot.
 
 ## 10. Hard rules (carried forward from phases 9–11)
 
