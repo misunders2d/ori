@@ -7,9 +7,13 @@ Pins:
   run_succeeded; Run.status == succeeded; stub Slack
   client receives one chat_postMessage.
 - Schedule-fetch + staleness (round-1 reviewer L201):
-  - schedule deleted between Run insert + claim → emit
-    `run_failed(schedule_not_found_at_claim)`; no Slack
-    call.
+  - schedule deleted between Run insert + the emit
+    branch's re-fetch → RAISES
+    `UnsupportedSpecError(schedule_not_found_at_claim)`;
+    NO `run_failed` event (the `events.schedule_id` FK
+    rejects the row because the schedule is deleted);
+    Run left RUNNING for the phase-4 recovery /
+    stale-claim path; no Slack call.
   - archived schedule → `run_failed(schedule_inactive_at_claim)`.
   - paused schedule → same code as archived.
   - template-name drift (spec rebuilt with a different
