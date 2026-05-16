@@ -740,16 +740,44 @@ tool on the extended spine).
    / freeze / commit pipeline (no bespoke commit);
    naive-datetime / bad-slot rejected at the tool
    boundary.
-8. **Failure-policy integration + agent guidance +
-   hygiene** — end-to-end FAILED / `require_reapprove` /
-   DRIFT pins through `_route_source_failure_policy`;
-   `retry_later` → `alert_admin` + WARNING (step-14
-   note); additive coordinator §11.4 scheduling-law
-   (template list + `RecurringSeriesFromSource`);
-   `test_phase11_import_hygiene.py` AST pin.
-   (`PHASE_ALLOWLIST[11]` / `.v2-current-phase` already
-   flipped in slice 0; only EXTEND the allowlist if a
-   new surface path appeared.)
+8. **Agent guidance + hygiene + carried review items.**
+   Additive coordinator §11.4 scheduling-law: the
+   template list gains `RecurringSeriesFromSource` /
+   `schedule_create_recurring_series_from_source`
+   (`OneOffReminder` + v1-contract wording byte-
+   unchanged). `test_phase11_import_hygiene.py` AST pin
+   on every phase-11 NEW module — the call detector
+   resolves import aliases so the direct-name-import
+   forms (`from uuid import uuid4; uuid4()`,
+   `from datetime import datetime as dt; dt.now()`) are
+   caught, not just the attribute forms (the slice-5
+   tracked 🔵, landed here). Carries the two review
+   items in the SAME commit: (a) **slice-6 🔵** —
+   `_tick_with_conn` `branch_outcome` uses an EXPLICIT
+   allowlist (`elif branch_outcome in ("succeeded",
+   "succeeded_skipped")`) + a defensive else
+   (`_fail_run(reason="worker_unexpected_branch_outcome")`)
+   so an unrecognised return can never fall through to a
+   spurious `RUN_SUCCEEDED`; (b) **7a-review 🟡** — the
+   `UnsupportedSpecError` docstring reconciled (dropped
+   the now-false `execution_plan_hash is set` example —
+   that is the LIVE §12 step-11 source-driven path,
+   resolved + emitted, NOT a raise — and the stale
+   "phase-9 emit-only contract" / "phase 10 / 12"
+   wording; the class is documented as raised ONLY for
+   the two can't-cleanly-fail shapes per Q4:
+   `schedule_not_found_at_claim` FK-unwritable +
+   template-None ∧ `execution_plan_hash`-None CustomFlow)
+   + the template-None raise message "phase 10 / 12" →
+   "§12 step 12". The end-to-end FAILED /
+   `require_reapprove` / DRIFT routing through
+   `_route_source_failure_policy` and the `retry_later`
+   → `alert_admin` + WARNING downgrade were delivered
+   earlier (slices 2/3/5/6 — the shared atomic core +
+   the resolve/emit wire + their pins); slice 8 adds NO
+   new failure-policy code. (`PHASE_ALLOWLIST[11]` /
+   `.v2-current-phase` already flipped in slice 0; no
+   new surface path → allowlist unchanged.)
 9. **closeout** — full `tests/v2`, §7 acceptance walk,
    phase guards, `gen_docs` regen+stage, annotated tag
    `v2-phase-11-complete` (gated on reviewer CLOSEOUT
@@ -826,7 +854,17 @@ tool on the extended spine).
 - `test_phase11_import_hygiene.py` — every phase-11 NEW
   module: no module-load `_defaults` / `slack_sdk` /
   `google` / `httpx` import; no `uuid.uuid4` /
-  `datetime.now` call; helper self-tests.
+  `datetime.now` call. The call detector resolves
+  import aliases (built from EVERY import in the tree,
+  module + lazy in-function) so the direct-name-import
+  forms — `from uuid import uuid4; uuid4()` and
+  `from datetime import datetime as dt; dt.now()` — are
+  caught, not just the attribute forms (the phase-10
+  raw-chain detector was blind to these: the slice-5
+  tracked 🔵, landed in slice 8). Helper self-tests
+  cover both alias forms, the lazy in-function form, a
+  negative control, and assert `_defaults` is still
+  flagged (non-vacuous).
 - Authoring-templates test (extend) — the new tool
   funnels through `validate_schedule_spec` + dry-run +
   freeze; LLM-visible signature is the slot set only

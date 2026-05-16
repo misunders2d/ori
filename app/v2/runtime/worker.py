@@ -114,15 +114,28 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 class UnsupportedSpecError(Exception):
-    """Raised by the worker emit branch when a claimed Run's
-    ScheduleSpec is outside the phase-9 emit-only contract.
+    """Raised by the worker emit branch ONLY for the two
+    spec shapes that cannot be cleanly failed in place
+    (docs/PHASE_11_PLAN.md §3.1 / Q4):
 
-    Examples:
-    - ``execution_plan_hash`` is set (phase 10 / 12
-      implements ExecutionPlan execution).
-    - ``template is None`` AND ``execution_plan_hash is
-      None`` (CustomFlow without plan; phase 10 / 12
-      implements this path).
+    1. ``schedule_not_found_at_claim`` — the schedule row
+       was deleted between Run insert and emit dispatch.
+       The events table's FK on ``schedule_id`` makes a
+       ``run_failed`` write impossible (the INSERT would
+       fail the FK), so the worker cannot record a clean
+       failure; it raises instead.
+    2. A CustomFlow spec with neither a ``template`` NOR an
+       ``execution_plan_hash`` — an unfireable shape whose
+       executor lands in §12 step 12 (the reasoning /
+       CustomFlow executor).
+
+    Every OTHER out-of-contract case — a missing / invalid
+    / reasoning-bearing ExecutionPlan, a source resolve or
+    emit failure — is a clean ``_fail_run`` with a distinct
+    reason, NOT a raise. (A source-driven spec — an
+    ``execution_plan_hash`` IS set — is the LIVE §12
+    step-11 fire path, resolved + emitted in
+    :meth:`_dispatch_emit_branch`; it is NOT a raise.)
 
     The worker's run_loop catches it and logs; the Run
     stays in ``RUNNING`` and recovery on next boot
@@ -404,13 +417,46 @@ class Worker:
                 # transition; return the run id so callers
                 # observe a tick happened.
                 return run.id
-            # "succeeded" (real delivery) or
-            # "succeeded_skipped" (skip_unchanged no-op) —
-            # both fall through to the ONE running →
-            # succeeded write; only the payload differs.
-            skipped_unchanged = (
-                branch_outcome == "succeeded_skipped"
-            )
+            elif branch_outcome in (
+                "succeeded",
+                "succeeded_skipped",
+            ):
+                # EXPLICIT allowlist (slice-6 🔵): only
+                # these two outcomes fall through to the ONE
+                # running → succeeded write. "succeeded" is a
+                # real delivery; "succeeded_skipped" is a
+                # skip_unchanged no-op — only the payload
+                # discriminator differs.
+                skipped_unchanged = (
+                    branch_outcome == "succeeded_skipped"
+                )
+            else:
+                # Defensive else (slice-6 🔵).
+                # ``_dispatch_emit_branch`` is typed to
+                # return EXACTLY one of "failed" /
+                # "succeeded" / "succeeded_skipped". An
+                # unrecognised value must NEVER fall through
+                # to the running → succeeded write below: a
+                # spurious RUN_SUCCEEDED on an unhandled
+                # outcome would silently mark a Run that
+                # never delivered as successful. Fail the
+                # Run with a distinct reason so a future
+                # regression is loud in the ledger, not
+                # invisible.
+                await self._fail_run(
+                    conn=conn,
+                    run=run,
+                    reason="worker_unexpected_branch_outcome",
+                    error_message=(
+                        f"_dispatch_emit_branch returned "
+                        f"{branch_outcome!r}; expected one "
+                        f"of 'failed' / 'succeeded' / "
+                        f"'succeeded_skipped'. Failing the "
+                        f"Run defensively rather than "
+                        f"emitting a spurious RUN_SUCCEEDED."
+                    ),
+                )
+                return run.id
         else:
             # Empty execution body. The yield gives the event
             # loop a chance to interleave other workers /
@@ -760,8 +806,8 @@ class Worker:
         if spec.template is None:
             raise UnsupportedSpecError(
                 f"schedule {spec.id!r} has no template AND "
-                "no execution_plan_hash; CustomFlow without "
-                "template lands in phase 10 / 12"
+                "no execution_plan_hash; the CustomFlow "
+                "executor lands in §12 step 12"
             )
 
         template_name = spec.template.name
