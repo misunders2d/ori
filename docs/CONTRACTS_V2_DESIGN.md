@@ -721,9 +721,19 @@ For series-style contracts:
 
 LiveSourceRef breaks "same plan hash → same output" guarantee.
 Per-fire snapshot stored:
-- On-disk: `data/contract_audit/<schedule_id>/<run_id>/sources/<source_id>.json`
+- On-disk: `data/contract_audit/<schedule_id>/<run_id>/sources/<source_id>.bin`
+  (phase-10, codex plan round-2 🟡 / round-3 🔴 — a RAW
+  file holding the §3.6 canonical `content_bytes`
+  VERBATIM: no `.json` extension, no JSON envelope, no
+  metadata in the file. `sha256(file) == content_hash`
+  re-verifies with zero parsing. Identical to
+  `docs/PHASE_10_PLAN.md` §3.6 — plan≡design is
+  load-bearing.)
 - SQLite row in `source_snapshots` keyed by `(run_id, source_id)`,
-  pointing at the on-disk file via `content_path`.
+  pointing at the on-disk `.bin` file via `content_path`;
+  ALL metadata (`source_kind`, `selection_method`,
+  `source_version`, `fetched_at`, sizes) lives in the
+  row, never in the file.
 
 Retention per ScheduleSpec (the `AuditPolicy` model,
 `app/v2/models/common.py`, already a field on
@@ -748,22 +758,33 @@ source_id, keep_last_n)` helper:
    runs.id = source_snapshots.run_id` (the table has no
    `schedule_id` column; PK is `(run_id, source_id)`).
 2. Order by `fetched_at` DESC, keep the newest
-   `keep_last_n`; DELETE the remaining rows.
-3. For each deleted row, unlink its backing
-   `content_path` file ONLY when no surviving row (any
-   `(run_id, source_id)`) still references that path —
-   dedup-shared files are content-addressed and may be
-   referenced by multiple rows; the file dies with its
-   last referencing row.
-4. Whole prune runs in one transaction; a file-unlink
-   failure is logged + counted, never aborts the row
-   delete. `keep_last_n == 0` prunes every row older
-   than the just-written one.
+   `keep_last_n`; collect the remaining rows' candidate
+   `content_path`s, then DELETE those rows.
+3. **COMMIT the row deletes FIRST** (codex plan round-2
+   🔴#4 / round-3 🔴 — files are NEVER unlinked inside
+   the prune transaction: a rollback would restore rows
+   pointing at already-deleted files = data loss).
+4. ONLY AFTER commit, on a fresh connection, for each
+   collected `content_path` re-query `SELECT 1 FROM
+   source_snapshots WHERE content_path = ? LIMIT 1`; if
+   no surviving row references it (dedup-shared,
+   content-addressed files may be referenced by multiple
+   rows), best-effort `unlink`. An orphaned file (row
+   gone, file lingers / unlink failed) is harmless and
+   is counted + logged for a separate sweep; a deleted
+   file with a live row is data loss and this ordering
+   makes it structurally impossible.
+5. `keep_last_n == 0` prunes every row older than the
+   just-written one.
 This clarifies — does not contradict — the retention
 intent above; the append-only invariant is scoped to
 `insert_snapshot`, with `prune_snapshots` the explicit
-retention-only exception. See `docs/PHASE_10_PLAN.md`
-§3.4.
+retention-only exception. **This sequence is verbatim-
+identical to `docs/PHASE_10_PLAN.md` §3.4** (plan≡design
+is load-bearing — the phase-10 drift class is closed by
+keeping these two passages in lock-step; the
+`prune_snapshots` test pins the commit-before-unlink
+ordering).
 
 #### 5.3.6 Sources are READ-ONLY
 

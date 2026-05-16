@@ -70,6 +70,31 @@ largely plan↔design drift (§9a is the full disposition):
   `content_bytes` verbatim (no JSON envelope);
   `sha256(file)==content_hash`.
 
+**Round-4 revision (2026-05-16)** closes the round-3
+codex HOLD — 3🔴, all the recurring plan↔design↔tag
+drift class: the plan body was correct but
+`docs/CONTRACTS_V2_DESIGN.md` §5.3.5 + the §8
+tag-annotation lagged. This pass did a SINGLE full
+reconciliation (§9b):
+- 🔴 design §5.3.5 on-disk line `…/<source_id>.json` →
+  `.bin` raw `content_bytes` verbatim + `sha256(file)==
+  content_hash`, verbatim-matching plan §3.6.
+- 🔴 design §5.3.5 prune sequence rewritten to COMMIT
+  row deletes FIRST then post-commit re-query +
+  best-effort unlink on a fresh conn — verbatim-matching
+  plan §3.4 (it had reintroduced the in-transaction
+  unlink data-loss).
+- 🔴 §8 tag-annotation `sources/<id>.json` → `.bin`
+  raw `content_bytes` + the corrected prune/error
+  wording (ships as the permanent phase record).
+Reconciliation grep (`json` / `unlink` / `transaction` /
+`<source_id>` / `realpath` / `startswith`) over BOTH
+docs: zero substantive divergences remain (residual
+`.json` hits are unrelated — registry cache, v1
+contracts; residual `realpath`/`startswith` is the
+intentional anti-pattern callout + dated disposition
+history). plan ≡ design ≡ tag-annotation.
+
 Q-call answers folded in: Q1 `SourceRefSpec` yes (reuse
 existing policy models); Q2 distinct cache knobs, both
 pinned; Q3 Protocol DI for Slack/Drive readers; Q4 keep
@@ -785,17 +810,24 @@ Source loaders + per-fire snapshot infrastructure. The
 four phase-1 concrete loaders (source_literal,
 source_local_file, source_slack_thread, source_drive_file)
 register into the SOURCES registry behind READ-ONLY
-descriptors. Per-fire snapshot writer persists content to
-data/contract_audit/<schedule>/<run>/sources/<id>.json +
-a source_snapshots row, content-addressed, dedup-by-hash,
-with per-ScheduleSpec retention + an explicit on_oversize
+descriptors. Per-fire snapshot writer persists the
+canonical content_bytes VERBATIM to a raw file
+data/contract_audit/<schedule>/<run>/sources/<id>.bin
+(no JSON envelope; sha256(file)==content_hash) + a
+source_snapshots row, content-addressed, dedup-by-hash,
+with per-ScheduleSpec retention (AuditPolicy) that
+commits row deletes BEFORE post-commit best-effort file
+unlink (no rollback data loss) + an explicit on_oversize
 branch (no silent fallback). Per-source cache + fallback
-mirrors the registry-cache load/stale shape; auth failure
-never caches. Live-change policy detects item_count /
-schema shape drift and routes allow / alert / re-approve.
-resolve_source orchestrates dispatch → cache → snapshot →
-drift → exactly one SOURCE_RESOLVED / SOURCE_DRIFT_DETECTED
-/ SOURCE_FAILED event.
+mirrors the registry-cache load/stale shape; exactly one
+typed SourceError subclass (SourceFetchError) is
+fallback-eligible — auth / security / policy / parse
+failures never cache or fall back. Live-change policy
+detects item_count / schema shape drift and routes
+allow / alert / re-approve. resolve_source orchestrates
+dispatch → cache → snapshot → drift → exactly one
+SOURCE_RESOLVED / SOURCE_DRIFT_DETECTED / SOURCE_FAILED
+event.
 
 Build-the-layer phase: NOT wired into the worker fire
 path. The worker still rejects execution_plan_hash specs;
@@ -852,6 +884,50 @@ Round-2 was a plan↔design drift problem. All 4🔴 + 1🟡:
   per declared kind incl. binary.
 
 No open questions remain. Plan-review round 3 requested.
+
+## 9b. Codex round-3 disposition (CLOSED) — single reconciliation pass
+
+Round-3 was 3🔴, ALL the same drift class: plan body
+correct, `docs/CONTRACTS_V2_DESIGN.md` §5.3.5 + the §8
+tag-annotation lagging. Closed in ONE reconciliation
+pass so the round-by-round drift ends here.
+
+- **🔴 design snapshot file** — `CONTRACTS_V2_DESIGN.md`
+  §5.3.5 on-disk bullet: `<source_id>.json` →
+  `<source_id>.bin` (raw `content_bytes` verbatim, no
+  envelope, `sha256(file)==content_hash`, metadata in
+  the row only). Verbatim-matches plan §1.2 / §3.6.
+- **🔴 design prune sequence** — §5.3.5 step 3-4
+  rewritten: COMMIT row deletes FIRST, then post-commit
+  re-query + best-effort unlink on a fresh connection;
+  orphan harmless + counted; deleted-file-with-live-row
+  structurally impossible. Verbatim-matches plan §3.4.
+- **🔴 §8 tag-annotation** — `sources/<id>.json` →
+  `.bin` raw `content_bytes`; added the corrected
+  prune-order + single-`fallback_eligible` wording. This
+  block ships as the permanent annotated-tag record, so
+  it now matches the final spec.
+
+**Reconciliation diff run (single pass):** grep over
+BOTH docs for `json` / `unlink` / `transaction` /
+`<source_id>` / `snapshot-file` / `realpath` /
+`startswith`, every hit classified:
+- snapshot file = `.bin` everywhere (plan §1.2/§3.2/§3.4
+  /§3.6/§5/§7/§10/§8-tag; design §5.3.5) — CONSISTENT.
+- prune = commit-row-deletes-then-post-commit-unlink
+  everywhere (plan §3.4; design §5.3.5) — CONSISTENT.
+- fence = `Path.resolve(strict=True)+is_relative_to`
+  everywhere (plan §3.2; design §5.3.1) — CONSISTENT;
+  the lone `realpath/startswith` in each doc is the
+  explicit "Do NOT use" anti-pattern callout.
+- residual `.json`: design L871 `slack_channels.json`
+  (registry cache) + L1252 `data/contracts/*/v*.json`
+  (v1 migration) — UNRELATED to source snapshots.
+- residual `realpath/startswith` in plan: dated
+  round-1/2/3 disposition narrative (accurate history).
+
+**Zero substantive divergences remain. plan ≡ design ≡
+tag-annotation.** Plan-review round 4 requested.
 
 ## 9. Codex round-1 disposition (CLOSED)
 
