@@ -85,12 +85,17 @@ class ResolveStatus(str, Enum):
 class ResolveOutcome:
     """The single typed result of a resolve. Carries the
     served body for RESOLVED / DRIFT; FAILED serves
-    nothing. ``event_id`` is the id of the EXACTLY-ONE
-    emitted event."""
+    nothing.
+
+    ``event_emitted`` is True iff the terminal event row
+    was actually persisted; ``event_id`` is its id (None
+    when the terminal emit ITSELF failed — see the
+    hardened contract in :func:`resolve_source`)."""
 
     status: ResolveStatus
     event_kind: EventKind
-    event_id: str
+    event_id: Optional[str]
+    event_emitted: bool
     source_id: str
     provenance: Optional[CacheProvenance] = None
     content_bytes: Optional[bytes] = None
@@ -115,26 +120,61 @@ async def resolve_source(
     loaders: SourceLoaderRegistry = SOURCE_LOADERS,
     repo_root: Path = _REPO_ROOT,
 ) -> ResolveOutcome:
-    """Resolve ``ref`` for one fire. Emits EXACTLY ONE
-    EventLedger event and returns a typed
-    :class:`ResolveOutcome`. Never raises for an expected
-    failure; an unexpected exception is also funnelled to
-    a single ``SOURCE_FAILED`` (no zero-emit).
+    """Resolve ``ref`` for one fire and return a single
+    well-defined :class:`ResolveOutcome`.
+
+    **Hardened terminal-emit contract (codex slice-8 🔴).**
+    The resolver attempts EXACTLY ONE terminal EventLedger
+    emit (``SOURCE_RESOLVED`` / ``SOURCE_DRIFT_DETECTED`` /
+    ``SOURCE_FAILED``) and NEVER raises into the caller —
+    on ANY path, including when the terminal emit ITSELF
+    fails (``append_event`` integrity / DB error, a
+    duplicate event id, a raising ``event_id_factory``,
+    a bad clock, …). A terminal-emit failure is
+    **best-effort**: it is logged and SWALLOWED (never
+    raised), and the resolver still returns the single
+    well-defined terminal outcome with
+    ``event_emitted=False`` / ``event_id=None``. So: at
+    most one event row is ever persisted, exactly one emit
+    is attempted, and there is NO path that double-emits,
+    flips the terminal status because the emit failed, or
+    propagates the append/DB exception.
     """
 
-    def _emit(kind: EventKind, payload: dict[str, Any]) -> str:
-        eid = event_id_factory()
-        event = Event(
-            id=eid,
-            run_id=run_id,
-            schedule_id=schedule_id,
-            ts=clock(),
-            kind=kind,
-            payload=payload,
-        )
-        with transaction(conn):
-            append_event(conn, event)
-        return eid
+    def _emit(
+        kind: EventKind, payload: dict[str, Any]
+    ) -> Optional[str]:
+        """Best-effort terminal emit. Returns the event id
+        on success, or None if the emit ITSELF failed
+        (logged, never raised). Catches BaseException so
+        even a ``KeyboardInterrupt``-class failure during
+        the append cannot break the never-raise / single-
+        outcome guarantee."""
+        try:
+            eid = event_id_factory()
+            event = Event(
+                id=eid,
+                run_id=run_id,
+                schedule_id=schedule_id,
+                ts=clock(),
+                kind=kind,
+                payload=payload,
+            )
+            with transaction(conn):
+                append_event(conn, event)
+            return eid
+        except BaseException:  # noqa: BLE001 - terminal-emit guard
+            _logger.exception(
+                "source resolver: terminal %s emit FAILED "
+                "(best-effort — swallowed; no event row "
+                "persisted) source_id=%s schedule_id=%s "
+                "run_id=%s",
+                kind.value,
+                source_id,
+                schedule_id,
+                run_id,
+            )
+            return None
 
     def _failed(
         code: str, *, fallback_eligible: Optional[bool] = None
@@ -151,6 +191,7 @@ async def resolve_source(
             status=ResolveStatus.FAILED,
             event_kind=EventKind.SOURCE_FAILED,
             event_id=eid,
+            event_emitted=eid is not None,
             source_id=source_id,
             failure_code=code,
             fallback_eligible=fallback_eligible,
@@ -207,6 +248,7 @@ async def resolve_source(
                 status=ResolveStatus.RESOLVED,
                 event_kind=EventKind.SOURCE_RESOLVED,
                 event_id=eid,
+                event_emitted=eid is not None,
                 source_id=source_id,
                 provenance=res.provenance,
                 default_value=res.default_value,
@@ -251,6 +293,7 @@ async def resolve_source(
                 status=ResolveStatus.DRIFT,
                 event_kind=EventKind.SOURCE_DRIFT_DETECTED,
                 event_id=eid,
+                event_emitted=eid is not None,
                 source_id=source_id,
                 provenance=res.provenance,
                 content_bytes=res.content_bytes,
@@ -270,16 +313,22 @@ async def resolve_source(
             status=ResolveStatus.RESOLVED,
             event_kind=EventKind.SOURCE_RESOLVED,
             event_id=eid,
+            event_emitted=eid is not None,
             source_id=source_id,
             provenance=res.provenance,
             content_bytes=res.content_bytes,
             content_hash=res.content_hash,
         )
 
-    except Exception as exc:  # noqa: BLE001 - exactly-one-event guard
-        # Unexpected: still emit EXACTLY ONE SOURCE_FAILED
-        # (no zero-emit on any path) and return — the
-        # resolver never raises into the caller.
+    except BaseException:  # noqa: BLE001 - terminal guard
+        # Any unexpected failure BEFORE the terminal emit
+        # (loader dispatch / prior-snapshot read / cache
+        # logic) → exactly ONE best-effort SOURCE_FAILED
+        # and return. ``_failed`` / ``_emit`` are themselves
+        # guaranteed non-raising (the terminal-emit guard),
+        # so this path cannot double-emit, flip status on
+        # emit failure, or propagate — the resolver NEVER
+        # raises into the caller.
         _logger.exception(
             "source resolver internal error for source_id=%s "
             "schedule_id=%s run_id=%s",
@@ -287,16 +336,10 @@ async def resolve_source(
             schedule_id,
             run_id,
         )
-        try:
-            return _failed(
-                "source_resolver_internal_error",
-                fallback_eligible=False,
-            )
-        except Exception:  # pragma: no cover - emit itself failed
-            _logger.exception(
-                "source resolver could not emit SOURCE_FAILED"
-            )
-            raise exc
+        return _failed(
+            "source_resolver_internal_error",
+            fallback_eligible=False,
+        )
 
 
 __all__ = [

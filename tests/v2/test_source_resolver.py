@@ -500,6 +500,140 @@ async def test_require_reapprove_fails_no_content(tmp_path):
         conn.close()
 
 
+# ===========================================================================
+# Hardened terminal-emit contract (codex slice-8 🔴) — the
+# emit ITSELF failing must not raise / zero-and-raise /
+# flip status / double-emit
+# ===========================================================================
+
+
+def _raising_eid():
+    def f() -> str:
+        raise RuntimeError("event_id_factory boom")
+
+    return f
+
+
+@pytest.mark.asyncio
+async def test_emit_failure_unknown_loader_no_raise(tmp_path):
+    factory = _db(tmp_path)
+    conn = factory()
+    try:
+        _seed_schedule(conn)
+        _seed_run(conn, "r1")
+    finally:
+        conn.close()
+    out = await _resolve(
+        factory, _StubLoader(text="x"),
+        _ref(loader="source_nope"), tmp_path=tmp_path,
+        eid=_raising_eid(),
+    )
+    assert out.status is ResolveStatus.FAILED
+    assert out.failure_code == "unknown_source_loader"
+    assert out.event_emitted is False
+    assert out.event_id is None
+    assert _events(factory, "r1") == []  # zero rows, no raise
+
+
+@pytest.mark.asyncio
+async def test_emit_failure_non_fallback_error_no_raise(tmp_path):
+    factory = _db(tmp_path)
+    conn = factory()
+    try:
+        _seed_schedule(conn)
+        _seed_run(conn, "r1")
+    finally:
+        conn.close()
+    out = await _resolve(
+        factory, _StubLoader(raises=SourceAuthError("401")),
+        _ref(ttl=0), tmp_path=tmp_path, eid=_raising_eid(),
+    )
+    assert out.status is ResolveStatus.FAILED
+    assert out.fallback_eligible is False
+    assert out.event_emitted is False
+    assert _events(factory, "r1") == []
+
+
+@pytest.mark.asyncio
+async def test_emit_failure_internal_error_no_raise(tmp_path):
+    factory = _db(tmp_path)
+    conn = factory()
+    try:
+        _seed_schedule(conn)
+        _seed_run(conn, "r1")
+    finally:
+        conn.close()
+
+    class _Boom(_StubLoader):
+        async def load(self, *, args, as_of_datetime, clock):
+            raise ValueError("not a SourceError")
+
+    out = await _resolve(
+        factory, _Boom(), _ref(), tmp_path=tmp_path,
+        eid=_raising_eid(),
+    )
+    assert out.status is ResolveStatus.FAILED
+    assert out.failure_code == "source_resolver_internal_error"
+    assert out.event_emitted is False
+    assert _events(factory, "r1") == []
+
+
+@pytest.mark.asyncio
+async def test_emit_failure_success_path_does_not_flip_or_raise(
+    tmp_path,
+):
+    """Shared exposure: the SUCCESS terminal emit failing
+    must NOT flip to FAILED, double-emit, or raise — the
+    content is still served, event_emitted False."""
+    factory = _db(tmp_path)
+    conn = factory()
+    try:
+        _seed_schedule(conn)
+        _seed_run(conn, "r1")
+    finally:
+        conn.close()
+    out = await _resolve(
+        factory, _StubLoader(text="hello"), _ref(),
+        tmp_path=tmp_path, eid=_raising_eid(),
+    )
+    assert out.status is ResolveStatus.RESOLVED  # NOT flipped
+    assert out.content_bytes == b"hello"  # still served
+    assert out.event_emitted is False
+    assert out.event_id is None
+    assert _events(factory, "r1") == []  # no row, no double, no raise
+
+
+@pytest.mark.asyncio
+async def test_append_event_integrity_failure_no_raise(
+    tmp_path, monkeypatch
+):
+    """append_event raising (integrity / dup id / DB) is
+    caught by the terminal-emit guard — swallowed, logged,
+    not raised; single well-defined outcome."""
+    import app.v2.sources.resolver as resolver_mod
+
+    def _boom_append(conn, event):
+        raise sqlite3.IntegrityError("duplicate event id")
+
+    monkeypatch.setattr(resolver_mod, "append_event", _boom_append)
+
+    factory = _db(tmp_path)
+    conn = factory()
+    try:
+        _seed_schedule(conn)
+        _seed_run(conn, "r1")
+    finally:
+        conn.close()
+    out = await _resolve(
+        factory, _StubLoader(text="x"), _ref(),
+        tmp_path=tmp_path,
+    )
+    assert out.status is ResolveStatus.RESOLVED
+    assert out.event_emitted is False
+    assert out.content_bytes == b"x"
+    assert _events(factory, "r1") == []
+
+
 @pytest.mark.asyncio
 async def test_first_fire_no_prior_no_drift(tmp_path):
     """No prior materialised snapshot → never a shape
