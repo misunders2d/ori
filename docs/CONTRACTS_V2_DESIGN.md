@@ -1147,6 +1147,32 @@ column). Two new primitives:
 
 LLM never touches state. Computed by deterministic loader logic.
 
+**LIVE since phase 13 (§12 step 13).** The two runtime
+primitives ship in `app/v2/runtime/state.py` as a thin typed
+layer over the phase-3 storage CAS
+(`app/v2/storage/schedule_state.py` —
+`get_state`/`set_state_cas`, byte-untouched):
+`state_read` → `StateView{value, version, written_at,
+written_by_run}` or `None`; `state_write` →
+`StateWriteOutcome{status: written|stale_version, version}`,
+delegating to `set_state_cas` (`expected_version=None`/`0`
+is the first-write/seed sentinel; `>= 1` is a CAS update;
+NO internal retry — a stale version returns `stale_version`
+immediately, the caller owns the retry). **"locks + CAS"
+(step-13 title) = the `version` CAS PLUS the EXISTING
+per-schedule single-flight run claim — NO new lock
+primitive/table was added** (CAS + the claim suffice; Q2).
+`schedule_state` stays strictly per-schedule (D5); a
+cross-schedule shared-state namespace is a DEFERRED design
+open question, NOT shipped (Q4). A build-the-layer worker
+seam (`Worker._cross_fire_state_seam`) marks where a future
+DETERMINISTIC state-loader would `state_read → pick →
+state_write`, but it is DEAD: no stateful-flow / reasoning
+EXECUTOR is shipped (no §12 step owns it — Q1a), so the
+live fire path never consults it and the phase-11 `_fail_run`
+boundary + phase-12 read-only-reasoning enforcement are
+byte/behaviour-unchanged.
+
 ### 6.6 Audit-mirror into channel session
 
 After successful emit, worker calls `mirror_emit_to_session(adapter, args, text)`
@@ -1556,7 +1582,7 @@ so revert is a single git command.
     - **11A (shipped — phase 11)**: the step-10 source layer (loaders / snapshot / cache / resolver), built unwired at step 10, goes LIVE in the worker fire path. A source-driven `ScheduleSpec` (`execution_plan_hash` → `ExecutionPlan` with `InputSpec.source_ref`, zero reasoning) fires end to end: claim → `resolve_source` per source-bearing input on the claimed connection → emit. Ships the `RecurringSeriesFromSource` template with STATELESS strategies only (`whole` / `skip_unchanged`), authored through the SHARED spine EXTENDED additively (§0.3, reviewer-ratified, scoped to the authoring spine): the freeze/commit trigger gate admits `{one_off, cron}` (others → `trigger_type_pending_step_unlock`); `commit` persists `insert_execution_plan`+`insert_schedule` atomically in ONE transaction (both-or-neither). `skip_unchanged` reads the additive `ResolveOutcome.changed_vs_prior` signal (§5.3.5 — the worker NEVER re-reads the snapshot table, Q5); the no-op success rides the EXISTING `running → succeeded` `RUN_SUCCEEDED` write via the typed additive `RunSucceededPayload.skipped_unchanged` discriminator (Option B, §0.2 — no new `EventKind`, no v002 events-schema migration, no second transaction). The `OneOffReminder` emit path + the emit/cache/resolver modules stay LITERALLY byte-untouched (additive cutover, §11.1; v1 scheduler untouched).
     - **11B (deferred)**: `ChannelDigest` (needs the LLM reasoning-chain executor + `summary_prompt`) and stateful `RecurringSeriesFromSource` progress (needs step-13 cross-fire `schedule_state`). **Phase-1 completion lands with 11B.**
 12. **Read-only reasoning + emit-only writes enforcement** (shipped phase 12 — `docs/PHASE_12_PLAN.md` §9, Q1=(a)): the §5.4 tool-capability-tag policy is wired into ENFORCEMENT. `validate_schedule_spec` (the §5.5 chokepoint) rejects a `tool_mode=read_only` reasoning step that references a `write_external`/`send_message`/`filesystem_write`/`db_write`/`privileged`-tagged tool (an unresolved/untagged referenced tool ⇒ fail-safe BLOCK, §5.4); a build-the-layer worker runtime guard mirrors the same decision at the reasoning seam. The §5.9 CustomFlow friction ships as a `warning`-severity advisory SIGNAL on the same chokepoint (NOT a hard reject). **NOT shipped — deferred, no §12 step owns it:** the LLM reasoning-chain EXECUTOR, and the §5.9 admin-approval GATE / its consuming flow. With no tool registry threaded (every shipped call site) the §5.4 fail-safe degenerates to blanket-blocking any `read_only` reasoning-bearing plan (intended, over-block-safe). The worker still `_fail_run`s every reasoning-bearing plan at the phase-11 boundary (no executor); the guard is dead until an executor lands.
-13. **Cross-fire state with locks + CAS**: state_read / state_write primitives backed by `schedule_state` table + CAS.
+13. **Cross-fire state with locks + CAS** (shipped phase 13 — `docs/PHASE_13_PLAN.md` §9, Q1a/Q2): the §6.5 `state_read` / `state_write` RUNTIME primitives ship in `app/v2/runtime/state.py` as a thin typed layer over the phase-3 storage CAS (`schedule_state` + `get_state`/`set_state_cas`, byte-untouched — NO SQL/DDL change). "locks + CAS" = the `version` CAS plus the EXISTING per-schedule single-flight run claim; **NO new lock primitive** (Q2). Per-schedule D5; cross-schedule shared namespace DEFERRED (Q4). A build-the-layer `Worker._cross_fire_state_seam` is wired where a future DETERMINISTIC state-loader would `state_read → pick → state_write`, but is DEAD — **no stateful-flow / reasoning EXECUTOR is shipped** (no §12 step owns it — Q1a); the live fire path never consults it, and the phase-11 `_fail_run` boundary + phase-12 enforcement are byte/behaviour-unchanged. Stateful `RecurringSeriesFromSource` progress remains deferred (it needs that executor).
 14. **Idempotency + cancellation**: per-emit idempotency keys; paused/archived enforcement; `paused_pending_policy`.
 15. **Observability**: `schedule_status`, `schedule_diff`, `schedule_replay`, background failure monitor over EventLedger.
 16. **Migration tooling**: v1 contract → v2 wrap; legacy job → ScheduleSpec import; ledger backfill.

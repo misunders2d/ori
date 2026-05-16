@@ -77,10 +77,15 @@ _READ_ONLY_BLOCKING_TAGS: frozenset[ToolCapabilityTag] = frozenset(
 )
 
 
-# Tags that, when present on any tool used by a CustomFlow,
-# trigger the admin-approval friction gate. The set matches the
-# bullets under "Tools tagged privileged or costly" +
-# "filesystem_write tools" in design §5.9.
+# Tags that, when present on a tool a CustomFlow reasoning
+# step references, raise the §5.9 advisory friction SIGNAL
+# (the warning-severity ``customflow_admin_approval_advisory``
+# validation issue — phase-12 slice-3 / Option A). SIGNAL
+# only: there is NO admin-approval gate or executor — the
+# §5.9 gate stays conceptual and its consuming flow is
+# DEFERRED (no §12 step owns it). The set matches the "Tools
+# tagged privileged or costly" + "filesystem_write tools"
+# bullets in design §5.9.
 _ADMIN_APPROVAL_TAGS: frozenset[ToolCapabilityTag] = frozenset(
     {
         ToolCapabilityTag.PRIVILEGED,

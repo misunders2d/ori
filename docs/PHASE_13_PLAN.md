@@ -258,6 +258,35 @@ finalises)
    per-schedule D5; shared namespace deferred), annotated
    tag `v2-phase-13-complete` (gated on CLOSEOUT PASS).
 
+   **LANDED (closeout).** Full `tests/v2` **2383 passed**, 0
+   fail, 0 regression. Phase guards `--staged` +
+   `--diff v2-phase-12-complete` exit 0. `gen_docs`
+   `files_changed=0` (phase-13 modules are not gen_docs
+   symbols — nothing to stage). REPO-WIDE semantic-intent
+   sweep: NO phase-13 falsified forward-ref ("stateful series
+   live" / "executor lands" / "new lock primitive") survives
+   in `app/v2/` or `tests/v2/` — slice-1/2 wrote accurate
+   DEAD/deferred/no-executor framing from the start (the only
+   "executor" mention is the accurate
+   `worker._cross_fire_state_seam` "Dead code until … lands"
+   docstring). Carried phase-12 non-binding 🔵 FIXED:
+   `app/v2/tool_tags.py` `_ADMIN_APPROVAL_TAGS` comment no
+   longer says "trigger the admin-approval friction gate" —
+   it states the §5.9 advisory-WARNING SIGNAL reality (no
+   gate/executor; conceptual/DEFERRED). The ONE
+   `CONTRACTS_V2_DESIGN.md` reconciliation applied: §6.5 LIVE
+   note (primitives over the byte-untouched phase-3 CAS;
+   "locks"=CAS+existing single-flight claim, NO new lock —
+   Q2; per-schedule D5, shared-namespace DEFERRED — Q4) +
+   §12 step-13 shipped-scope (primitives + build-the-layer
+   DEAD seam, NO executor — Q1a). design ≡ plan ≡ code ≡
+   tag. 5→13 invariant byte-proof vs `v2-phase-12-complete`:
+   `app/v2/sources/`, `app/v2/emit/`, `binding.py`,
+   `storage/schedule_state.py`, `ddl/`, `models/state.py`
+   EMPTY diff. Annotated tag `v2-phase-13-complete` on the
+   final commit, NOT pushed (gated on the claude-reviewer
+   CLOSEOUT PASS).
+
 ## 5. Test inventory (highlights)
 
 - `test_runtime_state.py` — `state_write` first write →
@@ -365,12 +394,37 @@ Design: docs/CONTRACTS_V2_DESIGN.md §12 step 13, §6.5, D5
 Plan:   docs/PHASE_13_PLAN.md
 ```
 
-## 9. claude-reviewer round-1 disposition (OPEN)
+## 9. claude-reviewer round-1 disposition (CLOSED — Q1–Q6 ALL RATIFIED)
 
-Q1–Q6 above await round-1 adjudication. Decisions baked here
+Plan-review round 1 on `121c814`: PASS — plan APPROVED,
+Q1–Q6 ALL recommended dispositions RATIFIED. Baked here
 verbatim (the phase-10/11/12 disposition-log discipline) so a
 future drift is caught against the decision, not
 re-litigated.
+
+- **Q1 = (a).** Build-the-layer §6.5 primitives + a DEAD
+  worker/flow seam; NO stateful-flow / reasoning executor
+  (no §12 step owns it). Static primitives ARE the
+  deliverable.
+- **Q2.** "locks" = the EXISTING `version` CAS + the
+  EXISTING per-schedule single-flight run claim — NO new
+  lock primitive/table.
+- **Q3.** Typed `written` / `stale_version` outcome;
+  caller-owns-retry (NO internal loop/spin);
+  `StateRunMismatchError` PROPAGATES (lineage audit-truth).
+- **Q4.** `schedule_state` per-schedule (D5); cross-schedule
+  shared-namespace OUT of scope / DEFERRED (design open
+  question, not a step-13 deliverable).
+- **Q5.** New module `app/v2/runtime/state.py` (storage CAS
+  stays a pure storage primitive; the runtime-facing layer
+  sits on top).
+- **Q6.** §11.1 additive — NO existing fire path consumes
+  cross-fire state; OneOff / v1 / phase-9–12 fire path +
+  emit/cache/resolver byte/behaviour-unchanged.
+
+Phase-12 non-binding 🔵 confirmed on this phase's closeout
+sweep (FIXED — `app/v2/tool_tags.py` `_ADMIN_APPROVAL_TAGS`
+comment terminology).
 
 ## 10. Hard rules (carried forward from phases 9–12)
 
