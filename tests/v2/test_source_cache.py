@@ -495,6 +495,84 @@ async def test_auth_failure_does_not_write_cache(tmp_path):
 
 
 # ===========================================================================
+# Cache-hit vs the non-fallback invariant (codex slice-5 🔴
+# — plan §1.4 / §9c committed semantics)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_within_ttl_hit_does_not_reprobe_even_if_auth_would_fail(
+    tmp_path,
+):
+    """ttl > 0, warm verified snapshot within the window:
+    the loader is NOT invoked (deliberate cross-fire
+    no-probe window) → CACHE_HIT even though the
+    (un-invoked) live source would raise SourceAuthError.
+    Plan §1.4: there is no live auth to mask because no
+    fetch occurs."""
+    factory = _db(tmp_path)
+    conn = factory()
+    try:
+        _seed_schedule(conn)
+    finally:
+        conn.close()
+    _seed_cached(factory, tmp_path, run_id="r0",
+                 text="cached", fetched_at=_T0)
+    clock = _Clock(_T0 + timedelta(seconds=100))  # within ttl 300
+    loader = _StubLoader(raises=SourceAuthError("401"))
+    res = await _resolve(loader, _ref(ttl=300), factory, clock,
+                         tmp_path, run_id="r1")
+    assert res.provenance is CacheProvenance.CACHE_HIT
+    assert res.content_bytes == b"cached"
+    assert loader.calls == 0  # NOT probed within the window
+
+
+@pytest.mark.asyncio
+async def test_ttl_zero_always_probes_auth_surfaces(tmp_path):
+    """cache_ttl_seconds == 0 = the security opt-out: the
+    cross-fire cache-hit path is skipped unconditionally,
+    the loader is probed, and a live SourceAuthError
+    surfaces — NEVER masked by the warm verified cache."""
+    factory = _db(tmp_path)
+    conn = factory()
+    try:
+        _seed_schedule(conn)
+    finally:
+        conn.close()
+    _seed_cached(factory, tmp_path, run_id="r0",
+                 text="warm verified", fetched_at=_T0)
+    # clock == _T0: age 0, would be a CACHE_HIT for any
+    # ttl>0; ttl==0 must STILL probe.
+    loader = _StubLoader(raises=SourceAuthError("401"))
+    with pytest.raises(SourceAuthError) as ei:
+        await _resolve(loader, _ref(ttl=0), factory,
+                        _Clock(_T0), tmp_path, run_id="r1")
+    assert ei.value.fallback_eligible is False
+    assert loader.calls == 1  # probed every fire
+
+
+@pytest.mark.asyncio
+async def test_ttl_zero_warm_cache_loader_success_is_fresh(tmp_path):
+    """ttl == 0 + warm cache + loader succeeds → FRESH
+    (probed every fire; the warm entry is not a hit)."""
+    factory = _db(tmp_path)
+    conn = factory()
+    try:
+        _seed_schedule(conn)
+    finally:
+        conn.close()
+    _seed_cached(factory, tmp_path, run_id="r0",
+                 text="warm", fetched_at=_T0)
+    _seed_bare_run(factory, "r1", _T0)
+    loader = _StubLoader(result_text="freshly probed")
+    res = await _resolve(loader, _ref(ttl=0), factory,
+                         _Clock(_T0), tmp_path, run_id="r1")
+    assert res.provenance is CacheProvenance.FRESH
+    assert res.content_bytes == b"freshly probed"
+    assert loader.calls == 1
+
+
+# ===========================================================================
 # Tampered / missing cached body is never served
 # ===========================================================================
 

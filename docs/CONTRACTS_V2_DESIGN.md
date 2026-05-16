@@ -699,6 +699,30 @@ Each LiveSourceRef declares its own policy (no global defaults):
 provided AND shown in dry-run. Auth failure NEVER triggers cache
 fallback — always routes to on_failure for re-auth.
 
+**Cache-hit vs the non-fallback invariant (phase-10
+slice-5 clarification, 2026-05-16 — codex slice-5 🔴).**
+`cache_ttl_seconds` is a **cross-fire no-probe window**:
+within it the captured snapshot IS the source for the
+fire and the loader is NOT invoked (a snapshot-backed
+cross-fire cache that re-authorised every hit would not
+be a cache). A within-TTL verified `CACHE_HIT` is
+therefore legitimate even if the un-invoked live source
+would now auth/security-fail — there is no live auth to
+mask because no fetch occurs. The "auth failure NEVER
+triggers cache fallback" rule above governs the
+**post-fetch** decision only (the loader was invoked and
+raised). The explicit security control for a source that
+must (re)authorize on EVERY fire is
+**`cache_ttl_seconds == 0`**: a zero window skips the
+cross-fire cache-hit path unconditionally, so the loader
+is probed every fire and a live auth/security failure
+surfaces every time (never masked by a stale entry).
+This clause and `docs/PHASE_10_PLAN.md` §1.4 / §3.3 / §9c
+MUST state the identical semantics (plan↔design
+consistency is load-bearing); the phase-10 cache test
+pins both the ttl>0-no-probe and the ttl==0-always-probe
+cases.
+
 #### 5.3.3 Live-source change policy
 
 ```

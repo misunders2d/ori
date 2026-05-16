@@ -31,6 +31,19 @@ snapshot present still fails — it must never serve a
 stale cached snapshot or a default, and must never poison
 the cache.
 
+Cache-hit vs the non-fallback invariant (plan §1.4 / §9c
+/ design §5.3.2): a within-``cache_ttl_seconds`` verified
+hit is a deliberate **no-probe window** — the captured
+snapshot IS the source and the loader is NOT invoked, so
+a ``CACHE_HIT`` legitimately does not re-auth (no fetch ⇒
+no live auth to mask). The §3.5 non-fallback invariant
+governs the **post-fetch** decision only.
+``cache_ttl_seconds == 0`` is the explicit security
+opt-out: the cross-fire cache-hit path is skipped
+unconditionally, the loader is probed EVERY fire, and a
+live auth/security failure surfaces every time (never
+masked by a stale entry).
+
 A tampered / missing cached ``.bin`` (hash mismatch /
 file gone) is treated as NO cache — never served.
 
@@ -170,25 +183,36 @@ async def resolve_source_cached(
     now = clock()
     cache = ref.cache
 
-    # ---- 1. cache hit (cross-fire TTL) ----
-    newest = _newest_materialised_snapshot(
-        conn, schedule_id=schedule_id, source_id=source_id
-    )
-    if newest is not None:
-        age = now - newest.fetched_at
-        if timedelta(0) <= age <= timedelta(
-            seconds=cache.cache_ttl_seconds
-        ):
-            body = _read_verified_body(repo_root, newest)
-            if body is not None:
-                return CacheResolution(
-                    provenance=CacheProvenance.CACHE_HIT,
-                    content_bytes=body,
-                    content_hash=newest.content_hash,
-                    snapshot=newest,
-                )
-            # tampered / missing → fall through to the
-            # loader; never serve an unverified body.
+    # ---- 1. cache hit (cross-fire TTL no-probe window) ----
+    # SECURITY OPT-OUT (plan §1.4 / §9c): cache_ttl_seconds
+    # == 0 (or negative) ⇒ the cross-fire cache-hit path is
+    # SKIPPED unconditionally so the loader is probed EVERY
+    # fire and a live SourceAuthError / SourceSecurityError
+    # surfaces every time, never masked by a within-TTL hit.
+    # A POSITIVE TTL is a deliberate no-probe window: within
+    # it the captured snapshot IS the source and the loader
+    # is not invoked — there is no live auth to mask (the
+    # §3.5 non-fallback invariant governs the post-fetch
+    # path only).
+    if cache.cache_ttl_seconds > 0:
+        newest = _newest_materialised_snapshot(
+            conn, schedule_id=schedule_id, source_id=source_id
+        )
+        if newest is not None:
+            age = now - newest.fetched_at
+            if timedelta(0) <= age <= timedelta(
+                seconds=cache.cache_ttl_seconds
+            ):
+                body = _read_verified_body(repo_root, newest)
+                if body is not None:
+                    return CacheResolution(
+                        provenance=CacheProvenance.CACHE_HIT,
+                        content_bytes=body,
+                        content_hash=newest.content_hash,
+                        snapshot=newest,
+                    )
+                # tampered / missing → fall through to the
+                # loader; never serve an unverified body.
 
     # ---- 2. fetch ----
     loader_args: dict[str, Any] = {

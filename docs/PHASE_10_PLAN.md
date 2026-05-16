@@ -95,6 +95,30 @@ contracts; residual `realpath`/`startswith` is the
 intentional anti-pattern callout + dated disposition
 history). plan ≡ design ≡ tag-annotation.
 
+**Round-5 revision (2026-05-16)** closes the slice-5
+codex 🔴 — a SEMANTIC tension, not a code hack: a
+within-`cache_ttl_seconds` hit serves before the loader
+runs, so a non-fallback class (auth/security/…) could be
+"masked" by a `CACHE_HIT`. Resolved against the plan
+(codex option 3 — make the decision explicit as a plan
+amendment): §1.4 gains the **"Cache-hit vs the
+non-fallback invariant"** + **"`cache_ttl_seconds == 0`
+⇒ NEVER a cache hit"** clauses. Chosen semantics: the
+cross-fire cache (§1.4: "snapshot-backed … persists
+across wakeup ticks; the TTL governs staleness of the
+persisted last-good snapshot") is a deliberate **no-probe
+window** — within TTL the captured snapshot IS the source
+and the loader is not invoked, so a `CACHE_HIT` legitimately
+does not re-probe (there is no live auth to mask). The
+§3.5 "never serve stale on a non-fallback failure"
+invariant governs the **post-fetch** decision only.
+`cache_ttl_seconds == 0` is the explicit security opt-out:
+zero window ⇒ cache-hit path skipped ⇒ loader probed
+EVERY fire ⇒ a live auth/security failure surfaces every
+time, never masked. §3.3 Steps + `CONTRACTS_V2_DESIGN.md`
+§5.3.2 kept consistent. Full disposition + the quoted
+authorising wording in §9c.
+
 Q-call answers folded in: Q1 `SourceRefSpec` yes (reuse
 existing policy models); Q2 distinct cache knobs, both
 pinned; Q3 Protocol DI for Slack/Drive readers; Q4 keep
@@ -199,6 +223,36 @@ Read this with:
    resolver routes straight to `SOURCE_FAILED` for
    re-auth; only `SourceFetchError` (network) is eligible
    for `fallback_policy` (§5.3.2).
+
+   **Cache-hit vs the non-fallback invariant — explicit
+   semantics (slice-5 codex 🔴; plan amendment, round-5).**
+   The §3.5 "a non-fallback failure NEVER serves a stale
+   cached snapshot" invariant governs the **post-fetch**
+   decision ONLY — i.e. what the resolver does *after* the
+   loader has been invoked and raised. A **within-
+   `cache_ttl_seconds`** verified hit is the deliberate
+   cross-fire optimisation defined above ("snapshot-backed
+   ... persists across wakeup ticks; the TTL governs
+   staleness of the persisted last-good snapshot"): inside
+   that window **the captured snapshot IS the source for
+   this fire and the loader is NOT invoked** — there is no
+   live auth to mask because no fetch occurs. A within-TTL
+   `CACHE_HIT` is therefore the correct, plan-authorised
+   outcome even if the (un-invoked) live source would now
+   auth/security-fail; the author bounds that exposure via
+   `cache_ttl_seconds`.
+
+   **Security opt-out — `cache_ttl_seconds == 0` ⇒ NEVER
+   a cache hit.** A source that must (re)authorize on
+   EVERY fire sets `cache_ttl_seconds = 0`: with a zero
+   window the cross-fire cache-hit path is skipped
+   unconditionally and the loader is ALWAYS probed, so a
+   live `SourceAuthError` / `SourceSecurityError` etc.
+   surfaces every fire (never masked by a stale entry).
+   This makes the knob the crisp, testable security
+   control. The `fallback_policy` path is unchanged: a
+   non-fallback error still NEVER falls back to cache
+   regardless of the TTL.
 5. **Live-source change policy** (`LiveChangePolicy`,
    `enums.py:239`): `allow` / `alert_on_shape_change` /
    `require_reapprove_on_shape_change`; shape = item_count
@@ -402,15 +456,20 @@ async def resolve_source(
 ) -> SourceResolution   # ok | drift | failed (typed)
 ```
 
-Steps: cache check → loader dispatch (`SOURCES.require`)
+Steps: **cache check** (a verified materialised snapshot
+within `cache_ttl_seconds` → `CACHE_HIT`, loader NOT
+invoked — the §1.4 cross-fire no-probe window;
+`cache_ttl_seconds == 0` ⇒ this path is skipped, loader
+always probed) → loader dispatch (`SOURCES.require`)
 → on a raised `SourceError` apply the single §3.5 rule
 (`fallback_eligible` ⇔ `SourceFetchError` → consult
 `fallback_policy`; ANY other subclass → `SOURCE_FAILED`,
-cache + fallback bypassed) → snapshot write (+ on_oversize)
-→ shape/drift check → retention prune (post-write) →
-append exactly one EventLedger event. Never raises into
-the caller for an expected failure — returns a typed
-resolution (mirrors phase-9 `SlackPostResult`).
+cache + fallback bypassed — post-fetch only) → snapshot
+write (+ on_oversize) → shape/drift check → retention
+prune (post-write) → append exactly one EventLedger
+event. Never raises into the caller for an expected
+failure — returns a typed resolution (mirrors phase-9
+`SlackPostResult`).
 
 ### 3.4 Snapshot writer + retention (`sources/snapshot_writer.py`)
 
@@ -928,6 +987,61 @@ BOTH docs for `json` / `unlink` / `transaction` /
 
 **Zero substantive divergences remain. plan ≡ design ≡
 tag-annotation.** Plan-review round 4 requested.
+
+## 9c. Codex slice-5 disposition (CLOSED) — cache-hit vs non-fallback semantics
+
+Slice-5 codex 🔴: the cache-hit path serves a within-TTL
+verified snapshot BEFORE the loader runs, so a
+non-fallback class (auth/security/policy/parse) could be
+masked by `CACHE_HIT` instead of `SOURCE_FAILED`. Codex
+required this be resolved against the plan first, not
+hacked.
+
+**Interpretation taken: codex option 1 + 3 — the plan
+already commits cache_ttl to a no-probe cross-fire
+window; round-5 makes the cache-hit-vs-auth boundary
+EXPLICIT (plan amendment) and adds the `ttl == 0`
+security opt-out.**
+
+Authorising plan wording (verbatim, §1.4 item 4,
+pre-amendment): *"`LiveSourceCachePolicy.cache_ttl_seconds`
+= cross-fire source cache (snapshot-backed, persists
+across wakeup ticks). … the TTL governs staleness of the
+persisted last-good snapshot."* and the §3.5 invariant
+text: *"→ `SOURCE_FAILED` with cache AND fallback
+bypassed. This … a denied path / oversize / parse failure
+can never serve a stale cached snapshot"* — the invariant
+is phrased about the loader-raised (post-fetch) decision,
+not a per-fire re-auth. A snapshot-backed cross-fire
+cache that re-authorised on every hit would not be a
+cache at all.
+
+**Committed semantics:**
+1. A within-`cache_ttl_seconds` verified hit serves
+   WITHOUT invoking the loader — by design; no live auth
+   occurs so none is "masked". `CACHE_HIT` is the
+   correct, plan-authorised outcome even if the
+   un-invoked live source would now fail.
+2. `cache_ttl_seconds == 0` ⇒ the cross-fire cache-hit
+   path is skipped UNCONDITIONALLY ⇒ the loader is
+   probed EVERY fire ⇒ a live `SourceAuthError` /
+   `SourceSecurityError` / … surfaces every fire, never
+   masked. This is the explicit, testable security
+   control for sources that must re-authorize per fire.
+3. The §3.5 non-fallback invariant is unchanged and
+   governs the post-fetch path ONLY: a loader-raised
+   non-fallback error still NEVER falls back to cache,
+   any TTL.
+
+Implementation: `cache.py` skips the cache-hit branch
+when `cache.cache_ttl_seconds <= 0`. Pins (slice-5-fix):
+ttl>0 within window + loader-would-`SourceAuthError`
+→ `CACHE_HIT`, loader NOT called (documented optimisation);
+ttl==0 + warm verified cache + loader `SourceAuthError`
+→ raises `SourceAuthError` (NEVER `CACHE_HIT`, never
+served); ttl==0 + warm cache + loader success → `FRESH`
+(probed every fire). `CONTRACTS_V2_DESIGN.md` §5.3.2 kept
+consistent.
 
 ## 9. Codex round-1 disposition (CLOSED)
 
