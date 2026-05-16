@@ -151,6 +151,7 @@ def _build_spec(
     *,
     execution_plan_hash: str | None,
     schedule_id: str = "sched_src",
+    failure_action: FailureActionType = FailureActionType.ALERT_ADMIN,
 ) -> ScheduleSpec:
     spec = ScheduleSpec(
         id=schedule_id,
@@ -168,9 +169,7 @@ def _build_spec(
             target_session_id="C012ABCDE",
             fallback_policy=DeliveryFallbackPolicy.SESSION_TO_ORIGIN,
         ),
-        failure=FailurePolicy(
-            on_failure_action=FailureActionType.ALERT_ADMIN
-        ),
+        failure=FailurePolicy(on_failure_action=failure_action),
         audit=AuditPolicy(),
         status=ScheduleStatus.ACTIVE,
         execution_plan_hash=execution_plan_hash,
@@ -278,6 +277,40 @@ def _failed_reason(factory, run_id: str = "run-src") -> str | None:
         return None
     finally:
         conn.close()
+
+
+def _events(factory, run_id: str = "run-src"):
+    conn = factory()
+    try:
+        return list_events_for_run(conn, run_id)
+    finally:
+        conn.close()
+
+
+class _FailingExecuteConn:
+    """Wrapper that raises on the ``UPDATE runs`` statement
+    (fires AFTER any in-TX event appends). Mirrors the
+    OneOff atomicity harness in
+    test_runtime_worker_emit_branch.py."""
+
+    def __init__(self, real_conn: sqlite3.Connection) -> None:
+        object.__setattr__(self, "_real", real_conn)
+
+    def execute(self, sql, *args, **kwargs):
+        if "UPDATE runs" in sql:
+            raise sqlite3.IntegrityError(
+                "simulated post-events failure"
+            )
+        return self._real.execute(sql, *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+    def __setattr__(self, name, value):
+        if name == "_real":
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._real, name, value)
 
 
 # ---------------------------------------------------------------------------
@@ -490,3 +523,145 @@ def test_worker_module_never_calls_or_imports_snapshot_writers():
     # Belt-and-braces: not bound on the imported module.
     for sym in _SNAPSHOT_WRITERS:
         assert not hasattr(worker_mod, sym)
+
+
+# ---------------------------------------------------------------------------
+# Slice 2 — _route_source_failure_policy (Q6 shared atomic core)
+# ---------------------------------------------------------------------------
+
+
+def _route_setup(tmp_path, *, failure_action):
+    factory, _ = _conn_factory(tmp_path)
+    plan = _plan()
+    spec = _build_spec(
+        execution_plan_hash=plan.hash,
+        failure_action=failure_action,
+    )
+    run = _seed(factory, spec=spec, plan=plan)
+    worker = _make_worker(factory)
+    return factory, spec, run, worker
+
+
+@pytest.mark.asyncio
+async def test_route_source_failure_alert_admin(tmp_path):
+    """ALERT_ADMIN: admin_alert_sent + run_failed (reason
+    carried), the running→failed UPDATE, and NO emit_failed
+    (the resolver owns the terminal SOURCE_FAILED — this
+    path does not double-emit)."""
+    factory, spec, run, worker = _route_setup(
+        tmp_path, failure_action=FailureActionType.ALERT_ADMIN
+    )
+    conn = factory()
+    try:
+        await worker._route_source_failure_policy(
+            conn=conn,
+            run=run,
+            spec=spec,
+            reason="source_security_denied",
+            error_text="path escaped the allowed root",
+        )
+    finally:
+        conn.close()
+
+    kinds = [e.kind for e in _events(factory)]
+    assert EventKind.EMIT_FAILED not in kinds
+    assert EventKind.ADMIN_ALERT_SENT in kinds
+    assert EventKind.RUN_FAILED in kinds
+    assert _status(factory) == "failed"
+    assert _failed_reason(factory) == "source_security_denied"
+
+
+@pytest.mark.asyncio
+async def test_route_source_failure_abort_silent(tmp_path):
+    """ABORT_SILENT: run_failed + running→failed only — NO
+    admin_alert_sent, NO emit_failed."""
+    factory, spec, run, worker = _route_setup(
+        tmp_path, failure_action=FailureActionType.ABORT_SILENT
+    )
+    conn = factory()
+    try:
+        await worker._route_source_failure_policy(
+            conn=conn,
+            run=run,
+            spec=spec,
+            reason="source_fetch_failed",
+            error_text="upstream 503",
+        )
+    finally:
+        conn.close()
+
+    kinds = [e.kind for e in _events(factory)]
+    assert EventKind.ADMIN_ALERT_SENT not in kinds
+    assert EventKind.EMIT_FAILED not in kinds
+    assert EventKind.RUN_FAILED in kinds
+    assert _status(factory) == "failed"
+
+
+@pytest.mark.asyncio
+async def test_route_source_failure_retry_later_downgrades(tmp_path):
+    """retry_later → downgraded to alert_admin: an
+    admin_alert_sent with a ``downgrade_from`` payload key
+    (the retry chain is step 14). Same shared admin builder
+    as the OneOff path."""
+    factory, spec, run, worker = _route_setup(
+        tmp_path, failure_action=FailureActionType.RETRY_LATER
+    )
+    conn = factory()
+    try:
+        await worker._route_source_failure_policy(
+            conn=conn,
+            run=run,
+            spec=spec,
+            reason="source_fetch_failed",
+            error_text="upstream timeout",
+        )
+    finally:
+        conn.close()
+
+    admin = [
+        e
+        for e in _events(factory)
+        if e.kind is EventKind.ADMIN_ALERT_SENT
+    ]
+    assert len(admin) == 1
+    assert admin[0].payload.get("downgrade_from") == "retry_later"
+    assert _status(factory) == "failed"
+
+
+@pytest.mark.asyncio
+async def test_route_source_failure_atomic_rollback(tmp_path):
+    """Shared atomic core (Q6): if the running→failed
+    UPDATE raises mid-TX, the admin_alert_sent appended
+    in-flight is ROLLED BACK and the Run stays RUNNING —
+    same single-transaction invariant proven for the OneOff
+    path in test_runtime_worker_emit_branch.py."""
+    factory, spec, run, worker = _route_setup(
+        tmp_path, failure_action=FailureActionType.ALERT_ADMIN
+    )
+
+    real_conn = factory()
+    wrapped = _FailingExecuteConn(real_conn)
+    try:
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="simulated post-events failure",
+        ):
+            await worker._route_source_failure_policy(
+                conn=wrapped,
+                run=run,
+                spec=spec,
+                reason="source_fetch_failed",
+                error_text="upstream 500",
+            )
+    finally:
+        real_conn.close()
+
+    persisted = {e.kind for e in _events(factory)}
+    assert EventKind.ADMIN_ALERT_SENT not in persisted, (
+        f"admin_alert_sent leaked through rollback: "
+        f"{persisted!r}"
+    )
+    assert EventKind.RUN_FAILED not in persisted
+    # Run stays RUNNING → recovery promotes (no permanent
+    # FAILED written behind a rolled-back ledger).
+    assert _status(factory) == "running"

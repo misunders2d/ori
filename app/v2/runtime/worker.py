@@ -650,6 +650,128 @@ class Worker:
             },
         )
 
+    def _build_admin_alert_event(
+        self,
+        *,
+        run,
+        spec: ScheduleSpec,
+        reason: str,
+        error_text: str,
+        correlates_id: Optional[str],
+    ) -> Optional[Event]:
+        """Shared admin-alert precompute (Q6, phase-11
+        slice 2). ``ABORT_SILENT`` → ``None`` (NO factory /
+        clock call). ``ALERT_ADMIN`` → an
+        ``ADMIN_ALERT_SENT`` event. Anything else
+        (``retry_later`` / custom) → downgrade to
+        ``alert_admin`` semantics with a WARNING and a
+        ``downgrade_from`` payload key (the retry chain is
+        step 14). Pure precompute — the caller invokes it at
+        the exact point in its own ``event_id_factory`` /
+        ``clock`` call order where the admin event was
+        historically built, so the OneOff path's event
+        ids / timestamps / ordering stay BYTE-IDENTICAL."""
+        action = spec.failure.on_failure_action
+        if action == FailureActionType.ABORT_SILENT:
+            return None
+        if action == FailureActionType.ALERT_ADMIN:
+            return Event(
+                id=self._event_id_factory(),
+                run_id=run.id,
+                schedule_id=run.schedule_id,
+                ts=self._clock(),
+                kind=EventKind.ADMIN_ALERT_SENT,
+                payload={
+                    "worker_id": self._worker_id,
+                    "reason": reason,
+                    "error": error_text,
+                },
+                correlates=correlates_id,
+            )
+        # retry_later / custom — step-14 work. Downgrade to
+        # alert_admin semantics so operators still see it.
+        _logger.warning(
+            "worker %s saw FailurePolicy.%s for "
+            "schedule_id=%r; phase 9 downgrades to "
+            "alert_admin (retry chain lands in phase 10)",
+            self._worker_id,
+            action.value,
+            spec.id,
+        )
+        return Event(
+            id=self._event_id_factory(),
+            run_id=run.id,
+            schedule_id=run.schedule_id,
+            ts=self._clock(),
+            kind=EventKind.ADMIN_ALERT_SENT,
+            payload={
+                "worker_id": self._worker_id,
+                "reason": reason,
+                "error": error_text,
+                "downgrade_from": action.value,
+            },
+            correlates=correlates_id,
+        )
+
+    async def _commit_failure_atomic(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        run,
+        completed_at: datetime,
+        error_text: str,
+        failure_event: Optional[Event],
+        admin_event: Optional[Event],
+        run_failed_event: Event,
+    ) -> None:
+        """The round-3-hardened single-transaction commit
+        core (Q6, phase-11 slice 2). Writes the optional
+        failure event + the optional admin-alert event +
+        the ``running → failed`` Run UPDATE + the
+        ``run_failed`` event inside ONE explicit
+        ``transaction(conn)`` block. Any raise inside the
+        block rolls back EVERY write — the EventLedger
+        never carries a failure / admin-alert event for a
+        Run that still reads ``running`` (pre-fix the helper
+        chained a second TX whose collision left the prior
+        events committed + the Run stuck at ``running``).
+
+        Shared by :meth:`_route_failure_policy` (OneOff —
+        ``failure_event`` = the ``emit_failed`` event) and
+        :meth:`_route_source_failure_policy` (source-driven
+        — ``failure_event`` is ``None``: the resolver
+        already emitted its terminal ``SOURCE_FAILED``; no
+        double-emit). The SQL, event order, rowcount guard
+        and rollback semantics are identical on both
+        paths."""
+        with transaction(conn):
+            if failure_event is not None:
+                append_event(conn, failure_event)
+            if admin_event is not None:
+                append_event(conn, admin_event)
+            cursor = conn.execute(
+                "UPDATE runs SET status = ?, completed_at = ?, "
+                "error = ? WHERE id = ?",
+                (
+                    RunStatus.FAILED.value,
+                    completed_at.astimezone(timezone.utc).isoformat(),
+                    error_text,
+                    run.id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                # Defensive: the run row should exist by the
+                # time we get here (caller saw it transition
+                # to RUNNING). If it vanished, raise so the
+                # transaction rolls back the events we just
+                # inserted. Recovery picks up from RUNNING.
+                raise RuntimeError(
+                    f"_commit_failure_atomic: runs row "
+                    f"{run.id!r} vanished mid-TX; rolling "
+                    "back the failure + admin-alert events"
+                )
+            append_event(conn, run_failed_event)
+
     async def _route_failure_policy(
         self,
         *,
@@ -658,31 +780,26 @@ class Worker:
         spec: ScheduleSpec,
         result: SlackPostResult,
     ) -> None:
-        """Emit-failure routing per
-        :class:`FailurePolicy.on_failure_action`. Phase 9
-        implements ``alert_admin`` + ``abort_silent``.
-        ``retry_later`` is downgraded to ``alert_admin``
-        semantics with a WARNING log (phase 10 ships the
-        retry chain).
+        """OneOff emit-failure routing per
+        :class:`FailurePolicy.on_failure_action`.
 
-        **Atomicity (round-3 reviewer slice-5 fix):** the
-        helper writes 2-3 events plus the
-        ``running → failed`` Run UPDATE inside ONE
-        explicit ``transaction(conn)`` block. Any raise
-        inside the block rolls back every write — the
-        EventLedger never carries an ``emit_failed`` /
-        ``admin_alert_sent`` event for a Run that still
-        reads ``running``. Pre-fix this helper called
-        ``update_run_status_and_append_event`` last, which
-        opens its own TX; an event-id collision on the
-        final write left the prior events committed and
-        Run status stuck at ``running``.
+        **BYTE-IDENTICAL to phase 9–10 (Q6 slice-2
+        constraint).** The event-id-factory / clock call
+        ORDER, the three event payloads, the
+        ``downgrade_from`` WARNING, the single
+        ``transaction(conn)`` boundary and the rollback /
+        rowcount guard are all unchanged — slice 2 only
+        factors the admin precompute into
+        :meth:`_build_admin_alert_event` (invoked at the
+        same point the admin event was historically built)
+        and the atomic commit into
+        :meth:`_commit_failure_atomic`. The OneOff path
+        must not regress; the existing atomicity test pins
+        it.
         """
-        # Pre-compute every event + timestamps OUTSIDE the
-        # transaction so failures in the factories surface
-        # before any write lands. Each Event constructor
-        # validates the payload shape; a malformed payload
-        # raises here, not mid-TX.
+        # emit_failed precompute — UNCHANGED (factory call
+        # #1, clock #1). Pre-computed OUTSIDE the TX so a
+        # malformed payload raises before any write.
         emit_failed_event = Event(
             id=self._event_id_factory(),
             run_id=run.id,
@@ -697,50 +814,16 @@ class Worker:
             correlates=None,
         )
 
-        action = spec.failure.on_failure_action
-        admin_event: Optional[Event] = None
-        if action == FailureActionType.ABORT_SILENT:
-            admin_event = None
-        elif action == FailureActionType.ALERT_ADMIN:
-            admin_event = Event(
-                id=self._event_id_factory(),
-                run_id=run.id,
-                schedule_id=run.schedule_id,
-                ts=self._clock(),
-                kind=EventKind.ADMIN_ALERT_SENT,
-                payload={
-                    "worker_id": self._worker_id,
-                    "reason": "emit_failed",
-                    "error": result.error or "",
-                },
-                correlates=emit_failed_event.id,
-            )
-        else:
-            # retry_later / custom — phase 10 / 12 work.
-            # Downgrade to alert_admin semantics so phase 9
-            # operators still see the failure.
-            _logger.warning(
-                "worker %s saw FailurePolicy.%s for "
-                "schedule_id=%r; phase 9 downgrades to "
-                "alert_admin (retry chain lands in phase 10)",
-                self._worker_id,
-                action.value,
-                spec.id,
-            )
-            admin_event = Event(
-                id=self._event_id_factory(),
-                run_id=run.id,
-                schedule_id=run.schedule_id,
-                ts=self._clock(),
-                kind=EventKind.ADMIN_ALERT_SENT,
-                payload={
-                    "worker_id": self._worker_id,
-                    "reason": "emit_failed",
-                    "error": result.error or "",
-                    "downgrade_from": action.value,
-                },
-                correlates=emit_failed_event.id,
-            )
+        # admin precompute (factory #2 / clock #2 when
+        # emitted) — same call order as the historical
+        # inline block.
+        admin_event = self._build_admin_alert_event(
+            run=run,
+            spec=spec,
+            reason="emit_failed",
+            error_text=result.error or "",
+            correlates_id=emit_failed_event.id,
+        )
 
         assert_legal_transition(
             RunStatus.RUNNING, RunStatus.FAILED
@@ -760,36 +843,80 @@ class Worker:
             correlates=emit_failed_event.id,
         )
 
-        # ---- Atomic write block ----
-        # All 2-3 events + the Run UPDATE live in one
-        # explicit transaction. Any raise inside the block
-        # triggers ROLLBACK; no partial state lands.
-        with transaction(conn):
-            append_event(conn, emit_failed_event)
-            if admin_event is not None:
-                append_event(conn, admin_event)
-            cursor = conn.execute(
-                "UPDATE runs SET status = ?, completed_at = ?, "
-                "error = ? WHERE id = ?",
-                (
-                    RunStatus.FAILED.value,
-                    completed_at.astimezone(timezone.utc).isoformat(),
-                    result.error or "",
-                    run.id,
-                ),
-            )
-            if cursor.rowcount == 0:
-                # Defensive: the run row should exist by the
-                # time we get here (caller saw it transition
-                # to RUNNING). If it vanished, raise so the
-                # transaction rolls back the events we just
-                # inserted. Recovery picks up from RUNNING.
-                raise RuntimeError(
-                    f"_route_failure_policy: runs row "
-                    f"{run.id!r} vanished mid-TX; rolling "
-                    "back emit_failed + admin_alert events"
-                )
-            append_event(conn, run_failed_event)
+        await self._commit_failure_atomic(
+            conn=conn,
+            run=run,
+            completed_at=completed_at,
+            error_text=result.error or "",
+            failure_event=emit_failed_event,
+            admin_event=admin_event,
+            run_failed_event=run_failed_event,
+        )
+
+    async def _route_source_failure_policy(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        run,
+        spec: ScheduleSpec,
+        reason: str,
+        error_text: str,
+    ) -> None:
+        """Source-driven resolve/emit failure routing
+        (Q6, phase-11 slice 2 — sibling of
+        :meth:`_route_failure_policy`).
+
+        Wired into the fire path in slices 3 (resolve
+        FAILED / ``require_reapprove``) and 5 (source emit
+        failure). The resolver has ALREADY emitted its
+        terminal ``SOURCE_FAILED`` event (it owns that), so
+        this path does NOT emit a separate failure event —
+        ``failure_event=None``. It routes the admin alert
+        per :class:`FailurePolicy.on_failure_action` (via
+        the SHARED :meth:`_build_admin_alert_event`) and
+        commits the ``running → failed`` Run UPDATE +
+        ``run_failed`` event through the SHARED
+        :meth:`_commit_failure_atomic` core — same
+        single-transaction atomicity invariant as the
+        OneOff path. ``retry_later`` is downgraded to
+        ``alert_admin`` + WARNING (retry chain = step 14)
+        by the shared admin builder.
+        """
+        admin_event = self._build_admin_alert_event(
+            run=run,
+            spec=spec,
+            reason=reason,
+            error_text=error_text,
+            correlates_id=None,
+        )
+
+        assert_legal_transition(
+            RunStatus.RUNNING, RunStatus.FAILED
+        )
+        completed_at = self._clock()
+        run_failed_event = Event(
+            id=self._event_id_factory(),
+            run_id=run.id,
+            schedule_id=run.schedule_id,
+            ts=completed_at,
+            kind=EventKind.RUN_FAILED,
+            payload={
+                "worker_id": self._worker_id,
+                "reason": reason,
+                "error": error_text,
+            },
+            correlates=None,
+        )
+
+        await self._commit_failure_atomic(
+            conn=conn,
+            run=run,
+            completed_at=completed_at,
+            error_text=error_text,
+            failure_event=None,
+            admin_event=admin_event,
+            run_failed_event=run_failed_event,
+        )
 
     async def _run_loop(self) -> None:
         """The poll loop. Runs until ``stop_event`` is set."""
