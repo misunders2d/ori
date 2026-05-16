@@ -278,6 +278,105 @@ async def test_missing_target_symlink_escape_is_security_not_notfound(
 
 
 # ===========================================================================
+# TOCTOU — check and read MUST hit the same inode
+# (codex slice-3 🔴 + 🟡)
+# ===========================================================================
+
+
+class _SwapToSymlinkAfterFence(LocalFileSource):
+    """Simulates the race: the checked file is replaced by
+    an out-of-root symlink AFTER _enforce_fence returns,
+    before the loader opens it."""
+
+    def __init__(self, *, swap_target: Path, **kw):
+        super().__init__(**kw)
+        self._swap_target = swap_target
+
+    def _enforce_fence(self, resolved: Path) -> None:
+        super()._enforce_fence(resolved)  # passes legitimately
+        os.remove(resolved)
+        os.symlink(self._swap_target, resolved)
+
+
+class _GrowAfterFence(LocalFileSource):
+    """Simulates the race: the file grows past max_bytes
+    AFTER the fence/stat, before the read."""
+
+    def __init__(self, *, grow_to: int, **kw):
+        super().__init__(**kw)
+        self._grow_to = grow_to
+
+    def _enforce_fence(self, resolved: Path) -> None:
+        super()._enforce_fence(resolved)
+        with open(resolved, "ab") as fh:
+            fh.write(b"A" * self._grow_to)
+
+
+@pytest.mark.asyncio
+async def test_symlink_swap_after_fence_refuses(tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    f = root / "ok.txt"
+    f.write_text("legit")
+    outside = tmp_path / "secret.txt"
+    outside.write_text("PWNED")
+
+    src = _SwapToSymlinkAfterFence(
+        allowed_roots=[root], swap_target=outside
+    )
+    with pytest.raises(SourceSecurityError) as ei:
+        await _load(src, f)
+    assert ei.value.payload_code == "symlink_swapped_after_fence"
+    assert ei.value.fallback_eligible is False
+    assert not isinstance(ei.value, SourceFetchError)
+
+
+@pytest.mark.asyncio
+async def test_grow_after_stat_refuses_non_fallback(tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    f = root / "small.txt"
+    f.write_bytes(b"hi")  # 2 bytes — under the limit at check time
+    src = _GrowAfterFence(
+        allowed_roots=[root], max_bytes=10, grow_to=100
+    )
+    with pytest.raises(SourcePolicyError) as ei:
+        await _load(src, f)
+    assert ei.value.payload_code == "source_local_file_oversize"
+    assert ei.value.fallback_eligible is False
+
+
+@pytest.mark.asyncio
+async def test_oversize_giant_file_not_slurped(tmp_path):
+    """The capped fd read must not pull the whole file into
+    memory — reading max_bytes+1 then rejecting."""
+    root = tmp_path / "root"
+    root.mkdir()
+    f = root / "big.txt"
+    f.write_bytes(b"B" * 5000)
+    src = LocalFileSource(allowed_roots=[root], max_bytes=100)
+    with pytest.raises(SourcePolicyError) as ei:
+        await _load(src, f)
+    assert ei.value.payload_code == "source_local_file_oversize"
+    assert ei.value.fallback_eligible is False
+
+
+@pytest.mark.asyncio
+async def test_directory_path_refused_non_regular(tmp_path):
+    """A path that fstat-s as a non-regular file (dir)
+    after the open is refused as SourceSecurityError."""
+    root = tmp_path / "root"
+    # allowlisted extension so the mime check passes and we
+    # reach the post-open fstat regular-file check.
+    (root / "d.txt").mkdir(parents=True)
+    src = _src(root)
+    with pytest.raises(SourceSecurityError) as ei:
+        await _load(src, root / "d.txt")
+    assert ei.value.payload_code == "path_not_a_regular_file"
+    assert ei.value.fallback_eligible is False
+
+
+# ===========================================================================
 # Policy refusals — non-fallback SourcePolicyError
 # ===========================================================================
 

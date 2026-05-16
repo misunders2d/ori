@@ -33,6 +33,17 @@ missing" under ``fallback_policy``); a missing-target
 symlink escape is classified SECURITY first, never
 downgraded to the fallback path.
 
+TOCTOU defense (codex slice-3 🔴): after the fence the
+file is opened ONCE with ``O_NOFOLLOW | O_CLOEXEC`` and
+read THROUGH that fd via ``fstat`` — the path is never
+re-opened / re-resolved, so the check and the read hit the
+SAME inode. A post-fence swap of the final component to a
+symlink makes ``os.open`` fail (``ELOOP``) →
+``SourceSecurityError``. The size limit is enforced on the
+fd read (cap ``max_bytes + 1``), never on a prior
+``stat()`` (which is itself TOCTOU — the file can grow
+between stat and read).
+
 ``allowed_roots`` defaults to EMPTY (deny-all) — admin
 opt-in per root lands when the loader is wired (later
 phase). ``max_bytes`` default 1 MiB; the full §3.4
@@ -54,8 +65,11 @@ Arg contract — ``args``:
 from __future__ import annotations
 
 import base64
+import errno
 import fnmatch
 import json
+import os
+import stat as _stat
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
@@ -124,6 +138,22 @@ LOCAL_FILE_DESCRIPTOR = SourceDescriptor(
     supports_versioning=False,
     supported_selection_methods=[SelectionMethod.CONTENT_HASH],
 )
+
+
+def _read_capped(fd: int, limit: int) -> bytes:
+    """Read at most ``limit`` bytes from ``fd`` (handles
+    short reads). Caller passes ``max_bytes + 1`` and
+    rejects when the result exceeds ``max_bytes`` — so an
+    oversize/grown file is never fully read into memory."""
+    chunks: list[bytes] = []
+    remaining = limit
+    while remaining > 0:
+        block = os.read(fd, remaining)
+        if not block:
+            break
+        chunks.append(block)
+        remaining -= len(block)
+    return b"".join(chunks)
 
 
 def _resolve_deny_dirs() -> tuple[Path, ...]:
@@ -245,13 +275,6 @@ class LocalFileSource:
 
         self._enforce_fence(resolved)
 
-        if not resolved.is_file():
-            raise SourceSecurityError(
-                f"path {str(resolved)!r} is not a regular "
-                "file",
-                code="path_not_a_regular_file",
-            )
-
         kind = _EXT_KIND.get(resolved.suffix.lower())
         if kind is None:
             if not allow_binary:
@@ -264,17 +287,66 @@ class LocalFileSource:
                 )
             kind = "binary"
 
-        size = resolved.stat().st_size
-        if size > self._max_bytes:
+        # TOCTOU defense (codex slice-3 🔴): open the
+        # resolved path ONCE with O_NOFOLLOW | O_CLOEXEC,
+        # then fstat + read THROUGH this fd. The fence check
+        # and the read operate on the SAME inode — the path
+        # is NEVER re-opened or re-resolved after the check.
+        # A post-fence swap of the final component to a
+        # symlink makes os.open fail (O_NOFOLLOW → ELOOP) →
+        # non-fallback SourceSecurityError; content is never
+        # served, no cache fallback.
+        try:
+            fd = os.open(
+                resolved,
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            )
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                raise SourceSecurityError(
+                    f"path {str(resolved)!r} became a "
+                    "symlink after the fence check "
+                    "(O_NOFOLLOW)",
+                    code="symlink_swapped_after_fence",
+                ) from exc
+            if exc.errno == errno.ENOENT:
+                # Contained path vanished in the race →
+                # genuinely absent (design §5.3.2 lists
+                # "source missing" under fallback_policy).
+                raise SourceFetchError(
+                    f"local file {str(resolved)!r} not "
+                    "found",
+                    code="source_local_file_not_found",
+                ) from exc
+            raise SourceSecurityError(
+                f"cannot open {str(resolved)!r} no-follow: "
+                f"{exc}",
+                code="path_open_failed",
+            ) from exc
+        try:
+            st = os.fstat(fd)
+            if not _stat.S_ISREG(st.st_mode):
+                raise SourceSecurityError(
+                    f"path {str(resolved)!r} is not a "
+                    "regular file",
+                    code="path_not_a_regular_file",
+                )
+            # Read at most max_bytes+1 THROUGH the fd. Never
+            # trust a prior stat() size — the file may grow
+            # between stat and read (TOCTOU); cap the read
+            # itself so a giant file is never slurped.
+            raw = _read_capped(fd, self._max_bytes + 1)
+        finally:
+            os.close(fd)
+
+        if len(raw) > self._max_bytes:
             raise SourcePolicyError(
-                f"local file is {size} bytes > max "
-                f"{self._max_bytes} (on_oversize: "
-                "fail_and_alert; slice-4 writer wires the "
-                "other branches)",
+                f"local file exceeds max {self._max_bytes} "
+                "bytes (on_oversize: fail_and_alert; "
+                "slice-4 writer wires the other branches)",
                 code="source_local_file_oversize",
             )
 
-        raw = resolved.read_bytes()
         return self._build_result(
             kind=kind,
             raw=raw,
