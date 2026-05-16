@@ -65,6 +65,11 @@ from app.v2.sources.registry import (
     SourceLoaderRegistry,
     register_source_loader,
 )
+from app.v2.sources.cache import (
+    CacheProvenance,
+    CacheResolution,
+    resolve_source_cached,
+)
 from app.v2.sources.snapshot_writer import (
     PruneResult,
     SnapshotWriteResult,
@@ -149,4 +154,7 @@ __all__ = [
     "PruneResult",
     "write_snapshot",
     "prune_snapshots",
+    "CacheProvenance",
+    "CacheResolution",
+    "resolve_source_cached",
 ]
