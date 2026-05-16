@@ -11,6 +11,19 @@ be type-checked alongside the kind discriminator. The phase-1
 boundary is intentional — model the shape now, tighten payload
 schemas alongside the runtime that produces them.
 
+Phase 11 slice 6 advances that boundary for ONE kind by
+reviewer directive: :class:`RunSucceededPayload` is the first
+per-EventKind payload model. It carries a TYPED, ADDITIVE,
+DEFAULTED ``skipped_unchanged`` discriminator so a consumer
+can deterministically tell a success-by-delivering apart from
+a ``skip_unchanged`` no-op success WITHOUT a loose ad-hoc
+``payload[...]`` dict key (the Option-B fork-resolution for
+``RecurringSeriesFromSource``: no v002 events-schema migration
+in a cutover phase — a named skip event-kind, if ever needed,
+belongs with the step-14 idempotency event-schema work, and is
+explicitly NOT ``emit_skipped_idempotent`` which stays reserved
+for idempotency dedup, not content-unchanged).
+
 See ``docs/CONTRACTS_V2_DESIGN.md`` §4.0 + ``docs/PHASE_1_PLAN.md``
 §4.7.
 """
@@ -63,3 +76,34 @@ class Event(BaseModel):
         "= run_failed.id``, ``schedule_revived.correlates = "
         "schedule_archived.id``.",
     )
+
+
+class RunSucceededPayload(BaseModel):
+    """Typed payload for :attr:`EventKind.RUN_SUCCEEDED` —
+    the first per-EventKind payload model (phase-11 slice 6,
+    reviewer-directed; see the module docstring).
+
+    ``skipped_unchanged`` is the Option-B discriminator: a
+    real delivery leaves it ``False`` (the default — every
+    pre-slice-6 RUN_SUCCEEDED producer/consumer is
+    semantically unaffected: the field is ADDITIVE and
+    defaulted, mirroring the slice-4
+    ``ResolveOutcome.changed_vs_prior`` additive
+    discipline), a ``RecurringSeriesFromSource``
+    ``skip_unchanged`` no-op success sets it ``True``. The
+    skip rides the EXISTING single ``running → succeeded``
+    transition + its one ``RUN_SUCCEEDED`` write — no
+    second event, no second transaction, no new event kind.
+
+    The worker builds this model and ``model_dump()``s it
+    into :attr:`Event.payload` (which stays a free-form
+    dict at the storage boundary — the typing is enforced
+    at the construction site, not the column)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    worker_id: str
+    skipped_unchanged: bool = False
+
+
+__all__ = ["Event", "RunSucceededPayload"]

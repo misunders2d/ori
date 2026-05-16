@@ -114,6 +114,42 @@ fresh comparison; the field only EXPOSES the
 already-computed signal). Design §5.3.3/§5.3.5
 live-change wording is reconciled at closeout (same pass).
 
+### 0.2 Slice-6 skip-success recording (CLOSED — reviewer A/B arbitration)
+
+How a `skip_unchanged` no-op success is RECORDED in the
+ledger was a fork (same shape as the phase-10 cache-mask):
+
+- **A** — a new `emit_skipped_unchanged` EventKind. REJECTED:
+  the `events` table `kind` has a hardcoded `CHECK (kind IN
+  (...))` (`app/v2/ddl/v001_initial.sql`); a new kind needs
+  a **v002 SQLite table-rebuild of the audit ledger** — out
+  of scope for a cutover phase and a production-migration
+  risk.
+- **B (CHOSEN)** — a TYPED, ADDITIVE, DEFAULTED
+  discriminator on the EXISTING `RUN_SUCCEEDED` payload:
+  :class:`app.v2.models.event.RunSucceededPayload`
+  (`skipped_unchanged: bool = False`) — the first per-kind
+  payload model (event.py phase-2 boundary advanced by
+  reviewer directive). The skip rides the EXISTING single
+  `running → succeeded` transition + its one
+  `RUN_SUCCEEDED` write — **no new event, no second
+  `transaction(conn)`, no bypass of
+  `assert_legal_transition`**. A real delivery leaves it
+  the model default `False` (pre-slice-6 producers /
+  consumers reading `worker_id` semantically unaffected —
+  the slice-4 additive discipline); a skip sets it `True`.
+
+Rationale (folded here per the phase-9/10 stale-wording
+lesson — it lands in the slice that introduces the
+mechanism): **no v002 events-schema migration in a cutover
+phase; a named skip-kind, if ever needed, belongs with the
+step-14 idempotency event-schema work.** And explicitly:
+**`emit_skipped_idempotent` is NOT reused** —
+content-unchanged is not idempotency-dedup; that kind
+stays RESERVED for step-14 (reusing it would be an audit
+lie). The §3.3 skip DECISION logic is unchanged by B — B
+only changes how the skip-success is RECORDED.
+
 ---
 
 ## 1. Scope statement
@@ -365,15 +401,27 @@ if spec.execution_plan_hash is not None:
         spec=spec, plan=plan, resolved=resolved,
         slack_client=self._slack_client, clock=self._clock,
     )
-    if result.skipped_unchanged:         # skip_unchanged &&
-        return "succeeded"               #   outcome.changed_vs_prior is False
-                                         # (emit_skipped_unchanged event written
-                                         #  in-band by the emit step)
     if result.ok:
-        return "succeeded"
+        # skip_unchanged no-op (skipped_unchanged=True) and
+        # a real delivery are BOTH success — they differ
+        # only by the typed discriminator the CALLER threads
+        # onto the EXISTING single running→succeeded
+        # RUN_SUCCEEDED write (Option B, §0.2 — no new
+        # event, no second transaction).
+        return (
+            "succeeded_skipped"
+            if result.skipped_unchanged
+            else "succeeded"
+        )
     await self._route_source_failure_policy(
-        conn=conn, run=run, spec=spec, emit_result=result)
+        conn=conn, run=run, spec=spec,
+        reason="source_emit_failed",
+        error_text=result.error or "")
     return "failed"
+# caller (_tick_with_conn): "failed" → early-return (already
+# finalised); else skipped = (outcome == "succeeded_skipped");
+# the ONE running→succeeded write builds
+# RunSucceededPayload(worker_id, skipped_unchanged=skipped).
 ```
 
 Required points:
@@ -414,11 +462,15 @@ reads `resolved[input_id].changed_vs_prior` (§0.1) — it
 NEVER touches the snapshot table. Under
 `progress_strategy="skip_unchanged"`, if
 `changed_vs_prior is False` for the (single phase-11)
-source input → NO Slack call, `skipped_unchanged=True`,
-and the step writes an `emit_skipped_unchanged` event
-(in-band, same transaction discipline as a normal emit).
-Verbatim text preservation (§5.3.7) — no reformat of the
-resolved bytes beyond the template-declared envelope.
+source input → NO Slack call; the adapter returns
+`SourcePostResult(ok=True, skipped_unchanged=True)`. The
+worker records the no-op success via the TYPED
+`RunSucceededPayload.skipped_unchanged` discriminator on
+the EXISTING single `running → succeeded` `RUN_SUCCEEDED`
+write (Option B, §0.2 — NOT a new `emit_skipped_unchanged`
+event kind; no second transaction). Verbatim text
+preservation (§5.3.7) — no reformat of the resolved bytes
+beyond the template-declared envelope.
 
 ### 3.3 `RecurringSeriesFromSource` (`templates/…`)
 
@@ -547,9 +599,12 @@ landing path — round-1 🟡 slice-2/6 reorder).
    `templates/recurring_series_from_source.py`; typed
    args; `whole` + `skip_unchanged`. `skip_unchanged`
    reads `outcome.changed_vs_prior` ONLY (NEVER the
-   snapshot table); `skipped_unchanged` no-op-success
-   path + `emit_skipped_unchanged` event; all-provenance
-   table (§3.3) pinned.
+   snapshot table); the no-op success is recorded via the
+   TYPED `RunSucceededPayload.skipped_unchanged`
+   discriminator on the EXISTING `running → succeeded`
+   write (Option B, §0.2 — no new event kind / no second
+   transaction); all-provenance table (§3.3) pinned
+   through the worker.
 7. **Authoring tool** —
    `make_schedule_create_recurring_series_from_source`;
    ExecutionPlan compile (inputs+emit, zero reasoning);
@@ -619,8 +674,12 @@ landing path — round-1 🟡 slice-2/6 reorder).
   ok / not-ok; verbatim bytes preserved (§5.3.7);
   channel from EmitStep args; `skip_unchanged` +
   `changed_vs_prior is False` → NO Slack call +
-  `skipped_unchanged=True` + `emit_skipped_unchanged`
-  event; `OneOffReminder` emit byte-unaffected.
+  `SourcePostResult(ok=True, skipped_unchanged=True)`;
+  `OneOffReminder` emit byte-unaffected. The skip-success
+  RECORDING (typed `RunSucceededPayload` discriminator on
+  the existing `RUN_SUCCEEDED`, single TX) +
+  distinguishability are pinned in
+  `test_runtime_source_fire.py` / `test_models_event.py`.
 - `test_templates_recurring_series_from_source.py` —
   builder produces a valid `ScheduleSpec`+`ExecutionPlan`
   (zero reasoning, one source input, one source_post
@@ -778,7 +837,13 @@ ResolveOutcome.changed_vs_prior signal the resolver
 populates per source provenance (FRESH / CACHE_HIT /
 FALLBACK_LAST_GOOD / FALLBACK_DEFAULT); the worker is a
 pure snapshot consumer (never re-reads the snapshot
-table). NO new state table. The reasoning-bearing-plan
+table). A skip is a no-op SUCCESS recorded via the TYPED
+additive RunSucceededPayload.skipped_unchanged
+discriminator on the EXISTING single running->succeeded
+RUN_SUCCEEDED write (Option B — no new event kind, no
+v002 events-schema migration, no second transaction;
+emit_skipped_idempotent stays reserved for step-14
+idempotency). NO new state table. The reasoning-bearing-plan
 step-12 boundary is a clean run_failed
 (_fail_run reason=reasoning_unsupported_pending_step_12),
 NOT a raise; the raise pattern stays reserved for the

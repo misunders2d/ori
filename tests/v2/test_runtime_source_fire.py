@@ -140,7 +140,9 @@ def _source_ref() -> SourceRefSpec:
     )
 
 
-def _plan(*, with_reasoning: bool = False) -> ExecutionPlan:
+def _plan(
+    *, with_reasoning: bool = False, progress_strategy=None
+) -> ExecutionPlan:
     reasoning = []
     if with_reasoning:
         reasoning = [
@@ -170,7 +172,14 @@ def _plan(*, with_reasoning: bool = False) -> ExecutionPlan:
                 # template-declared in the EmitStep args
                 # (NOT spec.delivery). The slice-6 builder
                 # compiles this; tests set it directly.
-                args={"channel": "C012ABCDE"},
+                args=(
+                    {"channel": "C012ABCDE"}
+                    if progress_strategy is None
+                    else {
+                        "channel": "C012ABCDE",
+                        "progress_strategy": progress_strategy,
+                    }
+                ),
             )
         ],
     )
@@ -1043,3 +1052,93 @@ def test_dispatch_does_not_wrap_resolve_source_in_try():
                     "/ never-raise contract (it must be called "
                     "bare; switch on outcome.status only)"
                 )
+
+
+# ---------------------------------------------------------------------------
+# Slice 6 — skip_unchanged THROUGH the worker (Option B):
+# §3.3 provenance table via changed_vs_prior + the typed
+# RUN_SUCCEEDED discriminator (distinguishability) + Q5
+# ---------------------------------------------------------------------------
+
+
+def _run_succeeded_payload(factory, run_id="run-src"):
+    for ev in _events(factory, run_id):
+        if ev.kind is EventKind.RUN_SUCCEEDED:
+            return ev.payload
+    return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "strategy, changed_vs_prior, expect_emit",
+    [
+        # skip_unchanged: EMIT unless changed_vs_prior is
+        # False (the §3.3 table, expressed via the signal
+        # the worker actually consumes).
+        ("skip_unchanged", False, False),  # unchanged → SKIP
+        ("skip_unchanged", True, True),    # changed → EMIT
+        ("skip_unchanged", None, True),    # FALLBACK_DEFAULT → EMIT
+        # whole ALWAYS emits regardless of the signal.
+        ("whole", False, True),
+        ("whole", True, True),
+    ],
+)
+async def test_skip_unchanged_through_worker_and_distinguishability(
+    tmp_path, monkeypatch, strategy, changed_vs_prior, expect_emit
+):
+    from app.v2.sources.resolver import (
+        ResolveOutcome,
+        ResolveStatus,
+    )
+
+    factory, _ = _conn_factory(tmp_path)
+    plan = _plan(progress_strategy=strategy)
+    spec = _build_spec(execution_plan_hash=plan.hash)
+    _seed_pending(factory, spec=spec, plan=plan)
+    worker = _make_worker(factory, repo_root=tmp_path)
+
+    async def _spy(**kw):
+        return ResolveOutcome(
+            status=ResolveStatus.RESOLVED,
+            event_kind=EventKind.SOURCE_RESOLVED,
+            event_id="evt-spy",
+            event_emitted=True,
+            source_id=kw["source_id"],
+            content_bytes=b"hello",
+            content_hash="sha256:" + "a" * 64,
+            changed_vs_prior=changed_vs_prior,
+        )
+
+    # Worker NEVER re-reads the snapshot table — it consumes
+    # ONLY outcome.changed_vs_prior (the spy supplies it);
+    # this stubs the resolver entirely so any snapshot
+    # re-read would be observable as a wrong result.
+    monkeypatch.setattr(worker_mod, "resolve_source", _spy)
+
+    run_id = await worker.tick()
+
+    assert run_id == "run-src"
+    # Skip OR deliver — BOTH are SUCCESS (skip is a no-op
+    # success that rides the EXISTING running→succeeded).
+    assert _status(factory) == "succeeded"
+    kinds = [e.kind for e in _events(factory)]
+    assert EventKind.RUN_SUCCEEDED in kinds
+    assert EventKind.RUN_FAILED not in kinds
+    # NO new event kind for the skip (Option B): the only
+    # emit-family kinds that could appear don't.
+    assert EventKind.EMIT_FAILED not in kinds
+
+    # Slack called IFF we emitted.
+    assert (worker._slack_client.calls != []) is expect_emit
+    if expect_emit:
+        assert worker._slack_client.calls == [
+            {"channel": "C012ABCDE", "text": "hello"}
+        ]
+
+    # DISTINGUISHABILITY via the TYPED discriminator on the
+    # EXISTING RUN_SUCCEEDED payload (Option B): a real
+    # delivery → False; a skip no-op → True.
+    payload = _run_succeeded_payload(factory)
+    assert payload is not None
+    assert payload["skipped_unchanged"] is (not expect_emit)
+    assert payload["worker_id"] == "worker-1"

@@ -21,7 +21,7 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from app.v2.enums import EventKind
-from app.v2.models.event import Event
+from app.v2.models.event import Event, RunSucceededPayload
 
 
 _NOW = datetime(2026, 5, 15, 9, 0, tzinfo=timezone.utc)
@@ -112,6 +112,61 @@ def test_every_event_kind_round_trips(kind):
 def test_kind_rejects_unknown_string():
     with pytest.raises(ValidationError):
         Event(**_baseline_kwargs(kind="ran_a_little_late"))
+
+
+# ---------------------------------------------------------------------------
+# RunSucceededPayload — phase-11 slice-6 typed discriminator (Option B)
+# ---------------------------------------------------------------------------
+
+
+def test_run_succeeded_payload_additive_default_false():
+    """skipped_unchanged is ADDITIVE + DEFAULTED: a
+    pre-slice-6 producer that only sets worker_id gets
+    False — semantically unaffected (slice-4 discipline)."""
+    p = RunSucceededPayload(worker_id="w1")
+    assert p.skipped_unchanged is False
+    assert p.model_dump() == {
+        "worker_id": "w1",
+        "skipped_unchanged": False,
+    }
+
+
+def test_run_succeeded_payload_skip_sets_true():
+    p = RunSucceededPayload(worker_id="w1", skipped_unchanged=True)
+    assert p.model_dump()["skipped_unchanged"] is True
+
+
+def test_run_succeeded_payload_extra_forbidden():
+    with pytest.raises(ValidationError):
+        RunSucceededPayload(worker_id="w1", bogus=1)
+
+
+def test_run_succeeded_distinguishability_via_typed_field():
+    """A consumer DETERMINISTICALLY separates
+    succeeded-by-delivering from succeeded-by-skip via the
+    TYPED field — not a heuristic / ad-hoc dict probe."""
+    delivered = Event(
+        **_baseline_kwargs(kind=EventKind.RUN_SUCCEEDED)
+    ).model_copy(
+        update={
+            "payload": RunSucceededPayload(
+                worker_id="w1"
+            ).model_dump()
+        }
+    )
+    skipped = delivered.model_copy(
+        update={
+            "payload": RunSucceededPayload(
+                worker_id="w1", skipped_unchanged=True
+            ).model_dump()
+        }
+    )
+
+    def was_skip(ev: Event) -> bool:
+        return RunSucceededPayload(**ev.payload).skipped_unchanged
+
+    assert was_skip(delivered) is False
+    assert was_skip(skipped) is True
 
 
 # ---------------------------------------------------------------------------

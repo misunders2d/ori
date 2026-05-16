@@ -155,6 +155,38 @@ async def emit_source_to_slack(
         )
 
     outcome = next(iter(resolved.values()))
+
+    # Slice 6: progress_strategy (template-declared in the
+    # EmitStep args; default "whole"). The §3.3 rule:
+    # under "skip_unchanged" EMIT *unless*
+    # ``outcome.changed_vs_prior is False`` — so a changed
+    # FRESH, a first fire (FRESH no prior → True), and a
+    # FALLBACK_DEFAULT (changed_vs_prior is None → a
+    # degraded default MUST surface, AI_EDITS rule 13) all
+    # still post; only an explicit "unchanged"
+    # (FRESH-same-hash / CACHE_HIT / FALLBACK_LAST_GOOD →
+    # False) is the no-op. "whole" always posts. The
+    # signal is the slice-4 ADDITIVE
+    # ``ResolveOutcome.changed_vs_prior`` — this adapter /
+    # the worker NEVER re-reads the snapshot table (the
+    # original 🔴 invariant, now live-consumed).
+    progress_strategy = emit_step.args.get(
+        "progress_strategy", "whole"
+    )
+    if (
+        progress_strategy == "skip_unchanged"
+        and outcome.changed_vs_prior is False
+    ):
+        # No-op SUCCESS — no Slack call. The worker records
+        # this on the EXISTING RUN_SUCCEEDED via the typed
+        # discriminator (Option B); no new event kind.
+        return SourcePostResult(
+            ok=True,
+            channel=channel,
+            ts=None,
+            skipped_unchanged=True,
+        )
+
     content_bytes = outcome.content_bytes
     if content_bytes is None:
         return SourcePostResult(

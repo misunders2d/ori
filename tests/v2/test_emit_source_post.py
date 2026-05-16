@@ -70,12 +70,16 @@ def _src_ref() -> SourceRefSpec:
     )
 
 
-def _plan(*, channel=_CHANNEL, with_step=True) -> ExecutionPlan:
+def _plan(
+    *, channel=_CHANNEL, with_step=True, progress_strategy=None
+) -> ExecutionPlan:
     emit = []
     if with_step:
         args = {}
         if channel is not None:
             args["channel"] = channel
+        if progress_strategy is not None:
+            args["progress_strategy"] = progress_strategy
         emit = [
             EmitStep(id="post", adapter=SOURCE_POST_ADAPTER, args=args)
         ]
@@ -96,7 +100,9 @@ def _plan(*, channel=_CHANNEL, with_step=True) -> ExecutionPlan:
     ).with_fresh_hash()
 
 
-def _outcome(content_bytes=b"hello") -> ResolveOutcome:
+def _outcome(
+    content_bytes=b"hello", changed_vs_prior=None
+) -> ResolveOutcome:
     return ResolveOutcome(
         status=ResolveStatus.RESOLVED,
         event_kind=EventKind.SOURCE_RESOLVED,
@@ -105,6 +111,7 @@ def _outcome(content_bytes=b"hello") -> ResolveOutcome:
         source_id="src",
         content_bytes=content_bytes,
         content_hash="sha256:" + "a" * 64,
+        changed_vs_prior=changed_vs_prior,
     )
 
 
@@ -312,3 +319,69 @@ def test_source_post_no_uuid_or_datetime_now_call():
             ["uuid", "uuid4"],
             ["datetime", "now"],
         ), f"forbidden call {'.'.join(chain)}()"
+
+
+# ---------------------------------------------------------------------------
+# Slice 6 — progress_strategy skip_unchanged (§3.3 rule:
+# EMIT unless changed_vs_prior is False; whole ALWAYS emits)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_skip_unchanged_false_skips_no_slack_call():
+    slack = _StubSlack()
+    out = await _emit(
+        {"src": _outcome(changed_vs_prior=False)},
+        plan=_plan(progress_strategy="skip_unchanged"),
+        slack=slack,
+    )
+    assert out.ok is True
+    assert out.skipped_unchanged is True
+    assert out.ts is None
+    assert slack.calls == []  # NO Slack call on a no-op skip
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cvp", [True, None])
+async def test_skip_unchanged_emits_when_changed_or_none(cvp):
+    """Rule: EMIT unless changed_vs_prior is False. True
+    (changed / first-fire) AND None (FALLBACK_DEFAULT — a
+    degraded default MUST surface, AI_EDITS r13) both
+    POST."""
+    slack = _StubSlack()
+    out = await _emit(
+        {"src": _outcome(b"hi", changed_vs_prior=cvp)},
+        plan=_plan(progress_strategy="skip_unchanged"),
+        slack=slack,
+    )
+    assert out.ok is True
+    assert out.skipped_unchanged is False
+    assert slack.calls == [{"channel": _CHANNEL, "text": "hi"}]
+
+
+@pytest.mark.asyncio
+async def test_whole_always_emits_even_when_unchanged():
+    """progress_strategy='whole' (and the default) ALWAYS
+    posts — changed_vs_prior is irrelevant."""
+    slack = _StubSlack()
+    out = await _emit(
+        {"src": _outcome(b"x", changed_vs_prior=False)},
+        plan=_plan(progress_strategy="whole"),
+        slack=slack,
+    )
+    assert out.ok is True
+    assert out.skipped_unchanged is False
+    assert slack.calls == [{"channel": _CHANNEL, "text": "x"}]
+
+
+@pytest.mark.asyncio
+async def test_default_strategy_is_whole_emits_when_unchanged():
+    slack = _StubSlack()
+    out = await _emit(
+        {"src": _outcome(b"x", changed_vs_prior=False)},
+        plan=_plan(),  # no progress_strategy arg → "whole"
+        slack=slack,
+    )
+    assert out.ok is True
+    assert out.skipped_unchanged is False
+    assert slack.calls == [{"channel": _CHANNEL, "text": "x"}]

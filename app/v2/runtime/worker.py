@@ -83,7 +83,7 @@ from app.v2.enums import (
     RunStatus,
     ScheduleStatus,
 )
-from app.v2.models.event import Event
+from app.v2.models.event import Event, RunSucceededPayload
 from app.v2.models.schedule import ScheduleSpec
 from app.v2.runtime.claim import claim_run
 from app.v2.runtime.state_machine import assert_legal_transition
@@ -386,23 +386,39 @@ class Worker:
         # the ScheduleSpec and dispatch through the
         # OneOffReminder emit path; non-OneOff specs route
         # to ``run_failed`` reason codes per plan §3.5.
+        # Phase-11 slice 6 (Option B): a skip_unchanged
+        # no-op is a SUCCESS that rides the EXISTING single
+        # running → succeeded transition below — its
+        # RUN_SUCCEEDED payload just carries a typed
+        # discriminator. No second event, no second
+        # transaction, no bypass of assert_legal_transition.
+        skipped_unchanged = False
         if self._slack_client is not None:
             branch_outcome = await self._dispatch_emit_branch(
                 conn, run
             )
-            if branch_outcome != "succeeded":
-                # ``_dispatch_emit_branch`` already wrote the
+            if branch_outcome == "failed":
+                # ``_dispatch_emit_branch`` / the slice-2
+                # shared atomic core already wrote the
                 # run_failed event + the running → failed
                 # transition; return the run id so callers
                 # observe a tick happened.
                 return run.id
+            # "succeeded" (real delivery) or
+            # "succeeded_skipped" (skip_unchanged no-op) —
+            # both fall through to the ONE running →
+            # succeeded write; only the payload differs.
+            skipped_unchanged = (
+                branch_outcome == "succeeded_skipped"
+            )
         else:
             # Empty execution body. The yield gives the event
             # loop a chance to interleave other workers /
             # shutdown signals.
             await asyncio.sleep(0)
 
-        # running → succeeded.
+        # running → succeeded. Skip rides THIS transition —
+        # the same single TX OneOff / whole-emit uses.
         assert_legal_transition(
             RunStatus.RUNNING, RunStatus.SUCCEEDED
         )
@@ -413,7 +429,15 @@ class Worker:
             schedule_id=run.schedule_id,
             ts=completed_at,
             kind=EventKind.RUN_SUCCEEDED,
-            payload={"worker_id": self._worker_id},
+            # Typed first-class discriminator (NOT an ad-hoc
+            # dict key): a real delivery leaves it the model
+            # default False; a skip_unchanged no-op sets it
+            # True. Additive — pre-slice-6 consumers reading
+            # ``worker_id`` are unaffected.
+            payload=RunSucceededPayload(
+                worker_id=self._worker_id,
+                skipped_unchanged=skipped_unchanged,
+            ).model_dump(),
             correlates=None,
         )
         update_run_status_and_append_event(
@@ -484,19 +508,26 @@ class Worker:
         :meth:`_route_source_failure_policy`; ``RESOLVED`` /
         ``DRIFT``(alert) carry the content.
 
-        **Source emit (phase-11 slice 5).** Once every
+        **Source emit (phase-11 slices 5-6).** Once every
         source input is resolved, the content is posted
         VERBATIM via
         :func:`app.v2.emit.source_post.emit_source_to_slack`
-        (``progress_strategy="whole"``) to the
-        ``source_post`` EmitStep's channel. ``ok`` →
-        ``"succeeded"`` (caller does the running →
-        succeeded transition); a failed emit →
+        to the ``source_post`` EmitStep's channel. Slice 6
+        adds ``progress_strategy`` (from the EmitStep
+        args): ``"whole"`` always posts; ``"skip_unchanged"``
+        reads ``outcome.changed_vs_prior`` (the slice-4
+        additive field — the worker NEVER re-reads the
+        snapshot table) and, when it is ``False``, returns
+        ok=True + skipped_unchanged=True WITHOUT a Slack
+        call. A real delivery → ``"succeeded"``; a skip
+        no-op → ``"succeeded_skipped"`` (still a SUCCESS —
+        the caller threads a typed discriminator onto the
+        EXISTING single running → succeeded transition's
+        RUN_SUCCEEDED payload; no new event / no second
+        transaction — Option B). A failed emit →
         :meth:`_route_source_failure_policy` (the slice-2
         shared atomic core). The OneOff emitter is a
         SEPARATE module, byte-untouched (Q3).
-        ``skip_unchanged`` (``changed_vs_prior``
-        consumption) lands in slice 6 — not read here.
 
         **Q5 — pure snapshot consumer (design §5.3.5).**
         The resolver/cache OWNS the per-fire snapshot
@@ -691,8 +722,19 @@ class Worker:
             # admin-alert + run_failed in ONE transaction.
             # OneOff / emit_reminder_to_slack is byte-
             # untouched (Q3 — source_post is a NEW module).
-            # skip_unchanged (changed_vs_prior consumption)
-            # lands in slice 6 — not read here.
+            #
+            # Slice 6: under progress_strategy="skip_unchanged"
+            # the adapter reads ``outcome.changed_vs_prior``
+            # (slice-4 additive field — the worker NEVER
+            # re-reads the snapshot table) and, if it is
+            # ``False``, returns ok=True +
+            # skipped_unchanged=True WITHOUT calling Slack.
+            # A skip IS a success: it returns
+            # "succeeded_skipped" so the caller threads the
+            # discriminator onto the EXISTING single
+            # running → succeeded transition's RUN_SUCCEEDED
+            # payload (Option B — no new event, no second
+            # transaction).
             result = await emit_source_to_slack(
                 spec=spec,
                 plan=plan,
@@ -701,7 +743,11 @@ class Worker:
                 clock=self._clock,
             )
             if result.ok:
-                return "succeeded"
+                return (
+                    "succeeded_skipped"
+                    if result.skipped_unchanged
+                    else "succeeded"
+                )
             await self._route_source_failure_policy(
                 conn=conn,
                 run=run,
