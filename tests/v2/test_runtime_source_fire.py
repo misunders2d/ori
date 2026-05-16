@@ -912,9 +912,14 @@ def test_dispatch_does_not_wrap_resolve_source_in_try():
     # resolve_source IS called somewhere (pin not vacuous).
     assert _calls_resolve_source(tree)
 
-    # …but never inside a Try body / handler / else / finally.
+    # …but never inside a Try / TryStar body / handler /
+    # else / finally. ``ast.TryStar`` (PEP 654 ``try*`` /
+    # exception groups, py3.11+) is included so a
+    # ``try* ... except*`` around resolve_source is ALSO
+    # caught (deferred slice-3 🔵, hardened here at slice 4).
+    _try_types = (ast.Try, ast.TryStar)
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Try):
+        if not isinstance(node, _try_types):
             continue
         for region in (
             node.body,

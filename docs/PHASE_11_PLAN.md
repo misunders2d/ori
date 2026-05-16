@@ -84,12 +84,20 @@ changed_vs_prior: Optional[bool] = None
 defaulted → every existing phase-10 `ResolveOutcome`
 construction / consumer is byte-unaffected. The resolver
 populates it on the terminal RESOLVED / DRIFT outcomes
-from the signal it ALREADY computes internally
-(`shape_changed`, `resolver.py:271`) extended across
-provenance (§3.3 table). (Exact line re-verified at
-slice 4 against the then-current `resolver.py`.) The worker reads
-`outcome.changed_vs_prior` ONLY — it NEVER calls
-`_newest_materialised_snapshot` or `write_snapshot`
+via a dedicated PURE module-level helper
+`_changed_vs_prior(provenance, prior_hash, content_hash)`
+(slice 4) that implements the §3.3 all-provenance table.
+It is computed from the `prior_hash` captured BEFORE the
+(possible) FRESH snapshot write (the existing
+`prior = _newest_materialised_snapshot(...)` read, ahead
+of `resolve_source_cached`) — race-free, the exact race
+class the §0.1 🔴 closes. (The separate `shape_changed`
+gate — FRESH-and-prior-and-differs only, drives
+DRIFT / require_reapprove — is UNCHANGED and lives at
+`resolver.py:332` post-edit; `changed_vs_prior` is a
+distinct all-provenance signal, NOT derived from it.) The
+worker reads `outcome.changed_vs_prior` ONLY — it NEVER
+calls `_newest_materialised_snapshot` or `write_snapshot`
 (Q5: resolver/cache OWNS the snapshot; worker is a PURE
 consumer).
 

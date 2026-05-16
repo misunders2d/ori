@@ -101,7 +101,22 @@ class ResolveOutcome:
     ``event_emitted`` is True iff the terminal event row
     was actually persisted; ``event_id`` is its id (None
     when the terminal emit ITSELF failed — see the
-    hardened contract in :func:`resolve_source`)."""
+    hardened contract in :func:`resolve_source`).
+
+    ``changed_vs_prior`` (phase-11 §0.1, ADDITIVE — default
+    ``None``, every pre-existing construction / consumer
+    byte-unaffected) exposes, for RESOLVED / DRIFT
+    outcomes, whether the served content differs from the
+    immediately-prior materialised snapshot, per the
+    all-provenance table in ``docs/PHASE_11_PLAN.md`` §3.3:
+    FRESH(no prior)→True, FRESH(prior)→``content_hash !=
+    prior_hash``, CACHE_HIT→False, FALLBACK_LAST_GOOD→False,
+    FALLBACK_DEFAULT→None. It is computed from the
+    ``prior_hash`` captured BEFORE the (possible) FRESH
+    snapshot write (race-free — same race class the §0.1
+    🔴 closes). The phase-11 ``skip_unchanged`` worker path
+    (slice 6) reads THIS — it never re-reads the snapshot
+    table."""
 
     status: ResolveStatus
     event_kind: EventKind
@@ -114,6 +129,40 @@ class ResolveOutcome:
     default_value: Optional[JsonValue] = None
     failure_code: Optional[str] = None
     fallback_eligible: Optional[bool] = None
+    changed_vs_prior: Optional[bool] = None
+
+
+def _changed_vs_prior(
+    provenance: Optional[CacheProvenance],
+    prior_hash: Optional[str],
+    content_hash: Optional[str],
+) -> Optional[bool]:
+    """Phase-11 §0.1 / §3.3 all-provenance live-change
+    signal for :attr:`ResolveOutcome.changed_vs_prior`.
+
+    PURE — it is computed from the ``prior_hash`` captured
+    BEFORE the (possible) FRESH snapshot write, so it
+    CANNOT race that write (this is exactly the race class
+    the §0.1 🔴 closes). It touches no DB / no snapshot
+    table; the worker never recomputes it.
+
+    - FRESH, no prior          → ``True``  (first fire is always "changed")
+    - FRESH, prior             → ``content_hash != prior_hash``
+    - CACHE_HIT                → ``False`` (snapshot IS the source; no new content)
+    - FALLBACK_LAST_GOOD       → ``False`` (re-serving the last-good snapshot)
+    - FALLBACK_DEFAULT / other → ``None``  (a degraded default MUST surface —
+      ``skip_unchanged`` never suppresses it; AI_EDITS rule 13)
+    """
+    if provenance is CacheProvenance.FRESH:
+        if prior_hash is None:
+            return True
+        return content_hash != prior_hash
+    if provenance in (
+        CacheProvenance.CACHE_HIT,
+        CacheProvenance.FALLBACK_LAST_GOOD,
+    ):
+        return False
+    return None
 
 
 async def resolve_source(
@@ -263,7 +312,19 @@ async def resolve_source(
                 source_id=source_id,
                 provenance=res.provenance,
                 default_value=res.default_value,
+                # FALLBACK_DEFAULT → None (a degraded default
+                # must surface; never suppressed downstream).
+                changed_vs_prior=None,
             )
+
+        # Phase-11 §0.1: the all-provenance live-change
+        # signal, computed from ``prior_hash`` (captured
+        # BEFORE the FRESH write — race-free) and the served
+        # content hash. RESOLVED / DRIFT carry it; the
+        # worker's skip_unchanged (slice 6) reads THIS.
+        cvp = _changed_vs_prior(
+            res.provenance, prior_hash, res.content_hash
+        )
 
         # Live-change only applies to a FRESH fetch — a
         # CACHE_HIT / FALLBACK_LAST_GOOD served no new
@@ -309,6 +370,7 @@ async def resolve_source(
                 provenance=res.provenance,
                 content_bytes=res.content_bytes,
                 content_hash=res.content_hash,
+                changed_vs_prior=cvp,
             )
 
         # allow (or no shape change) → resolved.
@@ -329,6 +391,7 @@ async def resolve_source(
             provenance=res.provenance,
             content_bytes=res.content_bytes,
             content_hash=res.content_hash,
+            changed_vs_prior=cvp,
         )
 
     except BaseException:  # noqa: BLE001 - terminal guard
