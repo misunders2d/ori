@@ -134,13 +134,23 @@ async def test_list_content_item_count():
 @pytest.mark.parametrize(
     "error",
     [
+        # OAuth / token / authentication
         "invalid_grant",
         "unauthorized",
         "unauthenticated",
-        "forbidden",
-        "insufficientPermissions",
         "authError",
         "tokenExpired",
+        # 403 permission-class reasons (codex slice-7 🔴 —
+        # these previously fell through to fallback-eligible
+        # SourceFetchError; now non-fallback auth)
+        "forbidden",
+        "insufficientPermissions",
+        "permissionDenied",
+        "insufficientFilePermissions",
+        "appNotAuthorizedToFile",
+        "domainPolicy",
+        # unregistered / no-credentials (auth-origin)
+        "dailyLimitExceededUnreg",
     ],
 )
 async def test_auth_errors_non_fallback(error):

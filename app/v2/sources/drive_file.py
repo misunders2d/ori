@@ -101,15 +101,30 @@ _CANONICAL_KINDS = frozenset(
     {"text", "markdown", "yaml", "json", "binary"}
 )
 
+# Full Drive permission/auth reason set — EVERY one maps
+# to the NON-fallback SourceAuthError so an auth/permission
+# failure can never serve a stale cached snapshot
+# (codex slice-7 🔴). Genuine rate-limit / 5xx / network
+# stay transient (SourceFetchError); not-found stays
+# contained-absent.
 _AUTH_ERRORS = frozenset(
     {
+        # OAuth / token / authentication
         "invalid_grant",
         "unauthorized",
         "unauthenticated",
-        "forbidden",
-        "insufficientPermissions",
         "authError",
         "tokenExpired",
+        # 403 permission-class reasons
+        "forbidden",
+        "insufficientPermissions",
+        "permissionDenied",
+        "insufficientFilePermissions",
+        "appNotAuthorizedToFile",
+        "domainPolicy",
+        # unregistered / no-credentials use (auth-origin,
+        # NOT a transient rate-limit)
+        "dailyLimitExceededUnreg",
     }
 )
 _TRANSIENT_ERRORS = frozenset(
