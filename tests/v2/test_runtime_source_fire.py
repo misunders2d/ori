@@ -27,9 +27,15 @@ claude-reviewer slice hard-check criteria.
   means NO control-flow ``try/except`` around it.
   ``FAILED`` (incl. ``require_reapprove``) →
   ``_route_source_failure_policy``; ``RESOLVED`` /
-  ``DRIFT`` carry the content. Slice 3 wires resolve ONLY
-  — after all inputs resolve it stops with
-  ``source_resolved_no_emit`` (emit lands in slice 5).
+  ``DRIFT`` carry the content.
+- **Slice 5 (LIVE emit)** — once resolved, the content is
+  posted VERBATIM via ``emit_source_to_slack``
+  (``progress_strategy="whole"``) to the ``source_post``
+  EmitStep channel. ``ok`` → the running → succeeded
+  transition (full tick() e2e pinned); a failed emit →
+  ``_route_source_failure_policy`` (reason
+  ``source_emit_failed``). ``skip_unchanged`` /
+  ``changed_vs_prior`` consumption is slice 6 — NOT here.
 - **Q5** — the worker is a PURE snapshot consumer: it
   NEVER calls ``write_snapshot`` / ``_newest_materialised_snapshot``
   and never imports them (bound OR original name —
@@ -94,12 +100,17 @@ _NOW = datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc)
 
 
 class _StubSlackClient:
-    def __init__(self) -> None:
+    def __init__(self, response=None) -> None:
         self.calls: list[dict] = []
+        self.response = (
+            response
+            if response is not None
+            else {"ok": True, "ts": "1700000000.000100"}
+        )
 
     async def chat_postMessage(self, *, channel: str, text: str):
         self.calls.append({"channel": channel, "text": text})
-        return {"ok": True, "ts": "1700000000.000100"}
+        return self.response
 
 
 def _conn_factory(tmp_path: Path):
@@ -151,7 +162,17 @@ def _plan(*, with_reasoning: bool = False) -> ExecutionPlan:
             )
         ],
         reasoning=reasoning,
-        emit=[EmitStep(id="post", adapter="source_post", args={})],
+        emit=[
+            EmitStep(
+                id="post",
+                adapter="source_post",
+                # Slice 5: the source_post channel is
+                # template-declared in the EmitStep args
+                # (NOT spec.delivery). The slice-6 builder
+                # compiles this; tests set it directly.
+                args={"channel": "C012ABCDE"},
+            )
+        ],
     )
     return plan.with_fresh_hash()
 
@@ -188,7 +209,9 @@ def _build_spec(
     return spec.with_fresh_hash()
 
 
-def _make_worker(factory, repo_root=None) -> Worker:
+def _make_worker(
+    factory, repo_root=None, slack_response=None
+) -> Worker:
     counter = {"i": 0}
 
     def evt_factory() -> str:
@@ -202,7 +225,7 @@ def _make_worker(factory, repo_root=None) -> Worker:
         clock=lambda: _NOW,
         run_id_factory=lambda: "should-not-be-called",
         event_id_factory=evt_factory,
-        slack_client=_StubSlackClient(),
+        slack_client=_StubSlackClient(slack_response),
         # Live source fire writes the per-fire snapshot under
         # repo_root/data/contract_audit/...; inject the test
         # tmp tree so the working copy is never littered.
@@ -250,6 +273,32 @@ def _seed(
         )
         conn.commit()
         return run.model_copy(update={"status": RunStatus.RUNNING})
+    finally:
+        conn.close()
+
+
+def _seed_pending(factory, *, spec: ScheduleSpec, plan: ExecutionPlan):
+    """Insert schedule + plan + a PENDING claimable Run —
+    for the full tick() end-to-end (claim → RUN_STARTED →
+    resolve → emit → running → succeeded)."""
+    conn = factory()
+    try:
+        insert_execution_plan(conn, plan)
+        insert_schedule(conn, spec)
+        insert_run(
+            conn,
+            Run(
+                id="run-src",
+                schedule_id=spec.id,
+                execution_plan_hash=spec.execution_plan_hash,
+                fire_reason=FireReason.SCHEDULED,
+                due_at=_NOW,
+                status=RunStatus.PENDING,
+                attempt=1,
+                root_run_id="run-src",
+            ),
+        )
+        conn.commit()
     finally:
         conn.close()
 
@@ -327,22 +376,24 @@ class _FailingExecuteConn:
 
 
 # ---------------------------------------------------------------------------
-# Slice 3 — LIVE resolve, then deterministic no-emit stop
+# Slice 5 — LIVE resolve → emit (progress_strategy="whole")
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_source_driven_resolves_then_stops_no_emit(tmp_path):
-    """The LIVE cutover: a well-formed source-driven spec
-    is RESOLVED by the phase-10 resolver (the resolver's
-    terminal SOURCE_RESOLVED event is written + the per-fire
-    snapshot lands under the injected tmp repo_root), then
-    the worker stops deterministically with
-    ``source_resolved_no_emit`` (emit lands in slice 5 — a
-    source-driven schedule never reports success without
-    delivering, never partially fires)."""
+async def test_source_whole_resolve_then_emit_dispatch_succeeds(
+    tmp_path,
+):
+    """Direct-dispatch contract: a well-formed source-driven
+    spec RESOLVES then the slice-5 emit posts the resolved
+    content VERBATIM → ``_dispatch_emit_branch`` returns
+    ``"succeeded"``. Channel is the source_post EmitStep
+    args channel; text is the literal source bytes decoded
+    1:1 (no reformat). The per-fire snapshot is written by
+    the resolver/cache under the INJECTED tmp repo_root —
+    NOT the working copy (Q5; no littering)."""
     factory, _ = _conn_factory(tmp_path)
-    plan = _plan()  # literal source, valid args → RESOLVED
+    plan = _plan()  # literal source text="hello" → RESOLVED
     spec = _build_spec(execution_plan_hash=plan.hash)
     run = _seed(factory, spec=spec, plan=plan)
     worker = _make_worker(factory, repo_root=tmp_path)
@@ -353,22 +404,80 @@ async def test_source_driven_resolves_then_stops_no_emit(tmp_path):
     finally:
         conn.close()
 
-    assert outcome == "failed"
-    assert _status(factory) == "failed"
-    assert _failed_reason(factory) == "source_resolved_no_emit"
-    # The resolver actually ran (its terminal event is
-    # present) — proves resolve is LIVE, not stubbed.
+    assert outcome == "succeeded"
+    # The resolver ran (terminal event present); no failure.
     kinds = [e.kind for e in _events(factory)]
     assert EventKind.SOURCE_RESOLVED in kinds
-    # No emit fired in slice 3.
-    assert worker._slack_client.calls == []
-    # Q5: the per-fire snapshot was written by the
-    # resolver/cache under the INJECTED tmp repo_root — NOT
-    # the working copy (no littering) — proving the worker
-    # delegated the snapshot write.
-    audit = tmp_path / "data" / "contract_audit"
-    bins = list(audit.rglob("*.bin"))
+    assert EventKind.RUN_FAILED not in kinds
+    # Emit posted VERBATIM to the EmitStep-args channel.
+    assert worker._slack_client.calls == [
+        {"channel": "C012ABCDE", "text": "hello"}
+    ]
+    # Q5: resolver/cache wrote the .bin under the tmp tree.
+    bins = list(
+        (tmp_path / "data" / "contract_audit").rglob("*.bin")
+    )
     assert bins, "resolver did not write the per-fire .bin"
+
+
+@pytest.mark.asyncio
+async def test_source_whole_end_to_end_run_succeeded(tmp_path):
+    """Full tick() end-to-end: claim → RUN_STARTED →
+    resolve → emit → running → succeeded. The Run row ends
+    SUCCEEDED and the ledger carries RUN_SUCCEEDED +
+    SOURCE_RESOLVED; Slack got the verbatim payload."""
+    factory, _ = _conn_factory(tmp_path)
+    plan = _plan()
+    spec = _build_spec(execution_plan_hash=plan.hash)
+    _seed_pending(factory, spec=spec, plan=plan)
+    worker = _make_worker(factory, repo_root=tmp_path)
+
+    run_id = await worker.tick()
+
+    assert run_id == "run-src"
+    assert _status(factory) == "succeeded"
+    kinds = [e.kind for e in _events(factory)]
+    assert EventKind.RUN_STARTED in kinds
+    assert EventKind.SOURCE_RESOLVED in kinds
+    assert EventKind.RUN_SUCCEEDED in kinds
+    assert EventKind.RUN_FAILED not in kinds
+    assert worker._slack_client.calls == [
+        {"channel": "C012ABCDE", "text": "hello"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_source_emit_failure_routes_source_failure_policy(
+    tmp_path,
+):
+    """A failed source emit (Slack ok=False) → the worker
+    routes via _route_source_failure_policy (slice-2 shared
+    atomic core): RUN_FAILED reason ``source_emit_failed`` +
+    ADMIN_ALERT_SENT (ALERT_ADMIN), NO EMIT_FAILED (the
+    OneOff-only kind), run ends FAILED."""
+    factory, _ = _conn_factory(tmp_path)
+    plan = _plan()
+    spec = _build_spec(execution_plan_hash=plan.hash)
+    run = _seed(factory, spec=spec, plan=plan)
+    worker = _make_worker(
+        factory,
+        repo_root=tmp_path,
+        slack_response={"ok": False, "error": "channel_not_found"},
+    )
+
+    conn = factory()
+    try:
+        outcome = await worker._dispatch_emit_branch(conn, run)
+    finally:
+        conn.close()
+
+    assert outcome == "failed"
+    assert _status(factory) == "failed"
+    assert _failed_reason(factory) == "source_emit_failed"
+    kinds = {e.kind for e in _events(factory)}
+    assert EventKind.SOURCE_RESOLVED in kinds  # resolve ran
+    assert EventKind.ADMIN_ALERT_SENT in kinds  # ALERT_ADMIN
+    assert EventKind.EMIT_FAILED not in kinds  # OneOff-only
 
 
 # ---------------------------------------------------------------------------

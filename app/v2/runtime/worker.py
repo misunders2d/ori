@@ -76,6 +76,7 @@ from app.v2.emit.slack_reminder import (
     SlackProtocol,
     emit_reminder_to_slack,
 )
+from app.v2.emit.source_post import emit_source_to_slack
 from app.v2.enums import (
     EventKind,
     FailureActionType,
@@ -481,11 +482,21 @@ class Worker:
         the resolver already wrote the FRESH snapshot +
         emitted SOURCE_FAILED) routes through
         :meth:`_route_source_failure_policy`; ``RESOLVED`` /
-        ``DRIFT`` carry the content. Slice 3 wires resolve
-        ONLY — after all inputs resolve it stops with
-        ``source_resolved_no_emit`` (emit lands in slice 5);
-        a source-driven schedule never reports success
-        without delivering and never partially fires.
+        ``DRIFT``(alert) carry the content.
+
+        **Source emit (phase-11 slice 5).** Once every
+        source input is resolved, the content is posted
+        VERBATIM via
+        :func:`app.v2.emit.source_post.emit_source_to_slack`
+        (``progress_strategy="whole"``) to the
+        ``source_post`` EmitStep's channel. ``ok`` →
+        ``"succeeded"`` (caller does the running →
+        succeeded transition); a failed emit →
+        :meth:`_route_source_failure_policy` (the slice-2
+        shared atomic core). The OneOff emitter is a
+        SEPARATE module, byte-untouched (Q3).
+        ``skip_unchanged`` (``changed_vs_prior``
+        consumption) lands in slice 6 — not read here.
 
         **Q5 — pure snapshot consumer (design §5.3.5).**
         The resolver/cache OWNS the per-fire snapshot
@@ -668,26 +679,35 @@ class Worker:
                 # serves). Carry it for the emit step.
                 resolved[inp.id] = outcome
 
-            # ---- Slice 3 stop: resolve is LIVE; emit lands
-            # in slice 5. Every source input resolved
-            # (RESOLVED / DRIFT) with NO emit fired. Stop
-            # deterministically — a source-driven schedule
-            # MUST NOT report success without delivering, and
-            # MUST NOT partially fire. ``source_resolved_no_emit``
-            # is the slice-3 test hook: it proves resolve ran
-            # end to end (the resolver's SOURCE_RESOLVED /
-            # SOURCE_DRIFT_DETECTED events are present) while
-            # emit is cleanly deferred. OneOff is byte-untouched.
-            await self._fail_run(
+            # ---- Phase 11 slice 5: LIVE emit
+            # (progress_strategy="whole"). Every source
+            # input resolved (RESOLVED / DRIFT-alert still
+            # serves); post the resolved content VERBATIM to
+            # the source_post EmitStep's channel. On success
+            # the caller proceeds with the existing
+            # running → succeeded transition. On failure the
+            # slice-2 shared atomic core
+            # (_route_source_failure_policy) writes the
+            # admin-alert + run_failed in ONE transaction.
+            # OneOff / emit_reminder_to_slack is byte-
+            # untouched (Q3 — source_post is a NEW module).
+            # skip_unchanged (changed_vs_prior consumption)
+            # lands in slice 6 — not read here.
+            result = await emit_source_to_slack(
+                spec=spec,
+                plan=plan,
+                resolved=resolved,
+                slack_client=self._slack_client,
+                clock=self._clock,
+            )
+            if result.ok:
+                return "succeeded"
+            await self._route_source_failure_policy(
                 conn=conn,
                 run=run,
-                reason="source_resolved_no_emit",
-                error_message=(
-                    f"schedule {spec.id!r} resolved "
-                    f"{len(resolved)} source input(s); the "
-                    f"emit step lands in phase-11 slice 5 "
-                    f"(slice 3 wires resolve only)"
-                ),
+                spec=spec,
+                reason="source_emit_failed",
+                error_text=result.error or "",
             )
             return "failed"
 
