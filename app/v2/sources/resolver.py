@@ -5,11 +5,22 @@ Phase 10 slice 8 (FINAL build slice) per
 §5.3.3.
 
 Ties the loader registry + per-source cache + snapshot
-writer + fallback + live-change policy together and emits
-**EXACTLY ONE** EventLedger event per call —
-``SOURCE_RESOLVED`` / ``SOURCE_DRIFT_DETECTED`` /
-``SOURCE_FAILED`` — on every path, including any
-exception (no double-emit, no zero-emit).
+writer + fallback + live-change policy together and
+returns **EXACTLY ONE** terminal :class:`ResolveOutcome`
+per call — ``RESOLVED`` / ``DRIFT`` / ``FAILED`` — on
+every path, including any exception, and NEVER raises into
+the caller. It ATTEMPTS exactly one matching terminal
+EventLedger row (``SOURCE_RESOLVED`` /
+``SOURCE_DRIFT_DETECTED`` / ``SOURCE_FAILED``); that row is
+**best-effort** — if the terminal emit ITSELF fails it is
+logged and SWALLOWED, the outcome still returns with
+``event_emitted=False`` / ``event_id=None``, and the
+terminal status is NOT flipped by the emit failure. So: at
+most one event row is ever persisted, exactly one emit is
+attempted, no path double-emits, and no path returns zero
+*outcomes* — a zero-*emit* (no row persisted) is a
+possible, explicit, hardened outcome, not a contract
+violation (see :func:`resolve_source`).
 
 Routing (the §3.5 taxonomy, slice-5 semantics):
 - loader resolution + cache + fallback delegate to

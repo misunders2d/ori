@@ -865,34 +865,83 @@ DI.
 ```
 v2 phase 10 complete
 
-Source loaders + per-fire snapshot infrastructure. The
-four phase-1 concrete loaders (source_literal,
-source_local_file, source_slack_thread, source_drive_file)
-register into the SOURCES registry behind READ-ONLY
-descriptors. Per-fire snapshot writer persists the
-canonical content_bytes VERBATIM to a raw file
+Source loaders + per-fire snapshot infrastructure (design
+§5.3, §12 step 10). The four phase-1 concrete loaders
+(source_literal, source_local_file, source_slack_thread,
+source_drive_file) register into the SOURCES registry
+behind READ-ONLY descriptors via atomic paired
+registration (loader + descriptor, rollback on a partial).
+The Slack/Drive transports are Protocol-typed DI — no
+vendor SDK imported at module load (AST-pinned).
+
+source_local_file fence (§5.3.1): a dirfd openat()
+component walk from the allowed root with
+O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK on EVERY
+component + a per-non-final fstat S_ISDIR check — swap-
+proof against an intermediate-dir symlink race, every
+open classified into a typed SourceError (no raw
+OSError); sibling-prefix / symlink-escape /
+symlink-into-denylist / .. traversal / non-allowlist
+mime / oversize all refused; empty-allowlist default
+denies all.
+
+Per-fire snapshot writer persists the canonical
+content_bytes VERBATIM to a raw file
 data/contract_audit/<schedule>/<run>/sources/<id>.bin
-(no JSON envelope; sha256(file)==content_hash) + a
-source_snapshots row, content-addressed, dedup-by-hash,
-with per-ScheduleSpec retention (AuditPolicy) that
-commits row deletes BEFORE post-commit best-effort file
-unlink (no rollback data loss) + an explicit on_oversize
-branch (no silent fallback). Per-source cache + fallback
-mirrors the registry-cache load/stale shape; exactly one
-typed SourceError subclass (SourceFetchError) is
-fallback-eligible — auth / security / policy / parse
-failures never cache or fall back. Live-change policy
-detects item_count / schema shape drift and routes
-allow / alert / re-approve. resolve_source orchestrates
-dispatch → cache → snapshot → drift → exactly one
-SOURCE_RESOLVED / SOURCE_DRIFT_DETECTED / SOURCE_FAILED
-event.
+(no JSON envelope; sha256(file)==content_hash for every
+kind incl. binary) + a content-addressed source_snapshots
+row, dedup-by-hash (a bodyless pointer/hash-only row is
+never reused). Retention (per-ScheduleSpec AuditPolicy)
+commits row DELETEs BEFORE a post-commit best-effort file
+unlink on a fresh connection (no rollback data loss; a
+dedup-shared or orphaned file is logged, never a lost
+referenced body). Every on_oversize branch is explicit
+(fail_and_alert → SourcePolicyError; no silent fallback);
+redact_fields are applied and the payload
+re-canonicalised before the size is re-measured.
+
+Typed error taxonomy (§3.5): a SourceError base with a
+fallback_eligible ClassVar (default False) + five
+subclasses — EXACTLY ONE (SourceFetchError) is
+fallback-eligible. SourceAuthError / SourceSecurityError
+/ SourcePolicyError / SourceParseError → SOURCE_FAILED
+with cache AND fallback bypassed even with a warm
+last-good snapshot (a denied path / oversize / auth
+failure NEVER serves stale data). The on-disk
+content_hash is recomputed and verified by a SourceResult
+model validator — a loader cannot lie about its own hash.
+
+Per-source cache + fallback mirrors the registry-cache
+load/stale shape: cache_ttl_seconds > 0 is a cross-fire
+NO-PROBE window (within it the snapshot IS the source —
+the loader is not invoked, so a CACHE_HIT is legitimate
+even if the live source would now fail), and == 0 is the
+explicit security opt-out (probe the loader every fire).
+The §3.5 non-fallback invariant governs the POST-FETCH
+path only. Live-change is checked on a FRESH fetch only,
+content_hash vs the immediately-prior materialised
+snapshot (SourceSnapshotMetadata does not persist
+item_count; content_hash is the discriminator): allow →
+no event; alert_on_shape_change → SOURCE_DRIFT_DETECTED
+and STILL serves; require_reapprove_on_shape_change →
+SOURCE_FAILED with content withheld (the FRESH snapshot
+is still written as the audit evidence to re-approve).
+
+resolve_source returns EXACTLY ONE terminal outcome per
+call (RESOLVED / DRIFT / FAILED) and NEVER raises into
+the caller, on every path including an internal
+exception. It attempts exactly one matching terminal
+EventLedger row; the row is best-effort — a failed
+terminal emit is logged and swallowed, the outcome still
+returns (event_emitted=False / event_id=None) and the
+status is not flipped by the emit failure. At most one
+row is ever persisted; no path double-emits.
 
 Build-the-layer phase: NOT wired into the worker fire
 path. The worker still rejects execution_plan_hash specs;
 source-driven schedules begin firing at step 11 (source
-templates). No CoordinatorAgent / run_bot.py edits. v1
-scheduler untouched.
+templates). No CoordinatorAgent / run_bot.py / app.agent
+edits. v1 scheduler untouched.
 
 NOT shipped (deferred): source templates (step 11),
 source_google_keep (phase 2+), read-only-reasoning runtime
