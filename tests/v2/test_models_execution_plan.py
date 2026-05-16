@@ -429,3 +429,124 @@ def test_realistic_plan_constructs_and_hashes():
     assert p.emit[0].gate is not None
     assert p.emit[1].id == "post_slack"
     assert p.compute_hash() == p.compute_hash()
+
+
+# ---------------------------------------------------------------------------
+# Phase-10 slice 1 — InputSpec.source_ref additive + hash-neutral
+# (docs/PHASE_10_PLAN.md §1.8 / §5; mirrors the phase-9
+#  TemplateRef.args None-strip)
+# ---------------------------------------------------------------------------
+
+
+from app.v2.enums import (  # noqa: E402
+    LiveChangePolicy,
+    SourceFallbackPolicy,
+)
+from app.v2.models.common import LiveSourceCachePolicy  # noqa: E402
+from app.v2.models.source_ref import SourceRefSpec  # noqa: E402
+
+
+def _source_ref(**overrides) -> SourceRefSpec:
+    base = dict(
+        loader="source_drive_file",
+        args={"file_id": "abc"},
+        cache=LiveSourceCachePolicy(
+            cache_ttl_seconds=300,
+            stale_max_age_seconds=3600,
+            fallback_policy=SourceFallbackPolicy.USE_LAST_GOOD_SNAPSHOT,
+        ),
+        live_change_policy=LiveChangePolicy.ALLOW,
+    )
+    base.update(overrides)
+    return SourceRefSpec(**base)
+
+
+def test_input_spec_source_ref_defaults_none():
+    i = InputSpec(id="sales_30d", loader="bigquery_query")
+    assert i.source_ref is None
+
+
+def test_canonical_body_strips_none_source_ref():
+    """A None ``source_ref`` MUST NOT appear in the
+    canonicalised body — otherwise ``model_dump`` emits
+    ``"source_ref": null`` on every input and shifts the
+    hash (§1.8 / phase-9 template.args pattern)."""
+    p = ExecutionPlan(
+        **_minimal_plan_kwargs(
+            inputs=[InputSpec(id="sales_30d", loader="bq")]
+        )
+    )
+    body = p.canonical_body()
+    assert body["inputs"], "fixture must carry an input"
+    for inp in body["inputs"]:
+        assert "source_ref" not in inp, (
+            "None source_ref must be stripped from "
+            "canonical_body"
+        )
+
+
+def test_source_ref_none_is_hash_neutral():
+    """A plan whose input leaves ``source_ref`` defaulted
+    hashes IDENTICALLY to the same plan that passes
+    ``source_ref=None`` explicitly — i.e. None ≡ omission,
+    so pre-phase-10 plan bodies hash unchanged."""
+    kw = _minimal_plan_kwargs(
+        inputs=[InputSpec(id="sales_30d", loader="bq")]
+    )
+    p_default = ExecutionPlan(**kw)
+    p_explicit_none = ExecutionPlan(
+        **_minimal_plan_kwargs(
+            inputs=[
+                InputSpec(
+                    id="sales_30d", loader="bq", source_ref=None
+                )
+            ]
+        )
+    )
+    assert (
+        p_default.compute_hash()
+        == p_explicit_none.compute_hash()
+    )
+
+
+def test_populated_source_ref_participates_in_hash():
+    """A populated ``source_ref`` IS part of the body hash
+    (deterministic + distinct from the None case); a change
+    to it re-hashes."""
+    base_kw = _minimal_plan_kwargs(
+        inputs=[InputSpec(id="sales_30d", loader="bq")]
+    )
+    p_none = ExecutionPlan(**base_kw)
+
+    p_ref = ExecutionPlan(
+        **_minimal_plan_kwargs(
+            inputs=[
+                InputSpec(
+                    id="sales_30d",
+                    loader="bq",
+                    source_ref=_source_ref(),
+                )
+            ]
+        )
+    )
+    assert p_ref.compute_hash() != p_none.compute_hash()
+    assert p_ref.compute_hash() == p_ref.compute_hash()
+
+    p_ref_changed = ExecutionPlan(
+        **_minimal_plan_kwargs(
+            inputs=[
+                InputSpec(
+                    id="sales_30d",
+                    loader="bq",
+                    source_ref=_source_ref(
+                        live_change_policy=(
+                            LiveChangePolicy.ALERT_ON_SHAPE_CHANGE
+                        )
+                    ),
+                )
+            ]
+        )
+    )
+    assert (
+        p_ref_changed.compute_hash() != p_ref.compute_hash()
+    ), "changing source_ref must re-hash the plan body"

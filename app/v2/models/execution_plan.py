@@ -27,6 +27,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.v2.enums import EnforcementMode, FailureActionType, ToolMode
+from app.v2.models.source_ref import SourceRefSpec
 
 
 _ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -64,10 +65,21 @@ class InputSpec(BaseModel):
     cache_for_seconds: int = Field(
         default=0,
         ge=0,
-        description="If > 0, the loader's output is cached for "
-        "this many seconds across fires within the same wakeup "
-        "window. Useful for expensive web searches / BQ "
-        "queries.",
+        description="In-wakeup-window memo: if > 0, the "
+        "loader's output is reused across fires within the "
+        "SAME wakeup tick. Distinct from "
+        "``source_ref.cache.cache_ttl_seconds`` (the "
+        "cross-fire, snapshot-backed source cache) — see "
+        "``docs/PHASE_10_PLAN.md`` §1.4 / Q2.",
+    )
+    source_ref: Optional[SourceRefSpec] = Field(
+        default=None,
+        description="Phase-10 (§1.8): per-source LiveSourceRef "
+        "policy bundle (cache / live-change / explicit "
+        "default). Additive + hash-neutral when None — "
+        "stripped from ``canonical_body`` so pre-phase-10 "
+        "plan bodies hash unchanged (mirrors the phase-9 "
+        "``template.args`` None-strip).",
     )
 
     @field_validator("id")
@@ -310,9 +322,28 @@ class ExecutionPlan(BaseModel):
     # ---- hashing ----
 
     def canonical_body(self) -> dict[str, Any]:
+        """JSON-serialisable body for hashing. Excludes
+        ``hash`` / ``authored_at``.
+
+        Phase-10 amendment (2026-05-16, §1.8): each
+        ``InputSpec.source_ref`` is stripped from the
+        serialised input dict when ``None`` so pre-phase-10
+        plan bodies (which had no ``source_ref`` key on
+        disk) hash UNCHANGED. Without this strip,
+        ``model_dump`` emits ``"source_ref": null`` on every
+        input and shifts the sorted-JSON output. A populated
+        ``source_ref`` participates in the hash; a body
+        change re-hashes. Mirrors the phase-9
+        ``TemplateRef.args`` None-strip (see
+        ``docs/PHASE_10_PLAN.md`` §5 / ``ScheduleSpec.
+        canonical_body``).
+        """
         d = self.model_dump(mode="json", by_alias=True)
         d.pop("hash", None)
         d.pop("authored_at", None)
+        for inp in d.get("inputs", []):
+            if isinstance(inp, dict) and inp.get("source_ref") is None:
+                inp.pop("source_ref", None)
         return d
 
     def compute_hash(self) -> str:
