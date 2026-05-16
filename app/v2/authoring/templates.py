@@ -78,7 +78,14 @@ from app.v2.registry_cache.refresh import (
 )
 from app.v2.registry_cache.resolver import resolve_channel
 from app.v2.registry_cache.schemas import SlackChannelsCache
+from app.v2.enums import LiveChangePolicy, SourceFallbackPolicy
+from app.v2.models.common import LiveSourceCachePolicy
+from app.v2.models.source_ref import SourceRefSpec
+from app.v2.registry import SOURCES
 from app.v2.templates.one_off_reminder import build_one_off_reminder
+from app.v2.templates.recurring_series_from_source import (
+    build_recurring_series_from_source,
+)
 from app.v2.validation import ValidationIssue
 
 
@@ -322,7 +329,241 @@ def make_schedule_create_reminder(
     return schedule_create_reminder
 
 
+SCHEDULE_CREATE_RECURRING_SERIES_FROM_SOURCE_TOOL_NAME = (
+    "schedule_create_recurring_series_from_source"
+)
+
+#: Phase-11 (11A) default per-source cache + live-change
+#: policy for a RecurringSeriesFromSource. These are NOT
+#: LLM slots (§3.3 slots are source/channel/hour_local/
+#: timezone/progress_strategy) — sensible template
+#: defaults: ``cache_ttl_seconds=0`` ⇒ probe the loader
+#: every fire (the secure default — a recurring series
+#: wants fresh content each tick; phase-10 §9c: ttl==0 is
+#: the probe-every-fire opt-out), ``USE_LAST_GOOD_SNAPSHOT``
+#: so a brief source outage re-serves the last good rather
+#: than failing the series, ``LiveChangePolicy.ALLOW`` so a
+#: shape change does not block the series (skip_unchanged
+#: is the user's drift control, not a hard gate).
+_RSFS_CACHE_TTL_SECONDS = 0
+_RSFS_STALE_MAX_AGE_SECONDS = 86_400
+
+
+def make_schedule_create_recurring_series_from_source(
+    *,
+    store: DraftStore,
+    handshake_store: HandshakeStore,
+    conn_factory: Callable[[], sqlite3.Connection],
+    clock: Callable[[], datetime],
+    event_id_factory: Callable[[], str],
+    schedule_id_factory: Callable[[], str],
+    owner: UserRef,
+    session_id: str,
+) -> Callable[
+    [dict, str, int, str, str], Awaitable[ToolResponse]
+]:
+    """Build the agent-facing
+    ``schedule_create_recurring_series_from_source``
+    closure with every DI dependency bound.
+
+    The returned closure exposes ONLY the LLM-visible slot
+    set ``(source, channel, hour_local, timezone,
+    progress_strategy)``; DI names do NOT appear in the
+    function schema (the phase-9
+    :func:`make_schedule_create_reminder` DI-leak pin —
+    ADK ``FunctionTool`` introspects the closure signature
+    to build the model-visible schema). Tests pin the
+    signature via ``inspect.signature``.
+
+    Pipeline (closure body), funnelling through the SAME
+    7a-extended authoring spine — NO bespoke commit path:
+
+    1. Validate ``source`` (a ``{"loader", "args"}``
+       object); unknown loader → ``validation_failed``.
+    2. Compose a :class:`SourceRefSpec` with the phase-11
+       default cache / live-change policy bundle.
+    3. Compile ``(ScheduleSpec, ExecutionPlan)`` via the
+       slice-6 :func:`build_recurring_series_from_source`
+       builder (inputs + emit, ZERO reasoning). A bad slot
+       (hour range / empty channel / empty tz / unknown
+       progress_strategy / bad source args) → a typed
+       ``validation_failed`` AT the tool boundary.
+    4. Persist a :class:`ScheduleSpecDraft` carrying BOTH
+       ``execution_plan_hash`` AND the FROZEN
+       ``execution_plan`` body (so the 7a commit step-8b
+       consistency check ``plan.hash ==
+       execution_plan_hash`` passes and the atomic
+       ``insert_execution_plan``+``insert_schedule`` path
+       is exercised end-to-end).
+    5. ``schedule_dry_run(VALIDATE_ONLY)`` → handshake.
+    6. ``schedule_freeze`` (cron unlocked at 7a).
+    7. ``schedule_draft_commit`` (atomic plan+schedule).
+    """
+
+    async def schedule_create_recurring_series_from_source(
+        source: dict,
+        channel: str,
+        hour_local: int,
+        timezone: str,
+        progress_strategy: str,
+    ) -> ToolResponse:
+        # Ensure the built-in source loaders are registered
+        # in the SOURCES singleton (sanctioned lazy in-fn
+        # import — keeps this module's load light + the
+        # phase-11 hygiene pin tight).
+        import app.v2.sources  # noqa: F401
+
+        # ---- 1. Validate the source slot ----
+        if not isinstance(source, dict):
+            return _validation_failed_single(
+                code="invalid_source",
+                path="source",
+                message=(
+                    "`source` must be an object with a "
+                    "'loader' name and optional 'args'"
+                ),
+            )
+        loader = source.get("loader")
+        if not isinstance(loader, str) or not loader:
+            return _validation_failed_single(
+                code="invalid_source",
+                path="source.loader",
+                message="`source.loader` must be a non-empty string",
+            )
+        if SOURCES.lookup(loader) is None:
+            return _validation_failed_single(
+                code="unknown_source_loader",
+                path="source.loader",
+                message=(
+                    f"source loader {loader!r} is not "
+                    f"registered in SOURCES"
+                ),
+            )
+        source_args = source.get("args", {})
+        if not isinstance(source_args, dict):
+            return _validation_failed_single(
+                code="invalid_source",
+                path="source.args",
+                message="`source.args` must be an object",
+            )
+
+        # ---- 2. Compose the SourceRefSpec ----
+        try:
+            source_ref = SourceRefSpec(
+                loader=loader,
+                args=source_args,
+                cache=LiveSourceCachePolicy(
+                    cache_ttl_seconds=_RSFS_CACHE_TTL_SECONDS,
+                    stale_max_age_seconds=_RSFS_STALE_MAX_AGE_SECONDS,
+                    fallback_policy=(
+                        SourceFallbackPolicy.USE_LAST_GOOD_SNAPSHOT
+                    ),
+                ),
+                live_change_policy=LiveChangePolicy.ALLOW,
+            )
+        except ValidationError as exc:
+            return _validation_failed_single(
+                code="invalid_source",
+                path="source",
+                message=str(exc),
+            )
+
+        # ---- 3. Build (ScheduleSpec, ExecutionPlan) ----
+        schedule_id = schedule_id_factory()
+        try:
+            spec, plan = build_recurring_series_from_source(
+                source=source_ref,
+                channel=channel,
+                hour_local=hour_local,
+                timezone_name=timezone,
+                progress_strategy=progress_strategy,
+                owner=owner,
+                schedule_id=schedule_id,
+                clock=clock,
+            )
+        except ValidationError as exc:
+            # Typed bad slot (hour range / empty channel /
+            # empty tz / unknown progress_strategy).
+            return _validation_failed_single(
+                code="recurring_series_args_invalid",
+                path="<root>",
+                message=str(exc),
+            )
+        except ValueError as exc:
+            # Builder ValueError (naive clock — DI; defensive).
+            return _validation_failed_single(
+                code="build_recurring_series_failed",
+                path="<root>",
+                message=str(exc),
+            )
+
+        # ---- 4. Persist draft (carries the FROZEN plan
+        # body so 7a commit step-8b passes) ----
+        draft = ScheduleSpecDraft(
+            id=spec.id,
+            description=spec.description,
+            owner=spec.owner,
+            trigger=spec.trigger,
+            delivery=spec.delivery,
+            failure=spec.failure,
+            audit=spec.audit,
+            status=spec.status,
+            execution_plan_hash=spec.execution_plan_hash,
+            template=spec.template,
+            parent_hash=spec.parent_hash,
+            execution_plan=plan,
+        )
+        store.write(session_id, draft)
+
+        # ---- 5. dry_run ----
+        dry_run_response = await schedule_dry_run(
+            draft.id,
+            DryRunMode.VALIDATE_ONLY,
+            session_id=session_id,
+            store=store,
+            handshake_store=handshake_store,
+            clock=clock,
+        )
+        if dry_run_response.status != "ok":
+            return dry_run_response
+
+        # ---- 6. Freeze (cron unlocked at 7a) ----
+        freeze_response = await schedule_freeze(
+            draft.id,
+            session_id=session_id,
+            store=store,
+            handshake_store=handshake_store,
+            clock=clock,
+        )
+        if freeze_response.status != "ok":
+            return freeze_response
+
+        # ---- 7. Commit (atomic plan + schedule, 7a) ----
+        with closing(conn_factory()) as conn:
+            commit_response = await schedule_draft_commit(
+                draft.id,
+                session_id=session_id,
+                store=store,
+                handshake_store=handshake_store,
+                conn=conn,
+                event_id_factory=event_id_factory,
+                clock=clock,
+            )
+
+        return commit_response
+
+    schedule_create_recurring_series_from_source.__name__ = (
+        SCHEDULE_CREATE_RECURRING_SERIES_FROM_SOURCE_TOOL_NAME
+    )
+    schedule_create_recurring_series_from_source.__qualname__ = (
+        SCHEDULE_CREATE_RECURRING_SERIES_FROM_SOURCE_TOOL_NAME
+    )
+    return schedule_create_recurring_series_from_source
+
+
 __all__ = [
     "SCHEDULE_CREATE_REMINDER_TOOL_NAME",
     "make_schedule_create_reminder",
+    "SCHEDULE_CREATE_RECURRING_SERIES_FROM_SOURCE_TOOL_NAME",
+    "make_schedule_create_recurring_series_from_source",
 ]
