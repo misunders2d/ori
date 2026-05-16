@@ -325,6 +325,33 @@ PHASE_ALLOWLIST: dict[int, set[str]] = {
         # phase-10/12 build-the-layer allowlist (no agent
         # surface).
     },
+    14: {
+        # Code surface carried forward
+        "app/v2/",
+        "tests/v2/",
+        # CI guard machinery (carried forward)
+        "scripts/check_phase_scope.py",
+        "scripts/install_hooks.py",
+        ".githooks/v2_phase_guard.sh",
+        ".githooks/pre-commit",
+        ".github/workflows/v2_phase_guard.yml",
+        # Phase-tracking artefact
+        ".v2-current-phase",
+        # Plan + design docs
+        "docs/PHASE_14_PLAN.md",
+        "docs/CONTRACTS_V2_DESIGN.md",
+        # Auto-generated index (pre-commit regenerates + stages)
+        "docs/INDEX.md",
+        "docs/AGENTS_INVENTORY.md",
+        # Doc-read marker bookkeeping
+        ".docs_read_marker",
+        # NOT re-added for phase 14: coordinator_agent.py /
+        # run_bot.py / app/agent.py. Step 14 = idempotency
+        # dedup (LIVE pre-emit ledger check in the worker
+        # branch — emit adapters stay byte-untouched) +
+        # paused_pending_policy + cancellation enforcement —
+        # no new agent mount, no boot integration.
+    },
     # Future phases populate here as they land.
 }
 
