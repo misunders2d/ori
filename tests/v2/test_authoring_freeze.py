@@ -5,11 +5,13 @@ Phase 8 slice 3 per ``docs/PHASE_8_PLAN.md`` §5.3.
 Pins:
 - Fresh handshake matching current OneOff draft → ok with
   spec.
-- Cron-trigger draft (L87 / Q4): even with a fresh matching
-  handshake → validation_failed(
-  non_oneoff_trigger_blocked_until_real_mode). Same code
-  surfaces with no handshake at all (gate runs BEFORE the
-  handshake check).
+- Phase-11 7a: cron is UNLOCKED (the source-driven
+  recurring series spine extension). A cron draft with a
+  fresh matching handshake now FREEZES OK; cron runs the
+  FULL remaining freeze validation (no-handshake →
+  dry_run_required; no execution_plan_hash → the
+  reminder-rule). A still-gated trigger (interval) →
+  validation_failed(trigger_type_pending_step_unlock).
 - Interval-trigger draft → same code as cron.
 - No handshake (OneOff) → validation_failed(dry_run_required).
 - Expired handshake → validation_failed(dry_run_expired)
@@ -159,8 +161,11 @@ async def test_fresh_handshake_oneoff_returns_ok_with_spec(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_cron_with_fresh_handshake_blocked(tmp_path):
-    """Cron + fresh matching handshake → non_oneoff code."""
+async def test_cron_with_fresh_handshake_freezes_ok(tmp_path):
+    """Phase-11 7a un-gate: cron + a fresh matching
+    handshake now FREEZES OK (freeze validates the spec +
+    handshake; the ExecutionPlan-body consistency check is
+    the COMMIT verb's job — step 8b — not freeze's)."""
     drafts, handshakes = await _seed_dry_run(tmp_path, _cron_draft())
 
     r = await schedule_freeze(
@@ -171,20 +176,20 @@ async def test_cron_with_fresh_handshake_blocked(tmp_path):
         clock=_fixed_clock,
     )
 
-    assert r.status == "validation_failed"
-    assert any(
-        i.code == "non_oneoff_trigger_blocked_until_real_mode"
-        for i in r.issues
-    )
+    assert r.status == "ok"
+    assert r.spec is not None
+    assert r.spec["id"] == "sched_alpha"
 
 
 @pytest.mark.asyncio
-async def test_cron_without_handshake_returns_non_oneoff_not_dry_run_required(
+async def test_cron_without_handshake_now_returns_dry_run_required(
     tmp_path,
 ):
-    """L87 gate runs BEFORE the handshake check; a cron draft
-    with NO handshake at all still surfaces the non_oneoff
-    code, not dry_run_required."""
+    """C2: the un-gate removes ONLY the trigger-type bypass —
+    a cron draft with NO handshake now runs the FULL
+    remaining freeze validation and surfaces
+    ``dry_run_required`` (the trigger gate no longer
+    pre-empts the handshake check)."""
     drafts, handshakes = _stores(tmp_path)
     drafts.write("sess1", _cron_draft())
 
@@ -198,30 +203,26 @@ async def test_cron_without_handshake_returns_non_oneoff_not_dry_run_required(
 
     assert r.status == "validation_failed"
     codes = {i.code for i in r.issues}
-    assert "non_oneoff_trigger_blocked_until_real_mode" in codes
-    assert "dry_run_required" not in codes
+    assert "dry_run_required" in codes
+    assert "trigger_type_pending_step_unlock" not in codes
+    assert "non_oneoff_trigger_blocked_until_real_mode" not in codes
 
 
 @pytest.mark.asyncio
-async def test_cron_without_plan_hash_returns_non_oneoff_not_validation_failure(
+async def test_cron_without_plan_hash_now_trips_reminder_rule(
     tmp_path,
 ):
-    """Reviewer slice-3 verdict: gate ordering bug — if the
-    non-OneOff gate runs AFTER validate_schedule_spec, a
-    cron draft without execution_plan_hash trips the
-    reminder-only rule (`missing_execution_plan_for_complex_
-    trigger`) and masks the L87 code the LLM needs to see.
-
-    Pin: cron + no execution_plan_hash + no handshake →
-    non_oneoff_trigger_blocked_until_real_mode. Pre-fix this
-    asserted the validation code; post-fix it asserts the
-    non-OneOff code per plan §3.3 + Q4."""
+    """C2 (the inverse of the pre-7a pin): with cron
+    UNLOCKED, a cron draft WITHOUT execution_plan_hash
+    correctly trips the reminder-rule
+    (``missing_execution_plan_for_complex_trigger``) —
+    the un-gate deliberately EXPOSES this validation that
+    the old trigger gate masked."""
     drafts, handshakes = _stores(tmp_path)
     bad = _oneoff_draft().model_copy(
         update={
             "trigger": CronTrigger(cron="0 9 * * MON", timezone="UTC"),
-            # NO execution_plan_hash — would trip reminder-only
-            # rule if the gate ran after validate_schedule_spec.
+            # NO execution_plan_hash → reminder-rule applies.
         }
     )
     drafts.write("sess1", bad)
@@ -236,14 +237,16 @@ async def test_cron_without_plan_hash_returns_non_oneoff_not_validation_failure(
 
     assert r.status == "validation_failed"
     codes = {i.code for i in r.issues}
-    assert "non_oneoff_trigger_blocked_until_real_mode" in codes
-    # The masked validation code must NOT appear — gate
-    # short-circuited before the validation chokepoint.
-    assert "missing_execution_plan_for_complex_trigger" not in codes
+    assert "missing_execution_plan_for_complex_trigger" in codes
+    assert "trigger_type_pending_step_unlock" not in codes
+    assert "non_oneoff_trigger_blocked_until_real_mode" not in codes
 
 
 @pytest.mark.asyncio
-async def test_interval_with_fresh_handshake_blocked(tmp_path):
+async def test_interval_still_gated_with_updated_code(tmp_path):
+    """C6c: a non-cron non-OneOff trigger (interval) is
+    STILL hard-rejected — with the UPDATED non-stale code
+    ``trigger_type_pending_step_unlock``."""
     drafts, handshakes = await _seed_dry_run(tmp_path, _interval_draft())
 
     r = await schedule_freeze(
@@ -255,10 +258,9 @@ async def test_interval_with_fresh_handshake_blocked(tmp_path):
     )
 
     assert r.status == "validation_failed"
-    assert any(
-        i.code == "non_oneoff_trigger_blocked_until_real_mode"
-        for i in r.issues
-    )
+    codes = {i.code for i in r.issues}
+    assert "trigger_type_pending_step_unlock" in codes
+    assert "non_oneoff_trigger_blocked_until_real_mode" not in codes
 
 
 # ===========================================================================

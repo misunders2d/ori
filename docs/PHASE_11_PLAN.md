@@ -150,6 +150,62 @@ stays RESERVED for step-14 (reusing it would be an audit
 lie). The §3.3 skip DECISION logic is unchanged by B — B
 only changes how the skip-success is RECORDED.
 
+### 0.3 Slice-7 spine-extension architecture (CLOSED — reviewer ratification)
+
+The phase-8/9 authoring pipeline was deliberately
+reminder-only and hard-gated the source-driven shape
+(freeze refused non-OneOff triggers; commit had no
+ExecutionPlan persistence). A working
+`RecurringSeriesFromSource` authoring tool requires
+EXTENDING the shared authoring spine — irreconcilable
+with a literal "OneOff pipeline byte-untouched". Reviewer
+ratified, with binding conditions:
+
+- **(i) relaxation, scoped.** "OneOff byte-untouched" →
+  "OneOff behaviour-unchanged via ADDITIVE branching" for
+  the SHARED AUTHORING SPINE ONLY
+  (`freeze`/`commit`/`drafts`/`toolsets.authoring`). The
+  emit modules / `cache.py` / `resolver.py` stay
+  LITERALLY byte-untouched (empty-diff pinned).
+- **(ii) re-scope.** Slice 7 → **7a** (shared-spine
+  extension, reviewed + PASS-gated FIRST) then **7b**
+  (the tool, on the now-extended spine).
+
+7a binding conditions (all satisfied this commit):
+C1 cron-ONLY freeze un-gate (`{one_off, cron}`; others
+stay gated; the residual rejection message + the
+freeze.py docstring rewritten — code renamed
+`non_oneoff_trigger_blocked_until_real_mode` →
+`trigger_type_pending_step_unlock`, no stale
+"phase-8 OneOff-only"/"phase 10/12" survives in the
+spine). C2 cron specs run the FULL remaining freeze/commit
+validation (un-gate removes ONLY the trigger-type bypass).
+C3 atomic `insert_execution_plan`+`insert_schedule` in
+commit's ONE existing `transaction(conn)`,
+both-or-neither; the `insert_execution_plan` raise surface
+handled explicitly (body-missing / not-frozen /
+hash-mismatch / present-without-hash → clean codes
+BEFORE the TX; content-addressed duplicate → idempotent
+reuse, never a half-commit); the OneOff path (no plan
+body) NEVER enters the new branch. C4
+`ScheduleSpecDraft.execution_plan: Optional[ExecutionPlan]
+= None` additive + defaulted (`missing_required_fields`
+unchanged). C5 step-12 boundary untouched — a
+reasoning-bearing plan is refused at authoring
+(`execution_plan_reasoning_unsupported_pending_step_12`).
+C6 OneOff behaviour-regression pins (freeze still works;
+OneOff commit plan-None → branch NOT entered, same single
+insert_schedule + same IntegrityError surfacing; interval
+STILL hard-rejected with the updated code; atomicity
+BOTH directions — plan-insert fail rolls back schedule,
+schedule-insert fail rolls back plan). C7 this plan
+reconciliation folded into the 7a commit.
+
+`docs/CONTRACTS_V2_DESIGN.md` §5.2 (template-first
+authoring now spans OneOff + source-driven cron via the
+extended spine) is amended in the ONE closeout
+reconciliation pass.
+
 ---
 
 ## 1. Scope statement
@@ -292,9 +348,36 @@ only changes how the skip-success is RECORDED.
   (`SlackProtocol`), no `slack_sdk` at module load.
 - Additive cutover (§11.1): the `OneOffReminder` emit
   branch and v1 scheduler keep working unchanged.
+- **Byte-untouched scope (slice-7a reviewer ratification,
+  §0.3).** The emit modules (`slack_reminder.py` /
+  `source_post.py`), `cache.py`, and `resolver.py` stay
+  **LITERALLY byte-untouched** (empty diff since
+  `v2-phase-10-complete` — pinned). The SHARED AUTHORING
+  SPINE (`freeze.py` / `commit.py` / `drafts.py` /
+  `toolsets/authoring.py`) is the ONE exception: it is
+  extended via **ADDITIVE branching** (cron-only freeze
+  un-gate; atomic `insert_execution_plan`+`insert_schedule`
+  in commit's existing single transaction; an additive
+  defaulted `ScheduleSpecDraft.execution_plan`) — the
+  OneOff/reminder path through it is **behaviour-unchanged**
+  (proven by the full pre-existing OneOff authoring suite
+  staying green + explicit C6 regression pins), NOT
+  byte-identical.
+- Cron-only un-gate: `freeze`/`commit` admit exactly
+  `{one_off, cron}` (cron = §12 step-11); every other
+  non-OneOff trigger stays gated with
+  `trigger_type_pending_step_unlock`. The step-12
+  boundary is untouched — a reasoning-bearing plan is
+  refused at authoring.
+- A source-driven schedule is NEVER persisted pointing at
+  an absent ExecutionPlan: `insert_execution_plan` +
+  `insert_schedule` are both-or-neither in commit's ONE
+  `transaction(conn)`.
 - plan ≡ design ≡ tag-annotation, zero divergence (the
-  phase-9/10 stale-wording lesson — one reconciliation
-  pass at closeout).
+  phase-9/10 stale-wording lesson — the PLAN reconciliation
+  lands in the slice that introduces the mechanism; the
+  `CONTRACTS_V2_DESIGN.md` §5.2 amendment is the one
+  closeout reconciliation pass).
 
 ---
 
@@ -509,29 +592,60 @@ NO new state table. The phase-10 contract-regression
 pins (§0.1 / §5) prove the field add did not break
 exactly-one-outcome / never-raise / §3.5.
 
-### 3.4 Authoring tool (`authoring/templates.py`)
+### 3.4 Authoring spine extension (7a) + tool (7b)
 
+**7a — shared-spine extension (§0.3).** The phase-8/9
+authoring pipeline was reminder-only and hard-gated the
+source-driven shape. 7a extends it ADDITIVELY so a
+source-driven (cron + `execution_plan_hash` + carried
+`ExecutionPlan` body, ZERO reasoning) draft flows through
+the SAME validate / dry-run / freeze / commit pipeline:
+- `freeze` + `commit` trigger gate admits `{one_off,
+  cron}` (cron = §12 step-11); other types →
+  `trigger_type_pending_step_unlock`. C2: cron then runs
+  the FULL remaining validation.
+- `ScheduleSpecDraft` gains additive defaulted
+  `execution_plan: Optional[ExecutionPlan] = None`.
+- `commit` step-8b validates body↔hash consistency
+  (missing / not-frozen / hash-mismatch / reasoning-bearing
+  / present-without-hash → explicit clean codes BEFORE the
+  TX) then, in its EXISTING single `transaction(conn)`,
+  `insert_execution_plan` (idempotent reuse if the
+  content-addressed body already exists) THEN
+  `insert_schedule` THEN `append_event` — both-or-neither.
+  OneOff (no plan body) NEVER enters the plan branch.
+- OneOff path behaviour-unchanged (C6 regression pins);
+  emit/cache/resolver literally byte-untouched.
+
+**7b — the tool (on the extended spine).**
 `make_schedule_create_recurring_series_from_source(*, store,
 handshake_store, conn_factory, …, clock, event_id_factory,
 schedule_id_factory, owner, session_id)` — LLM-visible
-signature is the slot set only (e.g.
-`(source, channel, hour_local, timezone,
-progress_strategy)`); DI threaded behind it (mirror the
-phase-9 `make_schedule_create_reminder` DI-leak pin).
-Funnels through the same `validate_schedule_spec` +
-dry-run handshake + freeze + commit pipeline.
+signature is the slot set only (`(source, channel,
+hour_local, timezone, progress_strategy)`); DI threaded
+behind it (mirror the phase-9
+`make_schedule_create_reminder` DI-leak pin). Compiles
+the `(ScheduleSpec, ExecutionPlan)` via the slice-6
+builder (inputs+emit, zero reasoning), attaches the plan
+to the draft, and funnels through the SAME (now-extended)
+`validate_schedule_spec` + dry-run handshake + freeze +
+commit pipeline — NO bespoke commit path. Naive
+datetime / bad slot rejected at the tool boundary.
 
 ---
 
 ## 4. Slice ordering + commit cadence
 
 Slice-gated; pause after each commit for reviewer; no
-push mid-phase. Cadence mirrors phases 9/10. **9 working
-slices** (Q7: old slice 4 split into 4 + 6 — the 🔴
-contract change is front-loaded as its own slice with
-the phase-10 regression pins; failure-policy extraction
-moved BEFORE the resolve-wire so a FAILED resolve has a
-landing path — round-1 🟡 slice-2/6 reorder).
+push mid-phase. Cadence mirrors phases 9/10. **10 working
+slices** (1, 2, 3, 4, 5, 6, **7a**, **7b**, 8, 9): Q7
+split old slice 4 → 4 + 6 (the 🔴 contract change
+front-loaded with the phase-10 regression pins;
+failure-policy extraction moved BEFORE the resolve-wire —
+round-1 🟡); and the slice-7 architecture ratification
+(§0.3) split slice 7 → **7a** (shared-spine extension,
+reviewed + PASS-gated FIRST) + **7b** (the authoring
+tool on the extended spine).
 
 0. **plan + phase transition** (this commit; NOT pushed)
    — `docs/PHASE_11_PLAN.md`, `PHASE_ALLOWLIST[11]` in
@@ -605,11 +719,27 @@ landing path — round-1 🟡 slice-2/6 reorder).
    write (Option B, §0.2 — no new event kind / no second
    transaction); all-provenance table (§3.3) pinned
    through the worker.
-7. **Authoring tool** —
+7a. **Shared authoring-spine extension (§0.3; reviewed +
+   PASS-gated BEFORE 7b).** Cron-only freeze/commit
+   un-gate (`{one_off, cron}`; code renamed →
+   `trigger_type_pending_step_unlock`; spine docstrings /
+   the agent-facing toolset descriptions reconciled);
+   additive `ScheduleSpecDraft.execution_plan`; commit
+   step-8b body↔hash consistency + atomic
+   `insert_execution_plan`+`insert_schedule` in the ONE
+   existing `transaction(conn)`; step-12 boundary kept
+   (reasoning-bearing plan refused at authoring). C6
+   OneOff behaviour-regression pins + C6d atomicity both
+   directions. Plan reconciliation (C7) folded into this
+   commit. emit/cache/resolver literally byte-untouched.
+7b. **Authoring tool (on the extended spine)** —
    `make_schedule_create_recurring_series_from_source`;
-   ExecutionPlan compile (inputs+emit, zero reasoning);
-   validation / dry-run / freeze / commit end-to-end;
-   LLM-visible-signature DI-leak pin.
+   LLM-visible signature = slot set only, DI behind it
+   (phase-9 DI-leak pin); reuses the slice-6 builder
+   (inputs+emit, zero reasoning); SAME validate / dry-run
+   / freeze / commit pipeline (no bespoke commit);
+   naive-datetime / bad-slot rejected at the tool
+   boundary.
 8. **Failure-policy integration + agent guidance +
    hygiene** — end-to-end FAILED / `require_reapprove` /
    DRIFT pins through `_route_source_failure_policy`;
@@ -761,8 +891,17 @@ the same commit.
    stale cache through the worker (the §3.5 invariant
    holds across the cutover).
 6. `emit_source_to_slack` delivers the resolved bytes
-   VERBATIM (§5.3.7); the `OneOffReminder` emit path is
-   byte-for-byte unchanged (additive cutover).
+   VERBATIM (§5.3.7); the `OneOffReminder` emit path +
+   the emit/cache/resolver modules are LITERALLY
+   byte-untouched (empty-diff pinned). The SHARED
+   authoring spine is EXTENDED additively (§0.3): the
+   `freeze`/`commit` trigger gate admits exactly
+   `{one_off, cron}` (others →
+   `trigger_type_pending_step_unlock`); `commit` persists
+   `insert_execution_plan`+`insert_schedule` atomically in
+   ONE transaction (both-or-neither, both rollback
+   directions pinned); the OneOff authoring path is
+   behaviour-unchanged (C6 regression pins green).
 7. `RecurringSeriesFromSource` builder + authoring tool
    produce a valid spec; `whole` always emits;
    `skip_unchanged` is driven by
@@ -828,8 +967,18 @@ path, not re-implemented in the worker.
 
 emit/source_post.py delivers the resolved bytes VERBATIM
 to Slack (SlackProtocol DI, no slack_sdk at module load);
-the OneOffReminder emit path is byte-for-byte unchanged
-(additive cutover, v1 scheduler untouched).
+the OneOffReminder emit path + the emit/cache/resolver
+modules are LITERALLY byte-untouched (additive cutover,
+v1 scheduler untouched). The SHARED authoring spine
+(freeze/commit/drafts/toolset) is EXTENDED ADDITIVELY so
+a source-driven cron draft authors through the SAME
+pipeline: the trigger gate admits {one_off, cron} (cron =
+step 11; others -> trigger_type_pending_step_unlock);
+commit persists insert_execution_plan + insert_schedule
+atomically in ONE transaction (both-or-neither); the
+OneOff authoring path is behaviour-unchanged (regression
+-pinned), not byte-identical (the reviewer-ratified §0.3
+relaxation, scoped to the spine only).
 RecurringSeriesFromSource (template + authoring tool)
 ships with STATELESS progress strategies only (whole /
 skip_unchanged). skip_unchanged reads an ADDITIVE

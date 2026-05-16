@@ -8,24 +8,29 @@ gate, then verifies the freshest
 present / fresh / hash-matches before letting the commit
 verb proceed.
 
-Phase 8 is **OneOff-only**: cron / interval drafts are
-refused outright with code
-``non_oneoff_trigger_blocked_until_real_mode`` per round-1
-reviewer L87 / Q4. Phase 10 / 12 lift the gate alongside
-the ``real`` dry-run mode body. The gate runs BEFORE the
-handshake check so a cron draft with no handshake at all
-still surfaces the non-OneOff code (not
-``dry_run_required``).
+Trigger-type gate (§12-step-aware): OneOff (step 9) AND
+cron (step 11 — the phase-11 source-driven cutover
+unlocks recurring source series via this same authoring
+spine, extended additively) are allowed; every OTHER
+non-OneOff trigger type (interval / event / conditional /
+…) is still refused with code
+``trigger_type_pending_step_unlock`` until its own
+implementation step lands. The gate runs BEFORE the
+handshake check so a still-gated draft with no handshake
+surfaces the trigger-type code (not ``dry_run_required``).
+Cron specs that pass the gate then run the FULL remaining
+freeze validation (handshake / expiry / hash-drift) — the
+un-gate removes ONLY the trigger-type bypass.
 
 Failure shapes (in order of precedence):
 
 - Missing draft → :meth:`ToolResponse.not_found`.
 - Incomplete draft → :meth:`ToolResponse.not_ready`.
 - to_spec naive-clock failure → ``to_spec_failed``.
-- Non-OneOff trigger →
-  ``non_oneoff_trigger_blocked_until_real_mode``. Runs
-  BEFORE validation so an unrelated validation issue
-  cannot mask the LLM-visible reason.
+- A still-gated trigger type (NOT OneOff, NOT cron) →
+  ``trigger_type_pending_step_unlock``. Runs BEFORE
+  validation so an unrelated validation issue cannot mask
+  the LLM-visible reason.
 - Validation failure → :meth:`ToolResponse.validation_failed`.
 - Missing handshake → ``dry_run_required``.
 - Expired handshake → ``dry_run_expired`` with elapsed
@@ -56,6 +61,14 @@ from app.v2.validation import validate_schedule_spec
 
 
 _ONEOFF_TRIGGER_TYPE = "one_off"
+#: Phase-11 §12 step-11: cron is unlocked for source-driven
+#: recurring series through this same authoring spine
+#: (extended additively in slice 7a). Other non-OneOff
+#: trigger types stay gated until their own step.
+_CRON_TRIGGER_TYPE = "cron"
+_UNLOCKED_TRIGGER_TYPES = frozenset(
+    {_ONEOFF_TRIGGER_TYPE, _CRON_TRIGGER_TYPE}
+)
 
 
 async def schedule_freeze(
@@ -70,9 +83,10 @@ async def schedule_freeze(
     draft, then return the canonical spec for the commit
     verb.
 
-    Phase 8 is OneOff-only: cron / interval drafts are
-    refused at this gate (before the handshake check) so the
-    commit verb never sees a non-OneOff trigger in phase 8.
+    OneOff (step 9) + cron (step 11) pass this gate; other
+    non-OneOff trigger types are refused here (before the
+    handshake check) so the commit verb never sees a
+    still-gated trigger.
 
     Workflow:
 
@@ -82,13 +96,13 @@ async def schedule_freeze(
        Non-empty → :meth:`ToolResponse.not_ready`.
     3. Call :meth:`ScheduleSpecDraft.to_spec(clock=clock)`.
        Naive-clock failure → ``to_spec_failed``.
-    4. **Trigger-type gate** (L87 / Q4): if
-       ``spec.trigger.type != "one_off"`` →
-       ``validation_failed(non_oneoff_trigger_blocked_until_real_mode)``.
+    4. **Trigger-type gate**: if ``spec.trigger.type`` is
+       NOT in ``{"one_off", "cron"}`` →
+       ``validation_failed(trigger_type_pending_step_unlock)``.
        Runs BEFORE validation AND the handshake check so an
        unrelated validation issue (e.g. cron without
        ``execution_plan_hash`` → reminder-only rule) cannot
-       mask the non-OneOff code the LLM needs.
+       mask the trigger-type code the LLM needs.
     5. Call :func:`validate_schedule_spec(spec)` with NO
        kwargs. Issues → :meth:`ToolResponse.validation_failed`.
     6. Read the handshake via :meth:`HandshakeStore.read`.
@@ -127,21 +141,28 @@ async def schedule_freeze(
         )
 
     # ---- 4. Trigger-type gate (BEFORE validation +
-    # handshake checks). Phase 8 is OneOff-only per round-1
-    # reviewer L87 / Q4. Gate must run immediately after
+    # handshake checks). OneOff (step 9) + cron (step 11 —
+    # phase-11 source-driven series, this spine extended
+    # additively) pass; every OTHER non-OneOff type stays
+    # gated pending its step. Gate runs immediately after
     # to_spec — running it after validate_schedule_spec
     # would let an unrelated validation failure (e.g. cron
     # without execution_plan_hash → reminder-only rule)
-    # mask the non-OneOff code the LLM needs to see. ----
+    # mask the trigger-type code the LLM needs to see.
+    # C2: the un-gate removes ONLY this trigger-type
+    # bypass — cron specs fall through to the FULL
+    # remaining validation (step 5+) below. ----
     trigger_type = getattr(spec.trigger, "type", None)
-    if trigger_type != _ONEOFF_TRIGGER_TYPE:
+    if trigger_type not in _UNLOCKED_TRIGGER_TYPES:
         return _validation_failed_single(
-            code="non_oneoff_trigger_blocked_until_real_mode",
+            code="trigger_type_pending_step_unlock",
             path="trigger.type",
             message=(
-                f"phase 8 is OneOff-only; trigger type "
-                f"{trigger_type!r} requires the `real` dry-run "
-                "mode (phase 10 / 12)"
+                f"trigger type {trigger_type!r} is not yet "
+                f"unlocked; OneOff (§12 step 9) and cron "
+                f"(§12 step 11) are authorable — the "
+                f"remaining trigger types unlock with their "
+                f"own implementation step"
             ),
         )
 

@@ -72,7 +72,19 @@ from app.v2.models.triggers import (
     IntervalTrigger,
     OneOffTrigger,
 )
+from app.v2.enums import LiveChangePolicy, SourceFallbackPolicy
+from app.v2.models.common import LiveSourceCachePolicy
+from app.v2.models.execution_plan import (
+    EmitStep,
+    ExecutionPlan,
+    InputSpec,
+)
+from app.v2.models.source_ref import SourceRefSpec
 from app.v2.storage.events import list_events_for_schedule
+from app.v2.storage.execution_plans import (
+    get_execution_plan,
+    insert_execution_plan,
+)
 from app.v2.storage.schedules import get_schedule
 
 
@@ -135,6 +147,55 @@ def _interval_draft(id_="sched_alpha") -> ScheduleSpecDraft:
         update={
             "trigger": IntervalTrigger(every_seconds=3600),
             "execution_plan_hash": "b" * 64,
+        }
+    )
+
+
+def _source_plan(*, reasoning_bearing=False) -> ExecutionPlan:
+    from app.v2.models.execution_plan import ReasoningStep
+
+    ref = SourceRefSpec(
+        loader="source_literal",
+        args={"source_id": "src", "text": "hello"},
+        cache=LiveSourceCachePolicy(
+            cache_ttl_seconds=0,
+            stale_max_age_seconds=3600,
+            fallback_policy=SourceFallbackPolicy.USE_LAST_GOOD_SNAPSHOT,
+        ),
+        live_change_policy=LiveChangePolicy.ALLOW,
+    )
+    reasoning = (
+        [
+            ReasoningStep(
+                id="r",
+                entry_agent="CoordinatorAgent",
+                user_template="x",
+            )
+        ]
+        if reasoning_bearing
+        else []
+    )
+    return ExecutionPlan(
+        id="recurring_series_from_source",
+        description="source-driven plan (commit 7a test)",
+        author="tester",
+        inputs=[
+            InputSpec(id="src", loader="source_literal", source_ref=ref)
+        ],
+        reasoning=reasoning,
+        emit=[EmitStep(id="post", adapter="source_post",
+                       args={"channel": "C123"})],
+    ).with_fresh_hash()
+
+
+def _source_cron_draft(
+    plan: ExecutionPlan, id_="sched_alpha"
+) -> ScheduleSpecDraft:
+    return _oneoff_draft(id_=id_).model_copy(
+        update={
+            "trigger": CronTrigger(cron="0 9 * * *", timezone="UTC"),
+            "execution_plan_hash": plan.hash,
+            "execution_plan": plan,
         }
     )
 
@@ -229,18 +290,20 @@ async def test_happy_path_with_template_payload_carries_name(tmp_path):
 
 
 # ===========================================================================
-# Trigger-type gate (L87 / Q4) — BEFORE DB I/O
+# Trigger-type gate (phase-11 7a: §12-step-aware — OneOff
+# step 9 + cron step 11 UNLOCKED; others still gated)
 # ===========================================================================
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "draft_builder", [_cron_draft, _interval_draft]
-)
-async def test_non_oneoff_blocked_before_db_io(
-    tmp_path, monkeypatch, draft_builder
+async def test_still_gated_trigger_blocked_before_db_io(
+    tmp_path, monkeypatch
 ):
-    drafts, handshakes = await _seed(tmp_path, draft_builder())
+    """C6c: a non-cron non-OneOff trigger (interval) is
+    STILL hard-rejected — with the UPDATED non-stale code
+    ``trigger_type_pending_step_unlock`` — BEFORE any DB
+    I/O. The cron un-gate is trigger-type-scoped."""
+    drafts, handshakes = await _seed(tmp_path, _interval_draft())
     conn = _migrate_conn(tmp_path)
 
     insert_spy = MagicMock(wraps=commit_mod.insert_schedule)
@@ -259,33 +322,36 @@ async def test_non_oneoff_blocked_before_db_io(
     )
 
     assert r.status == "validation_failed"
-    assert any(
-        i.code == "non_oneoff_trigger_blocked_until_real_mode"
-        for i in r.issues
-    )
+    codes = {i.code for i in r.issues}
+    assert "trigger_type_pending_step_unlock" in codes
+    # The renamed code fully replaced the stale one.
+    assert "non_oneoff_trigger_blocked_until_real_mode" not in codes
     # NO DB I/O.
     assert insert_spy.call_count == 0
     assert event_spy.call_count == 0
-    # No row landed.
     assert get_schedule(conn, "sched_alpha") is None
-    # Files preserved.
     assert drafts.read("sess1", "sched_alpha").id == "sched_alpha"
     handshakes.read("sess1", "sched_alpha")  # no raise
 
 
 @pytest.mark.asyncio
-async def test_cron_without_plan_hash_returns_non_oneoff_not_validation(
+async def test_cron_passes_trigger_gate_then_runs_full_validation(
     tmp_path,
 ):
-    """Mirror of the slice-3 reordering pin for commit."""
+    """C2: the cron un-gate removes ONLY the trigger-type
+    bypass — a cron WITHOUT execution_plan_hash now falls
+    through to the FULL remaining validation and surfaces
+    the reminder-rule (``missing_execution_plan_for_complex_trigger``),
+    NOT a trigger-type code (the gate no longer pre-empts
+    it)."""
     drafts, handshakes = _stores(tmp_path)
-    bad = _oneoff_draft().model_copy(
+    cron_no_plan = _oneoff_draft().model_copy(
         update={
             "trigger": CronTrigger(cron="0 9 * * MON", timezone="UTC"),
-            # NO execution_plan_hash.
+            # NO execution_plan_hash → reminder-rule applies.
         }
     )
-    drafts.write("sess1", bad)
+    drafts.write("sess1", cron_no_plan)
     conn = _migrate_conn(tmp_path)
 
     r = await schedule_draft_commit(
@@ -300,8 +366,41 @@ async def test_cron_without_plan_hash_returns_non_oneoff_not_validation(
 
     assert r.status == "validation_failed"
     codes = {i.code for i in r.issues}
-    assert "non_oneoff_trigger_blocked_until_real_mode" in codes
-    assert "missing_execution_plan_for_complex_trigger" not in codes
+    assert "missing_execution_plan_for_complex_trigger" in codes
+    assert "trigger_type_pending_step_unlock" not in codes
+    assert "non_oneoff_trigger_blocked_until_real_mode" not in codes
+
+
+@pytest.mark.asyncio
+async def test_cron_with_plan_hash_but_no_body_rejected_before_db_io(
+    tmp_path, monkeypatch
+):
+    """C3: a source-driven draft (execution_plan_hash set)
+    that does NOT carry the ExecutionPlan body is refused
+    with the explicit ``execution_plan_body_missing`` code
+    BEFORE the transaction — never an unhandled raise / a
+    schedule pointing at an absent plan."""
+    drafts, handshakes = await _seed(tmp_path, _cron_draft())
+    conn = _migrate_conn(tmp_path)
+
+    insert_spy = MagicMock(wraps=commit_mod.insert_schedule)
+    monkeypatch.setattr(commit_mod, "insert_schedule", insert_spy)
+
+    r = await schedule_draft_commit(
+        "sched_alpha",
+        session_id="sess1",
+        store=drafts,
+        handshake_store=handshakes,
+        conn=conn,
+        event_id_factory=_event_id_factory,
+        clock=_fixed_clock,
+    )
+
+    assert r.status == "validation_failed"
+    codes = {i.code for i in r.issues}
+    assert "execution_plan_body_missing" in codes
+    assert insert_spy.call_count == 0
+    assert get_schedule(conn, "sched_alpha") is None
 
 
 # ===========================================================================
@@ -794,3 +893,240 @@ def test_commit_body_calls_no_datetime_now():
     assert not leaked, (
         f"schedule_draft_commit must be clock-free; got {leaked!r}"
     )
+
+
+# ===========================================================================
+# Phase-11 7a — source-driven commit: atomic
+# insert_execution_plan + insert_schedule (C3/C6b/C6d)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_oneoff_commit_does_not_enter_plan_insert_branch(
+    tmp_path, monkeypatch
+):
+    """C6b: a OneOff (reminder) commit — plan body None —
+    NEVER enters the new insert_execution_plan branch; it
+    is the SAME single insert_schedule + append_event in
+    one transaction as before."""
+    drafts, handshakes = await _seed(tmp_path, _oneoff_draft())
+    conn = _migrate_conn(tmp_path)
+
+    plan_spy = MagicMock(wraps=commit_mod.insert_execution_plan)
+    monkeypatch.setattr(
+        commit_mod, "insert_execution_plan", plan_spy
+    )
+
+    r = await schedule_draft_commit(
+        "sched_alpha",
+        session_id="sess1",
+        store=drafts,
+        handshake_store=handshakes,
+        conn=conn,
+        event_id_factory=_event_id_factory,
+        clock=_fixed_clock,
+    )
+
+    assert r.status == "ok"
+    assert plan_spy.call_count == 0  # branch NOT entered
+    assert get_schedule(conn, "sched_alpha") is not None
+    assert len(list_events_for_schedule(conn, "sched_alpha")) == 1
+
+
+@pytest.mark.asyncio
+async def test_source_driven_commit_persists_plan_and_schedule(
+    tmp_path,
+):
+    """Happy path: a source-driven draft commits the
+    ExecutionPlan row AND the schedules row AND the
+    schedule_created event — all present afterward (one
+    transaction)."""
+    plan = _source_plan()
+    drafts, handshakes = await _seed(
+        tmp_path, _source_cron_draft(plan)
+    )
+    conn = _migrate_conn(tmp_path)
+
+    r = await schedule_draft_commit(
+        "sched_alpha",
+        session_id="sess1",
+        store=drafts,
+        handshake_store=handshakes,
+        conn=conn,
+        event_id_factory=_event_id_factory,
+        clock=_fixed_clock,
+    )
+
+    assert r.status == "ok"
+    assert get_execution_plan(conn, plan.hash) is not None
+    assert get_schedule(conn, "sched_alpha") is not None
+    assert len(list_events_for_schedule(conn, "sched_alpha")) == 1
+
+
+@pytest.mark.asyncio
+async def test_source_driven_commit_reuses_existing_plan(
+    tmp_path,
+):
+    """Content-addressed plans may be shared: if the
+    identical frozen ExecutionPlan is already present, the
+    commit REUSES it (no duplicate error) and still lands
+    the schedule."""
+    plan = _source_plan()
+    drafts, handshakes = await _seed(
+        tmp_path, _source_cron_draft(plan)
+    )
+    conn = _migrate_conn(tmp_path)
+    # Pre-insert the identical plan out-of-band.
+    insert_execution_plan(conn, plan)
+    conn.commit()
+
+    r = await schedule_draft_commit(
+        "sched_alpha",
+        session_id="sess1",
+        store=drafts,
+        handshake_store=handshakes,
+        conn=conn,
+        event_id_factory=_event_id_factory,
+        clock=_fixed_clock,
+    )
+
+    assert r.status == "ok"
+    assert get_schedule(conn, "sched_alpha") is not None
+
+
+@pytest.mark.asyncio
+async def test_plan_insert_failure_rolls_back_schedule(
+    tmp_path, monkeypatch
+):
+    """C6d direction 1: a forced failure on
+    insert_execution_plan rolls back the WHOLE transaction —
+    NO orphan schedule, NO event."""
+    plan = _source_plan()
+    drafts, handshakes = await _seed(
+        tmp_path, _source_cron_draft(plan)
+    )
+    conn = _migrate_conn(tmp_path)
+
+    def _explode(*a, **k):
+        raise RuntimeError("simulated insert_execution_plan failure")
+
+    monkeypatch.setattr(
+        commit_mod, "insert_execution_plan", _explode
+    )
+
+    with pytest.raises(RuntimeError, match="simulated"):
+        await schedule_draft_commit(
+            "sched_alpha",
+            session_id="sess1",
+            store=drafts,
+            handshake_store=handshakes,
+            conn=conn,
+            event_id_factory=_event_id_factory,
+            clock=_fixed_clock,
+        )
+
+    assert get_schedule(conn, "sched_alpha") is None  # no orphan
+    assert get_execution_plan(conn, plan.hash) is None
+    assert list_events_for_schedule(conn, "sched_alpha") == []
+
+
+@pytest.mark.asyncio
+async def test_schedule_insert_failure_rolls_back_plan(
+    tmp_path, monkeypatch
+):
+    """C6d direction 2: a forced failure on insert_schedule
+    rolls back the already-inserted ExecutionPlan — NO
+    orphan plan, NO event. Single transaction proven both
+    directions."""
+    plan = _source_plan()
+    drafts, handshakes = await _seed(
+        tmp_path, _source_cron_draft(plan)
+    )
+    conn = _migrate_conn(tmp_path)
+
+    def _explode(*a, **k):
+        raise RuntimeError("simulated insert_schedule failure")
+
+    monkeypatch.setattr(commit_mod, "insert_schedule", _explode)
+
+    with pytest.raises(RuntimeError, match="simulated"):
+        await schedule_draft_commit(
+            "sched_alpha",
+            session_id="sess1",
+            store=drafts,
+            handshake_store=handshakes,
+            conn=conn,
+            event_id_factory=_event_id_factory,
+            clock=_fixed_clock,
+        )
+
+    assert get_execution_plan(conn, plan.hash) is None  # no orphan
+    assert get_schedule(conn, "sched_alpha") is None
+    assert list_events_for_schedule(conn, "sched_alpha") == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mutate, expect_code",
+    [
+        ({"execution_plan": None}, "execution_plan_body_missing"),
+        (
+            {"execution_plan_hash": "f" * 64},
+            "execution_plan_hash_mismatch",
+        ),
+    ],
+)
+async def test_source_draft_consistency_codes(
+    tmp_path, mutate, expect_code
+):
+    """C3: explicit clean codes for body-missing /
+    hash-mismatch, surfaced BEFORE the transaction."""
+    plan = _source_plan()
+    draft = _source_cron_draft(plan).model_copy(update=mutate)
+    drafts, handshakes = await _seed(tmp_path, draft)
+    conn = _migrate_conn(tmp_path)
+
+    r = await schedule_draft_commit(
+        "sched_alpha",
+        session_id="sess1",
+        store=drafts,
+        handshake_store=handshakes,
+        conn=conn,
+        event_id_factory=_event_id_factory,
+        clock=_fixed_clock,
+    )
+
+    assert r.status == "validation_failed"
+    assert expect_code in {i.code for i in r.issues}
+    assert get_schedule(conn, "sched_alpha") is None
+
+
+@pytest.mark.asyncio
+async def test_reasoning_bearing_plan_rejected_at_authoring(
+    tmp_path,
+):
+    """C5: the cron un-gate is trigger-type-only — a
+    reasoning-bearing ExecutionPlan is refused at authoring
+    (step-12 boundary enforced here too)."""
+    plan = _source_plan(reasoning_bearing=True)
+    drafts, handshakes = await _seed(
+        tmp_path, _source_cron_draft(plan)
+    )
+    conn = _migrate_conn(tmp_path)
+
+    r = await schedule_draft_commit(
+        "sched_alpha",
+        session_id="sess1",
+        store=drafts,
+        handshake_store=handshakes,
+        conn=conn,
+        event_id_factory=_event_id_factory,
+        clock=_fixed_clock,
+    )
+
+    assert r.status == "validation_failed"
+    assert (
+        "execution_plan_reasoning_unsupported_pending_step_12"
+        in {i.code for i in r.issues}
+    )
+    assert get_schedule(conn, "sched_alpha") is None

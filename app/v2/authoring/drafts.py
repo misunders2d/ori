@@ -59,6 +59,7 @@ from app.v2.models.common import (
     TemplateRef,
     UserRef,
 )
+from app.v2.models.execution_plan import ExecutionPlan
 from app.v2.models.schedule import ScheduleSpec
 from app.v2.models.triggers import Trigger
 
@@ -98,6 +99,17 @@ class ScheduleSpecDraft(BaseModel):
     # accepts and round-trips them.
     template: Optional[TemplateRef] = None
     parent_hash: Optional[str] = None
+    # Phase-11 7a (C4): the compiled ExecutionPlan body for
+    # a source-driven draft. ADDITIVE + defaulted — every
+    # existing reminder draft round-trips byte-unaffected
+    # and ``missing_required_fields`` is UNCHANGED (a plan
+    # body is NOT a required ScheduleSpec field; it is
+    # required ONLY when ``execution_plan_hash`` is set, and
+    # THAT cross-field consistency is enforced at commit
+    # (commit.py step 8b), not here). ``to_spec`` does NOT
+    # read this — it builds the ScheduleSpec only; the
+    # commit verb persists the plan + schedule atomically.
+    execution_plan: Optional[ExecutionPlan] = None
 
     def missing_required_fields(self) -> list[str]:
         """Return the names of unset required-on-spec fields

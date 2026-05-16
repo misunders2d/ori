@@ -2,27 +2,40 @@
 
 Phase 8 slice 4 per ``docs/PHASE_8_PLAN.md`` §3.4 + §5.4.
 
-Lands a draft as a row in the v2 ``schedules`` table AND
-appends a ``schedule_created`` EventLedger event in the
-same transaction. Both writes succeed or both roll back —
-the EventLedger is the audit source of truth and must never
-diverge from the schedules table.
+Lands a draft as a row in the v2 ``schedules`` table —
+AND, for a source-driven draft (``execution_plan_hash``
+set, phase-11 7a), the carried ``ExecutionPlan`` body as
+a row in ``execution_plans`` — AND appends a
+``schedule_created`` EventLedger event, ALL in the SAME
+transaction. Every write succeeds or every write rolls
+back — the EventLedger is the audit source of truth and
+must never diverge from the schedules / execution_plans
+tables; a schedule is never persisted pointing at an
+absent plan.
 
-Pre-flight gates (same precedence as :func:`schedule_freeze`
-post-slice-3 fix):
+Pre-flight gates (same precedence as :func:`schedule_freeze`):
 
 1. Missing draft → :meth:`ToolResponse.not_found`.
 2. Incomplete draft → :meth:`ToolResponse.not_ready`.
 3. to_spec naive-clock failure → ``to_spec_failed``.
-4. **Trigger-type gate** (L87 / Q4):
-   ``non_oneoff_trigger_blocked_until_real_mode`` BEFORE
-   validate_schedule_spec so a cron-without-plan draft
-   surfaces the phase-8 contract code, not an unrelated
-   validation issue.
+4. **Trigger-type gate** (§12-step-aware): a trigger type
+   NOT in ``{one_off, cron}`` →
+   ``trigger_type_pending_step_unlock`` BEFORE
+   validate_schedule_spec (OneOff = step 9, cron = step 11;
+   others gated pending their step). A cron-without-plan
+   draft therefore now surfaces the reminder-rule
+   validation (``missing_execution_plan_for_complex_trigger``),
+   NOT a trigger-type code — the cron un-gate is
+   trigger-type-only.
 5. Validation failure → :meth:`ToolResponse.validation_failed`.
 6. Missing handshake → ``dry_run_required``.
 7. Expired handshake → ``dry_run_expired``.
 8. Hash drift → ``body_hash_drift``.
+8b. ExecutionPlan-body consistency (source-driven only):
+   missing / not-frozen / hash-mismatch / reasoning-bearing
+   / present-without-hash → an explicit clean
+   ``validation_failed`` code BEFORE the transaction
+   (never an unhandled raise).
 
 Atomic write (reached only when every pre-flight gate
 passes):
@@ -83,6 +96,10 @@ from app.v2.authoring.setters import _validation_failed_single
 from app.v2.enums import EventKind
 from app.v2.models.event import Event
 from app.v2.storage.events import append_event
+from app.v2.storage.execution_plans import (
+    get_execution_plan,
+    insert_execution_plan,
+)
 from app.v2.storage.schedules import insert_schedule
 from app.v2.storage.transactions import transaction
 from app.v2.validation import validate_schedule_spec
@@ -92,6 +109,14 @@ logger = logging.getLogger("app.v2.authoring.commit")
 
 
 _ONEOFF_TRIGGER_TYPE = "one_off"
+#: Twin of freeze._UNLOCKED_TRIGGER_TYPES — the commit verb
+#: carries the SAME §12-step-aware gate (OneOff step 9 +
+#: cron step 11). Kept in lock-step so a cron spec that
+#: passes freeze is never re-blocked at commit.
+_CRON_TRIGGER_TYPE = "cron"
+_UNLOCKED_TRIGGER_TYPES = frozenset(
+    {_ONEOFF_TRIGGER_TYPE, _CRON_TRIGGER_TYPE}
+)
 
 
 async def schedule_draft_commit(
@@ -157,18 +182,22 @@ async def schedule_draft_commit(
         )
 
     # ---- 4. Trigger-type gate (BEFORE validation +
-    # handshake + DB I/O). Same ordering as freeze post-fix
-    # so the non-OneOff contract is the LLM-visible code,
-    # not a downstream validation issue. ----
+    # handshake + DB I/O). Same §12-step-aware gate as
+    # freeze (OneOff step 9 + cron step 11) so the
+    # trigger-type contract is the LLM-visible code, not a
+    # downstream validation issue. C2: cron specs fall
+    # through to the FULL remaining validation below. ----
     trigger_type = getattr(spec.trigger, "type", None)
-    if trigger_type != _ONEOFF_TRIGGER_TYPE:
+    if trigger_type not in _UNLOCKED_TRIGGER_TYPES:
         return _validation_failed_single(
-            code="non_oneoff_trigger_blocked_until_real_mode",
+            code="trigger_type_pending_step_unlock",
             path="trigger.type",
             message=(
-                f"phase 8 is OneOff-only; trigger type "
-                f"{trigger_type!r} requires the `real` dry-run "
-                "mode (phase 10 / 12)"
+                f"trigger type {trigger_type!r} is not yet "
+                f"unlocked; OneOff (§12 step 9) and cron "
+                f"(§12 step 11) are authorable — the "
+                f"remaining trigger types unlock with their "
+                f"own implementation step"
             ),
         )
 
@@ -233,7 +262,74 @@ async def schedule_draft_commit(
             ),
         )
 
-    # ---- 9. Atomic insert + schedule_created event ----
+    # ---- 8b. ExecutionPlan body consistency (phase-11 7a,
+    # C3/C5). A source-driven spec (execution_plan_hash
+    # set) MUST carry the matching frozen ExecutionPlan
+    # body on the draft; a reminder spec MUST NOT. Every
+    # mismatch is a CLEAN, EXPLICIT validation failure
+    # surfaced BEFORE the DB transaction — never an
+    # unhandled raise that could half-commit. C5: the
+    # step-12 boundary is enforced HERE too — a
+    # reasoning-bearing plan is refused at authoring (the
+    # cron un-gate is trigger-type-only). ----
+    plan = draft.execution_plan
+    if spec.execution_plan_hash is not None:
+        if plan is None:
+            return _validation_failed_single(
+                code="execution_plan_body_missing",
+                path="execution_plan",
+                message=(
+                    "spec.execution_plan_hash is set but the "
+                    "draft carries no execution_plan body; a "
+                    "source-driven authoring path must attach "
+                    "the compiled ExecutionPlan"
+                ),
+            )
+        if not plan.hash:
+            return _validation_failed_single(
+                code="execution_plan_not_frozen",
+                path="execution_plan.hash",
+                message=(
+                    "the attached ExecutionPlan is not frozen "
+                    "(empty hash); call with_fresh_hash() "
+                    "before committing"
+                ),
+            )
+        if plan.hash != spec.execution_plan_hash:
+            return _validation_failed_single(
+                code="execution_plan_hash_mismatch",
+                path="execution_plan_hash",
+                message=(
+                    f"draft.execution_plan.hash {plan.hash!r} "
+                    f"!= spec.execution_plan_hash "
+                    f"{spec.execution_plan_hash!r}; the body "
+                    f"and the reference disagree"
+                ),
+            )
+        if plan.reasoning:
+            return _validation_failed_single(
+                code="execution_plan_reasoning_unsupported_pending_step_12",
+                path="execution_plan.reasoning",
+                message=(
+                    f"the attached ExecutionPlan carries "
+                    f"{len(plan.reasoning)} reasoning step(s); "
+                    f"the reasoning executor lands in §12 "
+                    f"step 12 — phase-11 source-driven plans "
+                    f"are inputs+emit, zero reasoning"
+                ),
+            )
+    elif plan is not None:
+        return _validation_failed_single(
+            code="execution_plan_without_hash",
+            path="execution_plan",
+            message=(
+                "draft carries an execution_plan body but "
+                "spec.execution_plan_hash is None; "
+                "OneOff/reminder specs must not attach a plan"
+            ),
+        )
+
+    # ---- 9. Atomic insert(s) + schedule_created event ----
     template_name = (
         spec.template.name if spec.template is not None else None
     )
@@ -257,8 +353,33 @@ async def schedule_draft_commit(
     # ``except sqlite3.IntegrityError`` mis-attributes the
     # event-side collision as a schedule-id duplicate.
     insert_raised_integrity = False
+    plan_insert_raised_integrity = False
     try:
         with transaction(conn):
+            # Source-driven ONLY: insert the ExecutionPlan
+            # FIRST so the schedule never points at an
+            # absent plan (C3 — both-or-neither, ONE
+            # transaction). The OneOff/reminder path
+            # (plan is None) NEVER enters this branch —
+            # exactly the single insert_schedule as before
+            # (C3/C6b). Plans are content-addressed and may
+            # be shared by multiple schedules
+            # (execution_plans.py contract): if the identical
+            # frozen body is already present, REUSE it (skip
+            # the insert) rather than fail — a benign
+            # idempotent case, not a duplicate error.
+            if plan is not None:
+                if get_execution_plan(conn, plan.hash) is None:
+                    try:
+                        insert_execution_plan(conn, plan)
+                    except sqlite3.IntegrityError:
+                        # TOCTOU: another writer inserted the
+                        # same hash between the check and the
+                        # insert. Roll the WHOLE TX back (the
+                        # schedule has NOT been inserted yet —
+                        # no orphan either way).
+                        plan_insert_raised_integrity = True
+                        raise
             try:
                 insert_schedule(conn, spec)
             except sqlite3.IntegrityError:
@@ -266,6 +387,18 @@ async def schedule_draft_commit(
                 raise
             append_event(conn, event)
     except sqlite3.IntegrityError as exc:
+        if plan_insert_raised_integrity:
+            return _validation_failed_single(
+                code="duplicate_execution_plan",
+                path="execution_plan.hash",
+                message=(
+                    f"execution_plan hash "
+                    f"{spec.execution_plan_hash!r} was "
+                    f"inserted concurrently; the whole commit "
+                    f"rolled back (no orphan schedule). Retry "
+                    f"({exc!s})"
+                ),
+            )
         if insert_raised_integrity:
             return _validation_failed_single(
                 code="duplicate_schedule_id",

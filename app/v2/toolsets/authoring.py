@@ -182,10 +182,13 @@ AUTHORING_TOOL_DESCRIPTORS: list[ToolDescriptor] = [
         description=(
             "Validate the draft against the §5.5 chokepoint "
             "and record a 60-second dry-run handshake. "
-            "validate_only is fully implemented in phase 8; "
-            "mocked_inputs / real return "
-            "mode_not_implemented_in_phase_8 until phases "
-            "10 / 12 ship the source-loader path."
+            "validate_only is implemented (OneOff + "
+            "source-driven cron); mocked_inputs / real "
+            "(an authoring-time source-resolving dry-run) "
+            "return mode_not_implemented pending the "
+            "dry-run source-resolution path (a later step) "
+            "— note source-driven schedules still resolve "
+            "+ fire correctly at runtime via the worker."
         ),
         tags={
             ToolCapabilityTag.FILESYSTEM_READ,
@@ -198,9 +201,12 @@ AUTHORING_TOOL_DESCRIPTORS: list[ToolDescriptor] = [
         description=(
             "Verify the dry-run handshake is fresh + "
             "hash-matches the current draft body and return "
-            "the canonical spec. No DB or file mutation; "
-            "phase-8 OneOff-only (non-OneOff triggers refused "
-            "with non_oneoff_trigger_blocked_until_real_mode)."
+            "the canonical spec. No DB or file mutation. "
+            "OneOff (step 9) + cron (step 11, source-driven "
+            "recurring series) are authorable; other "
+            "trigger types are refused with "
+            "trigger_type_pending_step_unlock until their "
+            "own step."
         ),
         tags={ToolCapabilityTag.FILESYSTEM_READ},
         module=f"{_AUTHORING_MODULE}.freeze",
@@ -208,11 +214,12 @@ AUTHORING_TOOL_DESCRIPTORS: list[ToolDescriptor] = [
     ToolDescriptor(
         name="schedule_draft_commit",
         description=(
-            "Atomic insert_schedule + append_event("
-            "schedule_created) in one transaction; on success "
-            "best-effort delete of draft + handshake files "
-            "(WARNING log on cleanup failure). Phase-8 "
-            "OneOff-only."
+            "Atomic, single-transaction insert_schedule "
+            "(+ insert_execution_plan for a source-driven "
+            "draft — both-or-neither) + append_event("
+            "schedule_created); on success best-effort "
+            "delete of draft + handshake files (WARNING log "
+            "on cleanup failure). OneOff + cron authorable."
         ),
         tags={
             ToolCapabilityTag.DB_WRITE,
