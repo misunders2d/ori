@@ -44,7 +44,13 @@ from typing import (
     runtime_checkable,
 )
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 from pydantic.types import JsonValue
 
 from app.v2.descriptors.source import SourceDescriptor
@@ -173,6 +179,32 @@ class SourceResult(BaseModel):
                 "hex chars"
             )
         return v
+
+    @model_validator(mode="after")
+    def _content_hash_matches_bytes(self) -> "SourceResult":
+        """The content hash MUST be DERIVED from
+        ``content_bytes``, never trusted from the loader.
+
+        Codex slice-1 🔴: shape-only validation let a
+        loader return lying metadata (a well-formed hash
+        that does not match its bytes), poisoning the
+        dedup / ``source_snapshots`` rows BEFORE the
+        snapshot writer (slice 4) ever runs — the whole
+        content-addressing invariant is bypassable at the
+        contract boundary. Recompute and reject any
+        mismatch so a constructed ``SourceResult`` is
+        provably self-consistent.
+        """
+        expected = content_hash_for(self.content_bytes)
+        if self.content_hash != expected:
+            raise ValueError(
+                "SourceResult.content_hash does not match "
+                "sha256(content_bytes): the hash must be "
+                "derived from the bytes, not trusted from "
+                f"the loader (expected {expected!r}, got "
+                f"{self.content_hash!r})"
+            )
+        return self
 
 
 @runtime_checkable

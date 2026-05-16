@@ -158,6 +158,58 @@ def test_source_result_negative_item_count_rejected():
         SourceResult(**_ok_kwargs(item_count=-1))
 
 
+# --- content-addressing integrity (codex slice-1 🔴) -----------------------
+
+
+_KIND_SAMPLES = [
+    ("text", "stand-up at 9"),
+    ("markdown", "# Title\n\nbody\n"),
+    ("yaml", "k: v\nn: 1\n"),
+    ("json", {"b": 1, "a": [2, 3]}),
+    ("dict", {"x": {"y": "z"}}),
+    ("list", [1, "two", {"k": 3}]),
+    ("binary", bytes(range(64))),
+]
+
+
+@pytest.mark.parametrize("kind,sample", _KIND_SAMPLES)
+def test_correct_derived_hash_passes(kind, sample):
+    cb = canonical_bytes(kind, sample)
+    r = SourceResult(
+        **_ok_kwargs(
+            content=(
+                {"_b64": "x"} if kind == "binary" else sample
+            ),
+            content_bytes=cb,
+            content_hash=content_hash_for(cb),
+        )
+    )
+    assert r.content_hash == content_hash_for(r.content_bytes)
+
+
+@pytest.mark.parametrize("kind,sample", _KIND_SAMPLES)
+def test_wellformed_but_wrong_hash_rejected(kind, sample):
+    """A loader returning a well-formed hash that does NOT
+    match content_bytes must be rejected at the contract
+    boundary — the hash is derived/verified, never trusted
+    (poisoning dedup / snapshot rows is impossible)."""
+    cb = canonical_bytes(kind, sample)
+    # A well-formed sha256 of DIFFERENT bytes — passes the
+    # shape check, fails the derived-hash check.
+    wrong = content_hash_for(cb + b"tampered")
+    assert wrong != content_hash_for(cb)
+    with pytest.raises(ValidationError, match="does not match"):
+        SourceResult(
+            **_ok_kwargs(
+                content=(
+                    {"_b64": "x"} if kind == "binary" else sample
+                ),
+                content_bytes=cb,
+                content_hash=wrong,
+            )
+        )
+
+
 def test_source_result_forbids_extra_fields():
     with pytest.raises(ValidationError):
         SourceResult(**_ok_kwargs(surprise=1))
