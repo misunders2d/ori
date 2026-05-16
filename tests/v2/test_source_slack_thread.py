@@ -206,6 +206,18 @@ async def test_ok_false_without_error_string_is_fetch():
         await _load(_src(reader))
 
 
+@pytest.mark.asyncio
+async def test_strict_ok_truthy_non_bool_is_not_ok():
+    """`ok: 1` (truthy non-bool) is NOT success — strict
+    identity (codex slice-6 🔵 / phase-9 parity). With no
+    error string → conservative fetch branch."""
+    reader = _FakeReader(
+        resp={"ok": 1, "messages": [{"ts": "1.0"}]}
+    )
+    with pytest.raises(SourceFetchError):
+        await _load(_src(reader))
+
+
 # ===========================================================================
 # Args
 # ===========================================================================

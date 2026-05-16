@@ -242,7 +242,7 @@ class SlackThreadSource:
                 f"response: {type(resp).__name__}",
                 code="slack_response_malformed",
             )
-        if not resp.get("ok", False):
+        if resp.get("ok") is not True:  # strict identity (phase-9 parity)
             error = resp.get("error")
             _raise_for_slack_error(
                 error if isinstance(error, str) else "unknown_error"
