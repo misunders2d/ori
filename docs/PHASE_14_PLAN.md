@@ -478,7 +478,8 @@ finalises)
   phase-14 adds).
 
 ## 7. Acceptance criteria for `v2-phase-14-complete`
-(provisional — finalised after round-1 disposition)
+(FINALISED at closeout — round-1 Q1–Q7 + slice-2 §9.1 +
+slice-3 §9.2 (α) all baked; walked with evidence below)
 
 1. Branch ahead of `v2-phase-13-complete` by N small
    per-slice commits.
@@ -502,12 +503,18 @@ finalises)
    `sources/`/`cache.py`/`resolver.py` EMPTY-diff vs
    `v2-phase-13-complete` (dedup is a worker-branch concern).
 5. `PausedPendingPolicy` enum + optional hash-stable
-   ScheduleSpec field; default `let_complete`; a spec without
-   the field hashes identically to pre-amendment.
-6. `schedule_pause` honours the policy: `let_complete` leaves
-   pending Runs; `cancel_pending` emits `run_cancelled`
-   (parity with `schedule_archive`); no new EventKind, no
-   v002.
+   `FailurePolicy.paused_pending_policy` field (the (α) locus
+   §9.2 — NOT a top-level `ScheduleSpec` field; persisted via
+   the existing `failure_json` column, no DDL/v002); default
+   `let_complete`; a spec without the field (or with explicit
+   `let_complete`) hashes byte-identically to pre-amendment
+   via the `canonical_body` nested-strip.
+6. `schedule_pause` reads the PERSISTED policy and honours it:
+   `let_complete` / None leaves pending Runs; `cancel_pending`
+   emits `run_cancelled` (parity with `schedule_archive` —
+   same seam, reason `schedule_paused` vs `schedule_archived`
+   per §13 audit-truth); no new EventKind, no v002;
+   `storage/schedules.py` byte-untouched.
 7. Phase-11 `_fail_run` boundary + phase-12 enforcement +
    phase-13 state seam byte/behaviour-unchanged; no executor.
 8. No `datetime.now`/`uuid.uuid4`/vendor-SDK module-load in
@@ -522,7 +529,87 @@ finalises)
 12. Annotated tag `v2-phase-14-complete` created (push gated
     on reviewer CLOSEOUT PASS).
 
-## 8. Tag annotation (draft — finalised at closeout)
+### 7.1 Closeout acceptance walk (evidence — 2026-05-16)
+
+All 12 walked, GREEN:
+
+1. **Branch ahead.** `evo/amazon_manager` ahead of
+   `origin` by 5 (plan + round-2 + slice1 9eaadf5 + slice2
+   90a753d + slice3 16b6626); latest origin tag
+   `v2-phase-13-complete @ f8fbfee`. Closeout adds the design
+   reconciliation + this walk.
+2. **`prior_emit_succeeded`.** `test_idempotency_dedup.py`
+   green (True iff prior `emit_succeeded` CARRYING THE KEY;
+   distinct/absent key never matches; kind-collision-safe;
+   pure, no mutation).
+3. **FULL protocol + honest residual.**
+   `test_idempotency_worker_dedup.py` green: real delivery →
+   keyed `emit_succeeded` + `RUN_SUCCEEDED` ATOMIC
+   (`_commit_success_atomic` both-or-neither, rb-DB
+   neither-persists); durable prior keyed hit → `stub.calls
+   == []` + `emit_skipped_idempotent` + run succeeds, NO
+   second `emit_succeeded`; A.2 structural pin (idempotency
+   calls source-block-only, OneOff `("succeeded", None)`).
+   The deliver-then-crash residual is documented as the
+   inherent at-least-once boundary (CONTRACTS §6.4 / §4.0.5).
+   No exactly-once / no unconditional no-double-deliver
+   wording survives (sweep (a) clean).
+4. **Emit byte-proof.** `slack_reminder.py` / `source_post.py`
+   + `sources/` + `cache.py` + `resolver.py` +
+   `transactions.py` + `events.py` + `schedule_state.py` +
+   `schedules.py` + `ddl/` — all 0-line diff vs
+   `v2-phase-13-complete` (cond-7 verified).
+5. **PausedPendingPolicy hash-stable.**
+   `test_paused_pending_policy.py` green: corpus (plain
+   reminder + OneOff-template + source-driven) hashes
+   byte-identical (phase-9 reconstruct technique), explicit
+   `let_complete` == unset, `cancel_pending` distinct +
+   deterministic + key-present, strip touches ONLY
+   `paused_pending_policy`. The (α) `FailurePolicy` locus —
+   NOT a top-level field (busted-premise sweep (c) confined
+   to the annotated round-1 record + §9.2).
+6. **Pause honours policy.** Same suite: `let_complete`/None
+   leaves pending untouched (no `run_cancelled`);
+   `cancel_pending` cancels with `run_cancelled` reason
+   `schedule_paused`; archive parity reason
+   `schedule_archived` (default `cancelled_reason`,
+   byte-identical). Round-trip pin: `cancel_pending` survives
+   fresh-conn `get_schedule`; `_COLUMNS == v001 set`. No new
+   EventKind / no v002 (`ddl/` empty-diff; `enums.py` added
+   ONLY the `PausedPendingPolicy` enum, no EventKind).
+7. **Carried boundaries byte/behaviour-unchanged.**
+   `test_worker_reasoning_seam.py` +
+   `test_validation_reasoning_tool_mode.py` +
+   `test_authoring_lifecycle{,_helper}.py` +
+   `test_runtime_source_fire.py` (82) UNMODIFIED + green;
+   `worker.py` / `idempotency.py` 0-diff vs slice-2
+   `@90a753d`; no executor (sweep (d) clean).
+8. **Module-load hygiene.** Phase-14 added NO new module;
+   the folded alias-robust import-hygiene pin
+   (`test_idempotency_dedup.py`) green; slice-3 introduced no
+   module-load `datetime.now`/`uuid4`/vendor (the only
+   `datetime.now` is the pre-existing function-scope
+   `_utc_now_iso`, already `pop`-ped from `canonical_body`).
+9. **Phase guards.** `check_phase_scope.py --staged` AND
+   `--diff v2-phase-13-complete` both exit 0.
+10. **Full suite.** `tests/v2` 2410 passed, 0 fail, 0
+    regression (2383 phase-13 baseline + 12 slice-1/2 + 15
+    slice-3; closeout adds no tests — docs-only
+    reconciliation).
+11. **plan ≡ code ≡ design ≡ tag.** The ONE
+    `CONTRACTS_V2_DESIGN.md` reconciliation pass done (§6.4
+    LIVE worker-branch read-AND-write + EmitStep-keyed +
+    OneOff-OUT + honest at-least-once; §4.0.4 / §4.0.5
+    adapter→worker + honest residual; §7.4 (α)
+    `FailurePolicy` locus + cancel-parity + `cancelled_reason`
+    audit-truth). Plan §1/§2/§3/§4/§5/§7-criterion-5/§8
+    busted-premise wording corrected; §0.1 Q2/Q3 verbatim +
+    SUPERSEDED annotations; §9.2 fork ruling. Repo-wide
+    semantic-intent sweep (a/b/c/d) clean.
+12. **Annotated tag.** `v2-phase-14-complete` created below,
+    NOT pushed — push gated on reviewer CLOSEOUT PASS.
+
+## 8. Tag annotation (FINALISED at closeout — == shipped code)
 
 ```
 v2 phase 14 complete

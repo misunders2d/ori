@@ -455,7 +455,7 @@ recovery logic.
 |---|---|
 | **Run claim** | Exactly one worker transitions `pending → claimed` via `UPDATE runs SET status='claimed', claimed_by=?, claimed_at=? WHERE id=? AND status='pending' AND NOT EXISTS (SELECT 1 FROM runs r2 WHERE r2.schedule_id = runs.schedule_id AND r2.status IN ('claimed', 'running'))`. The `RETURNING` clause confirms ownership. The single-flight subquery prevents two workers from running the same schedule concurrently — if blocked, run stays at `pending` (NOT stuck at `claimed`) and the next worker tick retries. SQLite serializes writes via WAL single-writer. |
 | **Retry chain** | A failed Run is terminal at `status='failed'`. If `on_failure.action='retry_later'` and `attempt < max_retries`, the failure handler INSERTs a new Run row with `fire_reason='retry'`, `root_run_id = old.root_run_id`, `parent_run_id = old.id`, `attempt = old.attempt + 1`, `due_at = now + backoff(old.attempt)`, `status='pending'`. The old Run is never re-statused. Retry chain queryable in O(1) via `WHERE root_run_id = ?`. |
-| **Emit idempotency** | Stable across retries. `idempotency_key = f"{schedule_id}:{root_run_id}:{emit_id}"` where `emit_id` is the EmitStep's required stable identifier (NOT the run-local `attempt`, which would change on retry and defeat dedup). Adapter checks the event ledger for prior `emit_succeeded` rows with the same key; refuses duplicate. Where the destination supports a native dedup token (e.g. Slack `client_msg_id`), the idempotency key is passed through as that token too. |
+| **Emit idempotency** | Stable across retries. `idempotency_key = f"{schedule_id}:{root_run_id}:{emit_id}"` where `emit_id` is the EmitStep's required stable identifier (NOT the run-local `attempt`, which would change on retry and defeat dedup). Phase-14 LIVE: the WORKER branch (not the adapter) checks the ledger for a prior `emit_succeeded` CARRYING THIS key and skips re-delivery (`emit_skipped_idempotent`); EmitStep-keyed so OneOff (no EmitStep) is OUT by construction; at-least-once, NOT exactly-once (a retry AFTER a durable keyed success is protected; deliver-then-crash-before-commit re-delivers). Native dedup-token pass-through is DEFERRED. See §6.4. |
 | **Ledger transactionality** | State transition + event row written in the same SQLite transaction. SQLite gives atomic multi-statement TX. No risk of "state moved but event missed" or vice versa. |
 | **Recovery on boot** | A boot-time scan executes: `SELECT id FROM runs WHERE status IN ('claimed', 'running') AND claimed_at < now - timeout`. Each is routed by policy: `RecoveryPolicy.RETRY_PENDING` (default for `running`), `RecoveryPolicy.MARK_FAILED` (default for `claimed`), or `RecoveryPolicy.RESUME` (manual override only). |
 | **Backfill** | The wakeup function for cron-style triggers also computes any missed `due_at` values within `backfill_policy.window` and inserts Runs for each. Bounded by max-rows-per-wakeup. |
@@ -478,22 +478,27 @@ What happens at each failure point:
   exist depending on how far the worker got.
 - Boot recovery routes by `RecoveryPolicy` for `running` runs
   (default: `RETRY_PENDING` → new attempt is queued; emit
-  idempotency prevents double-delivery for emits that already
-  succeeded).
+  idempotency skips re-delivery ONLY for an EmitStep emit whose
+  keyed `emit_succeeded` was DURABLY committed before the crash
+  — at-least-once, not exactly-once; see §6.4).
 
-**Worker crash between emit-succeeded HTTP call and event-written:**
-- The emit transmitted to Slack / Telegram / etc, but no
-  `emit_succeeded` event landed.
-- On retry, the idempotency check finds no prior success row →
-  the emit will RE-FIRE.
-- Mitigation: every adapter's HTTP call MUST be preceded by an
-  `emit_started` event with the idempotency key. On retry, finding
-  an `emit_started` without a matching `emit_succeeded` triggers a
-  duplicate-check at the destination (Slack API supports
-  `client_msg_id` for chat.postMessage; reuse our idempotency key).
-  For destinations without native dedup (raw httpx send),
-  document the at-most-once-vs-at-least-once tradeoff and pick
-  per-adapter.
+**Worker crash between the emit delivery and the terminal commit:**
+- The emit transmitted to Slack / Telegram / etc, but the
+  run-terminal transaction (which carries the keyed
+  `emit_succeeded`) did NOT commit.
+- On retry, the phase-14 worker-branch READ
+  (`prior_emit_succeeded`) finds NO durable keyed marker → the
+  emit RE-DELIVERS. This is the INHERENT at-least-once boundary,
+  NOT a bug: the external delivery is non-transactional I/O and
+  cannot be made atomic with the ledger write. The phase-14
+  dedup is therefore at-least-once with post-durable-success
+  dedup — explicitly NOT exactly-once / NOT unconditional
+  no-double-deliver.
+- The ONLY mitigation is DEFERRED native upstream dedup tokens
+  (Slack `client_msg_id` pass-through) — defense-in-depth at the
+  destination, not shipped in phase 14. The emit adapters are
+  byte-untouched; no `emit_started`-precedes-HTTP mandate is
+  shipped.
 
 **SQLite WAL recovery:**
 - WAL mode handles partial-write recovery transparently at the next
@@ -1121,19 +1126,49 @@ Three properties that matter:
   different root_run_id anyway, so cross-plan collisions are
   prevented at the root_run_id level.)
 
-Adapter behavior: before posting, query the EventLedger for prior
-`emit_succeeded` rows with the same `idempotency_key`. If found,
-short-circuit and write an `emit_skipped_idempotent` event
-(canonical event kind; see §4.0). Otherwise, write `emit_started`,
-post, then write `emit_succeeded` with the key in the payload.
+Dedup behavior: before delivery, query the EventLedger for prior
+`emit_succeeded` rows whose payload CARRIES THIS `idempotency_key`
+(not any `emit_succeeded`). If found, short-circuit and write an
+`emit_skipped_idempotent` event (canonical event kind; see §4.0).
+Otherwise deliver, then write `emit_succeeded` with the key in the
+payload.
 
 For destinations with native dedup tokens (Slack
-`client_msg_id`), pass the idempotency key as that token too —
-defense-in-depth at the upstream layer.
+`client_msg_id`), the idempotency key MAY be passed through as
+that token too — defense-in-depth at the upstream layer (DEFERRED,
+not shipped in phase 14).
 
-For destinations without native dedup (raw httpx send to a
-webhook), the at-most-once-vs-at-least-once tradeoff is per
-adapter. Document the choice in the adapter's docstring.
+**Phase-14 LIVE realization (shipped — design == code).** The
+dedup is wired in the WORKER, not the adapter:
+`Worker._dispatch_emit_branch` performs the pre-delivery READ
+(`app/v2/idempotency.py::prior_emit_succeeded`, a pure ledger
+read over the shipped `storage/events.py` surface) AND the
+post-success keyed `emit_succeeded` WRITE — the latter ATOMIC in
+the run-terminal transaction (`_commit_success_atomic`,
+both-or-neither with `RUN_SUCCEEDED`). The emit ADAPTERS
+(`slack_reminder.py` / `source_post.py`) + `sources/` + `cache.py`
++ `resolver.py` are BYTE-UNTOUCHED — dedup is a worker-branch
+concern (the phases-9–13 emit-byte-untouched invariant holds).
+
+- **EmitStep-keyed scope (honest — NOT all emits are deduped).**
+  The §6.4 key requires an `emit_id`, so dedup covers ONLY the
+  source-driven ExecutionPlan's `source_post` `EmitStep`. A
+  OneOff reminder is template-emit with NO `EmitStep` ⇒ no §6.4
+  key ⇒ OUT of emit-dedup BY CONSTRUCTION (it computes no key,
+  consults no prior marker, writes no keyed marker —
+  behaviour-identical to pre-phase-14). A OneOff sentinel key is
+  a DEFERRED separate design question, NOT shipped.
+- **At-least-once, NOT exactly-once (honest residual window).**
+  This protects a retry/recovery that runs AFTER a DURABLY
+  committed keyed `emit_succeeded`. The
+  deliver-then-crash-before-the-terminal-commit window is the
+  inherent at-least-once boundary (the delivery is
+  non-transactional external I/O, not atomic with the marker);
+  a retry then finds no durable marker and RE-DELIVERS. The
+  only mitigation is the DEFERRED native upstream tokens. No
+  exactly-once / no unconditional no-double-deliver claim.
+- No v002 / DDL: `emit_succeeded` + `emit_skipped_idempotent`
+  were already in the v001 EventKind CHECK.
 
 ### 6.5 Cross-fire state with CAS
 
@@ -1241,6 +1276,36 @@ paused ─────► archived       │
 - `archived`: wakeup is no-op AND existing pending runs cancelled.
   Cannot be resumed directly. `schedule_revive` transitions
   to `paused` (admin re-approves before final resume).
+
+**Phase-14 LIVE realization (shipped — design == code).**
+`paused_pending_policy` is housed on **`FailurePolicy`**
+(persisted via the existing `failure_json` column — it
+round-trips through `insert_schedule` / `_row_to_spec` with NO
+DDL and NO v002 migration; the phase-9 `TemplateRef.args`
+nested-optional precedent applied). It is NOT a literal
+top-level `ScheduleSpec` field — an early phase-14 plan draft
+wrongly assumed that; the slice-3 (α) fork ruling
+(`docs/PHASE_14_PLAN.md` §9.2) records the code-verified
+premise-bust (the `schedules` table is column-decomposed, not a
+spec JSON blob; (β)=v002-DDL forbidden by the no-v002 invariant
+held since phase 11; (γ)=in-memory-only is restart-unsafe).
+`ScheduleSpec.canonical_body()` elides it from the serialised
+`failure` dict when unset / `let_complete` (byte-for-byte the
+same nested-strip as `template.args`), so pre-phase-14 specs
+hash byte-identically; `cancel_pending` participates in the
+hash → new version. Default `let_complete` (None) is the
+pre-phase-14 no-op for in-flight work (least-surprise, the
+archive-vs-pause asymmetry above). `cancel_pending` cancels
+every pending Run in the pause transaction via the SAME
+`update_status_with_event` cancel-pending seam
+`schedule_archive` uses (same `run_cancelled` EventKind, same
+`PENDING → CANCELLED` state-machine transition — NO new
+EventKind, NO v002). The ONLY difference from archive is the
+`run_cancelled` payload `reason`: `schedule_paused` for a
+pause-driven cancel vs `schedule_archived` for archive (§13
+audit-truth — a pause is not an archive), threaded via a new
+optional defaulted `cancelled_reason` parameter whose default
+keeps the archive path byte-identical.
 
 ---
 
