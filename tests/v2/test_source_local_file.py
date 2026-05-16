@@ -298,6 +298,26 @@ class _SwapToSymlinkAfterFence(LocalFileSource):
         os.symlink(self._swap_target, resolved)
 
 
+class _SwapIntermediateDirAfterFence(LocalFileSource):
+    """Simulates the DEEPER race: an INTERMEDIATE
+    allowed-root directory component is replaced by an
+    out-of-root symlink AFTER _enforce_fence, before the
+    open. Final-component O_NOFOLLOW alone would NOT catch
+    this — the dirfd component walk must."""
+
+    def __init__(self, *, swap_dir: Path, evil_dir: Path, **kw):
+        super().__init__(**kw)
+        self._swap_dir = swap_dir
+        self._evil_dir = evil_dir
+
+    def _enforce_fence(self, resolved: Path) -> None:
+        super()._enforce_fence(resolved)  # passes legitimately
+        import shutil
+
+        shutil.rmtree(self._swap_dir)
+        os.symlink(self._evil_dir, self._swap_dir)
+
+
 class _GrowAfterFence(LocalFileSource):
     """Simulates the race: the file grows past max_bytes
     AFTER the fence/stat, before the read."""
@@ -326,6 +346,31 @@ async def test_symlink_swap_after_fence_refuses(tmp_path):
     )
     with pytest.raises(SourceSecurityError) as ei:
         await _load(src, f)
+    assert ei.value.payload_code == "symlink_swapped_after_fence"
+    assert ei.value.fallback_eligible is False
+    assert not isinstance(ei.value, SourceFetchError)
+
+
+@pytest.mark.asyncio
+async def test_intermediate_dir_swap_after_fence_refuses(tmp_path):
+    """Mid-path allowed-root dir swapped to an out-of-root
+    symlink after the fence → the dirfd component walk's
+    O_NOFOLLOW on the INTERMEDIATE component refuses
+    (final-component O_NOFOLLOW alone would not)."""
+    root = tmp_path / "root"
+    sub = root / "sub"
+    sub.mkdir(parents=True)
+    (sub / "leaf.txt").write_text("legit")
+
+    evil = tmp_path / "evil"
+    evil.mkdir()
+    (evil / "leaf.txt").write_text("PWNED")
+
+    src = _SwapIntermediateDirAfterFence(
+        allowed_roots=[root], swap_dir=sub, evil_dir=evil
+    )
+    with pytest.raises(SourceSecurityError) as ei:
+        await _load(src, sub / "leaf.txt")
     assert ei.value.payload_code == "symlink_swapped_after_fence"
     assert ei.value.fallback_eligible is False
     assert not isinstance(ei.value, SourceFetchError)

@@ -33,16 +33,21 @@ missing" under ``fallback_policy``); a missing-target
 symlink escape is classified SECURITY first, never
 downgraded to the fallback path.
 
-TOCTOU defense (codex slice-3 🔴): after the fence the
-file is opened ONCE with ``O_NOFOLLOW | O_CLOEXEC`` and
-read THROUGH that fd via ``fstat`` — the path is never
-re-opened / re-resolved, so the check and the read hit the
-SAME inode. A post-fence swap of the final component to a
-symlink makes ``os.open`` fail (``ELOOP``) →
-``SourceSecurityError``. The size limit is enforced on the
-fd read (cap ``max_bytes + 1``), never on a prior
-``stat()`` (which is itself TOCTOU — the file can grow
-between stat and read).
+TOCTOU defense (codex slice-3 🔴 + slice-3-fix-2 🔴 —
+option A, dirfd component walk): after the fence the
+resolved path is opened by walking it component-by-
+component from its allowed root with ``openat`` +
+``O_NOFOLLOW`` on EVERY step (``O_DIRECTORY`` for every
+non-final component). Any symlink ANYWHERE along the
+traversal — leaf OR an intermediate allowed-root dir
+swapped to a symlink after the check — fails ``openat``
+(``ELOOP``) → non-fallback ``SourceSecurityError``. The
+whole path traversal is structurally swap-proof, not
+merely the leaf and not a re-check. The final fd is the
+SAME inode the read uses (no re-open / re-resolve). The
+size limit is enforced on the fd read (cap
+``max_bytes + 1``), never on a prior ``stat()`` (itself
+TOCTOU — the file can grow between stat and read).
 
 ``allowed_roots`` defaults to EMPTY (deny-all) — admin
 opt-in per root lands when the loader is wired (later
@@ -198,11 +203,111 @@ class LocalFileSource:
 
     # ---- fence ----------------------------------------------------------
 
+    def _containing_root(self, resolved: Path) -> Optional[Path]:
+        """The allowed root that contains ``resolved`` (or
+        equals it), else None. Used both for the fence
+        decision and as the anchor for the swap-proof
+        component walk."""
+        for root in self._roots:
+            if resolved == root or resolved.is_relative_to(root):
+                return root
+        return None
+
     def _within_an_allowed_root(self, resolved: Path) -> bool:
-        return any(
-            resolved == root or resolved.is_relative_to(root)
-            for root in self._roots
+        return self._containing_root(resolved) is not None
+
+    def _open_walked_fd(self, root: Path, resolved: Path) -> int:
+        """Open ``resolved`` by walking it component-by-
+        component from ``root`` with ``openat`` +
+        ``O_NOFOLLOW`` on EVERY step (codex slice-3-fix-2
+        🔴 — option A).
+
+        Final-component ``O_NOFOLLOW`` alone left an
+        intermediate-directory symlink-swap window: after
+        the fence an attacker could replace a mid-path
+        allowed-root dir with a symlink and a single
+        ``os.open(resolved, …)`` would traverse it OUTSIDE
+        the root. Walking each component through a dir fd
+        with ``O_NOFOLLOW`` (``O_DIRECTORY`` for every
+        non-final component) means ANY symlink anywhere
+        along the path fails ``openat`` (``ELOOP``) — the
+        traversal is structurally swap-proof, not merely
+        re-checked. Returns the final file fd; caller
+        ``fstat`` + reads + closes it.
+        """
+        rel_parts = resolved.relative_to(root).parts
+        if not rel_parts:
+            # resolved == root (a directory) — not a file.
+            raise SourceSecurityError(
+                f"path {str(resolved)!r} is the allowed "
+                "root itself, not a regular file",
+                code="path_not_a_regular_file",
+            )
+
+        dir_fd = os.open(
+            root,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            | os.O_CLOEXEC,
         )
+        try:
+            for i, comp in enumerate(rel_parts):
+                is_last = i == len(rel_parts) - 1
+                # NO O_DIRECTORY: with O_DIRECTORY the kernel
+                # may return ENOTDIR for a symlinked
+                # component (the O_DIRECTORY check can win
+                # over O_NOFOLLOW), masking the swap. Open
+                # WITHOUT O_DIRECTORY so a symlinked
+                # component reliably fails O_NOFOLLOW with
+                # ELOOP; then fstat the fd and require
+                # S_ISDIR for every non-final component.
+                try:
+                    next_fd = os.open(
+                        comp,
+                        os.O_RDONLY | os.O_NOFOLLOW
+                        | os.O_CLOEXEC,
+                        dir_fd=dir_fd,
+                    )
+                except OSError as exc:
+                    if exc.errno == errno.ELOOP:
+                        raise SourceSecurityError(
+                            f"component {comp!r} of "
+                            f"{str(resolved)!r} became a "
+                            "symlink after the fence "
+                            "(O_NOFOLLOW walk)",
+                            code="symlink_swapped_after_fence",
+                        ) from exc
+                    if exc.errno == errno.ENOENT:
+                        # Contained path vanished in the
+                        # race → genuinely absent (design
+                        # §5.3.2 "source missing").
+                        raise SourceFetchError(
+                            f"local file {str(resolved)!r} "
+                            "not found",
+                            code="source_local_file_not_found",
+                        ) from exc
+                    raise SourceSecurityError(
+                        f"cannot open component {comp!r} "
+                        f"no-follow: {exc}",
+                        code="path_open_failed",
+                    ) from exc
+                os.close(dir_fd)
+                dir_fd = next_fd
+                if not is_last:
+                    st = os.fstat(dir_fd)
+                    if not _stat.S_ISDIR(st.st_mode):
+                        raise SourceSecurityError(
+                            f"component {comp!r} of "
+                            f"{str(resolved)!r} is not a "
+                            "directory during the walk",
+                            code="path_traversal_not_dir",
+                        )
+            # dir_fd is now the final file fd; hand it off.
+            file_fd = dir_fd
+            dir_fd = -1
+            return file_fd
+        finally:
+            if dir_fd >= 0:
+                os.close(dir_fd)
 
     def _hits_deny_list(self, resolved: Path) -> bool:
         for d in self._deny_dirs:
@@ -287,42 +392,23 @@ class LocalFileSource:
                 )
             kind = "binary"
 
-        # TOCTOU defense (codex slice-3 🔴): open the
-        # resolved path ONCE with O_NOFOLLOW | O_CLOEXEC,
-        # then fstat + read THROUGH this fd. The fence check
-        # and the read operate on the SAME inode — the path
-        # is NEVER re-opened or re-resolved after the check.
-        # A post-fence swap of the final component to a
-        # symlink makes os.open fail (O_NOFOLLOW → ELOOP) →
-        # non-fallback SourceSecurityError; content is never
-        # served, no cache fallback.
-        try:
-            fd = os.open(
-                resolved,
-                os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
-            )
-        except OSError as exc:
-            if exc.errno == errno.ELOOP:
-                raise SourceSecurityError(
-                    f"path {str(resolved)!r} became a "
-                    "symlink after the fence check "
-                    "(O_NOFOLLOW)",
-                    code="symlink_swapped_after_fence",
-                ) from exc
-            if exc.errno == errno.ENOENT:
-                # Contained path vanished in the race →
-                # genuinely absent (design §5.3.2 lists
-                # "source missing" under fallback_policy).
-                raise SourceFetchError(
-                    f"local file {str(resolved)!r} not "
-                    "found",
-                    code="source_local_file_not_found",
-                ) from exc
+        # TOCTOU defense (codex slice-3 🔴 + slice-3-fix-2
+        # 🔴): walk the resolved path component-by-component
+        # from its allowed root with openat + O_NOFOLLOW on
+        # EVERY step (option A). Final-component O_NOFOLLOW
+        # alone left an intermediate-dir symlink-swap window;
+        # the walk closes the WHOLE traversal structurally —
+        # any symlink anywhere along the path fails openat.
+        # The returned fd is the SAME inode the read uses;
+        # the path is never re-opened / re-resolved.
+        root = self._containing_root(resolved)
+        if root is None:  # defensive — fence already ensured it
             raise SourceSecurityError(
-                f"cannot open {str(resolved)!r} no-follow: "
-                f"{exc}",
-                code="path_open_failed",
-            ) from exc
+                f"path {str(resolved)!r} is outside every "
+                "allowed root",
+                code="path_outside_allowed_root",
+            )
+        fd = self._open_walked_fd(root, resolved)
         try:
             st = os.fstat(fd)
             if not _stat.S_ISREG(st.st_mode):
