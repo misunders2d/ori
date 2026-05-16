@@ -68,6 +68,8 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
+from pydantic import ValidationError
+
 from app.v2.emit.slack_reminder import (
     SlackPostResult,
     SlackProtocol,
@@ -85,6 +87,7 @@ from app.v2.runtime.claim import claim_run
 from app.v2.runtime.state_machine import assert_legal_transition
 from app.v2.storage.events import append_event
 from app.v2.storage.runs import list_claimable_due
+from app.v2.storage.execution_plans import get_execution_plan
 from app.v2.storage.schedules import get_schedule
 from app.v2.storage.transactions import (
     transaction,
@@ -395,7 +398,8 @@ class Worker:
         conn: sqlite3.Connection,
         run,
     ) -> str:
-        """Phase 9 slice 5 emit dispatch.
+        """Phase 9 emit dispatch + phase 11 slice 1
+        source-driven routing skeleton.
 
         Returns ``"succeeded"`` when the emit fires
         successfully — caller proceeds with the existing
@@ -404,12 +408,40 @@ class Worker:
         ``run_failed`` event + the ``running → failed``
         transition — caller returns early.
 
-        Raises :class:`UnsupportedSpecError` when the
-        ScheduleSpec is outside the phase-9 emit-only
-        contract (execution_plan_hash set, or template
-        is None AND no plan). The run_loop catches the
-        raise and logs; the Run stays in RUNNING and
-        recovery picks it up.
+        **Raise vs _fail_run (phase-11 plan §3.1 / Q4).**
+        A :class:`UnsupportedSpecError` is raised STRICTLY
+        for the can't-write-a-failed-event cases — the
+        events-table FK on ``schedule_id`` makes a
+        ``run_failed`` write impossible when the schedule
+        row is gone (``schedule_not_found_at_claim``). The
+        run_loop catches it, logs, leaves the Run RUNNING,
+        and boot recovery promotes it. Every other
+        out-of-contract case (a source-driven spec at
+        slice 1, a missing / invalid / reasoning-bearing
+        ExecutionPlan) is a clean ``_fail_run`` with a
+        distinct reason — NOT a raise.
+
+        **Source-driven selective failure handling
+        (phase-11 slice 1).** ``get_execution_plan`` is
+        wrapped in a NARROW ``except ValidationError`` only
+        (a corrupt / schema-incompatible frozen body →
+        ``execution_plan_invalid_at_claim``). A transient
+        infra fault (``ConnectionNotReady``,
+        ``sqlite3.OperationalError`` / DB-locked, any
+        ``sqlite3.DatabaseError``) is deliberately NOT
+        caught — it propagates so ``_run_loop`` logs it,
+        the Run stays RUNNING, and recovery retries.
+        Converting a transient DB-locked blip into a
+        permanent FAILED of a recurring series is the
+        explicit anti-goal; there is NO broad ``except``.
+
+        **Q5 — pure snapshot consumer (design §5.3.5).**
+        The resolver/cache OWNS the per-fire snapshot
+        write. This worker NEVER calls ``write_snapshot``
+        AND NEVER calls ``_newest_materialised_snapshot``;
+        neither symbol is imported here. ``skip_unchanged``
+        (slice 6) reads ``ResolveOutcome.changed_vs_prior``
+        only.
         """
         spec = get_schedule(conn, run.schedule_id)
         if spec is None:
@@ -447,17 +479,97 @@ class Worker:
             )
             return "failed"
 
-        # ExecutionPlan execution lands in phase 10 / 12.
-        # Defence in depth: a OneOffReminder-template spec
-        # should have execution_plan_hash=None per the
-        # builder; if both are set, treat as out-of-scope.
+        # ---- Phase 11 slice 1: source-driven routing
+        # skeleton (docs/PHASE_11_PLAN.md §3.1 / §4 s1).
+        # A source-driven spec carries execution_plan_hash
+        # → an ExecutionPlan. Slice 1 ships ONLY the
+        # plan-load + routing decision; the resolve (s3) +
+        # emit (s5) wiring is not yet in place, so the
+        # branch terminates in a deterministic
+        # ``source_fire_not_yet_wired`` _fail_run — nothing
+        # actually fires yet (incremental cutover).
         if spec.execution_plan_hash is not None:
-            raise UnsupportedSpecError(
-                f"schedule {spec.id!r} carries "
-                f"execution_plan_hash="
-                f"{spec.execution_plan_hash!r}; ExecutionPlan "
-                "execution lands in phase 10 / 12"
+            try:
+                plan = get_execution_plan(
+                    conn, spec.execution_plan_hash
+                )
+            except ValidationError as exc:
+                # NARROW catch: a frozen body that no longer
+                # validates is a permanently-unfireable spec
+                # (corrupt / schema-incompatible). NOT
+                # transient. ConnectionNotReady /
+                # sqlite3.OperationalError / DB-locked /
+                # any sqlite3.DatabaseError are NOT caught —
+                # they propagate (Run stays RUNNING →
+                # recovery retries); a broad except that
+                # _fail_run'd them would turn a transient
+                # blip into a permanent FAILED of a
+                # recurring series.
+                await self._fail_run(
+                    conn=conn,
+                    run=run,
+                    reason="execution_plan_invalid_at_claim",
+                    error_message=(
+                        f"schedule {spec.id!r} "
+                        f"execution_plan_hash="
+                        f"{spec.execution_plan_hash!r} body "
+                        f"failed ExecutionPlan validation at "
+                        f"claim time: {exc}"
+                    ),
+                )
+                return "failed"
+
+            if plan is None:
+                await self._fail_run(
+                    conn=conn,
+                    run=run,
+                    reason="execution_plan_missing_at_claim",
+                    error_message=(
+                        f"schedule {spec.id!r} references "
+                        f"execution_plan_hash="
+                        f"{spec.execution_plan_hash!r} with "
+                        f"no execution_plans row at claim time"
+                    ),
+                )
+                return "failed"
+
+            if plan.reasoning:
+                # Step-12 boundary (plan §1.1 / §3.1 / Q4):
+                # the LLM reasoning-chain executor is not
+                # built. Clean run_failed, NOT a raise.
+                await self._fail_run(
+                    conn=conn,
+                    run=run,
+                    reason="reasoning_unsupported_pending_step_12",
+                    error_message=(
+                        f"schedule {spec.id!r} ExecutionPlan "
+                        f"carries {len(plan.reasoning)} "
+                        f"reasoning step(s); the reasoning "
+                        f"executor lands in §12 step 12"
+                    ),
+                )
+                return "failed"
+
+            # Inputs+emit-only source-driven plan. Slice 1
+            # stops here: resolve (s3) + emit (s5) wiring is
+            # not present, so the fire is deterministically
+            # failed with a distinct reason rather than
+            # silently succeeding or partially firing. The
+            # worker did NOT touch the snapshot layer (Q5).
+            await self._fail_run(
+                conn=conn,
+                run=run,
+                reason="source_fire_not_yet_wired",
+                error_message=(
+                    f"schedule {spec.id!r} is source-driven "
+                    f"(execution_plan_hash="
+                    f"{spec.execution_plan_hash!r}); the "
+                    f"phase-11 resolve+emit wiring lands in "
+                    f"slices 3/5 — slice 1 ships the routing "
+                    f"skeleton only"
+                ),
             )
+            return "failed"
 
         if spec.template is None:
             raise UnsupportedSpecError(

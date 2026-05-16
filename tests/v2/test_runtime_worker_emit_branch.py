@@ -27,10 +27,15 @@ Pins:
   - retry_later → WARNING log + downgrade to
     alert_admin semantics (admin_alert_sent event
     present with `downgrade_from`).
-- UnsupportedSpec branches:
+- UnsupportedSpec branch:
   - template=None AND execution_plan_hash=None →
     `UnsupportedSpecError`.
-  - execution_plan_hash set → `UnsupportedSpecError`.
+- Phase-11 slice-1 cutover: execution_plan_hash set NO
+  LONGER raises — the worker loads the plan and routes
+  it; an invalid frozen body → clean
+  `_fail_run(execution_plan_invalid_at_claim)` (the
+  source-driven routing skeleton is fully exercised in
+  `test_runtime_source_fire.py`).
 """
 
 from __future__ import annotations
@@ -742,10 +747,18 @@ async def test_no_template_no_plan_raises_unsupported_spec(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_execution_plan_hash_set_raises_unsupported_spec(tmp_path):
-    """Spec with execution_plan_hash set → UnsupportedSpecError.
-    Seed an execution_plans row first so the FK on
-    schedules.execution_plan_hash is satisfied."""
+async def test_execution_plan_hash_set_invalid_body_fail_run(tmp_path):
+    """Phase-11 slice-1 cutover: a spec carrying
+    execution_plan_hash NO LONGER raises
+    ``UnsupportedSpecError``. The worker loads the plan and
+    routes it. Here the seeded ``body_json='{}'`` is not a
+    valid ``ExecutionPlan`` → ``decode_json`` raises
+    ``ValidationError``, which the NARROW slice-1 catch
+    converts to a clean ``_fail_run`` with reason
+    ``execution_plan_invalid_at_claim`` (NOT a raise — the
+    raise pattern is reserved for the can't-write-a-
+    failed-event cases). Pre-phase-11 this asserted the
+    raise; the cutover deliberately changed it."""
     factory, _ = _conn_factory(tmp_path)
 
     plan_hash = "a" * 64
@@ -800,12 +813,19 @@ async def test_execution_plan_hash_set_raises_unsupported_spec(tmp_path):
 
     conn = factory()
     try:
-        with pytest.raises(
-            UnsupportedSpecError, match="execution_plan_hash"
-        ):
-            await worker._dispatch_emit_branch(conn, run)
+        # MUST NOT raise.
+        outcome = await worker._dispatch_emit_branch(conn, run)
     finally:
         conn.close()
+
+    assert outcome == "failed"
+    assert client.calls == []
+    reasons = [
+        e.payload.get("reason")
+        for e in _read_events(factory, "run-abc")
+        if e.kind is EventKind.RUN_FAILED
+    ]
+    assert reasons == ["execution_plan_invalid_at_claim"]
 
 
 # ===========================================================================

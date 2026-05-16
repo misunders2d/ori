@@ -85,8 +85,9 @@ defaulted → every existing phase-10 `ResolveOutcome`
 construction / consumer is byte-unaffected. The resolver
 populates it on the terminal RESOLVED / DRIFT outcomes
 from the signal it ALREADY computes internally
-(`shape_changed`, `resolver.py:~260`) extended across
-provenance (§3.3 table). The worker reads
+(`shape_changed`, `resolver.py:271`) extended across
+provenance (§3.3 table). (Exact line re-verified at
+slice 4 against the then-current `resolver.py`.) The worker reads
 `outcome.changed_vs_prior` ONLY — it NEVER calls
 `_newest_materialised_snapshot` or `write_snapshot`
 (Q5: resolver/cache OWNS the snapshot; worker is a PURE
@@ -771,7 +772,7 @@ into 11A (this phase) + 11B (deferred) per the
 reviewer-approved §0 refinement.
 
 Design: docs/CONTRACTS_V2_DESIGN.md §12 step 11, §5.2,
-        §5.3, §5.3.5, §11.1/§11.4
+        §5.3, §5.3.3, §5.3.5, §11.1/§11.4
 Plan:   docs/PHASE_11_PLAN.md
 ```
 
