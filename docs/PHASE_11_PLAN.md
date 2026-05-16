@@ -15,52 +15,95 @@ still raises `UnsupportedSpecError` on
 CUTOVER**: `resolve_source` goes live in the worker fire
 path; a source-driven `ScheduleSpec` actually fires.
 
-> **Reviewer note (read §1 + §9 first).** Both §12-step-11
-> templates have a HARD forward dependency on a subsystem
-> that is NOT built and is NOT cleanly owned by step 11:
-> `ChannelDigest(…, summary_prompt)` needs an LLM
-> `ReasoningStep` chain executor (no such executor exists
-> in `app/v2/runtime/`; step 12 is reasoning *enforcement*,
-> which presupposes the executor), and
-> `RecurringSeriesFromSource(…, progress_strategy)` for a
-> "next unread item" series needs cross-fire
-> `schedule_state` (`state_read`+pick+`state_write` = §12
-> **step 13**, NOT built). The dependency-clean,
-> load-bearing deliverable is the **fire-path cutover +
-> the emit-only source path + a STATELESS
-> `RecurringSeriesFromSource`**. The disposition of
-> `ChannelDigest` and of the stateful progress strategy is
-> the central open question — see §0 + §9.
+> **Round-1 CLOSED (claude-reviewer; read §0 + §9).**
+> Both §12-step-11 templates have a HARD forward
+> dependency on a subsystem that is NOT built and is NOT
+> cleanly owned by step 11: `ChannelDigest(…,
+> summary_prompt)` needs an LLM `ReasoningStep` chain
+> executor (none in `app/v2/runtime/`; step 12 is
+> reasoning *enforcement*, presupposing the executor),
+> and stateful `RecurringSeriesFromSource(…,
+> progress_strategy)` needs cross-fire `schedule_state`
+> (§12 **step 13**, NOT built). Reviewer DECISION:
+> phase 11 = the dependency-clean **fire-path cutover +
+> emit-only source path + STATELESS
+> `RecurringSeriesFromSource`** (11A); `ChannelDigest` +
+> stateful progress defer to 11B. The round-1 🔴
+> (`skip_unchanged` must not race the FRESH snapshot
+> write) is fixed by the §0.1 additive
+> `ResolveOutcome.changed_vs_prior` field. Full
+> disposition: §9.
 
 ---
 
-## 0. Proposed §12 step-11 refinement (PENDING reviewer — NOT yet a design edit)
+## 0. §12 step-11 refinement (CLOSED — claude-reviewer round 1 APPROVED the split)
 
 Mirrors the phase-10 amendment discipline: the plan
-PROPOSES a scope refinement; `docs/CONTRACTS_V2_DESIGN.md`
-is amended ONLY after the reviewer approves the
-disposition (plan≡design stays load-bearing — no silent
-design edit in the plan commit).
+records the refinement; `docs/CONTRACTS_V2_DESIGN.md` is
+amended ONLY at closeout in the same reconciliation pass
+(plan≡design load-bearing — no silent design edit in a
+non-fix commit).
 
-**Proposed:** step 11 ships in two parts; phase 11 = part
-A (this plan). Part B (`ChannelDigest` + stateful series)
-defers to a later phase that depends on the reasoning
-executor + step 13, because shipping a non-summarising
-"digest" is a degraded product the user did not ask for
-and a stateful series without `schedule_state` is unsafe
-(no CAS, lost-progress on retry).
+**APPROVED (round 1, Q1):** step 11 ships in two parts;
+phase 11 = part A. Part B defers to a later phase that
+depends on the reasoning executor + step 13 — a
+non-summarising "digest" is a degraded product the user
+did not ask for, and a stateful series without
+`schedule_state` is unsafe (no CAS, lost-progress on
+retry).
 
 - **11A (this phase):** fire-path cutover; emit-only
   source delivery; `RecurringSeriesFromSource` with
-  STATELESS progress strategies only.
+  STATELESS progress strategies only (Q2 ACCEPTED).
 - **11B (deferred):** `ChannelDigest` + `summary_prompt`
   (needs reasoning executor); stateful
   `RecurringSeriesFromSource` progress (needs step 13
   cross-fire state).
 
-Reviewer adjudicates the split in plan-review round 1
-(§9 Q1/Q2). If the reviewer rejects the split, the slice
-plan in §4 expands accordingly.
+Closeout slice amends `docs/CONTRACTS_V2_DESIGN.md` §12
+(step 11 → 11A/11B) so design ≡ plan ≡ shipped code.
+
+### 0.1 Additive phase-10 contract change (CLOSED — round-1 🔴 fix)
+
+`skip_unchanged` MUST NOT be realised by the worker
+re-reading the prior snapshot: `resolve_source_cached`
+writes the FRESH snapshot (`cache.py:253`) and the
+resolver reads the prior BEFORE that cached call
+(`resolver.py:223`). A worker-side
+`_newest_materialised_snapshot` call AFTER resolve would
+race the just-written FRESH row and is the round-1 🔴.
+
+**Fix (additive, reviewer-approved):** `ResolveOutcome`
+(phase-10-FROZEN `app/v2/sources/resolver.py`) gains
+ONE additive field:
+
+```
+changed_vs_prior: Optional[bool] = None
+```
+
+defaulted → every existing phase-10 `ResolveOutcome`
+construction / consumer is byte-unaffected. The resolver
+populates it on the terminal RESOLVED / DRIFT outcomes
+from the signal it ALREADY computes internally
+(`shape_changed`, `resolver.py:~260`) extended across
+provenance (§3.3 table). The worker reads
+`outcome.changed_vs_prior` ONLY — it NEVER calls
+`_newest_materialised_snapshot` or `write_snapshot`
+(Q5: resolver/cache OWNS the snapshot; worker is a PURE
+consumer).
+
+This is an explicit edit to a phase-10-frozen module;
+declared here per the no-silent-frozen-edit rule. Slice 4
+ships **phase-10 contract-regression pins**: after the
+field add the resolver STILL (a) returns exactly one
+terminal `ResolveOutcome`, (b) never raises into the
+caller, (c) keeps the §3.5 typed-error taxonomy +
+`fallback_eligible` intact, (d) leaves every prior
+`ResolveOutcome` consumer unaffected (defaulted field).
+`cache.py` is NOT touched (the resolver owns the prior↔
+fresh comparison; the field only EXPOSES the
+already-computed signal). Design §5.3.3/§5.3.5
+live-change wording is reconciled at closeout (same pass).
 
 ---
 
@@ -74,10 +117,18 @@ plan in §4 expands accordingly.
    source-driven `ScheduleSpec` =
    `execution_plan_hash` set → an `ExecutionPlan` whose
    `inputs` carry `InputSpec.source_ref` and whose
-   `emits` are emit-only, with **zero `ReasoningStep`s**.
-   The worker loads the plan
-   (`get_execution_plan(conn, hash)`), resolves every
-   source-bearing input, then runs the emit step(s).
+   `emits` are emit-only. The worker loads the plan
+   (`get_execution_plan(conn, hash)` — failure modes
+   enumerated in §3.1), resolves every source-bearing
+   input, then runs the emit step(s). A plan with a
+   NON-empty `reasoning` list is the step-12 boundary:
+   the worker routes it through
+   `_fail_run(reason="reasoning_unsupported_pending_step_12")`
+   (Q4 — a clean `run_failed`, NOT a raise; the raise /
+   `UnsupportedSpecError` pattern is reserved STRICTLY
+   for the can't-write-a-failed-event cases, e.g.
+   `schedule_not_found_at_claim` where the events-table
+   FK makes the failure event unwritable).
 2. **`resolve_source` wired in (the cutover core).** Per
    `InputSpec` with a `source_ref`, the worker calls the
    phase-10 `resolve_source(...)` on the claimed
@@ -99,24 +150,32 @@ plan in §4 expands accordingly.
    §11.1 discipline).
 4. **`RecurringSeriesFromSource` template** (`source`,
    `channel`, `hour_local`, `timezone`,
-   `progress_strategy`) — STATELESS strategies only:
-   `whole` (emit the full resolved content each fire) and
-   `skip_unchanged` (emit only when `content_hash`
-   differs from the immediately-prior materialised
-   snapshot — reuses the phase-10 prior-snapshot
-   machinery, NO new state table). Builder + typed args
-   model mirror `build_one_off_reminder` /
-   `OneOffReminderArgs`. Authoring tool mirrors
-   `make_schedule_create_reminder`; it compiles a
-   `ScheduleSpec` + `ExecutionPlan`
+   `progress_strategy`) — STATELESS strategies only
+   (Q2): `whole` (emit the full resolved content each
+   fire) and `skip_unchanged` (emit UNLESS
+   `outcome.changed_vs_prior is False`). `skip_unchanged`
+   reads the additive `ResolveOutcome.changed_vs_prior`
+   (§0.1) — it NEVER re-reads the snapshot table from
+   the worker (that races the FRESH write — the round-1
+   🔴). NO new state table. Builder + typed args model
+   mirror `build_one_off_reminder` / `OneOffReminderArgs`.
+   Authoring tool mirrors `make_schedule_create_reminder`;
+   it compiles a `ScheduleSpec` + `ExecutionPlan`
    (`inputs=[source_ref]`, `emits=[source_post]`,
    `reasoning=[]`).
-5. **Failure routing.** Resolve/emit failure routes
-   through the existing `_route_failure_policy`
-   (generalised from `SlackPostResult` to a typed
-   resolve/emit failure). `retry_later` stays downgraded
-   to `alert_admin` with a WARNING (the retry chain is
-   step 14, mirrors the phase-9 decision).
+5. **Failure routing.** Q6: EXTRACT a shared atomic
+   single-transaction core (the round-3-hardened
+   2–3-events + Run-UPDATE-in-ONE-`transaction(conn)`
+   invariant, `worker.py:556-567`). The existing
+   `_route_failure_policy(result: SlackPostResult)`
+   call-site + behaviour stay BYTE-IDENTICAL (it just
+   delegates to the extracted core); a sibling
+   `_route_source_failure_policy` handles the typed
+   resolve/emit failure via the same core. The
+   single-transaction atomicity test is pinned for BOTH
+   paths. `retry_later` stays downgraded to
+   `alert_admin` + WARNING (retry chain = step 14,
+   mirrors the phase-9 decision).
 6. **Agent guidance (§11.4) additive.** Coordinator
    instruction + scheduling-law: the template list gains
    `RecurringSeriesFromSource`. Additive only — no v1
@@ -135,9 +194,9 @@ plan in §4 expands accordingly.
 - **LLM `ReasoningStep` chain executor** — no §12 step
   owns it cleanly (step 12 = read-only *enforcement*,
   presupposes the executor). A source-driven plan with
-  a non-empty `reasoning` list → typed
-  `UnsupportedSpecError` (step-12 boundary, mirrors the
-  phase-9/10 boundary discipline).
+  a non-empty `reasoning` list → `_fail_run(reason=
+  "reasoning_unsupported_pending_step_12")` (Q4 — a
+  clean `run_failed`, NOT a raise; see §1.1 / §3.1).
 - **`ChannelDigest` + `summary_prompt`** — depends on the
   reasoning executor (11B, §0).
 - **Stateful `RecurringSeriesFromSource` progress**
@@ -213,15 +272,20 @@ plan in §4 expands accordingly.
   authoring-templates test.
 
 **Edited (non-new):** `app/v2/runtime/worker.py`
-(`_dispatch_emit_branch` source-driven branch),
-`app/v2/authoring/templates.py`
+(`_dispatch_emit_branch` source-driven branch + the Q6
+`_route_*_failure_policy` extraction),
+`app/v2/sources/resolver.py` (phase-10-FROZEN — ONE
+additive `ResolveOutcome.changed_vs_prior` field per
+§0.1, reviewer-approved, with phase-10 contract-
+regression pins), `app/v2/authoring/templates.py`
 (`make_schedule_create_recurring_series_from_source`),
 `app/sub_agents/coordinator_agent.py` (additive template
 list + §11.4 scheduling-law), `scripts/check_phase_scope.py`
 (`PHASE_ALLOWLIST[11]`), `.v2-current-phase`,
-`docs/CONTRACTS_V2_DESIGN.md` (§12 refinement —
-ONLY after reviewer approves §0, in a slice-fix, never
-in the plan commit).
+`docs/CONTRACTS_V2_DESIGN.md` (§12 step-11 → 11A/11B +
+§5.3.3/§5.3.5 live-change wording — amended at CLOSEOUT
+in the one reconciliation pass, never in a non-fix
+commit; §0).
 
 ---
 
@@ -229,45 +293,116 @@ in the plan commit).
 
 ### 3.1 Worker source-driven branch (`worker.py`)
 
-In `_dispatch_emit_branch`, after the existing
-deleted/inactive/staleness checks, BEFORE the
-`execution_plan_hash is not None → raise`:
+In `_dispatch_emit_branch`, the current
+`if spec.execution_plan_hash is not None: raise
+UnsupportedSpecError(...)` (worker.py:454) is REPLACED by
+the source-driven branch (placed after the existing
+deleted/inactive/staleness checks; the OneOff branch
+below is untouched):
 
 ```
 if spec.execution_plan_hash is not None:
     plan = get_execution_plan(conn, spec.execution_plan_hash)
-    if plan is None: -> _fail_run(reason="execution_plan_missing_at_claim")
-    if plan.reasoning:  # step-12 boundary
-        raise UnsupportedSpecError("reasoning steps land in step 12")
+    # get_execution_plan failure modes (enumerated):
+    #  - None (no row for the hash)
+    #       -> _fail_run(reason="execution_plan_missing_at_claim"); return "failed"
+    #  - row present, body_json fails ExecutionPlan(**body) validation
+    #       -> _fail_run(reason="execution_plan_invalid_at_claim"); return "failed"
+    #  - sqlite OperationalError / DB-locked / corruption
+    #       -> propagates to run_loop (transient infra; Run stays
+    #          RUNNING; boot recovery promotes — SAME as the
+    #          phase-9 transient path; NOT a _fail_run, NOT a raise
+    #          we introduce). The events-table FK is intact here
+    #          (schedule row present) so this is not a
+    #          can't-write-failed-event case.
+    if plan is None:
+        await self._fail_run(conn=conn, run=run,
+            reason="execution_plan_missing_at_claim",
+            error_message=...); return "failed"
+    if plan.reasoning:                       # step-12 boundary (Q4)
+        await self._fail_run(conn=conn, run=run,
+            reason="reasoning_unsupported_pending_step_12",
+            error_message=...); return "failed"
+
+    resolved: dict[str, ResolveOutcome] = {}
     for inp in plan.inputs:
-        if inp.source_ref is None: continue
-        outcome = await resolve_source(ref=inp.source_ref, ...,
-                                       conn=conn, conn_factory=..., clock=...,
-                                       event_id_factory=..., audit=spec.audit)
-        if outcome.status is FAILED:
-            -> _route_failure_policy(... typed resolve failure ...); return "failed"
-        # RESOLVED or DRIFT(alert) -> carry outcome.content_bytes
-    result = await emit_source_to_slack(spec=spec, plan=plan,
-                                        resolved=<bytes/text>, slack_client=..., clock=...)
-    if result.ok: return "succeeded"
-    -> _route_failure_policy(...); return "failed"
+        if inp.source_ref is None:
+            continue
+        outcome = await resolve_source(
+            ref=inp.source_ref,
+            source_id=inp.id,            # STABILITY PIN: source_id == InputSpec.id
+            schedule_id=spec.id,
+            run_id=run.id,
+            conn=conn,
+            conn_factory=self._conn_factory,
+            clock=self._clock,
+            event_id_factory=self._event_id_factory,
+            as_of_datetime=None,         # live fire (not a dry-run)
+            audit=spec.audit,
+            # loaders / repo_root default to the prod singletons
+        )
+        if outcome.status is ResolveStatus.FAILED:
+            await self._route_source_failure_policy(
+                conn=conn, run=run, spec=spec, outcome=outcome)
+            return "failed"
+        resolved[inp.id] = outcome       # RESOLVED or DRIFT(alert serves)
+
+    result = await emit_source_to_slack(
+        spec=spec, plan=plan, resolved=resolved,
+        slack_client=self._slack_client, clock=self._clock,
+    )
+    if result.skipped_unchanged:         # skip_unchanged &&
+        return "succeeded"               #   outcome.changed_vs_prior is False
+                                         # (emit_skipped_unchanged event written
+                                         #  in-band by the emit step)
+    if result.ok:
+        return "succeeded"
+    await self._route_source_failure_policy(
+        conn=conn, run=run, spec=spec, emit_result=result)
+    return "failed"
 ```
 
-`resolve_source` is called with the worker's DI clock /
-`event_id_factory` / `conn_factory` (NOT
-`datetime.now`/`uuid4`). The resolver owns the snapshot
-write (Q5). Exactly-one-terminal-outcome / never-raise
-means the worker has NO `try/except` around it for
-control flow — it switches on `outcome.status`.
+Required points:
+- **kw-args** to `resolve_source` are EXACTLY the
+  phase-10 signature: `ref, source_id, schedule_id,
+  run_id, conn, conn_factory, clock, event_id_factory,
+  as_of_datetime, audit` (+ defaulted `loaders`,
+  `repo_root`). Called with the worker's DI
+  clock / `event_id_factory` / `conn_factory` — NEVER
+  `datetime.now` / `uuid4`.
+- **`source_id == inp.id` stability pin.** The resolver
+  keys the per-fire snapshot by `source_id`; `InputSpec.id`
+  is the stable snake_case (`^[a-z][a-z0-9_]*$`)
+  identifier frozen in the ExecutionPlan body, so the
+  snapshot identity is stable across fires/retries. A
+  test asserts `resolve_source` is called with
+  `source_id == inp.id` and that a re-fire reuses the
+  same snapshot key.
+- **Exactly-one-terminal-outcome / never-raise** ⇒ the
+  worker has NO `try/except` around `resolve_source` for
+  control flow; it switches on `outcome.status` only.
+- **Q5: pure consumer.** The worker NEVER calls
+  `write_snapshot` NOR `_newest_materialised_snapshot`.
+  `skip_unchanged` reads `outcome.changed_vs_prior`
+  (§0.1) only.
 
 ### 3.2 `emit_source_to_slack` (`emit/source_post.py`)
 
 Mirrors `emit_reminder_to_slack`:
-`async emit_source_to_slack(*, spec, plan, resolved,
-slack_client: SlackProtocol, clock) -> SourcePostResult`.
+`async emit_source_to_slack(*, spec, plan, resolved:
+dict[str, ResolveOutcome], slack_client: SlackProtocol,
+clock) -> SourcePostResult`.
 `SourcePostResult(ok: bool, channel: str, ts: Optional[str],
-error: Optional[str])`. Channel + format come from the
-`source_post` EmitStep `args` compiled by the template.
+error: Optional[str], skipped_unchanged: bool = False)`.
+Channel + `progress_strategy` come from the `source_post`
+EmitStep `args` compiled by the template. The emit step
+reads `resolved[input_id].changed_vs_prior` (§0.1) — it
+NEVER touches the snapshot table. Under
+`progress_strategy="skip_unchanged"`, if
+`changed_vs_prior is False` for the (single phase-11)
+source input → NO Slack call, `skipped_unchanged=True`,
+and the step writes an `emit_skipped_unchanged` event
+(in-band, same transaction discipline as a normal emit).
 Verbatim text preservation (§5.3.7) — no reformat of the
 resolved bytes beyond the template-declared envelope.
 
@@ -286,12 +421,27 @@ schedule_id_factory) -> (ScheduleSpec, ExecutionPlan)`.
   execution_plan_hash=plan.compute_hash(),
   template=TemplateRef(name=RECURRING_…_NAME,
   args=RecurringSeriesFromSourceArgs(...).model_dump()))`.
-`skip_unchanged` is realised in the worker emit step:
-compare `outcome.content_hash` to the prior materialised
-snapshot hash (the resolver already reads it for
-live-change); equal → no-op success
-(`run_succeeded` with `emit_skipped_unchanged` event),
-no Slack post. NO new state table.
+`skip_unchanged` is realised from
+`ResolveOutcome.changed_vs_prior` (§0.1) ONLY — the
+worker/emit step NEVER re-reads the snapshot table
+(that races the FRESH write — round-1 🔴). The resolver
+populates `changed_vs_prior` per source provenance
+(all-provenance semantics — round-1 🟡):
+
+| provenance | `changed_vs_prior` | skip_unchanged |
+|---|---|---|
+| `FRESH` (prior exists) | `content_hash != prior_hash` | skip iff hashes equal |
+| `FRESH` (no prior — first fire) | `True` | emit (first fire always emits) |
+| `CACHE_HIT` (within no-probe TTL) | `False` | skip (snapshot IS the source; no new content) |
+| `FALLBACK_LAST_GOOD` | `False` | skip (literally re-serving last-good) |
+| `FALLBACK_DEFAULT` | `None` | EMIT (a degraded default MUST surface — skip_unchanged NEVER suppresses a fallback-to-default; AI_EDITS rule 13) |
+
+Worker rule: under `skip_unchanged`, EMIT unless
+`changed_vs_prior is False` (so `None` ⇒ emit). Under
+`whole`, ALWAYS emit regardless of `changed_vs_prior`.
+NO new state table. The phase-10 contract-regression
+pins (§0.1 / §5) prove the field add did not break
+exactly-one-outcome / never-raise / §3.5.
 
 ### 3.4 Authoring tool (`authoring/templates.py`)
 
@@ -310,7 +460,12 @@ dry-run handshake + freeze + commit pipeline.
 ## 4. Slice ordering + commit cadence
 
 Slice-gated; pause after each commit for reviewer; no
-push mid-phase. Cadence mirrors phases 9/10.
+push mid-phase. Cadence mirrors phases 9/10. **9 working
+slices** (Q7: old slice 4 split into 4 + 6 — the 🔴
+contract change is front-loaded as its own slice with
+the phase-10 regression pins; failure-policy extraction
+moved BEFORE the resolve-wire so a FAILED resolve has a
+landing path — round-1 🟡 slice-2/6 reorder).
 
 0. **plan + phase transition** (this commit; NOT pushed)
    — `docs/PHASE_11_PLAN.md`, `PHASE_ALLOWLIST[11]` in
@@ -319,80 +474,144 @@ push mid-phase. Cadence mirrors phases 9/10.
    scope guard accepts the plan commit's own diff
    (phase-10 cadence). Design doc NOT touched here.
 1. **Worker plan-load + source-driven routing** — load
-   `ExecutionPlan`; route inputs+emits-only plans into a
-   new branch; typed `UnsupportedSpecError` for
-   reasoning-bearing plans (step-12 boundary) +
-   `execution_plan_missing_at_claim` fail; pin "resolver
-   owns the snapshot" (Q5). NO resolve / NO emit yet
-   (the branch raises a `not-yet-wired` typed error so
-   nothing fires) — purely the routing skeleton + tests.
-2. **`resolve_source` wired in** — call the resolver per
-   source-bearing input on the claimed conn; map
+   `ExecutionPlan`; route inputs+emits-only plans into
+   the new branch; `_fail_run(reason=
+   "reasoning_unsupported_pending_step_12")` for
+   reasoning-bearing plans (Q4 — NOT a raise);
+   `_fail_run("execution_plan_missing_at_claim")` /
+   `"execution_plan_invalid_at_claim"`; enumerate the
+   `get_execution_plan` failure modes (§3.1). Pin
+   Q5 (worker NEVER calls `write_snapshot` /
+   `_newest_materialised_snapshot`). NO resolve / NO
+   emit yet — the branch ends in a deterministic
+   `_fail_run("source_fire_not_yet_wired")` so nothing
+   fires; purely the routing skeleton + tests.
+2. **Failure-policy extraction (Q6)** — extract the
+   round-3-hardened single-`transaction(conn)` core
+   (2–3 events + Run UPDATE atomic, `worker.py:556-567`);
+   `_route_failure_policy(result: SlackPostResult)`
+   call-site + behaviour stay BYTE-IDENTICAL (delegates
+   to the core); add the sibling
+   `_route_source_failure_policy` for the typed
+   resolve/emit failure. Atomicity test pinned for BOTH
+   paths. (Moved ahead of the resolve-wire so slice 3's
+   FAILED branch has its destination — round-1 🟡.)
+3. **`resolve_source` wired in** — call the resolver per
+   source-bearing input on the claimed conn with the
+   exact §3.1 kw-args (`source_id == inp.id` pin); map
    `ResolveOutcome` → continue / fail; honour
-   exactly-one-outcome / never-raise; FAILED &
-   require_reapprove → failure policy; DRIFT(alert) →
-   carry content. No emit yet (stop after resolve,
-   succeed with a `source_resolved_no_emit` test hook).
-3. **`emit/source_post.py`** — `SourcePostResult` +
-   `emit_source_to_slack`; wire the resolved bytes →
-   Slack; `OneOffReminder` path untouched; full
-   resolve→emit→succeeded path live for `whole`.
-4. **`RecurringSeriesFromSource` builder** —
+   exactly-one-outcome / never-raise (no control-flow
+   `try/except`); FAILED & `require_reapprove` →
+   `_route_source_failure_policy`; DRIFT(alert) → carry.
+   No emit yet (stop after resolve, succeed via a
+   `source_resolved_no_emit` test hook).
+4. **Phase-10 additive contract change (the 🔴,
+   front-loaded — Q7 "4a").**
+   `ResolveOutcome.changed_vs_prior: Optional[bool] =
+   None` (§0.1); resolver populates it on RESOLVED /
+   DRIFT per the all-provenance table (§3.3). Ships the
+   **phase-10 contract-regression pins**: resolver still
+   (a) exactly one terminal outcome, (b) never raises,
+   (c) §3.5 taxonomy + `fallback_eligible` intact, (d)
+   every prior `ResolveOutcome` consumer unaffected
+   (defaulted). `cache.py` untouched. NO worker use yet.
+5. **`emit/source_post.py`** — `SourcePostResult`
+   (incl. `skipped_unchanged`) + `emit_source_to_slack`;
+   wire resolved bytes → Slack VERBATIM; `OneOffReminder`
+   path byte-untouched; full resolve→emit→succeeded path
+   live for `progress_strategy="whole"`.
+6. **`RecurringSeriesFromSource` builder + skip_unchanged
+   (Q7 "4b"; depends 4 + 5).**
    `templates/recurring_series_from_source.py`; typed
-   args; `whole` + `skip_unchanged`; `skip_unchanged`
-   no-op-success emit path + `emit_skipped_unchanged`
-   event.
-5. **Authoring tool** —
+   args; `whole` + `skip_unchanged`. `skip_unchanged`
+   reads `outcome.changed_vs_prior` ONLY (NEVER the
+   snapshot table); `skipped_unchanged` no-op-success
+   path + `emit_skipped_unchanged` event; all-provenance
+   table (§3.3) pinned.
+7. **Authoring tool** —
    `make_schedule_create_recurring_series_from_source`;
    ExecutionPlan compile (inputs+emit, zero reasoning);
-   validation/dry-run/freeze/commit end-to-end.
-6. **Failure-policy integration** — generalise
-   `_route_failure_policy` to the typed resolve/emit
-   failure; `alert_admin`/`abort_silent`; `retry_later`
-   → `alert_admin` + WARNING (step-14 note); end-to-end
-   FAILED / require_reapprove / DRIFT pins.
-7. **Agent guidance + hygiene** — additive coordinator
-   §11.4 scheduling-law (template list +
-   `RecurringSeriesFromSource`);
+   validation / dry-run / freeze / commit end-to-end;
+   LLM-visible-signature DI-leak pin.
+8. **Failure-policy integration + agent guidance +
+   hygiene** — end-to-end FAILED / `require_reapprove` /
+   DRIFT pins through `_route_source_failure_policy`;
+   `retry_later` → `alert_admin` + WARNING (step-14
+   note); additive coordinator §11.4 scheduling-law
+   (template list + `RecurringSeriesFromSource`);
    `test_phase11_import_hygiene.py` AST pin.
    (`PHASE_ALLOWLIST[11]` / `.v2-current-phase` already
-   flipped in slice 0; this slice only EXTENDS the
-   allowlist if a new surface path appeared.)
-8. **closeout** — full `tests/v2`, §7 acceptance walk,
-   phase guards, annotated tag `v2-phase-11-complete`
-   (gated on reviewer CLOSEOUT PASS), §0 design
-   amendment to `CONTRACTS_V2_DESIGN.md` IF the reviewer
-   approved the split.
+   flipped in slice 0; only EXTEND the allowlist if a
+   new surface path appeared.)
+9. **closeout** — full `tests/v2`, §7 acceptance walk,
+   phase guards, `gen_docs` regen+stage, annotated tag
+   `v2-phase-11-complete` (gated on reviewer CLOSEOUT
+   PASS), and the ONE reconciliation pass amending
+   `docs/CONTRACTS_V2_DESIGN.md` §12 (step 11 → 11A/11B)
+   + §5.3.3/§5.3.5 live-change wording so design ≡ plan
+   ≡ shipped code.
 
 ---
 
 ## 5. Test inventory (highlights)
 
 - `test_runtime_source_fire.py` — source-driven spec
-  fires end to end (RESOLVED→emit→succeeded);
-  reasoning-bearing plan → typed `UnsupportedSpecError`;
-  missing plan → `execution_plan_missing_at_claim`;
-  resolver FAILED → `run_failed` via failure policy, NO
+  fires end to end (RESOLVED→emit→succeeded); the exact
+  `get_execution_plan` failure-mode set: `None` →
+  `_fail_run("execution_plan_missing_at_claim")`,
+  invalid body → `_fail_run("execution_plan_invalid_at_claim")`,
+  sqlite-transient → propagates (Run stays RUNNING,
+  recovery promotes — NOT a `_fail_run`/raise we add);
+  reasoning-bearing plan →
+  `_fail_run("reasoning_unsupported_pending_step_12")`
+  (Q4 — a `run_failed`, NOT a raise); resolver FAILED →
+  `run_failed` via `_route_source_failure_policy`, NO
   emit, NO partial; `require_reapprove` → withhold +
-  FAILED + snapshot still written; DRIFT(alert) → drift
-  event + STILL emits; resolver called with DI
-  clock/id-factory (not `datetime.now`/`uuid4`); resolver
-  never-raise honoured (a forced internal resolver fault
-  → single `SOURCE_FAILED` outcome, worker fails
-  cleanly, no crash).
+  FAILED + snapshot still written by the resolver;
+  DRIFT(alert) → drift event + STILL emits; resolver
+  called with DI clock/id-factory and **`source_id ==
+  inp.id`** (stability pin — and a re-fire reuses the
+  same snapshot key); resolver never-raise honoured (a
+  forced internal resolver fault → single SOURCE_FAILED
+  outcome, worker `_fail_run`s cleanly, no crash, no
+  control-flow `try/except`).
+- `test_resolver_phase10_contract_regression.py`
+  (slice 4, §0.1) — after the `changed_vs_prior` field
+  add the resolver STILL: returns exactly ONE terminal
+  `ResolveOutcome`; never raises into the caller;
+  preserves the §3.5 typed-error taxonomy +
+  `fallback_eligible` (only `SourceFetchError`); every
+  pre-existing `ResolveOutcome` construction/consumer is
+  byte-unaffected (defaulted field). `changed_vs_prior`
+  populated correctly for ALL provenances per the §3.3
+  table (FRESH±prior / CACHE_HIT / FALLBACK_LAST_GOOD /
+  FALLBACK_DEFAULT).
+- `test_failure_policy_atomicity.py` (slice 2) — the
+  single-`transaction(conn)` invariant holds for BOTH
+  `_route_failure_policy` (SlackPostResult — behaviour
+  BYTE-IDENTICAL to phase-9: a raise mid-routing leaves
+  NO partial events + Run not stuck `running`) AND
+  `_route_source_failure_policy` (typed resolve/emit
+  failure — same atomic core).
 - `test_emit_source_post.py` — `emit_source_to_slack`
-  ok / not-ok; verbatim bytes preserved; channel from
-  EmitStep args; `OneOffReminder` emit unaffected.
+  ok / not-ok; verbatim bytes preserved (§5.3.7);
+  channel from EmitStep args; `skip_unchanged` +
+  `changed_vs_prior is False` → NO Slack call +
+  `skipped_unchanged=True` + `emit_skipped_unchanged`
+  event; `OneOffReminder` emit byte-unaffected.
 - `test_templates_recurring_series_from_source.py` —
   builder produces a valid `ScheduleSpec`+`ExecutionPlan`
   (zero reasoning, one source input, one source_post
-  emit); `skip_unchanged` no-ops on equal hash
-  (`emit_skipped_unchanged`), emits on changed hash;
+  emit); `whole` always emits; `skip_unchanged` decision
+  driven by `changed_vs_prior` across the FULL §3.3
+  provenance table (incl. FALLBACK_DEFAULT → EMIT);
   naive datetime / bad slot rejected at the builder.
 - `test_runtime_worker_emit_branch.py` (extend) — the
   source-driven branch coexists with the OneOff branch;
   the phase-9 `schedule_not_found` / inactive / template
-  invariants still hold.
+  invariants still hold; the worker NEVER calls
+  `write_snapshot` / `_newest_materialised_snapshot`
+  (Q5 — assert via patch/spy).
 - `test_phase11_import_hygiene.py` — every phase-11 NEW
   module: no module-load `_defaults` / `slack_sdk` /
   `google` / `httpx` import; no `uuid.uuid4` /
@@ -440,11 +659,16 @@ the same commit.
    reasoning) fires end to end: claim → resolve → emit →
    `succeeded`, with a `source_snapshots` row + `.bin`
    written by the resolver path.
-3. The worker calls `resolve_source` with DI
-   clock/id-factory; the phase-10 resolver contract is
-   unbroken (exactly one terminal outcome; never raises
-   into the worker — pinned with a forced internal
-   resolver fault).
+3. The worker calls `resolve_source` with the exact
+   phase-10 kw-args, DI clock/id-factory, and
+   `source_id == inp.id` (stability pin; re-fire reuses
+   the snapshot key). The phase-10 resolver contract is
+   unbroken AFTER the `changed_vs_prior` field add
+   (§0.1): exactly one terminal outcome; never raises
+   into the worker (forced-fault pin); §3.5 taxonomy +
+   `fallback_eligible` intact; every prior
+   `ResolveOutcome` consumer byte-unaffected. The worker
+   has NO control-flow `try/except` around the resolver.
 4. Resolver `FAILED` → `run_failed` via failure policy,
    no emit, no partial side effect;
    `require_reapprove_on_shape_change` → content
@@ -459,13 +683,23 @@ the same commit.
    VERBATIM (§5.3.7); the `OneOffReminder` emit path is
    byte-for-byte unchanged (additive cutover).
 7. `RecurringSeriesFromSource` builder + authoring tool
-   produce a valid spec; `whole` emits each fire;
-   `skip_unchanged` no-ops (`emit_skipped_unchanged`)
-   when `content_hash` is unchanged, emits when changed;
-   NO new state table introduced.
-8. A reasoning-bearing ExecutionPlan → typed
-   `UnsupportedSpecError` (step-12 boundary held); a
-   missing plan → `execution_plan_missing_at_claim`.
+   produce a valid spec; `whole` always emits;
+   `skip_unchanged` is driven by
+   `ResolveOutcome.changed_vs_prior` across the FULL §3.3
+   provenance table (FRESH±prior / CACHE_HIT /
+   FALLBACK_LAST_GOOD skip; FALLBACK_DEFAULT EMITS); the
+   worker NEVER re-reads the snapshot table
+   (`_newest_materialised_snapshot` / `write_snapshot`
+   never called — Q5); NO new state table introduced.
+8. The step-12 boundary uses `_fail_run` (Q4), NOT a
+   raise: a reasoning-bearing ExecutionPlan →
+   `_fail_run(reason="reasoning_unsupported_pending_step_12")`;
+   missing plan → `_fail_run("execution_plan_missing_at_claim")`;
+   invalid plan body →
+   `_fail_run("execution_plan_invalid_at_claim")`. The
+   raise / `UnsupportedSpecError` pattern is reserved
+   STRICTLY for the can't-write-a-failed-event cases
+   (`schedule_not_found_at_claim`, FK-unwritable).
 9. No `datetime.now` / `uuid.uuid4` / vendor-SDK
    module-load in any phase-11 NEW module; AST pin green.
 10. v1 untouched; coordinator change is ADDITIVE only
@@ -517,9 +751,16 @@ the OneOffReminder emit path is byte-for-byte unchanged
 (additive cutover, v1 scheduler untouched).
 RecurringSeriesFromSource (template + authoring tool)
 ships with STATELESS progress strategies only (whole /
-skip_unchanged via the prior-snapshot content_hash; no
-new state table). A reasoning-bearing plan -> typed
-UnsupportedSpecError (step-12 boundary held).
+skip_unchanged). skip_unchanged reads an ADDITIVE
+ResolveOutcome.changed_vs_prior signal the resolver
+populates per source provenance (FRESH / CACHE_HIT /
+FALLBACK_LAST_GOOD / FALLBACK_DEFAULT); the worker is a
+pure snapshot consumer (never re-reads the snapshot
+table). NO new state table. The reasoning-bearing-plan
+step-12 boundary is a clean run_failed
+(_fail_run reason=reasoning_unsupported_pending_step_12),
+NOT a raise; the raise pattern stays reserved for the
+can't-write-a-failed-event cases.
 
 NOT shipped (deferred): ChannelDigest + summary_prompt
 (needs the LLM reasoning-chain executor); stateful
@@ -536,51 +777,82 @@ Plan:   docs/PHASE_11_PLAN.md
 
 ---
 
-## 9. Open questions (for plan-review round 1)
+## 9. Codex/claude-reviewer round-1 disposition (CLOSED)
 
-- **Q1 — `ChannelDigest` disposition.** Options: (a)
-  defer `ChannelDigest` entirely to 11B (post reasoning
-  executor) — RECOMMENDED (a non-summarising concat
-  "digest" is a degraded product the user didn't ask
-  for); (b) ship a deterministic non-LLM multi-source
-  concat/format digest now, `summary_prompt` later; (c)
-  pull the LLM reasoning-chain executor into phase 11
-  (large scope expansion; collides with step 12). The
-  plan assumes (a). Adjudicate.
-- **Q2 — `RecurringSeriesFromSource` progress
-  strategies.** Proposal: STATELESS only — `whole` +
-  `skip_unchanged` (reuses the phase-10 prior-snapshot
-  `content_hash`, NO new state). The stateful "next
-  unread item" strategy defers to 11B (step-13
-  cross-fire `schedule_state`). Accept the stateless-only
-  set for phase 11?
-- **Q3 — emit adapter.** New `emit/source_post.py`
-  (reuse `SlackProtocol`) vs generalising
-  `emit_reminder_to_slack`. Proposal: NEW adapter so the
-  phase-9 OneOff emit stays byte-for-byte untouched
-  (additive cutover, §11.1). Agree?
-- **Q4 — reasoning-bearing plan handling.** Proposal: a
-  plan with non-empty `reasoning` → typed
-  `UnsupportedSpecError` ("reasoning lands in step 12"),
-  mirroring the phase-9/10 boundary discipline (the Run
-  stays RUNNING, recovery promotes it). Agree this is
-  the correct step-12 boundary, vs `_fail_run`?
-- **Q5 — snapshot write ownership.** The plan assumes
-  `resolve_source` / `resolve_source_cached` already
-  persists the per-fire `.bin` + `source_snapshots` row,
-  so the worker MUST NOT call `write_snapshot` itself
-  (double-write / dedup hazard). Slice 1 pins this.
-  Confirm the resolver owns the snapshot and the worker
-  is a pure consumer.
-- **Q6 — `_route_failure_policy` reuse.** Generalise the
-  phase-9 helper (currently typed to `SlackPostResult`)
-  to a shared resolve/emit failure shape, vs a parallel
-  helper. Proposal: generalise (one failure-routing
-  path). Acceptable, or keep them separate for blast-radius
-  containment?
-- **Q7 — slice count.** 8 slices (0 plan … 8 closeout)
-  proposed. If Q1 selects (b)/(c) the count grows. OK at
-  8 for 11A?
+All 7 questions adjudicated by claude-reviewer in
+plan-review round 1; decisions baked into §0–§7 of this
+revision. Recorded here verbatim so a future drift is
+caught against the decision, not re-litigated (the
+phase-10 disposition-log discipline).
+
+- **Q1 — `ChannelDigest`.** DECISION = (a): defer
+  `ChannelDigest` entirely to **11B** (post reasoning
+  executor). No scope growth. Baked: §0, §1 out-of-scope,
+  §8.
+- **Q2 — progress strategies.** DECISION = ACCEPT
+  stateless-only (`whole` + `skip_unchanged`); stateful
+  "next unread item" defers to 11B (step-13 cross-fire
+  `schedule_state`). Baked: §0, §1.4, §3.3.
+- **Q3 — emit adapter.** DECISION = NEW
+  `app/v2/emit/source_post.py`; `OneOffReminder` /
+  `emit_reminder_to_slack` stay byte-untouched (additive
+  cutover). Baked: §1.3, §2, §3.2, slice 5.
+- **Q4 — reasoning-bearing plan.** DECISION =
+  `_fail_run(reason="reasoning_unsupported_pending_step_12")`
+  — a clean `run_failed`, NOT a raise /
+  `UnsupportedSpecError`. The raise pattern is reserved
+  STRICTLY for the can't-write-a-failed-event cases
+  (FK-unwritable, e.g. `schedule_not_found_at_claim`).
+  This also resolves the §3.1 internal inconsistency
+  (now symmetric with the plan-missing path). Baked:
+  §1.1, §1 out-of-scope, §3.1, §7-#8, §9-Q4.
+- **Q5 — snapshot ownership.** CONFIRMED: the
+  resolver/cache OWNS the per-fire snapshot write
+  (`resolve_source_cached` writes on FRESH at
+  `cache.py:253`; the resolver reads the prior BEFORE
+  that cached call at `resolver.py:223`). The worker is
+  a PURE consumer — it MUST NOT call `write_snapshot`
+  AND MUST NOT call `_newest_materialised_snapshot`
+  (re-reading it for `skip_unchanged` races the FRESH
+  write — this is the round-1 🔴, fixed via §0.1's
+  additive `changed_vs_prior`). Slice-1 pin is correct +
+  necessary. Baked: §0.1, §3.1, §3.3, slice 1, §5.
+- **Q6 — failure-policy reuse.** DECISION = neither
+  pure-generalise nor pure-duplicate: EXTRACT the shared
+  atomic single-`transaction(conn)` core (the
+  round-3-hardened 2–3-events + Run-UPDATE invariant,
+  `worker.py:556-567`); keep
+  `_route_failure_policy(result: SlackPostResult)`
+  call-site/behaviour BYTE-IDENTICAL (delegates to the
+  core); add sibling `_route_source_failure_policy` for
+  the typed resolve/emit failure; pin the atomicity
+  test for BOTH paths. Baked: §1.5, §3.1, slice 2, §5.
+- **Q7 — slice count.** DECISION = split into **9**
+  (old slice 4 → slice 4 "resolver-signal contract
+  change + phase-10 regression pins" + slice 6 "template
+  + skip_unchanged emit"); the 🔴 contract change is its
+  own front-loaded slice; the failure-policy extraction
+  moves ahead of the resolve-wire (round-1 🟡
+  slice-2/6 reorder). Baked: §4.
+
+### Round-1 must-fix ledger (every item applied)
+
+- 🔴 `skip_unchanged` no longer re-reads the snapshot
+  table; uses the additive
+  `ResolveOutcome.changed_vs_prior` (§0.1) — declared as
+  an explicit additive edit to phase-10-frozen
+  `resolver.py` WITH phase-10 contract-regression pins.
+- 🟡 all-provenance `skip_unchanged` semantics specified
+  (§3.3 table: FRESH±prior / CACHE_HIT /
+  FALLBACK_LAST_GOOD / FALLBACK_DEFAULT).
+- 🟡 slice-2/slice-6 reorder applied (§4: failure-policy
+  extraction is now slice 2, before the resolve-wire).
+- 🟡 `get_execution_plan` failure modes enumerated
+  (§3.1: None / invalid-body / sqlite-transient).
+- 🟡 Q4 `_fail_run` decision applied consistently across
+  §1 / §3.1 / §7-#8 / §9-Q4.
+- §3.1 resketched with the exact phase-10 kw-args + the
+  `source_id == inp.id` stability pin.
 
 ---
 
