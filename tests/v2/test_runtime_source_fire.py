@@ -3,7 +3,9 @@
 Per ``docs/PHASE_11_PLAN.md`` §3.1 / §4 + the
 claude-reviewer slice hard-check criteria.
 
-- **Slice 1** — plan-load + routing skeleton. SELECTIVE
+- **Slice 1** — plan-load + source-driven routing
+  (introduced the branch; made LIVE end-to-end by slices
+  3+5). SELECTIVE
   failure handling: ``get_execution_plan`` is wrapped in a
   NARROW ``except ValidationError`` only — a corrupt body
   → ``_fail_run(execution_plan_invalid_at_claim)``; a

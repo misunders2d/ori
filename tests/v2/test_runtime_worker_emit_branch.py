@@ -30,11 +30,11 @@ Pins:
 - UnsupportedSpec branch:
   - template=None AND execution_plan_hash=None →
     `UnsupportedSpecError`.
-- Phase-11 slice-1 cutover: execution_plan_hash set NO
-  LONGER raises — the worker loads the plan and routes
-  it; an invalid frozen body → clean
-  `_fail_run(execution_plan_invalid_at_claim)` (the
-  source-driven routing skeleton is fully exercised in
+- Phase-11 (§12 step 11A) cutover: execution_plan_hash
+  set NO LONGER raises — the worker loads the plan and
+  routes it; an invalid frozen body → clean
+  `_fail_run(execution_plan_invalid_at_claim)` (the LIVE
+  source-driven fire path is fully exercised in
   `test_runtime_source_fire.py`).
 """
 

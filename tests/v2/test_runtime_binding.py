@@ -6,11 +6,12 @@ Slice 2 owns:
 - Construction + injection validation.
 - Lifecycle (start / stop / pause / resume / is_paused) +
   the documented paused-start / resume flow.
-- ``_fire_for`` exception-swallow skeleton.
+- ``_fire_for`` exception-swallow wrapper.
 
-Registration (``register`` / ``unregister`` / ``reregister``)
-is slice 3+ -- not exercised here. The boot sequence
-(``boot_runtime``) is slice 5.
+This file owns the slice-2 surface only; registration
+(``register`` / ``unregister`` / ``reregister``, slices
+3-4) and the boot sequence (``boot_runtime``, slice 5)
+are exercised in their own test files.
 
 Coverage:
 
@@ -654,7 +655,7 @@ async def test_double_resume_is_idempotent(tmp_path):
 
 
 # ===========================================================================
-# _fire_for skeleton
+# _fire_for exception-swallow wrapper
 # ===========================================================================
 
 

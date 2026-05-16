@@ -3,14 +3,16 @@
 Phase 5 slice 2 per ``docs/PHASE_5_PLAN.md`` section 3.2.
 
 Wraps one ``apscheduler.schedulers.asyncio.AsyncIOScheduler``
-instance and exposes the lifecycle + (later) registration
-surface the boot sequence + lifecycle hooks call.
+instance and exposes the lifecycle + registration surface
+the boot sequence + lifecycle hooks call.
 
-Slice 2 ships ONLY the lifecycle methods + the
-``_fire_for`` exception-swallow skeleton. The registration
-methods (``register`` / ``unregister`` / ``reregister``)
-land in slices 3 and 4. The boot sequence
-(``boot_runtime`` / ``shutdown_runtime``) lands in slice 5.
+Phase-5 build-out (all shipped): slice 2 introduced the
+lifecycle methods + the module-level ``_fire_for``
+exception-swallow wrapper; slices 3-4 added the
+registration methods (``register`` / ``unregister`` /
+``reregister``); slice 5 added the boot sequence
+(``boot_runtime`` / ``shutdown_runtime``, now in
+``app/v2/runtime/boot.py``).
 
 Job store: ``SQLAlchemyJobStore`` per design contract section
 4.0.5. Default path ``sqlite:///data/scheduler-v2-jobs.db``

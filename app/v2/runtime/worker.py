@@ -500,8 +500,14 @@ class Worker:
         conn: sqlite3.Connection,
         run,
     ) -> str:
-        """Phase 9 emit dispatch + phase 11 slice 1
-        source-driven routing skeleton.
+        """OneOff + LIVE source-driven emit dispatch
+        (§12 step 11A).
+
+        Two emit branches share this method: the phase-9
+        ``OneOffReminder`` template path, and the LIVE
+        source-driven fire path (§12 step 11A) — a spec
+        with ``execution_plan_hash`` set is loaded,
+        resolved per source input, and emitted.
 
         Returns ``"succeeded"`` when the emit fires
         successfully — caller proceeds with the existing
@@ -619,15 +625,20 @@ class Worker:
             )
             return "failed"
 
-        # ---- Phase 11 slice 1: source-driven routing
-        # skeleton (docs/PHASE_11_PLAN.md §3.1 / §4 s1).
-        # A source-driven spec carries execution_plan_hash
-        # → an ExecutionPlan. Slice 1 ships ONLY the
-        # plan-load + routing decision; the resolve (s3) +
-        # emit (s5) wiring is not yet in place, so the
-        # branch terminates in a deterministic
-        # ``source_fire_not_yet_wired`` _fail_run — nothing
-        # actually fires yet (incremental cutover).
+        # ---- §12 step 11A: LIVE source-driven fire path
+        # (docs/PHASE_11_PLAN.md §3.1;
+        # docs/CONTRACTS_V2_DESIGN.md §12 step 11A). A
+        # source-driven spec carries execution_plan_hash →
+        # an ExecutionPlan. The worker loads it, resolves
+        # every source-bearing InputSpec via resolve_source
+        # (FAILED / require_reapprove →
+        # _route_source_failure_policy — no partial emit),
+        # then posts the resolved content VERBATIM via
+        # emit_source_to_slack. progress_strategy="whole"
+        # always emits; "skip_unchanged" returns a no-op
+        # SUCCESS when ResolveOutcome.changed_vs_prior is
+        # False. Outcome: "succeeded" (delivered) /
+        # "succeeded_skipped" (skip no-op) / "failed".
         if spec.execution_plan_hash is not None:
             try:
                 plan = get_execution_plan(

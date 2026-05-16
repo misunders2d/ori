@@ -6,8 +6,8 @@ and ``docs/PHASE_1_PLAN.md`` for the phase-1 build-out scope.
 Phase 1 ships:
 - Pydantic enums + models (this subpackage's ``enums`` and
   ``models`` modules).
-- SQLite DDL + migration runner skeleton (``ddl/`` and
-  ``migrations/``, landing in a later commit of phase 1).
+- SQLite DDL + migration runner (``ddl/`` and
+  ``migrations/``).
 - Tests (under ``tests/v2/``).
 
 Phase 1 does NOT ship runtime code. No worker, no wakeup callback,
