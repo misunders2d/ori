@@ -17,7 +17,8 @@ Plus:
 Smoke:
 - No I/O imports.
 - No execution / claim-suggestive public callables.
-- No update / delete helper on the module surface.
+- No in-place mutation helper (insert append-only;
+  retention delete sanctioned in slice 4).
 """
 
 from __future__ import annotations
@@ -36,9 +37,12 @@ from app.v2.storage import source_snapshots as snapshots_mod
 from app.v2.storage.connection import ConnectionNotReady
 from app.v2.storage.serialization import NaiveDatetimeError
 from app.v2.storage.source_snapshots import (
+    content_path_referenced,
+    delete_snapshot,
     get_snapshot,
     insert_snapshot,
     list_snapshots_by_hash,
+    list_snapshots_for_schedule_source,
 )
 
 
@@ -408,22 +412,36 @@ def test_list_by_hash_calls_assert_connection_ready(tmp_path):
 # ===========================================================================
 
 
-def test_module_exposes_no_update_or_delete_helper():
+def test_module_exposes_no_inplace_mutation_helper():
+    """``insert_snapshot`` stays append-only + content-
+    addressed. Phase-10 slice 4 sanctions ONE delete —
+    retention (``delete_snapshot``, design §5.3.5 / plan
+    §3.4); in-place MUTATION of an existing row
+    (update/modify/overwrite) remains forbidden (a snapshot
+    is immutable history — a change is a new row, removal
+    is retention only)."""
     public = {
         name for name in dir(snapshots_mod) if not name.startswith("_")
     }
     forbidden = {
         "update_snapshot",
-        "delete_snapshot",
-        "drop_snapshot",
         "modify_snapshot",
+        "overwrite_snapshot",
+        "drop_snapshot",
+        "truncate_snapshots",
     }
     leaked = public & forbidden
     assert not leaked, (
-        f"source_snapshots module exposes mutation helpers: "
-        f"{sorted(leaked)}. Snapshots are content-addressed "
-        "history; new data is a new row."
+        f"source_snapshots module exposes in-place mutation "
+        f"helpers: {sorted(leaked)}. A snapshot is immutable "
+        "history; a change is a NEW row, removal is "
+        "retention-only (delete_snapshot)."
     )
+    # The sanctioned retention delete primitive IS present
+    # (slice 4).
+    assert "delete_snapshot" in public
+    assert "list_snapshots_for_schedule_source" in public
+    assert "content_path_referenced" in public
 
 
 def test_source_snapshots_module_has_no_io_imports():
@@ -472,3 +490,86 @@ def test_source_snapshots_module_has_no_dispatch_callables():
                 f"source_snapshots module exposes execution / claim "
                 f"suggestive callable: {name}"
             )
+
+
+# ===========================================================================
+# Phase-10 slice 4 — retention primitives (the sole
+# sanctioned delete surface; plan §3.4)
+# ===========================================================================
+
+
+def _seed_run_for(
+    conn: sqlite3.Connection,
+    run_id: str,
+    schedule_id: str,
+    *,
+    at: datetime = _NOW,
+) -> None:
+    conn.execute(
+        "INSERT INTO runs (id, schedule_id, fire_reason, "
+        "due_at, status, attempt, root_run_id) VALUES "
+        "(?,?,?,?,?,?,?)",
+        (run_id, schedule_id, "scheduled", at.isoformat(),
+         "pending", 1, run_id),
+    )
+
+
+def test_list_for_schedule_source_newest_first_and_scoped(tmp_path):
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn, "sched_a")
+    _seed_schedule(conn, "sched_b")
+    _seed_run_for(conn, "ra1", "sched_a", at=_NOW)
+    _seed_run_for(
+        conn, "ra2", "sched_a", at=_NOW + timedelta(minutes=5)
+    )
+    _seed_run_for(conn, "rb1", "sched_b", at=_NOW)
+    insert_snapshot(
+        conn,
+        _baseline_meta(run_id="ra1", source_id="s", fetched_at=_NOW),
+    )
+    insert_snapshot(
+        conn,
+        _baseline_meta(
+            run_id="ra2",
+            source_id="s",
+            fetched_at=_NOW + timedelta(minutes=5),
+        ),
+    )
+    insert_snapshot(
+        conn,
+        _baseline_meta(run_id="rb1", source_id="s", fetched_at=_NOW),
+    )
+
+    got = list_snapshots_for_schedule_source(
+        conn, schedule_id="sched_a", source_id="s"
+    )
+    # newest first; sched_b excluded.
+    assert [r[0] for r in got] == ["ra2", "ra1"]
+    assert all(r[1] == "s" for r in got)
+
+
+def test_delete_snapshot_rowcount_idempotent(tmp_path):
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn)
+    _seed_run(conn, "run-abc")
+    insert_snapshot(conn, _baseline_meta(run_id="run-abc"))
+
+    assert delete_snapshot(conn, run_id="run-abc", source_id="syllabus") == 1
+    assert delete_snapshot(conn, run_id="run-abc", source_id="syllabus") == 0
+    assert get_snapshot(conn, run_id="run-abc", source_id="syllabus") is None
+
+
+def test_content_path_referenced(tmp_path):
+    conn = _migrate(tmp_path)
+    _seed_schedule(conn)
+    _seed_run(conn, "run-abc")
+    insert_snapshot(
+        conn,
+        _baseline_meta(
+            run_id="run-abc", content_path="data/x/p.bin"
+        ),
+    )
+    assert content_path_referenced(conn, "data/x/p.bin") is True
+    assert content_path_referenced(conn, "data/x/other.bin") is False
+    delete_snapshot(conn, run_id="run-abc", source_id="syllabus")
+    assert content_path_referenced(conn, "data/x/p.bin") is False

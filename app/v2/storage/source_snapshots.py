@@ -14,13 +14,24 @@ Three helpers:
   by the audit / dedup tools to find every fire that observed
   the same source content.
 
-No update / delete surface — source snapshots are
-content-addressed historical records. A new snapshot is a new
-row.
+``insert_snapshot`` is append-only + content-addressed (a
+new snapshot is a new row). The ONLY sanctioned deletion
+is retention (phase-10 slice 4, design §5.3.5 / plan
+§3.4): :func:`delete_snapshot` removes one pruned row and
+:func:`list_snapshots_for_schedule_source` /
+:func:`content_path_referenced` are its read primitives.
+The orchestration — COMMIT the row deletes FIRST, then
+post-commit best-effort file unlink on a FRESH connection
+(re-query so a dedup-shared file is unlinked only when its
+last referencing row is gone) — lives in
+:mod:`app.v2.sources.snapshot_writer.prune_snapshots`,
+NEVER inside the delete transaction (a rollback would
+otherwise restore rows pointing at already-deleted files).
 
 References:
-- ``docs/CONTRACTS_V2_DESIGN.md`` §4.0.2, §4.6.4
+- ``docs/CONTRACTS_V2_DESIGN.md`` §4.0.2, §4.6.4, §5.3.5
 - ``docs/PHASE_3_PLAN.md`` §5.6
+- ``docs/PHASE_10_PLAN.md`` §3.4
 """
 
 from __future__ import annotations
@@ -161,8 +172,81 @@ def list_snapshots_by_hash(
     return [_row_to_meta(row) for row in rows]
 
 
+# ---------------------------------------------------------------------------
+# Retention primitives (phase-10 slice 4 — the SOLE
+# sanctioned delete surface; orchestrated by
+# app.v2.sources.snapshot_writer.prune_snapshots).
+# ---------------------------------------------------------------------------
+
+
+def list_snapshots_for_schedule_source(
+    conn: sqlite3.Connection,
+    *,
+    schedule_id: str,
+    source_id: str,
+) -> list[tuple[str, str, str]]:
+    """Return ``(run_id, source_id, content_path)`` for every
+    snapshot of ``source_id`` under ``schedule_id``,
+    **newest first** (``fetched_at`` DESC, then ``run_id``
+    DESC for a deterministic tie-break).
+
+    ``schedule_id`` is resolved via ``JOIN runs ON
+    runs.id = source_snapshots.run_id`` — the
+    ``source_snapshots`` table has no ``schedule_id``
+    column (PK is ``(run_id, source_id)``).
+    """
+    assert_connection_ready(conn)
+    rows = conn.execute(
+        "SELECT s.run_id, s.source_id, s.content_path "
+        "FROM source_snapshots s "
+        "JOIN runs r ON r.id = s.run_id "
+        "WHERE r.schedule_id = ? AND s.source_id = ? "
+        "ORDER BY s.fetched_at DESC, s.run_id DESC",
+        (schedule_id, source_id),
+    ).fetchall()
+    return [(r[0], r[1], r[2]) for r in rows]
+
+
+def delete_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    source_id: str,
+) -> int:
+    """Delete one snapshot row by composite PK. Returns the
+    number of rows removed (0 or 1). Retention-only — the
+    caller drives the COMMIT-then-unlink ordering."""
+    assert_connection_ready(conn)
+    cur = conn.execute(
+        "DELETE FROM source_snapshots "
+        "WHERE run_id = ? AND source_id = ?",
+        (run_id, source_id),
+    )
+    return cur.rowcount
+
+
+def content_path_referenced(
+    conn: sqlite3.Connection,
+    content_path: str,
+) -> bool:
+    """True iff ANY surviving snapshot row still references
+    ``content_path``. The post-commit unlink uses this on a
+    FRESH connection so a dedup-shared file is removed only
+    when its LAST referencing row is gone."""
+    assert_connection_ready(conn)
+    row = conn.execute(
+        "SELECT 1 FROM source_snapshots "
+        "WHERE content_path = ? LIMIT 1",
+        (content_path,),
+    ).fetchone()
+    return row is not None
+
+
 __all__ = [
     "insert_snapshot",
     "get_snapshot",
     "list_snapshots_by_hash",
+    "list_snapshots_for_schedule_source",
+    "delete_snapshot",
+    "content_path_referenced",
 ]

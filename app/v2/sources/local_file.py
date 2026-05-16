@@ -37,9 +37,12 @@ TOCTOU defense (codex slice-3 🔴 + slice-3-fix-2 🔴 —
 option A, dirfd component walk): after the fence the
 resolved path is opened by walking it component-by-
 component from its allowed root with ``openat`` +
-``O_NOFOLLOW`` on EVERY step (``O_DIRECTORY`` for every
-non-final component). Any symlink ANYWHERE along the
-traversal — leaf OR an intermediate allowed-root dir
+``O_NOFOLLOW | O_NONBLOCK`` on EVERY step (NO
+``O_DIRECTORY`` — it would mask a symlinked component as
+``ENOTDIR`` instead of ``ELOOP``; directory-ness is
+enforced by an ``fstat`` ``S_ISDIR`` check on the root +
+every non-final fd instead). Any symlink ANYWHERE along
+the traversal — leaf OR an intermediate allowed-root dir
 swapped to a symlink after the check — fails ``openat``
 (``ELOOP``) → non-fallback ``SourceSecurityError``. The
 whole path traversal is structurally swap-proof, not

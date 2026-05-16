@@ -65,6 +65,12 @@ from app.v2.sources.registry import (
     SourceLoaderRegistry,
     register_source_loader,
 )
+from app.v2.sources.snapshot_writer import (
+    PruneResult,
+    SnapshotWriteResult,
+    prune_snapshots,
+    write_snapshot,
+)
 
 
 #: (source id, paired-registration helper). Each helper
@@ -139,4 +145,8 @@ __all__ = [
     "LocalFileSource",
     "local_file_source",
     "register_local_file",
+    "SnapshotWriteResult",
+    "PruneResult",
+    "write_snapshot",
+    "prune_snapshots",
 ]
