@@ -87,6 +87,16 @@ class SourceLoaderRegistry:
         from production code."""
         self._store.clear()
 
+    def _rollback(self, key: str) -> None:
+        """Undo a just-applied :meth:`register` for ``key``.
+
+        Internal — used ONLY by
+        :func:`register_source_loader` to keep paired
+        registration atomic when the descriptor-side step
+        fails after the loader-side step succeeded. Idempotent
+        (pop-if-present)."""
+        self._store.pop(key, None)
+
 
 #: Production loader-instance singleton. Populated once at
 #: import by ``app/v2/sources/__init__.py``.
@@ -101,12 +111,17 @@ def register_source_loader(
 ) -> None:
     """Register ``loader`` into BOTH the descriptor registry
     (``sources``) and the loader-instance registry
-    (``loaders``).
+    (``loaders``) **atomically**.
 
     Refuses the pair if EITHER registry already knows the
-    id, so there is never a half-registered state (descriptor
-    without loader or vice versa). ``sources.register``
-    re-asserts the source read-only tag invariant.
+    id. Registration is all-or-nothing: the loader is
+    inserted first, then the descriptor (which re-asserts
+    the source read-only tag invariant and may raise). If
+    the descriptor step fails, the loader insert is rolled
+    back so NEITHER side is left registered — there is no
+    split-brain (codex slice-2 🟡: a second-step failure
+    after the first step previously left the descriptor
+    registered with no loader, permanently).
     """
     key = loader.descriptor.id
     if key in loaders or sources.lookup(key) is not None:
@@ -114,8 +129,16 @@ def register_source_loader(
             f"source loader {key!r} already registered "
             "(descriptor and/or loader registry)"
         )
-    sources.register(loader.descriptor)
+    # Step 1: the loader registry — the one we own and can
+    # roll back. Step 2: the descriptor registry, which
+    # validates the read-only invariant and may raise. A
+    # step-2 failure undoes step 1 → all-or-nothing.
     loaders.register(loader)
+    try:
+        sources.register(loader.descriptor)
+    except BaseException:
+        loaders._rollback(key)
+        raise
 
 
 __all__ = [

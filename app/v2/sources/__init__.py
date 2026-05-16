@@ -33,7 +33,7 @@ Snapshot writer + cache + resolver land in slices 4-8.
 
 from __future__ import annotations
 
-from app.v2.registry import SOURCES
+from app.v2.registry import SOURCES, SourceRegistry
 from app.v2.sources.contract import (
     SourceLoader,
     SourceResult,
@@ -61,15 +61,50 @@ from app.v2.sources.registry import (
 )
 
 
-def _register_builtin_sources() -> None:
-    """Register every built-in loader into the production
-    singletons. Idempotent: skips a loader whose id is
-    already present so a re-entrant / repeated import never
-    raises ``DuplicateDescriptorError``."""
-    if SOURCE_LITERAL_ID not in SOURCE_LOADERS and (
-        SOURCES.lookup(SOURCE_LITERAL_ID) is None
-    ):
-        register_literal()
+#: (source id, paired-registration helper). Each helper
+#: takes ``sources=`` / ``loaders=`` and registers BOTH
+#: registries atomically (see registry.register_source_loader).
+_BUILTIN_SOURCES = (
+    (SOURCE_LITERAL_ID, register_literal),
+)
+
+
+def _register_builtin_sources(
+    *,
+    sources: SourceRegistry = SOURCES,
+    loaders: SourceLoaderRegistry = SOURCE_LOADERS,
+) -> None:
+    """Register every built-in loader into the given
+    registries (default: the production singletons).
+
+    Idempotent for the PAIRED state: a loader whose id is
+    present in BOTH registries is skipped, so a re-entrant
+    / repeated import never raises.
+
+    A HALF state (descriptor present XOR loader present)
+    must never be silently no-op'd (codex slice-2 🟡 — that
+    preserved a broken split-brain). It can only arise from
+    a bug or an out-of-band mutation; surface it loud
+    (AI_EDITS rule 13 — nothing fails silently) rather than
+    paper over it with an ambiguous "repair".
+    """
+    for src_id, register_fn in _BUILTIN_SOURCES:
+        in_loaders = src_id in loaders
+        in_sources = sources.lookup(src_id) is not None
+        if in_loaders and in_sources:
+            continue  # already paired — idempotent no-op
+        if in_loaders != in_sources:
+            raise RuntimeError(
+                f"split-brain source registration for "
+                f"{src_id!r}: descriptor="
+                f"{'present' if in_sources else 'missing'}, "
+                f"loader="
+                f"{'present' if in_loaders else 'missing'}. "
+                "Paired registration is atomic — a half "
+                "state means a bug or out-of-band mutation; "
+                "refusing to silently continue."
+            )
+        register_fn(sources=sources, loaders=loaders)
 
 
 _register_builtin_sources()

@@ -200,6 +200,83 @@ def test_unknown_loader_require_raises():
 
 
 # ===========================================================================
+# Paired registration is ATOMIC (codex slice-2 🟡 #1)
+# ===========================================================================
+
+
+def test_register_rolls_back_loader_when_descriptor_step_fails():
+    """If the descriptor-side step raises AFTER the
+    loader-side step succeeded, the loader insert is rolled
+    back — NEITHER side is left registered (no permanent
+    split-brain)."""
+
+    class _BoomSources:
+        # lookup() -> None so the dup pre-check passes and
+        # we actually reach step 2; register() blows up
+        # AFTER loaders.register(loader) has run.
+        def lookup(self, key):
+            return None
+
+        def register(self, descriptor):
+            raise RuntimeError("descriptor step boom")
+
+    loaders = SourceLoaderRegistry()
+    with pytest.raises(RuntimeError, match="descriptor step boom"):
+        register_source_loader(
+            literal_source, sources=_BoomSources(), loaders=loaders
+        )
+
+    # Step 1 rolled back: loader registry is empty.
+    assert SOURCE_LITERAL_ID not in loaders
+    assert len(loaders) == 0
+
+
+# ===========================================================================
+# Import-hook split-brain detection (codex slice-2 🟡 #2)
+# ===========================================================================
+
+
+def _builtin_hook():
+    import app.v2.sources as src
+
+    return src._register_builtin_sources
+
+
+def test_register_builtins_both_absent_registers_paired():
+    sources = SourceRegistry()
+    loaders = SourceLoaderRegistry()
+    _builtin_hook()(sources=sources, loaders=loaders)
+    assert sources.lookup(SOURCE_LITERAL_ID) is not None
+    assert SOURCE_LITERAL_ID in loaders
+
+
+def test_register_builtins_both_present_is_idempotent():
+    sources = SourceRegistry()
+    loaders = SourceLoaderRegistry()
+    hook = _builtin_hook()
+    hook(sources=sources, loaders=loaders)
+    # Second call against the now-paired registries — no raise.
+    hook(sources=sources, loaders=loaders)
+    assert SOURCE_LITERAL_ID in loaders
+
+
+def test_register_builtins_descriptor_only_half_state_raises():
+    sources = SourceRegistry()
+    loaders = SourceLoaderRegistry()
+    sources.register(literal_source.descriptor)  # descriptor ONLY
+    with pytest.raises(RuntimeError, match="split-brain"):
+        _builtin_hook()(sources=sources, loaders=loaders)
+
+
+def test_register_builtins_loader_only_half_state_raises():
+    sources = SourceRegistry()
+    loaders = SourceLoaderRegistry()
+    loaders.register(literal_source)  # loader ONLY
+    with pytest.raises(RuntimeError, match="split-brain"):
+        _builtin_hook()(sources=sources, loaders=loaders)
+
+
+# ===========================================================================
 # Production singletons — registered on package import, idempotent
 # ===========================================================================
 
