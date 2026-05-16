@@ -305,6 +305,35 @@ finalises)
    pins green; the deliver-then-crash-before-commit
    at-least-once residual window pinned (no marker ⇒ a
    retry re-delivers — the inherent boundary, NOT a bug).
+   **LANDED** (fork verdict Q-A=(a) / Q-B; §9.1). EmitStep-
+   keyed (§6.4) on the source `source_post` step only —
+   OneOff is OUT by construction (no EmitStep, no §6.4 key;
+   A.1/A.2). `_dispatch_emit_branch` → `tuple[str,
+   Optional[Event]]`: pre-emit `compute_idempotency_key` +
+   `prior_emit_succeeded` (source-driven block only) ⇒ a
+   durable prior keyed hit returns
+   `("succeeded_idempotent_skip", emit_skipped_idempotent)`
+   with NO adapter call / NO resolve; a real delivery returns
+   `("succeeded", keyed emit_succeeded)`; skip_unchanged →
+   `("succeeded_skipped", None)` (phase-11 path UNCHANGED, no
+   marker); OneOff → `("succeeded", None)`. New
+   `_commit_success_atomic` (B.1 structural mirror of
+   `_commit_failure_atomic`) writes the optional marker + the
+   running→succeeded UPDATE + `RUN_SUCCEEDED` in ONE
+   `transaction(conn)`; the universal terminal-success path
+   reroutes through it (`emit_marker_event=None` ⇒
+   byte-behaviour-identical, B.2). Storage byte-untouched
+   (B.4 — `update_run_status_and_append_event` NOT modified;
+   emit/sources/cache/resolver/ddl empty-diff vs
+   `v2-phase-13-complete`). Coupled-test reconcile (NOT a
+   mask): the direct-`_dispatch_emit_branch` assertions in
+   `test_runtime_worker_emit_branch.py` /
+   `test_runtime_source_fire.py` unpack the new tuple
+   (`outcome, _marker = await …`) — behaviour byte-identical,
+   only the return shape changed (ratified Q-B). New
+   `test_idempotency_worker_dedup.py` (B.3 matrix +
+   `_commit_success_atomic` both-or-neither B.1/B.6 + the
+   structural A.2 pin).
 3. **`paused_pending_policy`** — enum + optional hash-stable
    ScheduleSpec field (hash-stability regression pin) +
    `schedule_pause` honours it (reuse the archive
@@ -416,7 +445,17 @@ protocol in Worker._dispatch_emit_branch (the emit ADAPTERS
 slack_reminder.py / source_post.py + sources/cache/resolver
 are BYTE-UNTOUCHED — dedup is a worker-branch concern; the
 phases-9–13 emit-byte-untouched invariant holds):
-- READ (pre-emit): compute the §6.4 key
+SCOPE (A.1, honest — NOT all emits are deduped): the §6.4
+key is EmitStep-keyed, so dedup covers ONLY the source-driven
+ExecutionPlan's source_post EmitStep. OneOff is template-emit
+with no EmitStep ⇒ no §6.4 key ⇒ OUT of emit-dedup by
+construction (a OneOff fire computes no key, consults no
+prior marker, writes no keyed marker — the
+emit_marker_event=None path, behaviour-identical to
+pre-phase-14; its retry/recovery at-most-once is the
+recovery/claim concern, not step-14). A OneOff sentinel key
+is a deferred separate design question, NOT shipped.
+- READ (pre-emit, source path only): compute the §6.4 key
   (compute_idempotency_key = schedule_id:root_run_id:emit_id,
   phase-1 helper); prior_emit_succeeded queries the ledger
   for a prior emit_succeeded whose payload CARRIES THIS KEY
@@ -513,6 +552,67 @@ not re-litigated.
   (`cancel_pending_runs=(policy == cancel_pending)`), NOT a
   new worker/wakeup branch (the `lifecycle.py` pause path +
   the archive seam verified shipped).
+
+### 9.1 Slice-2 fork verdict (CLOSED — Q-A=(a) + Q-B; both premises code-verified)
+
+Slice-2 surfaced two genuinely-open points; the CONDUCTOR/
+claude-reviewer fork verdict decided both (folded into the
+slice-2 commit per the phase-11 §0.3 / phase-12 §0.2 /
+phase-13 disposition discipline). Baked verbatim:
+
+- **Q-A = (a) RATIFIED — OneOff OUT of emit-dedup.** §6.4 is
+  canonical scope, EmitStep-keyed; OneOff (template-emit, no
+  EmitStep) has no §6.4 key. Sentinel (b) = an unrequested
+  key-model invention beyond §6.4, forbidden without design
+  ratification, a DEFERRED separate question, NOT shipped.
+  **A.1:** §0.1/§1/§9 + the §8 tag-annotation + the closeout
+  §6.4 design reconciliation scope it explicitly — dedup is
+  EmitStep-keyed (§6.4); OneOff OUT by construction (no
+  EmitStep, no §6.4 key); its retry/recovery at-most-once is
+  the recovery/claim path concern, NOT step-14; the OneOff
+  sentinel key is a deferred separate design Q, NOT shipped.
+  Honest-scope (phase-9–13 over-claim lesson): NO §1/§7/§8
+  wording may imply ALL emits are deduped — only
+  source/EmitStep emits. **A.2:** a OneOff fire computes NO
+  key, does NOT consult `prior_emit_succeeded`, writes NO
+  keyed marker — the `emit_marker_event=None` path,
+  behaviour-identical to pre-phase-14 (regression-pinned by
+  the unmodified+green phase-9 OneOff suite + the slice-2
+  structural A.2 pin).
+- **Q-B = mechanism APPROVED — `_commit_success_atomic`
+  mirror + universal-terminal-success reroute.** B.1
+  structural mirror of `_commit_failure_atomic` (ONE
+  `transaction(conn)` = optional `emit_marker_event` + the
+  running→succeeded `runs` UPDATE + the `RUN_SUCCEEDED`
+  event; both-or-neither; the round-3-hardened
+  `rowcount == 0` → rollback guard carried VERBATIM; any
+  raise rolls back EVERY write). B.2 `emit_marker_event=None`
+  BYTE-BEHAVIOUR-IDENTICAL (OneOff / `succeeded_skipped` /
+  no-source / empty-body: same single `RUN_SUCCEEDED` incl.
+  the unchanged phase-11 `RunSucceededPayload.skipped_unchanged`
+  discriminator, one `assert_legal_transition(RUNNING,
+  SUCCEEDED)` at the same caller placement, one transaction,
+  same rowcount guard; phase-9 OneOff + phase-11
+  succeeded_skipped/skip_unchanged + slice-6
+  `RunSucceededPayload` pins UNMODIFIED + green). B.3 three
+  success sub-states distinct + pinned (real source delivery
+  → `RUN_SUCCEEDED` + keyed `emit_succeeded`; dedup-skip →
+  `RUN_SUCCEEDED` + `emit_skipped_idempotent`, NO adapter
+  call; phase-11 skip_unchanged → `RUN_SUCCEEDED` +
+  `RunSucceededPayload.skipped_unchanged=True`, NO keyed
+  marker; OneOff → `RUN_SUCCEEDED` only). B.4 storage
+  byte-untouched (`_commit_success_atomic` open-codes
+  `transaction(conn)`+`append_event`; does NOT modify
+  `update_run_status_and_append_event` — verified empty-diff;
+  emit adapters byte-untouched). B.5 NO new EventKind / no
+  v002. B.6 the keyed `emit_succeeded` write is in the SAME
+  `_commit_success_atomic` transaction as `RUN_SUCCEEDED`,
+  durable iff the run terminal-commits; the
+  deliver-then-crash-before-this-commit window = the inherent
+  at-least-once boundary (pinned; NO exactly-once /
+  no-double-deliver claim — R2 honest-window discipline).
+  CONTRACTS_V2_DESIGN.md §6.4/§7 amendment stays for the ONE
+  closeout reconciliation pass, NOT slice 2.
 
 ## 10. Hard rules (carried forward from phases 9–13)
 

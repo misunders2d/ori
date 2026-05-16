@@ -76,12 +76,19 @@ from app.v2.emit.slack_reminder import (
     SlackProtocol,
     emit_reminder_to_slack,
 )
-from app.v2.emit.source_post import emit_source_to_slack
+from app.v2.emit.source_post import (
+    SOURCE_POST_ADAPTER,
+    emit_source_to_slack,
+)
 from app.v2.enums import (
     EventKind,
     FailureActionType,
     RunStatus,
     ScheduleStatus,
+)
+from app.v2.idempotency import (
+    compute_idempotency_key,
+    prior_emit_succeeded,
 )
 from app.v2.models.event import Event, RunSucceededPayload
 from app.v2.models.schedule import ScheduleSpec
@@ -413,10 +420,17 @@ class Worker:
         # discriminator. No second event, no second
         # transaction, no bypass of assert_legal_transition.
         skipped_unchanged = False
+        # Phase-14 slice 2: the optional keyed emit-marker
+        # (emit_succeeded for a real source delivery, OR
+        # emit_skipped_idempotent for a dedup-skip). None for
+        # OneOff / skip_unchanged / no-source / empty-body —
+        # the BYTE-BEHAVIOUR-IDENTICAL path (B.2).
+        emit_marker_event: Optional[Event] = None
         if self._slack_client is not None:
-            branch_outcome = await self._dispatch_emit_branch(
-                conn, run
-            )
+            (
+                branch_outcome,
+                emit_marker_event,
+            ) = await self._dispatch_emit_branch(conn, run)
             if branch_outcome == "failed":
                 # ``_dispatch_emit_branch`` / the slice-2
                 # shared atomic core already wrote the
@@ -427,39 +441,50 @@ class Worker:
             elif branch_outcome in (
                 "succeeded",
                 "succeeded_skipped",
+                "succeeded_idempotent_skip",
             ):
-                # EXPLICIT allowlist (slice-6 🔵): only
-                # these two outcomes fall through to the ONE
-                # running → succeeded write. "succeeded" is a
-                # real delivery; "succeeded_skipped" is a
-                # skip_unchanged no-op — only the payload
-                # discriminator differs.
+                # EXPLICIT allowlist (slice-6 🔵, extended
+                # phase-14 slice 2): only these outcomes fall
+                # through to the ONE running → succeeded
+                # write. "succeeded" = real delivery (+ a
+                # keyed emit_succeeded marker for the source
+                # path); "succeeded_skipped" = phase-11
+                # skip_unchanged no-op (no marker, payload
+                # discriminator only); "succeeded_idempotent_skip"
+                # = a DURABLE prior keyed success was found
+                # pre-emit (the adapter was NOT called; the
+                # emit_skipped_idempotent marker rides the
+                # terminal TX). The marker (when not None) is
+                # threaded into _commit_success_atomic.
                 skipped_unchanged = (
                     branch_outcome == "succeeded_skipped"
                 )
             else:
                 # Defensive else (slice-6 🔵).
-                # ``_dispatch_emit_branch`` is typed to
-                # return EXACTLY one of "failed" /
-                # "succeeded" / "succeeded_skipped". An
-                # unrecognised value must NEVER fall through
-                # to the running → succeeded write below: a
+                # ``_dispatch_emit_branch`` returns EXACTLY
+                # one of "failed" / "succeeded" /
+                # "succeeded_skipped" / "succeeded_idempotent_skip".
+                # An unrecognised value must NEVER fall
+                # through to the running → succeeded write: a
                 # spurious RUN_SUCCEEDED on an unhandled
                 # outcome would silently mark a Run that
                 # never delivered as successful. Fail the
                 # Run with a distinct reason so a future
                 # regression is loud in the ledger, not
-                # invisible.
+                # invisible. (Drop any marker — never thread
+                # it onto a defensive fail.)
+                emit_marker_event = None
                 await self._fail_run(
                     conn=conn,
                     run=run,
                     reason="worker_unexpected_branch_outcome",
                     error_message=(
                         f"_dispatch_emit_branch returned "
-                        f"{branch_outcome!r}; expected one "
-                        f"of 'failed' / 'succeeded' / "
-                        f"'succeeded_skipped'. Failing the "
-                        f"Run defensively rather than "
+                        f"{branch_outcome!r}; expected one of "
+                        f"'failed' / 'succeeded' / "
+                        f"'succeeded_skipped' / "
+                        f"'succeeded_idempotent_skip'. Failing "
+                        f"the Run defensively rather than "
                         f"emitting a spurious RUN_SUCCEEDED."
                     ),
                 )
@@ -493,12 +518,12 @@ class Worker:
             ).model_dump(),
             correlates=None,
         )
-        update_run_status_and_append_event(
-            conn,
-            run_id=run.id,
-            new_status=RunStatus.SUCCEEDED,
-            event=succeeded_event,
-            extra_columns={"completed_at": completed_at},
+        await self._commit_success_atomic(
+            conn=conn,
+            run=run,
+            completed_at=completed_at,
+            run_succeeded_event=succeeded_event,
+            emit_marker_event=emit_marker_event,
         )
         return run.id
 
@@ -506,7 +531,7 @@ class Worker:
         self,
         conn: sqlite3.Connection,
         run,
-    ) -> str:
+    ) -> tuple[str, Optional[Event]]:
         """OneOff + LIVE source-driven emit dispatch
         (§12 step 11A).
 
@@ -516,12 +541,29 @@ class Worker:
         with ``execution_plan_hash`` set is loaded,
         resolved per source input, and emitted.
 
-        Returns ``"succeeded"`` when the emit fires
-        successfully — caller proceeds with the existing
-        ``running → succeeded`` transition. Returns
-        ``"failed"`` when the branch already wrote a
-        ``run_failed`` event + the ``running → failed``
-        transition — caller returns early.
+        Returns ``(outcome, emit_marker_event)`` (phase-14
+        slice 2):
+
+        - ``("failed", None)`` — the branch already wrote a
+          ``run_failed`` event + the ``running → failed``
+          transition; caller returns early.
+        - ``("succeeded", emit_succeeded_event | None)`` — a
+          real delivery. The source path returns the keyed
+          ``emit_succeeded`` marker Event (§6.4 idempotency
+          — EmitStep-keyed); OneOff returns ``None`` (no
+          EmitStep ⇒ no §6.4 key, OUT of emit-dedup by
+          construction — A.1).
+        - ``("succeeded_skipped", None)`` — phase-11
+          skip_unchanged no-op; UNCHANGED, no keyed marker.
+        - ``("succeeded_idempotent_skip", emit_skipped_idempotent_event)``
+          — a DURABLE prior keyed ``emit_succeeded`` was
+          found pre-emit; the adapter was NOT called; the
+          dedup-skip marker rides the terminal TX.
+
+        The caller writes ``emit_marker_event`` (when not
+        ``None``) ATOMIC with ``RUN_SUCCEEDED`` in the
+        run-terminal transaction (:meth:`_commit_success_atomic`,
+        Q-B / B.6) — durable iff the run terminal-commits.
 
         **Raise vs _fail_run (phase-11 plan §3.1 / Q4).**
         A :class:`UnsupportedSpecError` is raised STRICTLY
@@ -630,7 +672,7 @@ class Worker:
                     "hook should have cancelled pending Runs)"
                 ),
             )
-            return "failed"
+            return "failed", None
 
         # ---- §12 step 11A: LIVE source-driven fire path
         # (docs/PHASE_11_PLAN.md §3.1;
@@ -675,7 +717,7 @@ class Worker:
                         f"claim time: {exc}"
                     ),
                 )
-                return "failed"
+                return "failed", None
 
             if plan is None:
                 await self._fail_run(
@@ -689,7 +731,7 @@ class Worker:
                         f"no execution_plans row at claim time"
                     ),
                 )
-                return "failed"
+                return "failed", None
 
             if plan.reasoning:
                 # Step-12 boundary (plan §1.1 / §3.1 / Q4).
@@ -718,7 +760,7 @@ class Worker:
                         f"is cleanly failed here"
                     ),
                 )
-                return "failed"
+                return "failed", None
 
             # SEAM (phase-13 slice-2): a future DETERMINISTIC
             # state-loader for a stateful series would, around
@@ -745,6 +787,64 @@ class Worker:
             # Q5: the resolver/cache OWNS the per-fire
             # snapshot write. The worker NEVER calls
             # ``write_snapshot`` / ``_newest_materialised_snapshot``.
+
+            # ---- Phase 14 slice 2: emit idempotency — the
+            # READ side (§12 step 14, §6.4; reviewer fork
+            # Q-A=(a)/Q-B). The §6.4 key is EmitStep-keyed
+            # (schedule_id:root_run_id:emit_id) — it exists
+            # ONLY for the source-driven ExecutionPlan's
+            # ``source_post`` EmitStep. (OneOff is template-
+            # emit with no EmitStep ⇒ NO §6.4 key, OUT of
+            # emit-dedup by construction — A.1; its
+            # retry/recovery at-most-once is the recovery/
+            # claim concern, NOT step-14.) Pre-emit (before
+            # resolve + adapter): if the ledger already holds
+            # a DURABLE keyed ``emit_succeeded`` for this
+            # exact key, a retry/recovery re-run must NOT
+            # re-deliver — skip the adapter entirely and
+            # record ``emit_skipped_idempotent`` (a SUCCESS,
+            # distinct from phase-11 skip_unchanged). This
+            # protects a retry AFTER a durable success; the
+            # deliver-then-crash-before-the-terminal-commit
+            # window is the inherent at-least-once boundary
+            # (B.6 — NOT exactly-once). NO SQL here (the read
+            # is the slice-1 ``prior_emit_succeeded``).
+            _src_emit_step = next(
+                (
+                    e
+                    for e in plan.emit
+                    if e.adapter == SOURCE_POST_ADAPTER
+                ),
+                None,
+            )
+            idem_key: Optional[str] = None
+            if _src_emit_step is not None:
+                idem_key = compute_idempotency_key(
+                    schedule_id=spec.id,
+                    root_run_id=run.root_run_id,
+                    emit_id=_src_emit_step.id,
+                )
+                if prior_emit_succeeded(
+                    conn, idempotency_key=idem_key
+                ):
+                    skip_event = Event(
+                        id=self._event_id_factory(),
+                        run_id=run.id,
+                        schedule_id=run.schedule_id,
+                        ts=self._clock(),
+                        kind=EventKind.EMIT_SKIPPED_IDEMPOTENT,
+                        payload={
+                            "worker_id": self._worker_id,
+                            "idempotency_key": idem_key,
+                            "reason": "prior_emit_succeeded",
+                        },
+                        correlates=None,
+                    )
+                    # Dedup-skip IS a success. The keyed
+                    # marker rides the terminal TX (Q-B) — no
+                    # adapter call, no resolve.
+                    return "succeeded_idempotent_skip", skip_event
+
             resolved: dict[str, ResolveOutcome] = {}
             for inp in plan.inputs:
                 if inp.source_ref is None:
@@ -792,7 +892,7 @@ class Worker:
                             f"{outcome.fallback_eligible!r})"
                         ),
                     )
-                    return "failed"
+                    return "failed", None
                 # RESOLVED or DRIFT(alert_on_shape_change):
                 # the resolver served content (DRIFT already
                 # emitted SOURCE_DRIFT_DETECTED and STILL
@@ -832,11 +932,37 @@ class Worker:
                 clock=self._clock,
             )
             if result.ok:
-                return (
-                    "succeeded_skipped"
-                    if result.skipped_unchanged
-                    else "succeeded"
-                )
+                if result.skipped_unchanged:
+                    # Phase-11 skip_unchanged no-op: UNCHANGED
+                    # — no Slack post happened, so NO keyed
+                    # emit_succeeded marker (a marker would
+                    # wrongly dedup future re-evaluations).
+                    # Rides the existing RunSucceededPayload.
+                    # skipped_unchanged path; no marker.
+                    return "succeeded_skipped", None
+                # REAL delivery → write the keyed
+                # ``emit_succeeded`` marker (Phase 14 slice 2
+                # WRITE side). Carried to the caller so it is
+                # committed ATOMIC in the run-terminal TX
+                # (Q-B / B.6) — durable iff the run
+                # terminal-commits. ``idem_key`` is set
+                # whenever a ``source_post`` EmitStep exists
+                # (the only §6.4-keyed source emit).
+                emit_marker = None
+                if idem_key is not None:
+                    emit_marker = Event(
+                        id=self._event_id_factory(),
+                        run_id=run.id,
+                        schedule_id=run.schedule_id,
+                        ts=self._clock(),
+                        kind=EventKind.EMIT_SUCCEEDED,
+                        payload={
+                            "worker_id": self._worker_id,
+                            "idempotency_key": idem_key,
+                        },
+                        correlates=None,
+                    )
+                return "succeeded", emit_marker
             await self._route_source_failure_policy(
                 conn=conn,
                 run=run,
@@ -844,7 +970,7 @@ class Worker:
                 reason="source_emit_failed",
                 error_text=result.error or "",
             )
-            return "failed"
+            return "failed", None
 
         if spec.template is None:
             raise UnsupportedSpecError(
@@ -870,7 +996,7 @@ class Worker:
                     f"execution_plan_hash)"
                 ),
             )
-            return "failed"
+            return "failed", None
 
         # OneOffReminder emit branch.
         result = await emit_reminder_to_slack(
@@ -879,7 +1005,13 @@ class Worker:
             clock=self._clock,
         )
         if result.ok:
-            return "succeeded"
+            # OneOff is template-emit: NO EmitStep, NO §6.4
+            # key, OUT of emit-dedup by construction (A.1/A.2).
+            # NO key computed, prior_emit_succeeded NOT
+            # consulted, NO keyed marker — the
+            # emit_marker_event=None path, behaviour-identical
+            # to pre-phase-14.
+            return "succeeded", None
 
         await self._route_failure_policy(
             conn=conn,
@@ -887,7 +1019,7 @@ class Worker:
             spec=spec,
             result=result,
         )
-        return "failed"
+        return "failed", None
 
     async def _fail_run(
         self,
@@ -1121,6 +1253,70 @@ class Worker:
                     "back the failure + admin-alert events"
                 )
             append_event(conn, run_failed_event)
+
+    async def _commit_success_atomic(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        run,
+        completed_at: datetime,
+        run_succeeded_event: Event,
+        emit_marker_event: Optional[Event],
+    ) -> None:
+        """The success-side twin of :meth:`_commit_failure_atomic`
+        (phase-14 slice 2, Q-B / B.1). Writes the optional
+        emit-marker event + the ``running → succeeded`` Run
+        UPDATE + the ``run_succeeded`` event inside ONE
+        explicit ``transaction(conn)`` block. Any raise rolls
+        back EVERY write — the keyed marker is durable IFF the
+        run terminal-commits (no orphan key, no missing key).
+
+        **``emit_marker_event=None`` is BYTE-BEHAVIOUR-IDENTICAL
+        to the pre-phase-14 terminal write (B.2):** OneOff /
+        phase-11 ``succeeded_skipped`` (skip_unchanged) /
+        no-source / empty-body all pass ``None`` ⇒ exactly one
+        ``run_succeeded`` event (carrying the unchanged
+        phase-11 slice-6 ``RunSucceededPayload`` discriminator)
+        + the same single ``runs`` UPDATE in one transaction,
+        same rowcount guard. The caller still does the ONE
+        ``assert_legal_transition(RUNNING, SUCCEEDED)`` at the
+        same placement (this helper, like
+        :meth:`_commit_failure_atomic`, does NOT call it).
+
+        ``emit_marker_event`` is the keyed ``emit_succeeded``
+        (a real source delivery) OR the ``emit_skipped_idempotent``
+        (a dedup-skip) — written BEFORE the UPDATE, mirroring
+        the failure core's event/UPDATE/guard/terminal-event
+        order. The phase-3 ``update_run_status_and_append_event``
+        storage helper is NOT modified (the failure core did
+        not either — B.4); this open-codes the same
+        ``transaction(conn)`` + ``append_event`` primitives."""
+        with transaction(conn):
+            if emit_marker_event is not None:
+                append_event(conn, emit_marker_event)
+            cursor = conn.execute(
+                "UPDATE runs SET status = ?, completed_at = ? "
+                "WHERE id = ?",
+                (
+                    RunStatus.SUCCEEDED.value,
+                    completed_at.astimezone(timezone.utc).isoformat(),
+                    run.id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                # Defensive (carried VERBATIM from
+                # _commit_failure_atomic — B.1): the run row
+                # should exist (caller saw it transition to
+                # RUNNING). If it vanished, raise so the
+                # transaction rolls back the emit-marker we
+                # just inserted. Recovery picks up from
+                # RUNNING.
+                raise RuntimeError(
+                    f"_commit_success_atomic: runs row "
+                    f"{run.id!r} vanished mid-TX; rolling "
+                    "back the emit-marker event"
+                )
+            append_event(conn, run_succeeded_event)
 
     async def _route_failure_policy(
         self,

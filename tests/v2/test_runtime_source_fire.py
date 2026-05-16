@@ -411,7 +411,9 @@ async def test_source_whole_resolve_then_emit_dispatch_succeeds(
 
     conn = factory()
     try:
-        outcome = await worker._dispatch_emit_branch(conn, run)
+        outcome, _marker = await worker._dispatch_emit_branch(
+            conn, run
+        )
     finally:
         conn.close()
 
@@ -478,7 +480,9 @@ async def test_source_emit_failure_routes_source_failure_policy(
 
     conn = factory()
     try:
-        outcome = await worker._dispatch_emit_branch(conn, run)
+        outcome, _marker = await worker._dispatch_emit_branch(
+            conn, run
+        )
     finally:
         conn.close()
 
@@ -510,7 +514,9 @@ async def test_execution_plan_missing_at_claim(tmp_path):
 
     conn = factory()
     try:
-        outcome = await worker._dispatch_emit_branch(conn, run)
+        outcome, _marker = await worker._dispatch_emit_branch(
+            conn, run
+        )
     finally:
         conn.close()
 
@@ -535,7 +541,9 @@ async def test_execution_plan_invalid_body_at_claim(tmp_path):
 
     conn = factory()
     try:
-        outcome = await worker._dispatch_emit_branch(conn, run)
+        outcome, _marker = await worker._dispatch_emit_branch(
+            conn, run
+        )
     finally:
         conn.close()
 
@@ -557,7 +565,9 @@ async def test_reasoning_bearing_plan_fail_run_not_raise(tmp_path):
     conn = factory()
     try:
         # Must NOT raise.
-        outcome = await worker._dispatch_emit_branch(conn, run)
+        outcome, _marker = await worker._dispatch_emit_branch(
+            conn, run
+        )
     finally:
         conn.close()
 
@@ -882,7 +892,9 @@ async def test_source_resolve_failed_routes_source_failure_policy(
 
     conn = factory()
     try:
-        outcome = await worker._dispatch_emit_branch(conn, run)
+        outcome, _marker = await worker._dispatch_emit_branch(
+            conn, run
+        )
     finally:
         conn.close()
 

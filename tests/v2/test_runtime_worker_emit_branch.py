@@ -380,7 +380,9 @@ async def _dispatch_against_spec_status(
     )
     conn = factory()
     try:
-        outcome = await worker._dispatch_emit_branch(conn, run)
+        outcome, _marker = await worker._dispatch_emit_branch(
+            conn, run
+        )
         conn.commit()
     finally:
         conn.close()
@@ -459,7 +461,9 @@ async def test_template_name_drift_run_failed(tmp_path):
     )
     conn = factory()
     try:
-        outcome = await worker._dispatch_emit_branch(conn, run)
+        outcome, _marker = await worker._dispatch_emit_branch(
+            conn, run
+        )
         conn.commit()
     finally:
         conn.close()
@@ -815,7 +819,9 @@ async def test_execution_plan_hash_set_invalid_body_fail_run(tmp_path):
     conn = factory()
     try:
         # MUST NOT raise.
-        outcome = await worker._dispatch_emit_branch(conn, run)
+        outcome, _marker = await worker._dispatch_emit_branch(
+            conn, run
+        )
     finally:
         conn.close()
 
