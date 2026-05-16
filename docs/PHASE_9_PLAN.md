@@ -1136,12 +1136,20 @@ Cross-cutting smoke checks (carry-forward):
    the documented (channel, text) and surfaces a
    typed `SlackPostResult`.
 6. Worker emit branch fetches the spec via
-   `get_schedule(conn, run.schedule_id)` (L201 fix);
-   handles `None` / archived / paused / template-name
-   drift each with a documented `run_failed` reason
-   code; happy path writes `run_succeeded`;
-   FailurePolicy routing pinned for `alert_admin` +
-   `abort_silent`.
+   `get_schedule(conn, run.schedule_id)` (L201 fix).
+   The `None` (deleted-schedule) case is the
+   FK-constrained outlier: it RAISES
+   `UnsupportedSpecError(schedule_not_found_at_claim)`
+   and leaves the Run RUNNING for recovery — NO
+   `run_failed` event (the `events.schedule_id` FK
+   would reject the row, schedule deleted). The
+   archived / paused / template-name-drift cases
+   (schedule row still exists) each write a documented
+   `run_failed` reason code
+   (`schedule_inactive_at_claim` /
+   `schedule_template_changed_at_claim`). Happy path
+   writes `run_succeeded`; FailurePolicy routing
+   pinned for `alert_admin` + `abort_silent`.
 7. `_owner_default` env fallback works; explicit
    kwarg wins; both-None raises `RuntimeError` at
    startup.
@@ -1227,9 +1235,17 @@ sqlite:///data/scheduler-v2-jobs.db (round-1 reviewer
 Q9).
 
 Worker fetches ScheduleSpec via get_schedule(conn,
-run.schedule_id) before emitting; missing / archived /
-paused / template-name-drift each surface a documented
-run_failed reason (round-1 reviewer L201 fix).
+run.schedule_id) before emitting (round-1 reviewer
+L201 fix). The missing (deleted) schedule case raises
+UnsupportedSpecError(schedule_not_found_at_claim) with
+NO run_failed event — the events.schedule_id FK
+rejects the row because the schedule is deleted — and
+leaves the Run RUNNING for recovery. The archived /
+paused / template-name-drift cases (schedule row still
+present) each surface a documented run_failed reason
+(archived & paused → run_failed(
+schedule_inactive_at_claim); drift → run_failed(
+schedule_template_changed_at_claim)).
 
 The schedule_create_reminder ADK tool exposes ONLY
 (at, recipient_channel, text) to the LLM via a
