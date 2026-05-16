@@ -276,6 +276,25 @@ finalises)
    reimpl; matches `emit_succeeded` kind AND
    payload-carries-the-key) + unit tests + hygiene
    assertion.
+   **LANDED** — `app/v2/idempotency.py` EXTEND-ONLY:
+   `prior_emit_succeeded(conn, *, idempotency_key) -> bool`
+   delegates to the SHIPPED
+   `storage/events.py::get_last_emit_succeeded` (`kind =
+   'emit_succeeded' AND json_extract(payload_json,
+   '$.idempotency_key') = ?`) — NO SQL re-implemented, pure
+   READ, no mutation. Collision-safe (test-pinned): an
+   `emit_failed` / `run_succeeded` carrying the same key, OR
+   an `emit_succeeded` carrying a DIFFERENT key, NEVER
+   matches — only the exact (kind, key) pair. `compute_idempotency_key`
+   BYTE-UNCHANGED (extend-only — diff has zero deletions).
+   `tests/v2/test_idempotency_dedup.py` (True/False/
+   distinct-never-match/kind-collision-safe/pure-no-mutation)
+   + a FOLDED alias-robust import-hygiene assertion for
+   `app.v2.idempotency` (no new module ⇒ folded here per the
+   slice-1 hard-check, not a new phase-14 hygiene file).
+   ZERO cross-phase touch: `emit/`, `sources/`, `worker.py`,
+   `storage/`, `ddl/` EMPTY diff vs `v2-phase-13-complete`.
+   `PHASE_ALLOWLIST[14]` unchanged (no new surface path).
 2. **LIVE worker read-AND-write dedup** — (READ) additive
    pre-emit check in `_dispatch_emit_branch`,
    `emit_skipped_idempotent` on a durable prior keyed hit;
