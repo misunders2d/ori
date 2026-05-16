@@ -50,11 +50,21 @@ transitions.
   a no-op for already-pending Runs (the
   `paused_pending_policy` was explicitly DEFERRED — see
   `runtime/lifecycle.py` "later phase").
+- **The worker writes NO `emit_succeeded` today.** The
+  success path returns `"succeeded"` from
+  `_dispatch_emit_branch`; `_tick_with_conn` writes ONE
+  `RUN_SUCCEEDED` event in the running→succeeded
+  `update_run_status_and_append_event` terminal transaction.
+  `EMIT_SUCCEEDED` is in the enum + v001 DDL CHECK but is
+  NOT emitted anywhere. So dedup is **read-AND-write**: the
+  keyed marker must also be WRITTEN, or the pre-check has
+  nothing to find (vacuous) — see §0.1 Q1 / the round-1 🟡.
 - **Missing (= phase-14 deliverable):** (i) the emit
-  idempotency DEDUP (ledger pre-check + `emit_skipped_idempotent`),
-  (ii) the `paused_pending_policy` enum + ScheduleSpec field +
-  pause enforcement, (iii) pause(`cancel_pending`)
-  cancellation parity with archive.
+  idempotency DEDUP — both the post-success keyed
+  `emit_succeeded` WRITE and the pre-emit READ +
+  `emit_skipped_idempotent`, (ii) the `paused_pending_policy`
+  enum + ScheduleSpec field + pause enforcement, (iii)
+  pause(`cancel_pending`) cancellation parity with archive.
 
 ### 0.1 Open design questions for round 1
 
@@ -62,35 +72,57 @@ Each carries a RECOMMENDED disposition (reviewer ratifies or
 overrides — the phase-11/12/13 §0 pattern). Nothing below is
 unilaterally decided.
 
-- **Q1 — idempotency-dedup placement (the central question;
-  interacts with the phases-9–13 "emit adapters
-  byte-untouched" invariant).** A retry/recovery re-run of a
-  logical fire would double-deliver without dedup — unlike
-  phases 12/13 there IS a LIVE consumer (the recovery/retry
-  path), so a build-the-layer-DEAD treatment would leave the
-  documented double-delivery risk unaddressed. Options:
-  - **(a) LIVE pre-emit check in the WORKER emit branch —
-    RECOMMENDED.** A pure dedup-decision helper (extend
-    `idempotency.py`: a ledger-query
-    `prior_emit_succeeded(conn, key) -> bool`) + an ADDITIVE
-    pre-emit check in `Worker._dispatch_emit_branch` BEFORE
-    the adapter call: on a prior-success hit, write
-    `emit_skipped_idempotent` + treat as success, skip the
-    adapter. **The emit ADAPTERS (slack_reminder.py /
-    source_post.py) stay BYTE-UNTOUCHED** — the empty-diff
-    invariant from phases 9–13 holds; dedup is the worker's
-    concern, not the adapter's. Native upstream tokens (Slack
-    `client_msg_id`) are out of scope here (defense-in-depth
-    extra, deferred).
+- **Q1 — idempotency-dedup placement + the FULL read-AND-write
+  protocol (the central question; round-1 🟡; interacts with
+  the phases-9–13 "emit adapters byte-untouched" invariant).**
+  Dedup is a READ-AND-WRITE protocol — specifying only the
+  READ is VACUOUS (nothing writes the keyed marker, so a
+  retry finds nothing) AND would over-claim exactly-once.
+  Phase 14 is the FIRST LIVE consumer, so the full protocol
+  must ship. A retry/recovery re-run would double-deliver
+  without it — unlike phases 12/13 there IS a LIVE consumer,
+  so build-the-layer-DEAD is REJECTED.
+  - **(a) LIVE read-AND-write in the WORKER emit branch —
+    RECOMMENDED (round-1 ratified).** The FULL protocol:
+    1. **READ (pre-emit):** compute the §6.4 key
+       (`compute_idempotency_key`); query the ledger via a
+       pure `prior_emit_succeeded(conn, *, idempotency_key)`
+       for a prior `emit_succeeded` event whose payload
+       CARRIES THIS KEY (not any `emit_succeeded`). Hit ⇒
+       skip the adapter, write `emit_skipped_idempotent`,
+       succeed.
+    2. **WRITE (post-success):** when the adapter delivered,
+       the WORKER BRANCH writes the keyed `emit_succeeded`
+       marker **ATOMIC in the run-terminal transaction**
+       (the same `update_run_status_and_append_event`
+       running→succeeded commit that writes `RUN_SUCCEEDED`)
+       — both-or-neither, so the dedup record is durable iff
+       the run terminal-commits (no orphan / no missing
+       key).
+    3. **HONEST residual window:** ledger dedup eliminates
+       double-delivery for a retry that runs AFTER a DURABLY
+       committed keyed `emit_succeeded`. The
+       deliver-then-crash-BEFORE-the-terminal-commit window
+       is the inherent **at-least-once** boundary (the
+       adapter call is non-transactional external I/O; it is
+       NOT atomic with the marker write) — mitigated only by
+       the DEFERRED native upstream tokens. NOT exactly-once.
+    The emit ADAPTERS (`slack_reminder.py` / `source_post.py`)
+    stay BYTE-UNTOUCHED — both the read and the write are the
+    worker's concern; the phases-9–13 empty-diff invariant
+    holds. Native upstream tokens (Slack `client_msg_id`)
+    out of scope (deferred).
   - (b) dedup inside the emit adapter — BREAKS the
-    emit-byte-untouched invariant; needs an explicit reviewer
-    relaxation (phase-11 §0.3-style).
+    emit-byte-untouched invariant; rejected.
   - (c) build-the-layer DEAD — REJECTED: a live retry
     consumer exists; deferring contradicts step-14's purpose.
-  - *Rationale for (a):* makes dedup LIVE where the risk
-    actually is (retry) while preserving the emit-adapter
-    byte-untouched invariant via an additive worker-branch
-    check.
+  - *Rationale for (a):* makes the FULL dedup protocol LIVE
+    where the risk actually is (retry) while preserving the
+    emit-adapter byte-untouched invariant via an additive
+    worker-branch read + a terminal-TX-atomic write, and
+    states the protected window honestly (no exactly-once
+    over-claim — the phase-9–13 over-claim/stale-wording
+    lesson, written accurately the first time).
 - **Q2 — `paused_pending_policy`.** Add a `PausedPendingPolicy`
   enum (`let_complete` / `cancel_pending`) + an OPTIONAL
   ScheduleSpec field. RECOMMENDED default = **`let_complete`**
@@ -118,9 +150,14 @@ unilaterally decided.
   Q1(a), `slack_reminder.py` / `source_post.py` /
   `sources/` / `cache.py` / `resolver.py` stay EMPTY-diff vs
   `v2-phase-13-complete`; OneOff / v1 / the phase-9–13 fire
-  path are behaviour-unchanged EXCEPT the intended new
-  dedup-skip (which is itself a success path — no
-  double-delivery). Pinned.
+  path are behaviour-unchanged EXCEPT (i) the new
+  post-success keyed `emit_succeeded` marker written atomic
+  in the existing run-terminal TX and (ii) the intended
+  dedup-skip (a retry that finds a durable prior keyed
+  success ⇒ `emit_skipped_idempotent`, itself a success).
+  This protects a retry AFTER a durable success; it is NOT
+  exactly-once (the deliver-then-crash-before-commit window
+  is the inherent at-least-once boundary). Pinned.
 - **Q6 — dedup-decision module placement.** RECOMMENDED:
   extend `app/v2/idempotency.py` (cohesive: the key + the
   ledger dedup-decision together, both pure / DI-conn). NO
@@ -139,15 +176,31 @@ unilaterally decided.
 ### In scope (phase 14), assuming Q1(a) / Q2–Q7 RECOMMENDED
 (reviewer may revise):
 
-1. **Idempotency dedup (LIVE, worker branch).** Pure
-   `prior_emit_succeeded(conn, *, idempotency_key) -> bool`
-   (extend `idempotency.py`; reuses `storage/events.py`,
-   no SQL reimpl). An ADDITIVE pre-emit check in
-   `Worker._dispatch_emit_branch`: compute the key
-   (`compute_idempotency_key`), query the ledger; on a prior
-   `emit_succeeded` hit → write `emit_skipped_idempotent` +
-   succeed WITHOUT calling the adapter. Emit adapters
-   BYTE-UNTOUCHED.
+1. **Idempotency dedup — the FULL read-AND-write protocol
+   (LIVE, worker branch).**
+   - READ: pure `prior_emit_succeeded(conn, *,
+     idempotency_key) -> bool` (extend `idempotency.py`;
+     reuses `storage/events.py`, no SQL reimpl; matches
+     `emit_succeeded` kind AND payload-carries-the-key, not
+     any `emit_succeeded`). ADDITIVE pre-emit check in
+     `Worker._dispatch_emit_branch`: compute the key
+     (`compute_idempotency_key`), query; on a prior keyed
+     hit → write `emit_skipped_idempotent` + succeed WITHOUT
+     calling the adapter.
+   - WRITE: on a real delivery, the worker branch writes the
+     keyed `emit_succeeded` marker ATOMIC in the run-terminal
+     transaction (the running→succeeded
+     `update_run_status_and_append_event` commit) —
+     both-or-neither with `RUN_SUCCEEDED`; durable iff the
+     run terminal-commits (no orphan / no missing key).
+   - PROTECTED-WINDOW scope (honest, not exactly-once):
+     dedup eliminates double-delivery for a retry AFTER a
+     durably committed keyed `emit_succeeded`; the
+     deliver-then-crash-before-terminal-commit window is the
+     inherent at-least-once boundary (deferred upstream
+     tokens are the only mitigation). Emit adapters
+     BYTE-UNTOUCHED (both read and write are the worker's
+     concern).
 2. **`paused_pending_policy`.** New `PausedPendingPolicy`
    enum (`let_complete` / `cancel_pending`) + optional
    ScheduleSpec field (default `let_complete`,
@@ -196,13 +249,21 @@ unilaterally decided.
 
 - `prior_emit_succeeded(conn, *, idempotency_key: str) ->
   bool` — True iff the ledger has an `emit_succeeded` event
-  whose payload carries this key. Pure read.
+  whose payload CARRIES THIS KEY (not any `emit_succeeded`).
+  Pure read, no mutation.
+- Worker WRITE side: on real delivery, append a keyed
+  `emit_succeeded` Event (payload carries `idempotency_key`)
+  ATOMIC in the run-terminal transaction (the same
+  `update_run_status_and_append_event` running→succeeded
+  commit as `RUN_SUCCEEDED`) — both-or-neither.
 - `PausedPendingPolicy(str, Enum)`: `LET_COMPLETE` /
   `CANCEL_PENDING`.
 - `ScheduleSpec.paused_pending_policy: PausedPendingPolicy =
-  LET_COMPLETE` (optional, hash-stable per Q3).
-- Worker pre-emit: compute key → `prior_emit_succeeded` →
-  branch (skip+`emit_skipped_idempotent` vs proceed).
+  LET_COMPLETE` (optional; ELIDED from the `compute_hash`
+  canonical body when unset/default — Q3, no hash drift).
+- Worker pre-emit READ: compute key → `prior_emit_succeeded`
+  → branch (skip+`emit_skipped_idempotent` vs proceed);
+  post-success WRITE the keyed marker in the terminal TX.
 
 ## 4. Slice ordering + commit cadence (draft — reviewer
 finalises)
@@ -210,13 +271,21 @@ finalises)
 0. **plan + phase transition** (this commit; NOT pushed) —
    `docs/PHASE_14_PLAN.md`, `PHASE_ALLOWLIST[14]`,
    `.v2-current-phase`→14. Design doc NOT touched here.
-1. **Idempotency dedup-decision** (pure
-   `prior_emit_succeeded` over `storage/events.py`, no SQL
-   reimpl) + unit tests + hygiene assertion.
-2. **LIVE worker pre-emit dedup** — additive check in
-   `_dispatch_emit_branch`; `emit_skipped_idempotent` on hit;
-   emit adapters BYTE-UNTOUCHED (empty-diff pinned);
-   phase-9–13 fire-path regression pins green.
+1. **Idempotency dedup-decision (READ side)** — pure
+   `prior_emit_succeeded` over `storage/events.py` (no SQL
+   reimpl; matches `emit_succeeded` kind AND
+   payload-carries-the-key) + unit tests + hygiene
+   assertion.
+2. **LIVE worker read-AND-write dedup** — (READ) additive
+   pre-emit check in `_dispatch_emit_branch`,
+   `emit_skipped_idempotent` on a durable prior keyed hit;
+   (WRITE) post-success keyed `emit_succeeded` marker ATOMIC
+   in the run-terminal TX (both-or-neither with
+   `RUN_SUCCEEDED`). Emit adapters BYTE-UNTOUCHED (empty-diff
+   pinned); phase-9–13 fire-path/boundary/seam regression
+   pins green; the deliver-then-crash-before-commit
+   at-least-once residual window pinned (no marker ⇒ a
+   retry re-delivers — the inherent boundary, NOT a bug).
 3. **`paused_pending_policy`** — enum + optional hash-stable
    ScheduleSpec field (hash-stability regression pin) +
    `schedule_pause` honours it (reuse the archive
@@ -233,12 +302,23 @@ finalises)
 ## 5. Test inventory (highlights)
 
 - `test_idempotency_dedup.py` — `prior_emit_succeeded` True
-  iff a prior `emit_succeeded` with the key; False otherwise;
-  pure read, no mutation.
-- worker dedup — first fire delivers; a retry/recovery re-run
-  with the same `root_run_id`+`emit_id` ⇒
-  `emit_skipped_idempotent`, NO second adapter call, run still
-  succeeds; distinct schedules/emit_ids never collide.
+  iff a prior `emit_succeeded` whose payload CARRIES THE KEY
+  (False for an `emit_succeeded` with a different/absent
+  key — NOT any `emit_succeeded`); pure read, no mutation.
+- worker read-AND-write — first fire delivers AND writes the
+  keyed `emit_succeeded` marker ATOMIC with `RUN_SUCCEEDED`
+  in the run-terminal TX; a retry/recovery re-run with the
+  same `root_run_id`+`emit_id` finds it ⇒
+  `emit_skipped_idempotent`, NO second adapter call, run
+  still succeeds; distinct schedules/emit_ids never collide.
+- residual-window pin (honest, not exactly-once): when the
+  terminal TX did NOT commit (deliver-then-crash-before-
+  record), NO keyed marker exists ⇒ a retry re-delivers —
+  the inherent at-least-once boundary, asserted as
+  EXPECTED, not a bug.
+- terminal-TX atomicity pin: the keyed `emit_succeeded` is
+  durable IFF the run terminal-commits (both-or-neither with
+  `RUN_SUCCEEDED` — no orphan marker, no missing key).
 - `test_paused_pending_policy.py` — `let_complete` (default)
   pause leaves pending Runs; `cancel_pending` pause emits
   `run_cancelled` for them (parity with archive); hash
@@ -267,11 +347,21 @@ finalises)
 1. Branch ahead of `v2-phase-13-complete` by N small
    per-slice commits.
 2. `prior_emit_succeeded` True iff a prior `emit_succeeded`
-   event carries the key; pure read.
-3. A retry/recovery re-run of the same logical fire
-   (`root_run_id`+`emit_id` stable) ⇒ `emit_skipped_idempotent`,
-   NO duplicate adapter delivery, run succeeds; distinct
-   keys never collide.
+   event whose payload CARRIES THE KEY (not any
+   `emit_succeeded`); pure read, no mutation.
+3. The FULL protocol: a real delivery WRITES the keyed
+   `emit_succeeded` marker ATOMIC in the run-terminal TX
+   (both-or-neither with `RUN_SUCCEEDED`). A retry/recovery
+   re-run of the same logical fire (`root_run_id`+`emit_id`
+   stable) that finds a DURABLE prior keyed success ⇒
+   `emit_skipped_idempotent`, NO duplicate adapter delivery,
+   run succeeds; distinct keys never collide. This protects
+   a retry AFTER a durable success — it is explicitly NOT
+   exactly-once: the deliver-then-crash-before-terminal-commit
+   window is the inherent at-least-once boundary (pinned as
+   EXPECTED; mitigated only by the deferred upstream
+   tokens). No §1/§7/§8 wording claims exactly-once or
+   unconditional "no double-delivery".
 4. Emit adapters (`slack_reminder.py`/`source_post.py`) +
    `sources/`/`cache.py`/`resolver.py` EMPTY-diff vs
    `v2-phase-13-complete` (dedup is a worker-branch concern).
@@ -302,20 +392,30 @@ finalises)
 v2 phase 14 complete
 
 Emit idempotency + cancellation (§12 step 14). The emit
-idempotency DEDUP is wired LIVE: Worker._dispatch_emit_branch
-computes the §6.4 key
-(compute_idempotency_key = schedule_id:root_run_id:emit_id,
-phase-1 helper) and, BEFORE calling the adapter, queries the
-event ledger via prior_emit_succeeded — on a prior
-emit_succeeded hit it writes emit_skipped_idempotent and
-succeeds WITHOUT re-delivering (a retry/recovery re-run of
-the same logical fire no longer double-delivers). The emit
-ADAPTERS (slack_reminder.py / source_post.py) +
-sources/cache/resolver are BYTE-UNTOUCHED — dedup is a
-worker-branch concern (the phases-9–13 emit-byte-untouched
-invariant holds). No v002 / DDL change:
-emit_skipped_idempotent + run_cancelled + cancelled were
-already in the v001 CHECK.
+idempotency DEDUP is wired LIVE as the FULL read-AND-write
+protocol in Worker._dispatch_emit_branch (the emit ADAPTERS
+slack_reminder.py / source_post.py + sources/cache/resolver
+are BYTE-UNTOUCHED — dedup is a worker-branch concern; the
+phases-9–13 emit-byte-untouched invariant holds):
+- READ (pre-emit): compute the §6.4 key
+  (compute_idempotency_key = schedule_id:root_run_id:emit_id,
+  phase-1 helper); prior_emit_succeeded queries the ledger
+  for a prior emit_succeeded whose payload CARRIES THIS KEY
+  (not any emit_succeeded). A hit ⇒ write
+  emit_skipped_idempotent + succeed WITHOUT calling the
+  adapter.
+- WRITE (post-success): on a real delivery the worker writes
+  the keyed emit_succeeded marker ATOMIC in the run-terminal
+  transaction (both-or-neither with RUN_SUCCEEDED) — durable
+  iff the run terminal-commits (no orphan, no missing key).
+This protects a retry that runs AFTER a DURABLY committed
+keyed emit_succeeded. It is NOT exactly-once: the
+deliver-then-crash-before-the-terminal-commit window is the
+inherent at-least-once boundary (the adapter call is
+non-transactional external I/O, not atomic with the marker);
+the only mitigation is the DEFERRED native upstream tokens.
+No v002 / DDL change: emit_succeeded + emit_skipped_idempotent
++ run_cancelled + cancelled were already in the v001 CHECK.
 
 paused_pending_policy ships: a PausedPendingPolicy enum
 (let_complete / cancel_pending) + an OPTIONAL hash-stable
@@ -332,8 +432,11 @@ read-only-reasoning enforcement, and phase-13 cross-fire
 state seam are byte/behaviour-unchanged; no reasoning /
 stateful-flow executor is shipped (no §12 step owns it).
 OneOff / v1 / the phase-9–13 fire path are
-behaviour-unchanged except the intended dedup-skip (itself a
-success, no double-delivery).
+behaviour-unchanged except (i) the new post-success keyed
+emit_succeeded marker (atomic in the existing run-terminal
+TX) and (ii) the intended dedup-skip of a retry that finds a
+durable prior keyed success — at-least-once with
+post-durable-success dedup, NOT exactly-once.
 
 NOT shipped (deferred): native upstream dedup tokens (Slack
 client_msg_id pass-through); the retry CHAIN scheduler; the
@@ -344,12 +447,53 @@ Design: docs/CONTRACTS_V2_DESIGN.md §12 step 14, §6.4, §7
 Plan:   docs/PHASE_14_PLAN.md
 ```
 
-## 9. claude-reviewer round-1 disposition (OPEN)
+## 9. claude-reviewer round-1 disposition (CLOSED — Q1–Q7 ALL RATIFIED)
 
-Q1–Q7 above await round-1 adjudication. Decisions baked here
-verbatim (the phase-10/11/12/13 disposition-log discipline)
-so a future drift is caught against the decision, not
-re-litigated.
+Round 1 on `b62b35c`: 🟡 HOLD — Q1–Q7 ALL recommended
+dispositions RATIFIED; one HOLD-class 🟡 (the read-AND-write
+protocol + honest residual-window — fixed in this round-2
+revision: §0.1 Q1, §1, §3, §5, §7, §8). No carried items.
+Baked here verbatim (the phase-10/11/12/13 disposition-log
+discipline) so a future drift is caught against the decision,
+not re-litigated.
+
+- **Q1 = (a).** LIVE pre-emit dedup in `_dispatch_emit_branch`
+  (adapters byte-untouched) — correct placement (dedup live
+  where the retry risk is). (b) breaks emit-byte-untouched
+  (rejected); (c) build-the-layer-DEAD correctly REJECTED (a
+  live retry consumer exists — the correct departure from
+  phases 11–13). **CONDITION (the 🟡):** the FULL
+  read-AND-write protocol — pre-emit READ + post-success
+  keyed `emit_succeeded` WRITE atomic in the run-terminal TX;
+  honest protected-window scope (NOT exactly-once).
+- **Q2 = ratified.** `PausedPendingPolicy{let_complete,
+  cancel_pending}`, default `let_complete` (design §7
+  archive-vs-pause asymmetry; a pause must not silently kill
+  in-flight unless asked).
+- **Q3 = ratified.** Optional hash-stable field (phase-9
+  `TemplateRef.args` precedent, no DDL). **CONDITION:** the
+  default MUST be ELIDED from the `compute_hash` canonical
+  body when unset/default (NOT serialized — no hash drift).
+- **Q4 = ratified.** Reuse `run_cancelled` / `cancelled` /
+  state-machine PENDING→CANCELLED /
+  `update_status_with_event(cancel_pending_runs=True)` — all
+  shipped. NO new kind, NO v002.
+- **Q5 = ratified.** Q1(a) ⇒ `slack_reminder.py` /
+  `source_post.py` / `sources/` / `cache.py` / `resolver.py`
+  EMPTY-diff vs `v2-phase-13-complete`. **CONDITION:**
+  slice-2 empty-diff proof + phase-9–13
+  fire-path/boundary/seam regression pins.
+- **Q6 = ratified.** Extend `idempotency.py` (key +
+  dedup-decision cohesive, pure/DI-conn). **CONDITION:** NO
+  SQL reimpl — use the shipped `storage/events.py` read
+  surface; pure read (no mutation); the query matches
+  `emit_succeeded` kind AND payload-carries-the-key (NOT any
+  `emit_succeeded`).
+- **Q7 = ratified.** `schedule_pause` honours the policy via
+  the archive cancel-pending seam
+  (`cancel_pending_runs=(policy == cancel_pending)`), NOT a
+  new worker/wakeup branch (the `lifecycle.py` pause path +
+  the archive seam verified shipped).
 
 ## 10. Hard rules (carried forward from phases 9–13)
 
