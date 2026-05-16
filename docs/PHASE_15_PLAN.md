@@ -85,7 +85,16 @@ the live slice).
   RECOMMENDED DEFER: `schedule_replay` (re-runs a past Run in
   dry-run mode — touches the dry-run / fire path + stored
   snapshots; NOT pure-read; its own slice or a later step).
-  Reviewer rules the cut.
+  Reviewer rules the cut. **[SUPERSEDED by §9.1 (slice-1
+  fork ruling α): `schedule_diff` is NOT a pure-read
+  aggregation — code-verified there is NO persisted
+  historical ScheduleSpec body to diff (`schedules`
+  one-row-per-id current-only; `schedule_created`
+  payload={hash,template}; no `schedule_revised` emitter;
+  `execution_plans`=ExecutionPlan-not-ScheduleSpec bodies).
+  DEFERRED exactly as `schedule_replay`. IN-set amended
+  6→5: `schedule_status`, `schedule_failures`,
+  `schedule_history`, `schedule_health`, `registry_status`.]**
 - **Q4 — return shape.** RECOMMENDED: typed Pydantic result
   models (the §3.5 typed-result discipline) returned via
   `ToolResponse.ok` payload; no loose dicts. Verify
@@ -112,9 +121,15 @@ the live slice).
 ### In scope (phase 15), assuming Q1 BTL / Q2–Q7 RECOMMENDED
 
 1. **Pure-read observability primitives** over the EventLedger
-   + runs + schedules read substrate (Q3 set). Typed result
-   models. NO SQL re-implementation — compose the shipped
-   `storage/*` pure-read API. ZERO fire-path touch.
+   + schedules read substrate — the **5** Q3 IN-set
+   (amended 6→5 by §9.1): `schedule_status`,
+   `schedule_failures` (per-schedule), `schedule_history`,
+   `schedule_health` (DI-clock), `registry_status` (reuses
+   phase-6 `registry_cache`). Dedicated typed Pydantic result
+   models (Q4 — `ToolResponse` code-verified insufficient).
+   NO SQL re-implementation — compose the shipped
+   `storage/events.py` / `storage/schedules.py` /
+   `registry_cache` pure-read API. ZERO fire-path touch.
 2. **Background failure-monitor pure detector** — a
    build-the-layer function (DI-conn / DI-clock) returning
    the unacked-overdue `admin_alert_sent` set. NO periodic
@@ -129,6 +144,17 @@ the live slice).
 - **`schedule_replay`** (Q3) — touches the dry-run / fire
   path + stored snapshots; not pure-read; its own slice or a
   later step.
+- **`schedule_diff`** (slice-1 fork ruling α, §9.1) —
+  code-verified NO persisted historical ScheduleSpec body to
+  diff: `schedules` is one-row-per-id current-only,
+  `schedule_created` payload is `{hash, template}` only, no
+  `schedule_revised` emitter exists, `execution_plans` stores
+  ExecutionPlan (not ScheduleSpec) bodies. A real §9
+  `schedule_diff` (unified diff of two historical spec bodies
+  + tool-tag snapshots) needs a spec-version store that is
+  NOT shipped — its own future design + DDL decision
+  (no-v002-relitigation), NOT a §15 pure-read primitive.
+  Same deferral class as `schedule_replay`.
 - **Failure-monitor periodic wiring + re-alert dispatch**
   (Q1/Q2) — side-effecting; build-the-layer detector only.
 - **External metrics/trace exporter** (Q6) — not canonical
@@ -169,6 +195,37 @@ the live slice).
    the folded hygiene pin. ZERO cross-phase touch (emit /
    sources / storage / ddl / worker EMPTY-diff vs
    `v2-phase-14-complete`).
+   **LANDED** (slice-1 fork ruling α, §9.1; folded in-commit
+   per the phase-11 §0.3 / phase-14 §9.2 disposition
+   discipline). New `app/v2/observability/` package
+   (`__init__.py`, `results.py`, `primitives.py`) — pure /
+   DI-conn / DI-clock, no module-load
+   `datetime.now` / `uuid4` / vendor-SDK. **5** primitives
+   (Q3 amended 6→5; `schedule_diff` DEFERRED, §9.1):
+   `schedule_status` (get_schedule + `list_events_for_schedule`
+   → recent-run summaries + pause/archive + unacked-alert
+   count), `schedule_failures` (per-schedule — merges the 4
+   failure kinds via `list_events_for_schedule(kind=…)`,
+   most-recent-first, limit-guarded), `schedule_history`
+   (chronological), `schedule_health` (DI-`now`,
+   `fire_ok_rate` None — never silent 0.0 — when no terminal
+   in window), `registry_status` (REUSES phase-6
+   `load_cache` / `is_stale`, no DB, no re-impl). Dedicated
+   typed Pydantic result model per primitive (Q4 —
+   `ToolResponse` code-verified insufficient; NOT mutated).
+   Composes ONLY the shipped `storage/events.py` /
+   `storage/schedules.py` / `registry_cache` reads — NO SQL
+   reimpl. `tests/v2/test_observability.py`: per-primitive
+   correctness + a PURITY pin (events/runs/schedules/
+   schedule_state full-table fingerprint byte-unchanged
+   post-call) + the folded alias-robust AST import-hygiene
+   pin. 2421 v2 tests, 0 fail, 0 regression (2410 phase-14
+   baseline + 11). ZERO cross-phase touch verified:
+   `emit/` `sources/` `storage/` `ddl/` `worker.py`
+   `registry_cache/` all 0-diff vs `v2-phase-14-complete`.
+   NO wiring / NO detector (slice 2). `PHASE_ALLOWLIST[15]`
+   unchanged (the `app/v2/` prefix covers `observability/` —
+   no genuinely new surface path).
 2. **Failure-monitor pure detector** — build-the-layer
    function (DI-conn / DI-clock), NOT wired; reuses
    `admin_alert_sent` / `admin_alert_acked` (no new kind).
@@ -252,21 +309,39 @@ the live slice).
 ```
 v2 phase 15 complete
 
-Observability (§12 step 15). Pure read-only query /
+Observability (§12 step 15). FIVE pure read-only query /
 aggregation primitives over the live EventLedger substrate
-(written every fire by the phase-9–14 cores) — composes the
-shipped storage/* pure-read API, NO SQL re-implementation,
-ZERO fire-path behaviour change (pure side-channel). The
-background failure monitor ships as a build-the-layer pure
-detector (DI-conn / DI-clock) — NO periodic wiring, NO
-re-alert side-effect, reuses admin_alert_sent /
-admin_alert_acked. No new EventKind, no v002.
+(written every fire by the phase-9–14 cores): schedule_status,
+schedule_failures (per-schedule), schedule_history,
+schedule_health (DI-clock), registry_status (reuses the
+phase-6 registry_cache load_cache/is_stale — no re-impl).
+Dedicated typed Pydantic result model per primitive
+(ToolResponse was code-verified insufficient — NOT mutated).
+Composes ONLY the shipped storage/events.py /
+storage/schedules.py / registry_cache pure-read API, NO SQL
+re-implementation, ZERO fire-path behaviour change (pure
+side-channel). The background failure monitor ships as a
+build-the-layer pure detector (DI-conn / DI-clock) — NO
+periodic wiring, NO re-alert side-effect, reuses
+admin_alert_sent / admin_alert_acked. No new EventKind, no
+v002.
 
-Deferred: schedule_replay (touches the dry-run/fire path);
-the failure-monitor periodic wiring + re-alert dispatch;
-external metrics/trace exporter (not canonical §9);
-migration tooling (§12 step 16); the reasoning/stateful-flow
-executor + the retry CHAIN (no §12 step owns either).
+Deferred: schedule_diff — code-verified NO persisted
+historical ScheduleSpec body to diff (schedules
+one-row-per-id current-only; schedule_created
+payload={hash,template}; no schedule_revised emitter;
+execution_plans=ExecutionPlan-not-ScheduleSpec bodies); a
+real §9 schedule_diff needs a spec-version store NOT shipped
+(its own future design+DDL decision, no-v002-relitigation),
+NOT a §15 pure-read primitive (slice-1 fork ruling α; a
+metadata-only diff under the §9 name was explicitly REJECTED
+as a degraded product / honest-scope debt — the phase-11
+ChannelDigest-(b) anti-pattern). schedule_replay (touches the
+dry-run/fire path + stored snapshots); the failure-monitor
+periodic wiring + re-alert dispatch; external metrics/trace
+exporter (not canonical §9); migration tooling (§12 step 16);
+the reasoning/stateful-flow executor + the retry CHAIN (no
+§12 step owns either).
 
 Phase-9–14 fire path + emit adapters byte/behaviour-
 unchanged; carried invariants intact.
@@ -275,15 +350,114 @@ Design: docs/CONTRACTS_V2_DESIGN.md §12 step 15, §9
 Plan:   docs/PHASE_15_PLAN.md
 ```
 
-## 9. claude-reviewer round-1 disposition (PENDING)
+## 9. claude-reviewer round-1 disposition (CLOSED — Q1–Q7 RATIFIED)
 
-Round 1 to be baked here VERBATIM (the phase-10–14
-disposition-log discipline) so a future drift is caught
-against the decision, not re-litigated. Any code-busted
-premise gets a verbatim record + an inline **SUPERSEDED**
-annotation (the phase-14 §0.1/§9.2 precedent — a busted
-premise must NOT silently persist as plan wording; the
-phase-9–14 stale-wording lesson).
+Round 1 PASS (cleanest of the relay — first plan with ZERO
+code-busted premise; verify-first genuinely honoured). Baked
+VERBATIM (the phase-10–14 disposition-log discipline) so a
+future drift is caught against the decision, not re-litigated.
+Conditions binding.
+
+- **Q1 = pure-read side-channel + BTL detector RATIFIED.**
+  Cond: slice-2 §11.1 byte-proof + phase-9–14 boundary
+  regression pins; primitives PURE (per-primitive test:
+  event/run/schedule rows byte-unchanged post-call); detector
+  NOT wired (periodic + re-alert deferred, closeout-recorded).
+- **Q2 = pure detector only RATIFIED.** Cond: detector writes
+  ZERO rows (pinned: no emit/event/DM/binding); reuses
+  `admin_alert_sent` / `admin_alert_acked` (no new EventKind,
+  no v002); re-alert + periodic wiring deferred — a future
+  re-alert needing otherwise requires a verify-first fork.
+- **Q3 = IN={status, failures, history, health,
+  registry_status}; DEFER `schedule_replay` RATIFIED.**
+  Replay touches the dry-run/fire path + stored snapshots
+  (design §9), NOT pure-read. Cond: closeout §9
+  reconciliation records the EXACT shipped set vs §9; the
+  IN-set stays within §9 pure-read-ledger-aggregation intent
+  (failures/history/health are decompositions of
+  schedule_status-over-EventLedger — no NEW design surface
+  beyond §9). **`schedule_diff` DEFERRED — see §9.1.**
+- **Q4 = typed Pydantic results, no loose dicts RATIFIED
+  (verify-first).** Slice-1 code-verified
+  `authoring/responses.ToolResponse` insufficient (`ok`
+  payload allowlist `{draft_id,schedule_id,spec,message}`,
+  `spec` a loose `dict[str,Any]`, `extra="forbid"` +
+  status-allowlist validator → no arbitrary typed payload) →
+  a dedicated typed observability result model per primitive;
+  `ToolResponse` NOT mutated (byte-safe; avoids the
+  phase-7–14 authoring-contract regression surface).
+- **Q5 = no agent mount RATIFIED** (`PHASE_ALLOWLIST[15]`
+  mirrors `[13]`/`[14]` — no coordinator/run_bot/agent
+  surface).
+- **Q6 = external exporter OUT/deferred RATIFIED.** Not
+  canonical §9. If ever ratified → `Protocol`/DI, NO
+  vendor-SDK at module load (the carried alias-robust
+  AST-pin discipline).
+- **Q7 = `registry_status` REUSES the phase-6
+  `registry_cache` read surface RATIFIED (verify-first).**
+  Slice-1 code-verified `registry_cache/loader.py` exposes
+  `load_cache` + `is_stale` (exported via `__init__`);
+  `registry_status` REUSES them, NO re-implementation, NO DB.
+
+### 9.1 Slice-1 fork ruling (CLOSED — α; `schedule_diff` premise code-verified-bust)
+
+Slice-1 surfaced (pre-code, verify-first) a code-verified
+bust of the ratified-Q3 premise that `schedule_diff` is a
+pure-read-ledger-aggregation. Folded into the slice-1 commit
+per the §0.3-class / phase-14 §9.2 discipline. Baked verbatim:
+
+- **(a) Premise-bust (code-verified).** A §9 `schedule_diff`
+  (unified diff of two historical ScheduleSpec bodies +
+  tool-tag snapshots) needs persisted historical spec bodies.
+  Verified NOWHERE queryable: `ddl/v001_initial.sql`
+  `schedules` = `id TEXT PRIMARY KEY` (one row per id =
+  CURRENT spec only; no `get_schedule_by_hash`);
+  `schedule_created` event payload (`commit.py:140`) =
+  `{"hash", "template"}` — NOT the spec body; NO
+  `schedule_revised` event emitter exists in `authoring/`
+  (the kind is reserved in the v001 CHECK but unwritten;
+  `on_schedule_revised` is only a phase-5 binding re-register
+  hook); `execution_plans` is hash-addressed but stores
+  ExecutionPlan bodies, not ScheduleSpec bodies. The
+  round-1 "RECOMMENDED IN: … `schedule_diff`" /
+  "schedule_diff is a pure-read aggregation" premise is
+  therefore FALSE — recorded verbatim in §0.2 Q3 with an
+  inline **[SUPERSEDED]** so it reads as current NOWHERE
+  outside that annotated record (the recurring phase-9–14
+  stale-wording lesson — the very lesson that recurred in
+  the phase-14 closeout).
+- **(b) Ruling = (α).** `schedule_diff` DEFERRED exactly as
+  `schedule_replay`. A real §9 `schedule_diff` requires a
+  spec-version store that is NOT shipped — its own future
+  design + DDL decision (no-v002-relitigation), NOT a §15
+  pure-read primitive. Q3 IN-set amended **6→5**:
+  `schedule_status`, `schedule_failures`, `schedule_history`,
+  `schedule_health`, `registry_status`. The closeout §9
+  reconciliation records `schedule_diff` with this EXACT
+  code-evidence (same rationale-shape as `schedule_replay`).
+- **(γ) REJECTED** — persisting spec bodies / a spec-version
+  store = NEW design surface + storage/ddl touch + no-v002
+  violation; collides with the ratified Q3 condition, the
+  GO-slice-1 EMPTY-diff-vs-`v2-phase-14-complete` binding,
+  and no-v002. Identical hard-invariant class to
+  phase-14-(β).
+- **(β) REJECTED** — a metadata-only `schedule_diff`
+  (`parent_hash` chain + event metadata, NO bodies / tool-tag
+  snapshots) ships materially LESS than the §9 stated
+  semantics under the §9 name = honest-scope / expectation
+  debt + later re-semantics / migration debt. Exactly the
+  phase-11 ChannelDigest-(b) anti-pattern (a degraded product
+  under a design name the substrate cannot honour). Recorded
+  REJECTED explicitly so a future reader does NOT optimize
+  toward a metadata-only diff.
+- **Scope pin.** Slice-1 = the 5 pure-read primitives + typed
+  models + tests ONLY. ZERO worker / emit / sources /
+  storage / ddl / registry_cache touch (EMPTY-diff vs
+  `v2-phase-14-complete`, verified). No new EventKind, no
+  v002. `CONTRACTS_V2_DESIGN.md` §9 amendment (record the
+  EXACT shipped 5-set + `schedule_diff`/`schedule_replay`
+  deferred with substrate evidence) → the ONE closeout
+  reconciliation pass, NOT slice 1.
 
 ## 10. Hard rules (carried forward from phases 9–14)
 
