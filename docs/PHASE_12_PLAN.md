@@ -278,6 +278,19 @@ mid-phase.
    ONE reconciliation pass is at closeout).
 1. **Pure enforcement composition** + unit tests +
    `test_tool_tags` drift-guard extension + AST hygiene pin.
+   **LANDED** — `app/v2/reasoning_enforcement.py`
+   (`evaluate_reasoning_step` →
+   `ReasoningEnforcementOutcome{allowed, blocked_tools,
+   unresolved_tools}`; built ON
+   `tool_tags.is_blocked_by_read_only_reasoning`, NOT a
+   re-declared set; `write_allowed` ⇒ allowed without
+   consulting the resolver; `None` OR empty resolved tags ⇒
+   unresolved ⇒ fail-safe BLOCK per §5.4 / Q2). Pure, zero
+   sources/resolver/cache/worker touch; NOT yet wired into
+   validation (slice 2) or the worker seam (slice 4).
+   `test_tool_tags` drift-guard extended (the layer's block
+   decision ≡ `is_blocked_by_read_only_reasoning` for every
+   enum tag); alias-robust `test_phase12_import_hygiene.py`.
 2. **`validate_schedule_spec` static rule** (Q2/Q6) — new
    `_validate_reasoning_tool_mode` + codes; coupled-test
    reconcile; all-issues-collected proof.

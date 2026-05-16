@@ -252,3 +252,39 @@ def test_is_user_facing_false_without_send_message():
 
 def test_is_user_facing_false_on_empty_set():
     assert is_user_facing(set()) is False
+
+
+# ---------------------------------------------------------------------------
+# Drift guard (phase 12 slice 1): the pure read-only-reasoning
+# enforcement layer (``app.v2.reasoning_enforcement``) MUST
+# decide via ``is_blocked_by_read_only_reasoning`` — it must NOT
+# re-declare its own blocking-tag set. This pins that for EVERY
+# canonical tag, a ``read_only`` step referencing one tool
+# carrying exactly that tag is blocked iff the helper blocks it.
+# A future divergence (a hardcoded copy in the new module that
+# drifts from ``_READ_ONLY_BLOCKING_TAGS``) fails HERE.
+# ---------------------------------------------------------------------------
+
+
+from app.v2.enums import ToolMode  # noqa: E402
+from app.v2.models.execution_plan import ReasoningStep  # noqa: E402
+from app.v2.reasoning_enforcement import (  # noqa: E402
+    evaluate_reasoning_step,
+)
+
+
+@pytest.mark.parametrize("tag", list(ToolCapabilityTag))
+def test_reasoning_layer_block_matches_helper_for_each_tag(tag):
+    step = ReasoningStep(
+        id="s1",
+        entry_agent="CoordinatorAgent",
+        tools=["t"],
+        tool_mode=ToolMode.READ_ONLY,
+        user_template="x",
+    )
+    outcome = evaluate_reasoning_step(
+        step, resolve_tags=lambda _n: {tag}
+    )
+    assert outcome.allowed is (
+        not is_blocked_by_read_only_reasoning({tag})
+    )
