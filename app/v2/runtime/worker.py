@@ -66,6 +66,7 @@ import asyncio
 import logging
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Callable, Optional
 
 from pydantic import ValidationError
@@ -85,6 +86,11 @@ from app.v2.models.event import Event
 from app.v2.models.schedule import ScheduleSpec
 from app.v2.runtime.claim import claim_run
 from app.v2.runtime.state_machine import assert_legal_transition
+from app.v2.sources.resolver import (
+    ResolveOutcome,
+    ResolveStatus,
+    resolve_source,
+)
 from app.v2.storage.events import append_event
 from app.v2.storage.runs import list_claimable_due
 from app.v2.storage.execution_plans import get_execution_plan
@@ -96,6 +102,14 @@ from app.v2.storage.transactions import (
 from app.v2.templates.one_off_reminder import (
     ONE_OFF_REMINDER_TEMPLATE_NAME,
 )
+
+
+# Repo root = the dir containing app/ (this file is
+# app/v2/runtime/worker.py). Default per-fire snapshot
+# audit root; identical to resolver._REPO_ROOT. DI-injected
+# in tests so a live source fire writes the snapshot into a
+# tmp tree, never the working copy.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 class UnsupportedSpecError(Exception):
@@ -142,7 +156,15 @@ class Worker:
             run_id_factory: Callable[[], str],
             event_id_factory: Callable[[], str],
             claim_batch_size: int = 10,
+            slack_client: Optional[SlackProtocol] = None,
+            repo_root: Optional[Path] = None,
         )
+
+    ``repo_root`` (phase 11 slice 3) is the per-fire
+    source-snapshot audit root threaded to
+    ``resolve_source``; ``None`` → the production repo
+    root. Tests inject a tmp tree so a live source fire
+    never writes into the working copy.
 
     ``poll_interval`` must be strictly positive — a zero or
     negative interval would busy-loop the event loop without
@@ -169,6 +191,7 @@ class Worker:
         event_id_factory: Callable[[], str],
         claim_batch_size: int = 10,
         slack_client: Optional[SlackProtocol] = None,
+        repo_root: Optional[Path] = None,
     ) -> None:
         if not worker_id:
             raise ValueError(
@@ -216,6 +239,14 @@ class Worker:
         # phase 4 and ticks proceed straight to
         # RUN_SUCCEEDED.
         self._slack_client = slack_client
+        # Phase 11 slice 3: per-fire source-snapshot audit
+        # root threaded to ``resolve_source``. Defaults to
+        # the production repo root; tests inject a tmp tree
+        # so a live source fire never writes into the
+        # working copy. Additive + optional — existing
+        # Worker() call sites (no source path) are
+        # behaviourally unchanged.
+        self._repo_root = repo_root or _REPO_ROOT
 
         self._conn: Optional[sqlite3.Connection] = None
         self._stop_event: Optional[asyncio.Event] = None
@@ -416,10 +447,10 @@ class Worker:
         row is gone (``schedule_not_found_at_claim``). The
         run_loop catches it, logs, leaves the Run RUNNING,
         and boot recovery promotes it. Every other
-        out-of-contract case (a source-driven spec at
-        slice 1, a missing / invalid / reasoning-bearing
-        ExecutionPlan) is a clean ``_fail_run`` with a
-        distinct reason — NOT a raise.
+        out-of-contract case (a missing / invalid /
+        reasoning-bearing ExecutionPlan, a resolve failure)
+        is a clean ``_fail_run`` with a distinct reason —
+        NOT a raise.
 
         **Source-driven selective failure handling
         (phase-11 slice 1).** ``get_execution_plan`` is
@@ -434,6 +465,27 @@ class Worker:
         Converting a transient DB-locked blip into a
         permanent FAILED of a recurring series is the
         explicit anti-goal; there is NO broad ``except``.
+
+        **Source resolve (phase-11 slice 3 — LIVE
+        cutover).** Each source-bearing ``InputSpec`` is
+        resolved via :func:`app.v2.sources.resolver.resolve_source`
+        with ``source_id == inp.id`` (stable snapshot key
+        across fires/retries) and the worker's DI
+        clock / id-factory / conn-factory. The phase-10
+        contract is honoured verbatim: it returns EXACTLY
+        ONE terminal ``ResolveOutcome`` and NEVER raises
+        into this method, so there is deliberately NO
+        control-flow ``try/except`` around the call —
+        wrapping it would break that contract. ``FAILED``
+        (incl. ``require_reapprove`` — content withheld,
+        the resolver already wrote the FRESH snapshot +
+        emitted SOURCE_FAILED) routes through
+        :meth:`_route_source_failure_policy`; ``RESOLVED`` /
+        ``DRIFT`` carry the content. Slice 3 wires resolve
+        ONLY — after all inputs resolve it stops with
+        ``source_resolved_no_emit`` (emit lands in slice 5);
+        a source-driven schedule never reports success
+        without delivering and never partially fires.
 
         **Q5 — pure snapshot consumer (design §5.3.5).**
         The resolver/cache OWNS the per-fire snapshot
@@ -550,23 +602,91 @@ class Worker:
                 )
                 return "failed"
 
-            # Inputs+emit-only source-driven plan. Slice 1
-            # stops here: resolve (s3) + emit (s5) wiring is
-            # not present, so the fire is deterministically
-            # failed with a distinct reason rather than
-            # silently succeeding or partially firing. The
-            # worker did NOT touch the snapshot layer (Q5).
+            # ---- Phase 11 slice 3: LIVE source resolve.
+            # The phase-10 resolver is wired into the fire
+            # path. ``resolve_source`` returns EXACTLY ONE
+            # terminal ``ResolveOutcome`` and NEVER raises
+            # into the caller — so there is deliberately NO
+            # control-flow ``try/except`` around it (wrapping
+            # it would break that contract). The worker
+            # switches on ``outcome.status`` only.
+            #
+            # Q5: the resolver/cache OWNS the per-fire
+            # snapshot write. The worker NEVER calls
+            # ``write_snapshot`` / ``_newest_materialised_snapshot``.
+            resolved: dict[str, ResolveOutcome] = {}
+            for inp in plan.inputs:
+                if inp.source_ref is None:
+                    # Non-source loader inputs are outside
+                    # the phase-11 (11A) source-driven scope.
+                    continue
+                outcome = await resolve_source(
+                    ref=inp.source_ref,
+                    source_id=inp.id,  # STABILITY: source_id == InputSpec.id
+                    schedule_id=spec.id,
+                    run_id=run.id,
+                    conn=conn,
+                    conn_factory=self._conn_factory,
+                    clock=self._clock,
+                    event_id_factory=self._event_id_factory,
+                    as_of_datetime=None,  # live fire (not a dry-run)
+                    audit=spec.audit,
+                    repo_root=self._repo_root,
+                    # loaders defaults to the prod SOURCE_LOADERS singleton
+                )
+                if outcome.status is ResolveStatus.FAILED:
+                    # Every non-fallback / fetch failure AND
+                    # require_reapprove land here. The resolver
+                    # has ALREADY emitted its terminal
+                    # SOURCE_FAILED and (for require_reapprove)
+                    # written the FRESH snapshot as audit; we
+                    # withhold the content and fail the run —
+                    # NO partial emit.
+                    # _route_source_failure_policy passes
+                    # failure_event=None (no double-emit) and
+                    # shares the slice-2 atomic core.
+                    await self._route_source_failure_policy(
+                        conn=conn,
+                        run=run,
+                        spec=spec,
+                        reason=(
+                            outcome.failure_code
+                            or "source_resolve_failed"
+                        ),
+                        error_text=(
+                            f"source {inp.id!r} resolve "
+                            f"FAILED (code="
+                            f"{outcome.failure_code!r}, "
+                            f"fallback_eligible="
+                            f"{outcome.fallback_eligible!r})"
+                        ),
+                    )
+                    return "failed"
+                # RESOLVED or DRIFT(alert_on_shape_change):
+                # the resolver served content (DRIFT already
+                # emitted SOURCE_DRIFT_DETECTED and STILL
+                # serves). Carry it for the emit step.
+                resolved[inp.id] = outcome
+
+            # ---- Slice 3 stop: resolve is LIVE; emit lands
+            # in slice 5. Every source input resolved
+            # (RESOLVED / DRIFT) with NO emit fired. Stop
+            # deterministically — a source-driven schedule
+            # MUST NOT report success without delivering, and
+            # MUST NOT partially fire. ``source_resolved_no_emit``
+            # is the slice-3 test hook: it proves resolve ran
+            # end to end (the resolver's SOURCE_RESOLVED /
+            # SOURCE_DRIFT_DETECTED events are present) while
+            # emit is cleanly deferred. OneOff is byte-untouched.
             await self._fail_run(
                 conn=conn,
                 run=run,
-                reason="source_fire_not_yet_wired",
+                reason="source_resolved_no_emit",
                 error_message=(
-                    f"schedule {spec.id!r} is source-driven "
-                    f"(execution_plan_hash="
-                    f"{spec.execution_plan_hash!r}); the "
-                    f"phase-11 resolve+emit wiring lands in "
-                    f"slices 3/5 — slice 1 ships the routing "
-                    f"skeleton only"
+                    f"schedule {spec.id!r} resolved "
+                    f"{len(resolved)} source input(s); the "
+                    f"emit step lands in phase-11 slice 5 "
+                    f"(slice 3 wires resolve only)"
                 ),
             )
             return "failed"

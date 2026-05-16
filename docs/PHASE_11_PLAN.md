@@ -274,7 +274,12 @@ live-change wording is reconciled at closeout (same pass).
 
 **Edited (non-new):** `app/v2/runtime/worker.py`
 (`_dispatch_emit_branch` source-driven branch + the Q6
-`_route_*_failure_policy` extraction),
+`_route_*_failure_policy` extraction; slice 3 adds an
+ADDITIVE optional `Worker(..., repo_root=None)` DI kwarg —
+defaults to the prod repo root, threaded to
+`resolve_source` so the per-fire snapshot lands under a
+tmp tree in tests, never the working copy; existing
+`Worker()` call sites are behaviourally unchanged),
 `app/v2/sources/resolver.py` (phase-10-FROZEN — ONE
 additive `ResolveOutcome.changed_vs_prior` field per
 §0.1, reviewer-approved, with phase-10 contract-
@@ -504,8 +509,16 @@ landing path — round-1 🟡 slice-2/6 reorder).
    exactly-one-outcome / never-raise (no control-flow
    `try/except`); FAILED & `require_reapprove` →
    `_route_source_failure_policy`; DRIFT(alert) → carry.
-   No emit yet (stop after resolve, succeed via a
-   `source_resolved_no_emit` test hook).
+   No emit yet — after all inputs resolve the worker
+   stops DETERMINISTICALLY via
+   `_fail_run(reason="source_resolved_no_emit")` (NOT a
+   success: a source-driven schedule must never report
+   success without delivering, and must never partially
+   fire). That reason is the slice-3 test hook — the
+   resolver's `SOURCE_RESOLVED`/`SOURCE_DRIFT_DETECTED`
+   events prove resolve ran end to end while emit is
+   cleanly deferred to slice 5. Worker gains an additive
+   `repo_root` DI (snapshot audit root; tmp in tests).
 4. **Phase-10 additive contract change (the 🔴,
    front-loaded — Q7 "4a").**
    `ResolveOutcome.changed_vs_prior: Optional[bool] =

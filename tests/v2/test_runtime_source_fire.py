@@ -1,33 +1,42 @@
-"""Phase 11 slice 1 — worker source-driven routing skeleton.
+"""Phase 11 slices 1-3 — worker source-driven fire path.
 
-Per ``docs/PHASE_11_PLAN.md`` §3.1 / §4 slice 1 + the
-claude-reviewer slice-1 hard-check criteria.
+Per ``docs/PHASE_11_PLAN.md`` §3.1 / §4 + the
+claude-reviewer slice hard-check criteria.
 
-Slice 1 ships ONLY the plan-load + routing decision in
-``Worker._dispatch_emit_branch``. There is NO resolve / NO
-emit yet, so a well-formed source-driven spec is
-deterministically failed with reason
-``source_fire_not_yet_wired``. The slice-1 invariants
-pinned here:
-
-- SELECTIVE failure handling. ``get_execution_plan`` is
-  wrapped in a NARROW ``except ValidationError`` only:
-  a corrupt frozen body → ``_fail_run(
-  execution_plan_invalid_at_claim)``; a missing row →
-  ``_fail_run(execution_plan_missing_at_claim)``; a
-  reasoning-bearing plan → ``_fail_run(
-  reasoning_unsupported_pending_step_12)`` (Q4 — a clean
-  run_failed, NOT a raise). A TRANSIENT infra fault
-  (``ConnectionNotReady`` / ``sqlite3.OperationalError``
-  / DB-locked) PROPAGATES — the Run stays RUNNING, no
-  ``run_failed`` is written, recovery retries. A broad
-  catch-all would convert a transient blip into a
-  permanent FAILED of a recurring series and is the
-  explicit anti-goal.
-- Q5 — the worker is a PURE snapshot consumer: it NEVER
-  calls ``write_snapshot`` AND NEVER calls
-  ``_newest_materialised_snapshot`` (neither symbol is
-  imported into ``app.v2.runtime.worker``).
+- **Slice 1** — plan-load + routing skeleton. SELECTIVE
+  failure handling: ``get_execution_plan`` is wrapped in a
+  NARROW ``except ValidationError`` only — a corrupt body
+  → ``_fail_run(execution_plan_invalid_at_claim)``; a
+  missing row → ``_fail_run(execution_plan_missing_at_claim)``;
+  a reasoning-bearing plan →
+  ``_fail_run(reasoning_unsupported_pending_step_12)`` (Q4
+  — a clean run_failed, NOT a raise). A TRANSIENT infra
+  fault (``ConnectionNotReady`` / ``sqlite3.OperationalError``
+  / DB-locked / ``sqlite3.DatabaseError``) PROPAGATES —
+  the Run stays RUNNING, no ``run_failed`` is written,
+  recovery retries. NO broad catch-all (it would convert a
+  transient blip into a permanent FAILED of a recurring
+  series — the explicit anti-goal).
+- **Slice 2** — the Q6 shared atomic core +
+  ``_route_source_failure_policy`` sibling (atomicity
+  pinned for both paths).
+- **Slice 3 (LIVE cutover)** — ``resolve_source`` is wired
+  into the fire path with the EXACT phase-10 kw-args and
+  ``source_id == inp.id`` (stable snapshot key). It is
+  called BARE — exactly-one-terminal-outcome / never-raise
+  means NO control-flow ``try/except`` around it.
+  ``FAILED`` (incl. ``require_reapprove``) →
+  ``_route_source_failure_policy``; ``RESOLVED`` /
+  ``DRIFT`` carry the content. Slice 3 wires resolve ONLY
+  — after all inputs resolve it stops with
+  ``source_resolved_no_emit`` (emit lands in slice 5).
+- **Q5** — the worker is a PURE snapshot consumer: it
+  NEVER calls ``write_snapshot`` / ``_newest_materialised_snapshot``
+  and never imports them (bound OR original name —
+  hardened here at the resolve-wire slice). The per-fire
+  snapshot is written by the resolver/cache under the
+  DI-injected ``repo_root`` (a tmp tree in tests — never
+  the working copy).
 """
 
 from __future__ import annotations
@@ -179,7 +188,7 @@ def _build_spec(
     return spec.with_fresh_hash()
 
 
-def _make_worker(factory) -> Worker:
+def _make_worker(factory, repo_root=None) -> Worker:
     counter = {"i": 0}
 
     def evt_factory() -> str:
@@ -194,6 +203,10 @@ def _make_worker(factory) -> Worker:
         run_id_factory=lambda: "should-not-be-called",
         event_id_factory=evt_factory,
         slack_client=_StubSlackClient(),
+        # Live source fire writes the per-fire snapshot under
+        # repo_root/data/contract_audit/...; inject the test
+        # tmp tree so the working copy is never littered.
+        repo_root=repo_root,
     )
 
 
@@ -314,17 +327,25 @@ class _FailingExecuteConn:
 
 
 # ---------------------------------------------------------------------------
-# Routing: a well-formed source-driven spec is NOT yet wired
+# Slice 3 — LIVE resolve, then deterministic no-emit stop
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_source_driven_spec_not_yet_wired_fail_run(tmp_path):
+async def test_source_driven_resolves_then_stops_no_emit(tmp_path):
+    """The LIVE cutover: a well-formed source-driven spec
+    is RESOLVED by the phase-10 resolver (the resolver's
+    terminal SOURCE_RESOLVED event is written + the per-fire
+    snapshot lands under the injected tmp repo_root), then
+    the worker stops deterministically with
+    ``source_resolved_no_emit`` (emit lands in slice 5 — a
+    source-driven schedule never reports success without
+    delivering, never partially fires)."""
     factory, _ = _conn_factory(tmp_path)
-    plan = _plan()
+    plan = _plan()  # literal source, valid args → RESOLVED
     spec = _build_spec(execution_plan_hash=plan.hash)
     run = _seed(factory, spec=spec, plan=plan)
-    worker = _make_worker(factory)
+    worker = _make_worker(factory, repo_root=tmp_path)
 
     conn = factory()
     try:
@@ -334,9 +355,20 @@ async def test_source_driven_spec_not_yet_wired_fail_run(tmp_path):
 
     assert outcome == "failed"
     assert _status(factory) == "failed"
-    assert _failed_reason(factory) == "source_fire_not_yet_wired"
-    # No emit attempted in slice 1.
+    assert _failed_reason(factory) == "source_resolved_no_emit"
+    # The resolver actually ran (its terminal event is
+    # present) — proves resolve is LIVE, not stubbed.
+    kinds = [e.kind for e in _events(factory)]
+    assert EventKind.SOURCE_RESOLVED in kinds
+    # No emit fired in slice 3.
     assert worker._slack_client.calls == []
+    # Q5: the per-fire snapshot was written by the
+    # resolver/cache under the INJECTED tmp repo_root — NOT
+    # the working copy (no littering) — proving the worker
+    # delegated the snapshot write.
+    audit = tmp_path / "data" / "contract_audit"
+    bins = list(audit.rglob("*.bin"))
+    assert bins, "resolver did not write the per-fire .bin"
 
 
 # ---------------------------------------------------------------------------
@@ -487,20 +519,26 @@ def test_worker_module_never_calls_or_imports_snapshot_writers():
 
     tree = ast.parse(inspect.getsource(worker_mod))
 
-    # No import binds either symbol into the module.
+    # No import binds either symbol into the module — check
+    # BOTH the bound name (alias.asname or alias.name) AND
+    # the ORIGINAL imported name (alias.name) so an aliased
+    # import — ``from x import write_snapshot as foo`` — is
+    # ALSO caught (slice-1 deferred 🔵, hardened here at the
+    # resolve-wire slice per the claude-reviewer carry).
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
+        if isinstance(node, (ast.ImportFrom, ast.Import)):
             for alias in node.names:
                 bound = alias.asname or alias.name
+                original = alias.name
                 assert bound not in _SNAPSHOT_WRITERS, (
                     f"worker imports {bound!r} — Q5: the worker "
                     f"must be a pure snapshot consumer"
                 )
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                assert (
-                    (alias.asname or alias.name)
-                    not in _SNAPSHOT_WRITERS
+                assert original not in _SNAPSHOT_WRITERS, (
+                    f"worker imports the original name "
+                    f"{original!r} (aliased as {bound!r}) — "
+                    f"Q5: aliasing a snapshot writer does not "
+                    f"make the worker a pure consumer"
                 )
 
     # No Call resolves (by simple/attribute name) to either.
@@ -665,3 +703,229 @@ async def test_route_source_failure_atomic_rollback(tmp_path):
     # Run stays RUNNING → recovery promotes (no permanent
     # FAILED written behind a rolled-back ledger).
     assert _status(factory) == "running"
+
+
+# ---------------------------------------------------------------------------
+# Slice 3 — resolve FAILED routes via _route_source_failure_policy
+# ---------------------------------------------------------------------------
+
+
+def _bad_literal_source_ref() -> SourceRefSpec:
+    """A literal source missing the required ``text`` arg →
+    LiteralSource raises SourceParseError (non-fallback) →
+    the resolver returns a FAILED ResolveOutcome."""
+    return SourceRefSpec(
+        loader="source_literal",
+        args={"source_id": "src"},  # no "text"
+        cache=LiveSourceCachePolicy(
+            cache_ttl_seconds=300,
+            stale_max_age_seconds=3600,
+            fallback_policy=SourceFallbackPolicy.USE_LAST_GOOD_SNAPSHOT,
+        ),
+        live_change_policy=LiveChangePolicy.ALLOW,
+    )
+
+
+def _plan_failing() -> ExecutionPlan:
+    plan = ExecutionPlan(
+        id="p_src",
+        description="source-driven plan (resolve-fail test)",
+        author="tester",
+        inputs=[
+            InputSpec(
+                id="src",
+                loader="source_literal",
+                source_ref=_bad_literal_source_ref(),
+            )
+        ],
+        reasoning=[],
+        emit=[EmitStep(id="post", adapter="source_post", args={})],
+    )
+    return plan.with_fresh_hash()
+
+
+@pytest.mark.asyncio
+async def test_source_resolve_failed_routes_source_failure_policy(
+    tmp_path,
+):
+    """A non-fallback resolve failure → the resolver emits
+    its terminal SOURCE_FAILED, then the worker routes via
+    _route_source_failure_policy: RUN_FAILED carries the
+    resolver's failure code, ADMIN_ALERT_SENT is written
+    (ALERT_ADMIN), there is NO EMIT_FAILED (no double-emit),
+    no Slack call, and the run ends FAILED."""
+    factory, _ = _conn_factory(tmp_path)
+    plan = _plan_failing()
+    spec = _build_spec(execution_plan_hash=plan.hash)
+    run = _seed(factory, spec=spec, plan=plan)
+    worker = _make_worker(factory, repo_root=tmp_path)
+
+    conn = factory()
+    try:
+        outcome = await worker._dispatch_emit_branch(conn, run)
+    finally:
+        conn.close()
+
+    assert outcome == "failed"
+    assert _status(factory) == "failed"
+    evs = _events(factory)
+    kinds = {e.kind for e in evs}
+    assert EventKind.SOURCE_FAILED in kinds  # resolver terminal
+    assert EventKind.EMIT_FAILED not in kinds  # no double-emit
+    assert EventKind.ADMIN_ALERT_SENT in kinds  # ALERT_ADMIN
+    # RUN_FAILED reason == the resolver's failure code.
+    src_failed = next(
+        e for e in evs if e.kind is EventKind.SOURCE_FAILED
+    )
+    assert _failed_reason(factory) == src_failed.payload.get("code")
+    assert worker._slack_client.calls == []
+
+
+# ---------------------------------------------------------------------------
+# Slice 3 — exact kw-args + source_id == inp.id stability
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolve_source_called_with_exact_kwargs_and_stable_source_id(
+    tmp_path, monkeypatch
+):
+    """resolve_source is called with the EXACT phase-10
+    kw-args, the worker's DI clock / id-factory /
+    conn-factory / repo_root, ``as_of_datetime=None``,
+    ``audit=spec.audit``, and ``source_id == inp.id``. A
+    re-fire (a fresh run on the same schedule) reuses the
+    SAME ``source_id`` (stable per-(schedule,source)
+    snapshot key)."""
+    from app.v2.sources.resolver import (
+        ResolveOutcome,
+        ResolveStatus,
+    )
+
+    factory, _ = _conn_factory(tmp_path)
+    plan = _plan()
+    spec = _build_spec(execution_plan_hash=plan.hash)
+    run = _seed(factory, spec=spec, plan=plan)
+    worker = _make_worker(factory, repo_root=tmp_path)
+
+    captured: list[dict] = []
+
+    async def _spy(**kw):
+        captured.append(kw)
+        return ResolveOutcome(
+            status=ResolveStatus.RESOLVED,
+            event_kind=EventKind.SOURCE_RESOLVED,
+            event_id="evt-spy",
+            event_emitted=True,
+            source_id=kw["source_id"],
+        )
+
+    monkeypatch.setattr(worker_mod, "resolve_source", _spy)
+
+    conn = factory()
+    try:
+        await worker._dispatch_emit_branch(conn, run)
+    finally:
+        conn.close()
+
+    assert len(captured) == 1
+    kw = captured[0]
+    inp = plan.inputs[0]
+    # The worker RELOADS the plan/spec from the DB
+    # (get_execution_plan / get_schedule), so ref / audit
+    # are VALUE-equal, not identity. The DI callables are
+    # the worker's own attrs → identity holds.
+    assert kw["ref"] == inp.source_ref
+    assert kw["source_id"] == inp.id == "src"
+    assert kw["schedule_id"] == spec.id
+    assert kw["run_id"] == run.id
+    assert kw["conn_factory"] is worker._conn_factory
+    assert kw["clock"] is worker._clock
+    assert kw["event_id_factory"] is worker._event_id_factory
+    assert kw["as_of_datetime"] is None
+    assert kw["audit"] == spec.audit
+    assert kw["repo_root"] is worker._repo_root
+
+    # Re-fire: a fresh run on the SAME schedule reuses the
+    # same source_id (stable snapshot key, run-independent).
+    run2 = run.model_copy(update={"id": "run-src-2"})
+    conn = factory()
+    try:
+        conn.execute(
+            "INSERT INTO runs (id, schedule_id, "
+            "execution_plan_hash, fire_reason, due_at, "
+            "status, attempt, root_run_id) VALUES "
+            "(?, ?, ?, 'scheduled', ?, 'running', 1, ?)",
+            (
+                "run-src-2",
+                spec.id,
+                spec.execution_plan_hash,
+                _NOW.isoformat(),
+                "run-src-2",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    conn = factory()
+    try:
+        await worker._dispatch_emit_branch(conn, run2)
+    finally:
+        conn.close()
+
+    assert len(captured) == 2
+    assert captured[1]["source_id"] == inp.id == captured[0]["source_id"]
+
+
+# ---------------------------------------------------------------------------
+# Slice 3 — exactly-one-outcome/never-raise: NO try/except
+# wrapped around resolve_source
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_does_not_wrap_resolve_source_in_try():
+    """The phase-10 resolver guarantees exactly-one-terminal
+    -outcome and never raises into the caller. Wrapping the
+    call in a control-flow try/except would break that
+    contract — pin that the resolve_source Call does NOT
+    appear inside any ``try`` block in worker.py."""
+    import ast
+
+    tree = ast.parse(inspect.getsource(worker_mod))
+
+    def _calls_resolve_source(subtree) -> bool:
+        for n in ast.walk(subtree):
+            if not isinstance(n, ast.Call):
+                continue
+            f = n.func
+            name = (
+                f.id
+                if isinstance(f, ast.Name)
+                else f.attr
+                if isinstance(f, ast.Attribute)
+                else None
+            )
+            if name == "resolve_source":
+                return True
+        return False
+
+    # resolve_source IS called somewhere (pin not vacuous).
+    assert _calls_resolve_source(tree)
+
+    # …but never inside a Try body / handler / else / finally.
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try):
+            continue
+        for region in (
+            node.body,
+            node.orelse,
+            node.finalbody,
+            *[h.body for h in node.handlers],
+        ):
+            for stmt in region:
+                assert not _calls_resolve_source(stmt), (
+                    "resolve_source is wrapped in a try/except "
+                    "— breaks the exactly-one-terminal-outcome "
+                    "/ never-raise contract (it must be called "
+                    "bare; switch on outcome.status only)"
+                )
