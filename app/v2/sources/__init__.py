@@ -60,6 +60,13 @@ from app.v2.sources.local_file import (
     local_file_source,
     register_local_file,
 )
+from app.v2.sources.slack_thread import (
+    SOURCE_SLACK_THREAD_ID,
+    SlackThreadReader,
+    SlackThreadSource,
+    register_slack_thread,
+    slack_thread_source,
+)
 from app.v2.sources.registry import (
     SOURCE_LOADERS,
     SourceLoaderRegistry,
@@ -84,6 +91,7 @@ from app.v2.sources.snapshot_writer import (
 _BUILTIN_SOURCES = (
     (SOURCE_LITERAL_ID, register_literal),
     (SOURCE_LOCAL_FILE_ID, register_local_file),
+    (SOURCE_SLACK_THREAD_ID, register_slack_thread),
 )
 
 
@@ -150,6 +158,11 @@ __all__ = [
     "LocalFileSource",
     "local_file_source",
     "register_local_file",
+    "SOURCE_SLACK_THREAD_ID",
+    "SlackThreadReader",
+    "SlackThreadSource",
+    "slack_thread_source",
+    "register_slack_thread",
     "SnapshotWriteResult",
     "PruneResult",
     "write_snapshot",

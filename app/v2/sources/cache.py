@@ -26,10 +26,16 @@ eligible. :class:`SourceAuthError` /
 consult the cache, NEVER consult ``fallback_policy``,
 NEVER write / refresh the cache, and propagate straight
 out (the slice-8 resolver turns them into
-``SOURCE_FAILED``). An auth failure with a warm last-good
-snapshot present still fails — it must never serve a
-stale cached snapshot or a default, and must never poison
-the cache.
+``SOURCE_FAILED``). This is the **post-fetch** invariant:
+once the loader has been invoked and raised a non-fallback
+error, the resolver must never fall back to the cache or a
+default for it, and a failed auth must not poison the
+cache. It does NOT force a re-auth on a within-TTL hit —
+see the cache-hit-vs-non-fallback note below: a within-
+``cache_ttl_seconds`` hit serves WITHOUT invoking the
+loader (no live auth occurs, so none is masked);
+``cache_ttl_seconds == 0`` is the opt-out that probes
+every fire.
 
 Cache-hit vs the non-fallback invariant (plan §1.4 / §9c
 / design §5.3.2): a within-``cache_ttl_seconds`` verified
