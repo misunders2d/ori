@@ -90,6 +90,7 @@ from app.v2.reasoning_enforcement import (
     evaluate_reasoning_plan,
 )
 from app.v2.runtime.claim import claim_run
+from app.v2.runtime.state import StateView, state_read
 from app.v2.runtime.state_machine import assert_legal_transition
 from app.v2.sources.resolver import (
     ResolveOutcome,
@@ -719,6 +720,19 @@ class Worker:
                 )
                 return "failed"
 
+            # SEAM (phase-13 slice-2): a future DETERMINISTIC
+            # state-loader for a stateful series would, around
+            # here, consult ``self._cross_fire_state_seam(...)``
+            # (state_read → pick → state_write, §6.5 /
+            # use-case 12) to advance a per-schedule cursor.
+            # That seam ships build-the-layer (slice-1
+            # primitives + this consult point) but is DEAD —
+            # no stateful-flow loader/executor exists (Q1a;
+            # stateful RecurringSeriesFromSource progress was
+            # deferred to "needs step-13"). Until then the
+            # source resolve below runs unchanged and the seam
+            # is never reached on the live path.
+            #
             # ---- Phase 11 slice 3: LIVE source resolve.
             # The phase-10 resolver is wired into the fire
             # path. ``resolve_source`` returns EXACTLY ONE
@@ -947,6 +961,43 @@ class Worker:
         return evaluate_reasoning_plan(
             plan.reasoning,
             resolve_tags=lambda _tool_name: None,
+        )
+
+    def _cross_fire_state_seam(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        schedule_id: str,
+        key: str,
+    ) -> Optional[StateView]:
+        """Build-the-layer §12 step-13 cross-fire-state SEAM
+        (phase-13 slice-2). The point a future DETERMINISTIC
+        state-loader would consult — ``state_read`` → pick →
+        ``state_write`` (§6.5, use-case 12) — to advance a
+        stateful series' per-schedule cursor at fire time.
+
+        **Dead code until a stateful-flow loader/executor
+        lands.** No such executor is shipped (no §12 step owns
+        it — Q1a; stateful ``RecurringSeriesFromSource``
+        progress was deferred to "needs step-13", and step-13
+        ships only the slice-1 primitives + this seam). The
+        phase-11 ``_fail_run`` reasoning boundary + the
+        phase-12 read-only-reasoning enforcement are unchanged
+        and run BEFORE any stateful loader would; this seam is
+        unit-reachable (the slice-2 seam test) but is NEVER
+        invoked on the live fire path — a source-scan test
+        pins that :meth:`_dispatch_emit_branch` does not call
+        it.
+
+        Read-only delegation to the slice-1 primitive
+        (:func:`app.v2.runtime.state.state_read`) — NO
+        CAS/policy re-declared. The ``pick`` + ``state_write``
+        half is the deferred loader's job; performing a CAS
+        write here without a deterministic ``pick`` would be
+        meaningless and is deliberately NOT done.
+        """
+        return state_read(
+            conn, schedule_id=schedule_id, key=key
         )
 
     def _build_admin_alert_event(

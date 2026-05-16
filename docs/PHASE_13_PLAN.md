@@ -221,6 +221,29 @@ finalises)
    phase-11 `_fail_run` + phase-12 enforcement boundaries
    regression-pinned UNCHANGED; seam test
    reachable-but-deferred + live-path-not-consulted AST pin.
+   **LANDED** — `app/v2/runtime/worker.py` private
+   `_cross_fire_state_seam(conn, *, schedule_id, key) ->
+   StateView | None`: STRICT read-only delegation to the
+   slice-1 `state_read` (NO CAS/policy re-declared; the
+   `pick`+`state_write` half is the deferred loader's job and
+   is deliberately NOT done). A seam comment marks where a
+   future deterministic state-loader (§6.5 / use-case 12)
+   would `state_read → pick → state_write`. **DEAD on the
+   live path** — AST scan pins `_dispatch_emit_branch` never
+   CALLs it (comment-mention expected). worker.py touched
+   ONLY: the slice-1 import + the seam comment + the additive
+   dead method — NO live-path control-flow change. phase-11
+   reason CODE `reasoning_unsupported_pending_step_12`
+   BYTE-IDENTICAL; phase-12 enforcement code (the
+   `_validate_reasoning_tool_mode` /
+   `_validate_customflow_admin_friction` rules + their
+   distinct codes) UNTOUCHED. NO stateful-flow executor
+   shipped (Q1a). §11.1: OneOff/v1/phase-9–12 fire path +
+   `storage/schedule_state.py`/`models/state.py`/`ddl/`/
+   `sources/`/`emit/` EMPTY diff vs `v2-phase-12-complete`.
+   `tests/v2/test_worker_state_seam.py`; phase-11/12
+   regression pins UNMODIFIED + green. No new module ⇒
+   `PHASE_ALLOWLIST[13]` unchanged.
 3. **closeout** — full `tests/v2`, §7 acceptance walk, phase
    guards, `gen_docs` regen+stage, REPO-WIDE semantic-intent
    stale-wording/inconsistency sweep (the phase-9/10/11/12
