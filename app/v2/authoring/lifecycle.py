@@ -41,8 +41,8 @@ from app.v2.authoring.lifecycle_helper import (
 )
 from app.v2.authoring.responses import ToolResponse
 from app.v2.authoring.setters import _validation_failed_single
-from app.v2.enums import ScheduleStatus
-from app.v2.storage.schedules import ScheduleNotFoundError
+from app.v2.enums import PausedPendingPolicy, ScheduleStatus
+from app.v2.storage.schedules import ScheduleNotFoundError, get_schedule
 
 
 def _not_found(schedule_id: str) -> ToolResponse:
@@ -80,19 +80,47 @@ async def schedule_pause(
     No-op (round-3 L544 / Q15) when current status is already
     ``paused``: returns :meth:`ToolResponse.ok` with an
     ``already paused`` hint.
+
+    Phase-14: honours the persisted run-disposition-on-pause
+    policy (``FailurePolicy.paused_pending_policy``, housed
+    there so it round-trips via ``failure_json`` with no
+    DDL/v002 — (α) fork ruling, ``docs/PHASE_14_PLAN.md``
+    §9.1). ``None`` ≡ ``let_complete`` (the pre-phase-14
+    no-op for in-flight work — least-surprise, design §7).
+    ``cancel_pending`` cancels every pending Run in the same
+    transaction via the EXISTING ``update_status_with_event``
+    cancel-pending seam (the same seam ``schedule_archive``
+    uses) with the ``run_cancelled`` payload reason
+    ``schedule_paused`` (§13 audit-truth — a pause is NOT an
+    archive).
     """
     current = _current_status(conn, schedule_id)
     if current is None:
         return _not_found(schedule_id)
 
+    # Read the PERSISTED policy. ``failure_json`` already
+    # round-trips ``FailurePolicy`` through ``get_schedule`` /
+    # ``_row_to_spec`` (no storage/schedules.py change), so a
+    # post-restart / fresh-conn pause sees an author-set
+    # ``cancel_pending``.
+    spec = get_schedule(conn, schedule_id)
+    if spec is None:
+        return _not_found(schedule_id)
+    cancel_pending = (
+        spec.failure.paused_pending_policy
+        == PausedPendingPolicy.CANCEL_PENDING
+    )
+
     already_target = current == ScheduleStatus.PAUSED
     try:
-        update_status_with_event(
+        cancelled = update_status_with_event(
             conn,
             schedule_id,
             _LifecycleAction.PAUSE,
             event_id_factory=event_id_factory,
             clock=clock,
+            cancel_pending_runs=cancel_pending,
+            cancelled_reason="schedule_paused",
         )
     except ScheduleNotFoundError:
         return _not_found(schedule_id)
@@ -102,6 +130,13 @@ async def schedule_pause(
         return ToolResponse.ok(
             schedule_id=schedule_id,
             message=f"schedule {schedule_id!r} already paused",
+        )
+    if cancel_pending and cancelled:
+        return ToolResponse.ok(
+            schedule_id=schedule_id,
+            message=(
+                f"paused; cancelled {cancelled} pending run(s)"
+            ),
         )
     return ToolResponse.ok(schedule_id=schedule_id)
 

@@ -27,6 +27,7 @@ from app.v2.enums import (
     DeliveryFallbackPolicy,
     FailureActionType,
     OnOversizePolicy,
+    PausedPendingPolicy,
     RetryStrategy,
     SourceFallbackPolicy,
 )
@@ -183,12 +184,56 @@ class RetryPolicy(BaseModel):
 class FailurePolicy(BaseModel):
     """ScheduleSpec-level failure handling. Per-Run handlers
     (``on_failure`` on the ExecutionPlan) can override.
+
+    Phase-14 (2026-05-16) adds the optional
+    ``paused_pending_policy`` field — the run-disposition-on-
+    pause policy. It is HOUSED here (NOT as a literal top-level
+    ``ScheduleSpec`` field as an early phase-14 plan draft
+    wrongly assumed) because ``FailurePolicy`` is persisted via
+    the ``failure_json`` column, which already round-trips
+    through ``insert_schedule`` / ``_row_to_spec`` with NO DDL
+    and NO v002 migration — and ``FailurePolicy`` is the
+    defensible semantic home for "what to do with in-flight /
+    pending work on a lifecycle state change". The (α) fork
+    ruling (``docs/PHASE_14_PLAN.md`` §9.1) records the
+    code-verified premise-bust (the ``schedules`` table is
+    column-decomposed, not a spec JSON blob) and why this
+    locus is correct.
+
+    The phase-9 ``TemplateRef.args`` nested-optional precedent
+    is applied verbatim: hash drift on pre-phase-14 specs is
+    avoided by :meth:`ScheduleSpec.canonical_body` stripping
+    the ``paused_pending_policy`` key from the serialised
+    ``failure`` dict when it is unset (None) or the
+    ``let_complete`` default (see that method's body comment).
+    ``cancel_pending`` participates in the hash — a real
+    behaviour change → new version.
+
+    References:
+    - ``docs/CONTRACTS_V2_DESIGN.md`` §7 (archive-vs-pause
+      asymmetry).
+    - ``docs/PHASE_14_PLAN.md`` §9.1 (the (α) fork ruling).
     """
 
     model_config = ConfigDict(extra="forbid")
 
     on_failure_action: FailureActionType = FailureActionType.ALERT_ADMIN
     retry_policy: Optional[RetryPolicy] = None
+    paused_pending_policy: Optional[PausedPendingPolicy] = Field(
+        default=None,
+        description=(
+            "Run-disposition-on-pause policy. None / "
+            "'let_complete' (default) leaves pending Runs "
+            "untouched when the schedule is paused (pre-phase-14 "
+            "no-op; least-surprise, design §7). 'cancel_pending' "
+            "cancels them in the pause transaction via the same "
+            "seam as schedule_archive (same run_cancelled event, "
+            "same PENDING→CANCELLED transition). Elided from the "
+            "canonical hash body when unset/default so "
+            "pre-phase-14 specs hash byte-identically "
+            "(phase-9 TemplateRef.args precedent)."
+        ),
+    )
 
 
 class AuditPolicy(BaseModel):

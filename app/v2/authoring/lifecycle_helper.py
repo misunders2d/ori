@@ -94,6 +94,7 @@ def update_status_with_event(
     event_id_factory: Callable[[], str],
     clock: Callable[[], datetime],
     cancel_pending_runs: bool = False,
+    cancelled_reason: str = "schedule_archived",
 ) -> int:
     """Atomic status flip + EventLedger append.
 
@@ -117,6 +118,18 @@ def update_status_with_event(
            ``run_cancelled`` event correlated to the
            ``schedule_archived`` event.
         4. Commit the savepoint.
+
+    ``cancelled_reason`` is the ``reason`` written into each
+    ``run_cancelled`` event payload when ``cancel_pending_runs``
+    is True. Defaults to ``"schedule_archived"`` so the archive
+    path (the only pre-phase-14 caller of the cancel-pending
+    branch) is byte-identical. Phase-14 ``schedule_pause`` with
+    ``paused_pending_policy=cancel_pending`` passes
+    ``"schedule_paused"`` so the audit ledger states the truth
+    (§13) — a pause-driven cancellation is NOT
+    ``schedule_archived``. Optional defaulted parameter only:
+    every existing caller is unaffected; no signature break,
+    no new EventKind.
 
     Caller is responsible for the OUTER transaction (the
     helper uses a SAVEPOINT so it composes with a wrapping
@@ -177,6 +190,7 @@ def update_status_with_event(
                 correlates_event_id=schedule_event.id,
                 event_id_factory=event_id_factory,
                 clock=clock,
+                cancelled_reason=cancelled_reason,
             )
     except BaseException:
         conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
@@ -195,6 +209,7 @@ def _cancel_pending_runs(
     correlates_event_id: str,
     event_id_factory: Callable[[], str],
     clock: Callable[[], datetime],
+    cancelled_reason: str = "schedule_archived",
 ) -> int:
     """Cancel every pending Run for the schedule + append a
     ``run_cancelled`` event per Run. Returns the count of
@@ -203,6 +218,12 @@ def _cancel_pending_runs(
     Routes each transition through
     :func:`assert_legal_transition` so the runtime
     state-machine chokepoint owns the policy (L155 pin).
+
+    ``cancelled_reason`` (default ``"schedule_archived"``)
+    is written verbatim into each ``run_cancelled`` payload's
+    ``reason``. The default keeps the archive path
+    byte-identical to pre-phase-14; ``schedule_pause`` passes
+    ``"schedule_paused"`` (§13 audit-truth).
     """
     pending_rows = conn.execute(
         "SELECT id FROM runs WHERE schedule_id = ? AND status = ?",
@@ -229,7 +250,7 @@ def _cancel_pending_runs(
             schedule_id=schedule_id,
             ts=now,
             kind=EventKind.RUN_CANCELLED,
-            payload={"reason": "schedule_archived"},
+            payload={"reason": cancelled_reason},
             correlates=correlates_event_id,
         )
         append_event(conn, run_event)

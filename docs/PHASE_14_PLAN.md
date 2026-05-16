@@ -131,7 +131,10 @@ unilaterally decided.
   archive-vs-pause asymmetry in design §7). Pause then:
   `let_complete` → already-pending Runs untouched (current
   behaviour); `cancel_pending` → cancel them (parity with
-  archive).
+  archive). **[SUPERSEDED by §9.2 (α): the field is housed on
+  `FailurePolicy`, NOT a top-level `ScheduleSpec` field — the
+  "OPTIONAL ScheduleSpec field" phrasing here was a
+  code-verified-busted premise; see §9.2 (a)/(b).]**
 - **Q3 — canonical-hash stability of the new spec field.**
   The field is OPTIONAL + defaulted; per the phase-9
   `TemplateRef.args` precedent (design §5.2), a spec that
@@ -140,6 +143,11 @@ unilaterally decided.
   set (or default-elided) so every pre-amendment frozen spec
   hashes unchanged. Pinned by a hash-stability regression
   test. NO DDL change (spec is JSON in `schedules`).
+  **[SUPERSEDED by §9.2: "spec is JSON in `schedules`" is
+  FALSE — the table is column-decomposed. The no-DDL goal
+  HOLDS, realised via the `FailurePolicy` / `failure_json`
+  locus (α); the canonical_body nested-strip + regression
+  corpus requirement is unchanged. See §9.2 (a)/(c).]**
 - **Q4 — cancellation reuse.** RECOMMENDED: reuse the
   EXISTING `run_cancelled` EventKind + `cancelled` RunStatus
   + the state-machine transitions + the
@@ -202,11 +210,17 @@ unilaterally decided.
      BYTE-UNTOUCHED (both read and write are the worker's
      concern).
 2. **`paused_pending_policy`.** New `PausedPendingPolicy`
-   enum (`let_complete` / `cancel_pending`) + optional
-   ScheduleSpec field (default `let_complete`,
-   hash-stable — Q3). `schedule_pause` honours it
-   (`cancel_pending` → cancel already-pending Runs via the
-   existing archive seam; `let_complete` → current no-op).
+   enum (`let_complete` / `cancel_pending`) + an optional
+   field on **`FailurePolicy`** (NOT a literal top-level
+   `ScheduleSpec` field — slice-3 (α) fork ruling §9.2: a new
+   top-level field is NOT persisted by the column-decomposed
+   `schedules` table without DDL, whereas `FailurePolicy`
+   round-trips via `failure_json`; default `let_complete`,
+   hash-stable — Q3 nested-strip). `schedule_pause` reads the
+   persisted policy and honours it (`cancel_pending` → cancel
+   already-pending Runs via the existing archive seam with
+   `run_cancelled` reason `schedule_paused`; `let_complete` /
+   None → current no-op).
 3. **Cancellation parity.** Pause(`cancel_pending`) emits
    `run_cancelled` for already-pending Runs exactly as
    `schedule_archive` does (reused seam; no new kind).
@@ -234,11 +248,16 @@ unilaterally decided.
 - Extensions only (no new module expected): `app/v2/idempotency.py`
   (+ `prior_emit_succeeded` ledger-query, pure/DI-conn),
   `app/v2/enums.py` (+ `PausedPendingPolicy`),
-  `app/v2/models/schedule.py` (+ optional
-  `paused_pending_policy` field, hash-stable),
+  `app/v2/models/common.py` (+ optional
+  `FailurePolicy.paused_pending_policy` field — (α) locus,
+  §9.2), `app/v2/models/schedule.py`
+  (`canonical_body` nested-strip, hash-stable),
   `app/v2/runtime/worker.py` (additive pre-emit dedup check),
-  `app/v2/authoring/lifecycle.py` / `app/v2/runtime/lifecycle.py`
-  (pause honours the policy).
+  `app/v2/authoring/lifecycle.py` (pause reads + honours the
+  persisted policy) / `app/v2/authoring/lifecycle_helper.py`
+  (optional defaulted `cancelled_reason`). `storage/schedules.py`
+  is NOT touched — `failure_json` already round-trips
+  `FailurePolicy` (the (α) structural win).
 - `tests/v2/test_idempotency_dedup.py`,
   `tests/v2/test_paused_pending_policy.py`,
   `tests/v2/test_phase14_import_hygiene.py` (if a new module
@@ -258,9 +277,20 @@ unilaterally decided.
   commit as `RUN_SUCCEEDED`) — both-or-neither.
 - `PausedPendingPolicy(str, Enum)`: `LET_COMPLETE` /
   `CANCEL_PENDING`.
-- `ScheduleSpec.paused_pending_policy: PausedPendingPolicy =
-  LET_COMPLETE` (optional; ELIDED from the `compute_hash`
-  canonical body when unset/default — Q3, no hash drift).
+- `FailurePolicy.paused_pending_policy:
+  Optional[PausedPendingPolicy] = None` ((α) locus §9.2 — NOT
+  a top-level `ScheduleSpec` field; persisted via the existing
+  `failure_json` column, no DDL/v002). `ScheduleSpec.canonical_body()`
+  ELIDES it from the serialised `failure` dict when unset
+  (None) / `let_complete` — byte-for-byte the same nested-strip
+  as `template.args` (Q3, no hash drift; NOT
+  `model_dump(exclude_defaults=)`).
+- `update_status_with_event` / `_cancel_pending_runs` gain an
+  optional `cancelled_reason: str = "schedule_archived"`
+  (default = archive byte-identical); `schedule_pause` passes
+  `"schedule_paused"` (§13 audit-truth — a pause is NOT an
+  archive). Optional defaulted param only — no signature
+  break, no new EventKind.
 - Worker pre-emit READ: compute key → `prior_emit_succeeded`
   → branch (skip+`emit_skipped_idempotent` vs proceed);
   post-success WRITE the keyed marker in the terminal TX.
@@ -335,9 +365,59 @@ finalises)
    `_commit_success_atomic` both-or-neither B.1/B.6 + the
    structural A.2 pin).
 3. **`paused_pending_policy`** — enum + optional hash-stable
-   ScheduleSpec field (hash-stability regression pin) +
-   `schedule_pause` honours it (reuse the archive
-   cancel-pending seam; `run_cancelled`, no new kind).
+   policy field + `schedule_pause` honours it (reuse the
+   archive cancel-pending seam; `run_cancelled`, no new kind).
+   **LANDED** (slice-3 (α) fork ruling §9.2; folded in-commit
+   per the §9.1 / phase-11 §0.3 / phase-12 §0.2 disposition
+   discipline). The pre-arm-named "top-level `ScheduleSpec`
+   field" was CODE-VERIFIED impossible without DDL (the
+   `schedules` table is column-decomposed — no spec JSON
+   blob, no policy column; `_COLUMNS` / `_row_to_spec` /
+   `insert_schedule` enumerate fixed columns). Ruling: (α) —
+   the field is housed on **`FailurePolicy`** (persisted via
+   the existing `failure_json` column, round-trips through
+   `get_schedule` / `_row_to_spec` with NO DDL / NO v002 —
+   the (β)=v002-DDL path is forbidden by the no-v002 invariant
+   held since phase 11; (γ)=in-memory-only is Q4/Q7-
+   unsatisfiable across restart/fresh-conn). (α) is the only
+   no-DDL path faithful to the phase-9 `TemplateRef.args`
+   nested-optional precedent the pre-arm itself cited.
+   `PausedPendingPolicy{let_complete,cancel_pending}` enum;
+   `FailurePolicy.paused_pending_policy:
+   Optional[PausedPendingPolicy]=None`;
+   `ScheduleSpec.canonical_body()` strips it from the
+   serialised `failure` dict when unset/`let_complete`
+   (byte-for-byte the `template.args` mechanism — NOT
+   `model_dump(exclude_defaults=)`). `schedule_pause` reads
+   the PERSISTED `spec.failure.paused_pending_policy` and
+   passes `cancel_pending_runs=(policy==cancel_pending)` +
+   `cancelled_reason="schedule_paused"` through the EXISTING
+   `update_status_with_event` archive seam (no new
+   worker/wakeup branch; PENDING→CANCELLED reused, not
+   re-declared). `update_status_with_event` /
+   `_cancel_pending_runs` gain an optional
+   `cancelled_reason="schedule_archived"` — default keeps the
+   archive path byte-identical (existing archive tests
+   UNMODIFIED + green); pause-cancel `run_cancelled` reason
+   `schedule_paused` is distinct from archive's
+   `schedule_archived` (§13 audit-truth — the secondary
+   audit-truth fix, reviewer-approved). `storage/schedules.py`
+   BYTE-UNTOUCHED (the (α) structural win — pinned).
+   `tests/v2/test_paused_pending_policy.py`: Q3 hash-stability
+   corpus (plain reminder + OneOff-template + source-driven /
+   RecurringSeriesFromSource-shaped — phase-9
+   reconstruct-pre-amendment-shape technique: unset hashes
+   byte-identical, explicit `let_complete` == unset,
+   `cancel_pending` stable+distinct+key-present, strip touches
+   ONLY `paused_pending_policy`); round-trip pin
+   (`cancel_pending` survives fresh-conn `get_schedule`;
+   `_COLUMNS` == the v001 set); pause-honours (let_complete /
+   None no-op for pending; `cancel_pending` cancels with
+   reason `schedule_paused`; archive parity reason
+   `schedule_archived`). 2410 v2 tests, 0 fail, 0 regression
+   (2383 phase-13 baseline + 12 slice-1/2 + 15 slice-3).
+   `PHASE_ALLOWLIST[14]` unchanged (no new surface path —
+   enum + model field + lifecycle only).
 4. **closeout** — full `tests/v2`, acceptance walk, phase
    guards, `gen_docs` regen+stage, REPO-WIDE semantic-intent
    sweep (the phase-9/10/11/12/13 lesson), the ONE
@@ -367,11 +447,19 @@ finalises)
 - terminal-TX atomicity pin: the keyed `emit_succeeded` is
   durable IFF the run terminal-commits (both-or-neither with
   `RUN_SUCCEEDED` — no orphan marker, no missing key).
-- `test_paused_pending_policy.py` — `let_complete` (default)
-  pause leaves pending Runs; `cancel_pending` pause emits
-  `run_cancelled` for them (parity with archive); hash
-  stability: a spec without the field hashes identically to
-  pre-amendment.
+- `test_paused_pending_policy.py` — `let_complete` (default /
+  None) pause leaves pending Runs untouched; `cancel_pending`
+  pause emits `run_cancelled` for them with reason
+  `schedule_paused` (parity-with-archive seam, distinct reason
+  per §13 audit-truth); archive path byte-identical (default
+  `cancelled_reason="schedule_archived"`). Q3 hash-stability:
+  a corpus (plain reminder + OneOff-template + source-driven)
+  with the `FailurePolicy` field unset/`let_complete` hashes
+  byte-identically to the pre-amendment on-disk shape (phase-9
+  reconstruct technique); `cancel_pending` → stable, distinct,
+  deterministic hash. Round-trip: `cancel_pending` survives a
+  fresh-conn `get_schedule`; `storage/schedules.py` `_COLUMNS`
+  == the v001 set (no accidental DDL).
 - emit-adapter byte-untouched empty-diff proof; phase-9–13
   fire-path/boundary/seam regression pins green.
 
@@ -477,13 +565,27 @@ No v002 / DDL change: emit_succeeded + emit_skipped_idempotent
 
 paused_pending_policy ships: a PausedPendingPolicy enum
 (let_complete / cancel_pending) + an OPTIONAL hash-stable
-ScheduleSpec field (default let_complete — a spec that does
-not set it hashes identically to pre-amendment, the phase-9
-TemplateRef.args precedent). schedule_pause honours it:
-let_complete leaves already-pending Runs (prior behaviour),
-cancel_pending emits run_cancelled for them — parity with
-schedule_archive, reusing the existing cancel-pending seam,
-NO new EventKind.
+field on FailurePolicy (NOT a top-level ScheduleSpec field —
+the slice-3 (α) fork ruling: a new top-level field is not
+persisted by the column-decomposed schedules table without
+DDL; FailurePolicy round-trips via the existing failure_json
+column with NO DDL / NO v002, faithful to the phase-9
+TemplateRef.args nested-optional precedent. storage/
+schedules.py is byte-untouched). Default let_complete — a
+spec that does not set it (or sets let_complete) hashes
+identically to pre-amendment via the canonical_body
+nested-strip on the failure dict (the same mechanism as
+template.args; cancel_pending participates → new version).
+schedule_pause reads the PERSISTED policy and honours it:
+let_complete / None leaves already-pending Runs (prior
+behaviour), cancel_pending emits run_cancelled for them —
+parity with schedule_archive, reusing the existing
+update_status_with_event cancel-pending seam, NO new
+EventKind. The run_cancelled payload reason is schedule_paused
+for a pause-driven cancel vs schedule_archived for archive
+(§13 audit-truth — a pause is not an archive); a new optional
+defaulted cancelled_reason param keeps the archive path
+byte-identical.
 
 The phase-11 _fail_run reasoning boundary, phase-12
 read-only-reasoning enforcement, and phase-13 cross-fire
@@ -613,6 +715,83 @@ phase-13 disposition discipline). Baked verbatim:
   no-double-deliver claim — R2 honest-window discipline).
   CONTRACTS_V2_DESIGN.md §6.4/§7 amendment stays for the ONE
   closeout reconciliation pass, NOT slice 2.
+
+### 9.2 Slice-3 fork ruling (CLOSED — (α); premise code-verified-bust)
+
+Slice-3 surfaced (pre-code) a code-verified bust of the
+conductor/claude-reviewer slice-3 pre-arm premise. The
+reviewer code-verified the bust itself and acknowledged its
+own pre-arm was wrong (the catch was correct). Folded into
+the slice-3 commit per the §9.1 / phase-11 §0.3 / phase-12
+§0.2 disposition discipline — a busted-premise pre-arm must
+NOT silently persist as plan wording (the phase-9–13
+stale-wording lesson). Baked verbatim:
+
+- **(a) Premise-bust (code-verified).** The pre-arm said
+  "new optional **top-level `ScheduleSpec`** field" + "spec
+  is JSON in schedules (NO DDL)". FALSE: the `schedules`
+  table (`ddl/v001_initial.sql`) is **column-decomposed**
+  (`id, owner, description, trigger_json, delivery_json,
+  failure_json, audit_json, status, execution_plan_hash,
+  template_json, authored_at, parent_hash, hash`) — there is
+  NO spec JSON blob and NO `paused_pending_policy` column.
+  `storage/schedules.py` `_COLUMNS` / `_row_to_spec` /
+  `insert_schedule` enumerate that fixed list. A new
+  top-level `ScheduleSpec` field would NOT be written by
+  `insert_schedule` nor reconstructed by `_row_to_spec` ⇒
+  `get_schedule` would always return the default ⇒
+  `schedule_pause` could never read an author-set
+  `cancel_pending` post-restart/fresh-conn (Q4/Q7
+  unreachable). The cited phase-9 precedent
+  (`TemplateRef.args`) works precisely because `args` lives
+  INSIDE the round-tripping `template_json` column, NOT as a
+  new top-level column.
+- **(b) Ruling = (α).** `paused_pending_policy` is housed on
+  **`FailurePolicy`** (persisted via the existing
+  `failure_json` column — `encode_json(spec.failure)` /
+  `decode_json(failure_raw, FailurePolicy)` — round-trips
+  with NO DDL / NO v002). **(β)** top-level field + new
+  nullable column = a v002 DDL migration, forbidden by the
+  no-v002 invariant held since phase 11 — REJECTED.
+  **(γ)** top-level + in-memory-only (not persisted) =
+  Q4/Q7 unsatisfiable across restart/fresh-conn,
+  non-viable — REJECTED. (α) is the ONLY no-DDL/no-v002 path
+  that round-trips AND is faithful to the phase-9
+  nested-optional precedent the pre-arm itself cited — the
+  CORRECT realization of the pre-arm INTENT (persisted,
+  hash-stable, no-DDL). `FailurePolicy` is the defensible
+  semantic home: run-disposition-on-a-lifecycle-event.
+- **(c) Hash-elision locus.** `ScheduleSpec.canonical_body()`
+  nested-strip on the serialised `failure` dict, byte-for-
+  byte the SAME mechanism as the existing `template.args`
+  strip (pop `paused_pending_policy` when None /
+  `let_complete`). NOT `model_dump(exclude_defaults=)` (would
+  not match the precedent; risks collateral elision of other
+  defaulted fields). Q3 regression corpus (locus moved,
+  requirement identical): pre-amendment frozen specs hash
+  byte-identically (field unset/default); `cancel_pending`
+  yields a stable distinct deterministic (sorted-JSON) hash.
+- **(d) `cancelled_reason` audit-truth fix
+  (reviewer-APPROVED).** `_cancel_pending_runs` hardcoded
+  `payload={"reason":"schedule_archived"}`; a pause-driven
+  cancel emitting `schedule_archived` is a false
+  audit-ledger statement (§13). Fix: an optional
+  `cancelled_reason: str = "schedule_archived"` threaded
+  `update_status_with_event` → `_cancel_pending_runs`
+  (default keeps the archive cancel-pending path
+  byte-identical — existing archive tests UNMODIFIED +
+  green); `schedule_pause` passes `"schedule_paused"`.
+  Optional defaulted param ONLY — every existing caller
+  unaffected, no signature break, no new EventKind.
+- **Scope pin.** ZERO worker / emit / sources / idempotency /
+  `storage/schedules.py` touch (slice 3 = `FailurePolicy`
+  field + `canonical_body` strip + `schedule_pause` /
+  `lifecycle_helper` `cancelled_reason`); slice-2 dedup +
+  `_commit_success_atomic` untouched; emit adapters
+  byte-untouched. `CONTRACTS_V2_DESIGN.md` §7 amendment
+  (state the `FailurePolicy` locus + the (α) rationale + that
+  it is NOT a literal top-level field) → the ONE closeout
+  reconciliation pass, NOT slice 3.
 
 ## 10. Hard rules (carried forward from phases 9–13)
 

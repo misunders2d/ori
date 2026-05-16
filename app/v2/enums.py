@@ -340,3 +340,44 @@ class ToolMode(str, Enum):
 
     READ_ONLY = "read_only"
     WRITE_ALLOWED = "write_allowed"
+
+
+class PausedPendingPolicy(str, Enum):
+    """What happens to a schedule's already-pending Runs when
+    the schedule is paused (:func:`schedule_pause`).
+
+    Phase-14 (2026-05-16). Housed on
+    :class:`app.v2.models.common.FailurePolicy` (persisted via
+    the ``failure_json`` column — it round-trips through
+    ``insert_schedule`` / ``_row_to_spec`` with NO DDL and NO
+    v002 migration; the phase-9 ``TemplateRef.args``
+    nested-optional precedent applied). An early phase-14 plan
+    draft wrongly assumed a literal top-level ``ScheduleSpec``
+    field — the (α) fork ruling corrected that
+    (``docs/PHASE_14_PLAN.md`` §9.1): a new top-level field is
+    NOT persisted by the column-decomposed ``schedules`` table
+    without DDL, whereas ``FailurePolicy`` already round-trips
+    and is the defensible semantic home for
+    "what to do with in-flight / pending work on a lifecycle
+    state change".
+
+    ``let_complete`` (default) — pending Runs are left
+        untouched; they fire normally even though the schedule
+        is paused. This is the pre-phase-14 behaviour: pausing
+        with no policy set is a no-op for in-flight work
+        (design §7 archive-vs-pause asymmetry; least-surprise).
+    ``cancel_pending`` — every pending Run is cancelled in the
+        same transaction as the pause, exactly as
+        :func:`schedule_archive` does (same
+        ``update_status_with_event`` cancel-pending seam, same
+        ``run_cancelled`` event, same PENDING→CANCELLED
+        state-machine transition). Differs from archive ONLY in
+        the ``run_cancelled`` payload ``reason``
+        (``schedule_paused`` vs ``schedule_archived``) so the
+        audit ledger states the truth (§13).
+
+    See ``docs/CONTRACTS_V2_DESIGN.md`` §7.
+    """
+
+    LET_COMPLETE = "let_complete"
+    CANCEL_PENDING = "cancel_pending"

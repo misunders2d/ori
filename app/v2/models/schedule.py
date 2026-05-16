@@ -29,7 +29,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.v2.enums import ScheduleStatus
+from app.v2.enums import PausedPendingPolicy, ScheduleStatus
 from app.v2.models.common import (
     AuditPolicy,
     Delivery,
@@ -164,6 +164,22 @@ class ScheduleSpec(BaseModel):
         in the hash; a body change re-hashes. See
         ``docs/PHASE_9_PLAN.md`` §0 (round-3 reviewer L65
         fix).
+
+        Phase-14 amendment (2026-05-16):
+        ``FailurePolicy.paused_pending_policy`` is stripped
+        from the serialised ``failure`` dict when it is unset
+        (None) or at the ``let_complete`` default — byte-for-
+        byte the SAME nested-strip mechanism as the
+        ``template.args`` strip above. Pre-phase-14 specs on
+        disk have NO ``paused_pending_policy`` key in
+        ``failure_json``; post-amendment specs that leave it
+        unset / default re-serialise WITHOUT the key so they
+        hash byte-identically. Only ``cancel_pending``
+        participates in the hash (a real behaviour change →
+        new version). NOT ``model_dump(exclude_defaults=)``
+        — that would not match the precedent and risks
+        collateral elision of other defaulted fields. See
+        ``docs/PHASE_14_PLAN.md`` §9.1 (the (α) fork ruling).
         """
         d = self.model_dump(mode="json", by_alias=True)
         d.pop("hash", None)
@@ -171,6 +187,14 @@ class ScheduleSpec(BaseModel):
         template = d.get("template")
         if template is not None and template.get("args") is None:
             template.pop("args", None)
+        failure = d.get("failure")
+        if failure is not None:
+            ppp = failure.get("paused_pending_policy")
+            if (
+                ppp is None
+                or ppp == PausedPendingPolicy.LET_COMPLETE.value
+            ):
+                failure.pop("paused_pending_policy", None)
         return d
 
     def compute_hash(self) -> str:
