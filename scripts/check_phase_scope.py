@@ -240,6 +240,36 @@ PHASE_ALLOWLIST: dict[int, set[str]] = {
         # wiring, no agent mount, no production side effect
         # before step 11 (§12.1 invariant 2).
     },
+    11: {
+        # Code surface carried forward
+        "app/v2/",
+        "tests/v2/",
+        # CI guard machinery (carried forward)
+        "scripts/check_phase_scope.py",
+        "scripts/install_hooks.py",
+        ".githooks/v2_phase_guard.sh",
+        ".githooks/pre-commit",
+        ".github/workflows/v2_phase_guard.yml",
+        # Phase-tracking artefact
+        ".v2-current-phase",
+        # Plan + design docs
+        "docs/PHASE_11_PLAN.md",
+        "docs/CONTRACTS_V2_DESIGN.md",
+        # Auto-generated index (pre-commit regenerates + stages)
+        "docs/INDEX.md",
+        "docs/AGENTS_INVENTORY.md",
+        # Doc-read marker bookkeeping
+        ".docs_read_marker",
+        # RE-ADDED for phase 11 — step-11 fire-path cutover.
+        # The phase-10 source layer goes live in the worker;
+        # the coordinator §11.4 scheduling-law gains the new
+        # RecurringSeriesFromSource template (ADDITIVE, like
+        # phase 9). NOT carried from phase 10 (build-the-layer
+        # had no agent mount). run_bot.py / app/agent.py are
+        # NOT re-added: phase-9 already wired boot + slack DI;
+        # phase 11 adds no new boot integration.
+        "app/sub_agents/coordinator_agent.py",
+    },
     # Future phases populate here as they land.
 }
 
