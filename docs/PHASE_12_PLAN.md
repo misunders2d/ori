@@ -319,6 +319,35 @@ mid-phase.
    ToolDescriptor forbids an untagged registration).
 3. **Tag-driven CustomFlow friction** (Q5 subset) — additive
    to the authoring path.
+   **LANDED** — reviewer arbitration = **Option A + C1–C7**
+   (no pre-existing admin-approval/handshake mechanism existed;
+   §5.9 is conceptual). `app/v2/validation.py`
+   `_validate_customflow_admin_friction`: a SECOND independent
+   additive `_validate_*` (after `_validate_reasoning_tool_mode`,
+   non-short-circuiting) emitting a **`warning`**-severity
+   `customflow_admin_approval_advisory` (C1 — DISTINCT code,
+   NEVER `error`; that severity split IS the
+   slice-2-REJECT vs slice-3-FRICTION boundary). Trigger
+   (C2, Q5 subset only): a `tool_mode=write_allowed` reasoning
+   step OR a referenced tool for which
+   `tool_tags.requires_admin_approval` is True
+   (privileged/costly/filesystem_write — `costly` subsumed, no
+   policy re-declared). §11.1 early-no-op + all-issues-collected
+   (C3); shipped ValidationIssue warning surface, no parallel
+   path, slice-1 establishes write_allowed⇒allowed so friction
+   is raised separately not as a reject (C4); message states
+   SIGNAL-ONLY / no executor / DEFERRED (C5); zero
+   sources/resolver/cache/worker touch (C7). **No coupled-test
+   reconcile needed** — slice-3 is warning-only; existing tests
+   assert on `errors()`/`ok` (warnings don't affect either),
+   and the slice-2 `_plan_with_refs` write_allowed default
+   already absorbed the structural shift. Dedicated tests in
+   `test_validation_customflow_friction.py`. **§5.9 ships as a
+   validation WARNING SIGNAL, NOT a shipped admin-approval
+   gate/executor** — the gate + consuming flow are DEFERRED
+   (no §12 step owns it; same no-executor framing as Q1 and
+   the design's own open question); the closeout §5.9 design
+   reconciliation records shipped(=signal)-vs-deferred(=gate).
 4. **Build-the-layer runtime guard + worker seam** (Q1a/Q3)
    — guard wired at the seam, NOT live; phase-11 worker
    boundary regression-pinned unchanged.
@@ -509,6 +538,28 @@ future drift is caught against the decision, not re-litigated.
 Cross-phase invariants confirmed UNTOUCHED by the reviewer:
 phase 12 = validation + `tool_tags` layer; does NOT touch
 sources / resolver / cache / dirfd / snapshot.
+
+**Slice-3 arbitration (CLOSED — Option A + C1–C7).** Recon
+established NO pre-existing admin-approval/handshake friction
+mechanism in the v2 authoring flow (`requires_admin_approval`
+unconsumed; `ToolResponse` has no approval status; the
+HandshakeStore is dry-run-only; §5.9 is conceptual). Surfaced
+to the reviewer rather than inventing a parallel path
+(slice-6/slice-7 precedent). DECISION = **Option A**: the §5.9
+friction ships as a **WARNING-severity validation SIGNAL** on
+the SHIPPED `ValidationIssue`/`ValidationResult` warning
+surface — mapping the slice-2-REJECT vs slice-3-FRICTION
+boundary onto the EXISTING `error`/`warning` partition, fitting
+Q1 exactly (static enforcement IS the deliverable; the
+deliverable is the SIGNAL a future approval gate would
+consume). Binding conditions C1–C7 baked into the slice-3
+ledger above. **No admin-approval gate/executor is shipped or
+implied** — none exists; design §5.9 stays conceptual; the
+consuming approval flow is DEFERRED (no §12 step owns it
+cleanly — same framing as Q1's no-executor). The closeout §5.9
+design reconciliation MUST record shipped(=warning signal)
+vs deferred(=gate/executor) so §5.9 never reads as
+fully-wired (semantic-intent — the phase-9/10/11 lesson).
 
 ## 10. Hard rules (carried forward from phases 9–11)
 

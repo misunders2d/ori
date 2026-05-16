@@ -35,12 +35,13 @@ from typing import Literal, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.v2.enums import EnforcementMode
+from app.v2.enums import EnforcementMode, ToolMode
 from app.v2.models.execution_plan import ExecutionPlan
 from app.v2.models.schedule import ScheduleSpec
 from app.v2.models.triggers import OneOffTrigger
 from app.v2.reasoning_enforcement import evaluate_reasoning_step
 from app.v2.registry import EmitRegistry, SourceRegistry, ToolRegistry
+from app.v2.tool_tags import requires_admin_approval
 
 
 Severity = Literal["error", "warning"]
@@ -580,6 +581,113 @@ def _validate_reasoning_tool_mode(
     return issues
 
 
+def _validate_customflow_admin_friction(
+    spec: ScheduleSpec,
+    execution_plans: Optional[Mapping[str, ExecutionPlan]],
+    registries: Optional[RegistrySnapshot],
+) -> list[ValidationIssue]:
+    """Phase-12 slice-3 — design §5.9 CustomFlow friction
+    SIGNAL (Q5 subset; reviewer Option A + C1–C7).
+
+    Emits a ``warning``-severity issue (NEVER ``error`` — C1;
+    that severity split is what distinguishes this FRICTION
+    signal from slice-2's hard REJECT) when a reasoning-bearing
+    plan contains a reasoning step that is EITHER:
+
+    - ``tool_mode=write_allowed`` (the D6 opt-in — slice-1
+      already returns ``allowed=True`` for it, i.e. NOT a
+      reject; the friction is raised separately here as an
+      advisory warning), OR
+    - references a tool tagged ``privileged`` / ``costly`` /
+      ``filesystem_write`` — detected via
+      :func:`app.v2.tool_tags.requires_admin_approval` (the
+      shipped §5.9 ``_ADMIN_APPROVAL_TAGS`` predicate;
+      ``costly`` is subsumed there, so ``is_costly`` need not
+      be called separately — NO policy is re-declared, C2/C4).
+
+    The 4 orthogonal §5.9 triggers (dynamic delivery target,
+    emit count > 3, previously-unused adapter,
+    ``require_reapprove`` + recent shape change) are OUT of
+    scope (C2).
+
+    **SIGNAL ONLY — no dangling-gate illusion (C5).** No
+    admin-approval gate or executor is shipped — none exists;
+    design §5.9 is a CONCEPTUAL gate (Q1: static enforcement
+    IS the deliverable, there is no executor). This warning
+    merely SURFACES that conceptual gate for a future
+    consuming flow; it is advisory at this layer and does NOT
+    block the spec (``ValidationResult.ok`` stays True for
+    warnings). The message states this plainly so neither a
+    reader nor the LLM can infer an approval flow exists.
+
+    §11.1 + structural guards mirror slice-2 (C3): early
+    no-op for no ``execution_plan_hash`` /
+    ``execution_plans is None`` / plan-not-in-index /
+    ``reasoning == []``; the rule is independent +
+    NON-short-circuiting (returns its OWN list; iterates EVERY
+    reasoning step so all issues are still collected). With
+    ``registries`` / ``registries.tools`` ``None`` (every
+    shipped caller, §1.1a) the TAG trigger cannot resolve and
+    is silently skipped; the ``write_allowed`` trigger is a
+    model-field read and fires regardless. Zero
+    sources/resolver/cache/worker touch (C7).
+    """
+    if spec.execution_plan_hash is None:
+        return []
+    if execution_plans is None:
+        return []
+    plan = execution_plans.get(spec.execution_plan_hash)
+    if plan is None:
+        return []
+    if not plan.reasoning:
+        return []
+
+    tools_reg = registries.tools if registries is not None else None
+
+    issues: list[ValidationIssue] = []
+    for ri, step in enumerate(plan.reasoning):
+        triggers: list[str] = []
+        if step.tool_mode is ToolMode.WRITE_ALLOWED:
+            triggers.append(
+                "tool_mode=write_allowed reasoning step"
+            )
+        if tools_reg is not None:
+            for tool_name in step.tools:
+                descriptor = tools_reg.lookup(tool_name)
+                if descriptor is None:
+                    continue
+                if requires_admin_approval(
+                    frozenset(descriptor.tags)
+                ):
+                    triggers.append(
+                        f"tool {tool_name!r} carries a §5.9 "
+                        f"admin-approval tag "
+                        f"(privileged/costly/filesystem_write)"
+                    )
+        if not triggers:
+            continue
+        issues.append(
+            ValidationIssue(
+                code="customflow_admin_approval_advisory",
+                severity="warning",
+                path=f"execution_plan.reasoning[{ri}]",
+                message=(
+                    f"reasoning step {step.id!r} trips the "
+                    f"design §5.9 CustomFlow friction "
+                    f"({'; '.join(triggers)}). ADVISORY SIGNAL "
+                    f"ONLY: no admin-approval gate or executor "
+                    f"is shipped — design §5.9 is a conceptual "
+                    f"gate and the consuming approval flow is "
+                    f"DEFERRED (no §12 step owns it). The spec "
+                    f"is NOT blocked by this warning; it merely "
+                    f"surfaces the friction for a future "
+                    f"reviewer/approval flow."
+                ),
+            )
+        )
+    return issues
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -632,6 +740,11 @@ def validate_schedule_spec(
     )
     issues.extend(
         _validate_reasoning_tool_mode(spec, execution_plans, registries)
+    )
+    issues.extend(
+        _validate_customflow_admin_friction(
+            spec, execution_plans, registries
+        )
     )
     return ValidationResult(issues=issues)
 
