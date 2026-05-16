@@ -351,6 +351,39 @@ mid-phase.
 4. **Build-the-layer runtime guard + worker seam** (Q1a/Q3)
    — guard wired at the seam, NOT live; phase-11 worker
    boundary regression-pinned unchanged.
+   **LANDED** — `app/v2/reasoning_enforcement.py` extended
+   ADDITIVELY with `ReasoningPlanGuardResult` +
+   `evaluate_reasoning_plan` (strict per-step delegation to
+   the slice-1 `evaluate_reasoning_step`; NO policy
+   re-declared; `all_allowed` aggregate).
+   `app/v2/runtime/worker.py`: a private
+   `_reasoning_runtime_guard(plan)` — the SEAM a future LLM
+   reasoning-chain executor would consult; registry-less
+   (the worker owns no `ToolRegistry`) ⇒ §5.4 fail-safe,
+   consistent with the validation §1.1b degeneration.
+   **Dead on the live path**: the phase-11 `if plan.reasoning:`
+   `_fail_run` boundary is byte/behaviour-unchanged and
+   returns BEFORE the guard; a seam-test AST-scan pins that
+   `_dispatch_emit_branch` never CALLs the guard (the seam
+   comment naming it is expected). The reason CODE
+   `reasoning_unsupported_pending_step_12` is BYTE-IDENTICAL;
+   only the human message refined — it now states the
+   ENFORCEMENT layer ships but the EXECUTOR is not built (no
+   §12 step owns it), with NO dangling-gate illusion
+   (semantic accuracy — the phase-9/10/11 lesson). The
+   CustomFlow/template-None raise message is a DISTINCT,
+   accurate string and intentionally retained. Phase-11
+   regression pin
+   (`test_runtime_source_fire.py::test_reasoning_bearing_plan_fail_run_not_raise`)
+   UNMODIFIED + green. emit adapters NOT tag-enforced (Q4);
+   OneOff / v1 / phase-9–11 source path byte/behaviour-
+   unchanged (§11.1). ZERO sources/resolver/cache touch;
+   worker touched ONLY for the additive dead seam + the
+   message refine. Dedicated tests in
+   `test_worker_reasoning_seam.py` + `test_reasoning_enforcement.py`
+   plan-guard cases; `test_phase12_import_hygiene` still
+   green over the extended module (no new module ⇒
+   `PHASE_ALLOWLIST[12]` unchanged).
 5. **closeout** — full `tests/v2`, §7 acceptance walk, phase
    guards, `gen_docs` regen+stage, REPO-WIDE semantic-intent
    stale-wording / inconsistency sweep (the phase-9/10/11

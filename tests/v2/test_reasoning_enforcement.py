@@ -26,6 +26,8 @@ from app.v2.enums import ToolMode
 from app.v2.models.execution_plan import ReasoningStep
 from app.v2.reasoning_enforcement import (
     ReasoningEnforcementOutcome,
+    ReasoningPlanGuardResult,
+    evaluate_reasoning_plan,
     evaluate_reasoning_step,
 )
 from app.v2.tool_tags import ToolCapabilityTag
@@ -203,3 +205,53 @@ def test_all_tools_clean_read_only_is_allowed():
         resolve_tags=lambda n: {T.READ_EXTERNAL, T.FILESYSTEM_READ},
     )
     assert o == ReasoningEnforcementOutcome(allowed=True)
+
+
+# ---------------------------------------------------------------------------
+# Plan-level guard (slice 4) — strict delegation to slice-1
+# ---------------------------------------------------------------------------
+
+
+def test_plan_guard_empty_is_all_allowed():
+    r = evaluate_reasoning_plan([], resolve_tags=lambda n: None)
+    assert r == ReasoningPlanGuardResult()
+    assert r.all_allowed is True
+
+
+def test_plan_guard_delegates_per_step_in_order():
+    s1 = _step(["w"])  # read_only + write tool ⇒ blocked
+    s2 = ReasoningStep(
+        id="s2",
+        entry_agent="CoordinatorAgent",
+        tools=["r"],
+        tool_mode=ToolMode.READ_ONLY,
+        user_template="x",
+    )
+    resolve = lambda n: {  # noqa: E731
+        "w": {T.WRITE_EXTERNAL},
+        "r": {T.READ_EXTERNAL},
+    }.get(n)
+    r = evaluate_reasoning_plan([s1, s2], resolve_tags=resolve)
+    # Same shape as calling slice-1 per step, in order.
+    assert [sid for sid, _o in r.outcomes] == ["s1", "s2"]
+    assert r.outcomes[0][1] == evaluate_reasoning_step(
+        s1, resolve_tags=resolve
+    )
+    assert r.outcomes[1][1] == evaluate_reasoning_step(
+        s2, resolve_tags=resolve
+    )
+    assert r.all_allowed is False  # s1 blocked
+
+
+def test_plan_guard_all_allowed_when_every_step_allowed():
+    r = evaluate_reasoning_plan(
+        [_step([], mode=ToolMode.WRITE_ALLOWED), _step([])],
+        resolve_tags=lambda n: None,
+    )
+    assert r.all_allowed is True
+
+
+def test_plan_guard_frozen():
+    r = ReasoningPlanGuardResult()
+    with pytest.raises(Exception):
+        r.outcomes = ()  # type: ignore[misc]

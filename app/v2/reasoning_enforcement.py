@@ -48,6 +48,7 @@ from typing import (
     TYPE_CHECKING,
     AbstractSet,
     Callable,
+    Iterable,
     Optional,
 )
 
@@ -146,8 +147,56 @@ def evaluate_reasoning_step(
     )
 
 
+@dataclass(frozen=True)
+class ReasoningPlanGuardResult:
+    """Plan-level read-only-reasoning guard result (phase-12
+    slice-4, build-the-layer).
+
+    ``outcomes`` is ``((step_id, ReasoningEnforcementOutcome),
+    …)`` in plan order — one entry per ``ReasoningStep``.
+    ``all_allowed`` is True iff EVERY step's outcome is
+    allowed. This is the shape a future LLM reasoning-chain
+    EXECUTOR would consult at the worker seam BEFORE invoking
+    a step's tools. **No executor is shipped** (no §12 step
+    owns it — Q1/Q3); this layer is wired at the seam but not
+    fired end-to-end.
+    """
+
+    outcomes: tuple[
+        tuple[str, ReasoningEnforcementOutcome], ...
+    ] = ()
+
+    @property
+    def all_allowed(self) -> bool:
+        return all(o.allowed for _sid, o in self.outcomes)
+
+
+def evaluate_reasoning_plan(
+    steps: "Iterable[ReasoningStep]",
+    *,
+    resolve_tags: ResolveTags,
+) -> ReasoningPlanGuardResult:
+    """Pure plan-level guard: map every ``ReasoningStep``
+    through :func:`evaluate_reasoning_step` (slice-1).
+
+    Strict delegation — the §5.4 blocking policy is NOT
+    re-declared here; this only aggregates per-step outcomes
+    keyed by ``step.id`` in order. ``steps`` is never mutated;
+    ``resolve_tags`` is the only collaborator (pure by
+    contract).
+    """
+    return ReasoningPlanGuardResult(
+        outcomes=tuple(
+            (s.id, evaluate_reasoning_step(s, resolve_tags=resolve_tags))
+            for s in steps
+        )
+    )
+
+
 __all__ = [
     "ResolveTags",
     "ReasoningEnforcementOutcome",
+    "ReasoningPlanGuardResult",
     "evaluate_reasoning_step",
+    "evaluate_reasoning_plan",
 ]

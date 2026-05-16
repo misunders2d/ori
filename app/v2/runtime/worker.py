@@ -85,6 +85,10 @@ from app.v2.enums import (
 )
 from app.v2.models.event import Event, RunSucceededPayload
 from app.v2.models.schedule import ScheduleSpec
+from app.v2.reasoning_enforcement import (
+    ReasoningPlanGuardResult,
+    evaluate_reasoning_plan,
+)
 from app.v2.runtime.claim import claim_run
 from app.v2.runtime.state_machine import assert_legal_transition
 from app.v2.sources.resolver import (
@@ -685,9 +689,17 @@ class Worker:
                 return "failed"
 
             if plan.reasoning:
-                # Step-12 boundary (plan §1.1 / §3.1 / Q4):
-                # the LLM reasoning-chain executor is not
-                # built. Clean run_failed, NOT a raise.
+                # Step-12 boundary (plan §1.1 / §3.1 / Q4).
+                # SEAM (phase-12 slice-4): a future LLM
+                # reasoning-chain executor would, right here,
+                # consult ``self._reasoning_runtime_guard(plan)``
+                # once per ReasoningStep before invoking its
+                # tools. That guard ships build-the-layer
+                # (pure, tested) but is DEAD until an executor
+                # exists — no §12 step owns the executor
+                # (Q1/Q3). Until then a reasoning-bearing plan
+                # is still a clean run_failed, NOT a raise, and
+                # the guard is never reached on the live path.
                 await self._fail_run(
                     conn=conn,
                     run=run,
@@ -695,8 +707,12 @@ class Worker:
                     error_message=(
                         f"schedule {spec.id!r} ExecutionPlan "
                         f"carries {len(plan.reasoning)} "
-                        f"reasoning step(s); the reasoning "
-                        f"executor lands in §12 step 12"
+                        f"reasoning step(s); §12 step-12 ships "
+                        f"the read-only-reasoning ENFORCEMENT "
+                        f"layer only — the LLM reasoning-chain "
+                        f"EXECUTOR is not built (no §12 step "
+                        f"owns it), so a reasoning-bearing plan "
+                        f"is cleanly failed here"
                     ),
                 )
                 return "failed"
@@ -894,6 +910,39 @@ class Worker:
                 "completed_at": completed_at,
                 "error": error_message,
             },
+        )
+
+    def _reasoning_runtime_guard(
+        self, plan
+    ) -> ReasoningPlanGuardResult:
+        """Build-the-layer §12 step-12 RUNTIME guard
+        (phase-12 slice-4). The SEAM a future LLM
+        reasoning-chain executor would consult — once per
+        ``ReasoningStep``, BEFORE invoking that step's tools —
+        to enforce read-only-reasoning at fire time.
+
+        **Dead code until the executor lands.** No reasoning
+        executor is shipped (no §12 step owns it — Q1/Q3);
+        :meth:`_dispatch_emit_branch` still cleanly
+        ``_fail_run``s every reasoning-bearing plan at the
+        unchanged phase-11 boundary BEFORE this guard would
+        ever be reached. It is unit-reachable (the slice-4
+        seam test) but is NEVER invoked on the live fire path
+        — a source-scan test pins that
+        ``_dispatch_emit_branch`` does not call it.
+
+        The worker holds no ``ToolRegistry`` (it owns
+        sources / resolver / emit, not the tool registry), so
+        the resolver is registry-less: every tool resolves to
+        ``None`` ⇒ the §5.4 fail-safe blocks it (defense in
+        depth, consistent with the validation-layer §1.1b
+        degeneration + the unchanged ``_fail_run`` boundary).
+        Delegates to the slice-1/4 pure layer — NO policy is
+        re-declared here.
+        """
+        return evaluate_reasoning_plan(
+            plan.reasoning,
+            resolve_tags=lambda _tool_name: None,
         )
 
     def _build_admin_alert_event(
