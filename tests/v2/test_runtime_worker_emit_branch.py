@@ -547,7 +547,8 @@ async def test_retry_later_downgrades_to_admin_alert_with_warning(
         r for r in caplog.records if r.levelno == logging.WARNING
     ]
     assert any(
-        "phase 9 downgrades to alert_admin" in r.getMessage()
+        "downgrading to alert_admin" in r.getMessage()
+        and "§12 step 14" in r.getMessage()
         for r in warnings
     )
 

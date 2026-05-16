@@ -144,10 +144,10 @@ class UnsupportedSpecError(Exception):
 
 
 class UnsupportedFailurePolicyError(Exception):
-    """Raised internally when a FailurePolicy action is not
-    implemented in phase 9. Caught by
-    :meth:`_route_failure_policy` and downgraded to a
-    warning log + alert_admin semantics."""
+    """Raised internally when a FailurePolicy action has no
+    executor yet (the retry chain lands in §12 step 14).
+    Caught by :meth:`_route_failure_policy` and downgraded
+    to a warning log + alert_admin semantics."""
 
 
 _logger = logging.getLogger(__name__)
@@ -818,8 +818,11 @@ class Worker:
                 reason="schedule_template_changed_at_claim",
                 error_message=(
                     f"schedule {spec.id!r} template name is "
-                    f"{template_name!r}; phase 9 emits only "
-                    f"{ONE_OFF_REMINDER_TEMPLATE_NAME!r}"
+                    f"{template_name!r}; the template emit "
+                    f"path serves only "
+                    f"{ONE_OFF_REMINDER_TEMPLATE_NAME!r} "
+                    f"(source-driven specs route via "
+                    f"execution_plan_hash)"
                 ),
             )
             return "failed"
@@ -924,8 +927,8 @@ class Worker:
         # alert_admin semantics so operators still see it.
         _logger.warning(
             "worker %s saw FailurePolicy.%s for "
-            "schedule_id=%r; phase 9 downgrades to "
-            "alert_admin (retry chain lands in phase 10)",
+            "schedule_id=%r; downgrading to alert_admin "
+            "(the retry chain lands in §12 step 14)",
             self._worker_id,
             action.value,
             spec.id,

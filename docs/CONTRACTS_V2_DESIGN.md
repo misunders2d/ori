@@ -571,9 +571,21 @@ funnel through the same validation pipeline):
     ExecutionPlan.
 - **Stage B (after source loaders land)**:
   - `RecurringSeriesFromSource(source, channel, hour_local, timezone, progress_strategy)`
-    — covers use cases 1, 12.
+    — covers use cases 1, 12. **Shipped phase 11 (§12
+    step 11A)**: STATELESS strategies only (`whole` /
+    `skip_unchanged`). Authored through the SAME pipeline
+    as `OneOffReminder` — the shared spine was EXTENDED
+    additively (§0.3, reviewer-ratified): the
+    freeze/commit trigger gate admits `{one_off, cron}`
+    and `commit` persists `insert_execution_plan` +
+    `insert_schedule` atomically in ONE transaction
+    (both-or-neither). Stateful "next unread item"
+    progress is deferred to 11B (needs step-13 cross-fire
+    `schedule_state`).
   - `ChannelDigest(sources, channel, schedule, summary_prompt)`
-    — covers use cases 2, 10.
+    — covers use cases 2, 10. **Deferred to §12 step 11B**
+    (needs the LLM reasoning-chain executor for
+    `summary_prompt`).
 
 - **CustomFlow** — escape hatch; full typed-tool authoring; lands
   alongside the tool registry.
@@ -733,6 +745,21 @@ live_change_policy ∈ {
 }
 ```
 
+**LIVE since phase 11 (§12 step 11A).** The policy is
+enforced in the worker fire path: `alert_on_shape_change`
+emits the drift event and STILL serves; `require_reapprove_
+on_shape_change` withholds content → `FAILED` with the
+FRESH snapshot still written as audit (no partial emit).
+`RecurringSeriesFromSource`'s `skip_unchanged` strategy
+does NOT re-read the snapshot table to detect a change —
+it reads the additive derived signal
+`ResolveOutcome.changed_vs_prior` the resolver populates
+per source provenance (§5.3.5 / `docs/PHASE_11_PLAN.md`
+§0.1, §3.3 all-provenance table). Re-reading the table
+from the worker would race the resolver's FRESH write —
+that was the phase-11 round-1 🔴, structurally avoided by
+the derived-signal design.
+
 #### 5.3.4 Item-id strategy
 
 For series-style contracts:
@@ -758,6 +785,19 @@ Per-fire snapshot stored:
   ALL metadata (`source_kind`, `selection_method`,
   `source_version`, `fetched_at`, sizes) lives in the
   row, never in the file.
+
+**LIVE since phase 11 (§12 step 11A).** The per-fire
+`.bin` + `source_snapshots` row are written by the
+resolver/cache path (`resolve_source_cached` on FRESH),
+not the worker. The worker is a PURE snapshot CONSUMER:
+it never calls `write_snapshot` and never re-reads
+`_newest_materialised_snapshot` (Q5 — `docs/PHASE_11_PLAN.md`
+§0.1). The only cross-fire signal it consumes is the
+derived, race-free `ResolveOutcome.changed_vs_prior`
+(§5.3.3). `sha256(.bin) == content_hash` re-verification
+and the `cache_ttl_seconds` no-probe (within TTL) /
+probe-every-fire (`ttl == 0`) semantics are honoured
+end-to-end through the worker without re-implementation.
 
 Retention per ScheduleSpec (the `AuditPolicy` model,
 `app/v2/models/common.py`, already a field on
@@ -1484,7 +1524,9 @@ so revert is a single git command.
 8. **Dry-run handshake + boot self-test**: three modes + `as_of_datetime` + freeze records snapshot + boot self-test gating.
 9. **OneOff trigger + `OneOffReminder` template + emit-only path**: first end-to-end working schedule. Reminders fire via the new path, no ExecutionPlan, no source.
 10. **Source loaders + snapshot infrastructure**: `source_literal`, `source_drive_file`, `source_local_file`, `source_slack_thread`. Per-source cache + fallback + drift + retention + on_oversize.
-11. **Source templates**: `RecurringSeriesFromSource`, `ChannelDigest`. Phase-1 completion.
+11. **Source-driven fire-path cutover + `RecurringSeriesFromSource`** (split 2026-05-16 into 11A/11B per `docs/PHASE_11_PLAN.md` §0 — reviewer-approved refinement):
+    - **11A (shipped — phase 11)**: the step-10 source layer (loaders / snapshot / cache / resolver), built unwired at step 10, goes LIVE in the worker fire path. A source-driven `ScheduleSpec` (`execution_plan_hash` → `ExecutionPlan` with `InputSpec.source_ref`, zero reasoning) fires end to end: claim → `resolve_source` per source-bearing input on the claimed connection → emit. Ships the `RecurringSeriesFromSource` template with STATELESS strategies only (`whole` / `skip_unchanged`), authored through the SHARED spine EXTENDED additively (§0.3, reviewer-ratified, scoped to the authoring spine): the freeze/commit trigger gate admits `{one_off, cron}` (others → `trigger_type_pending_step_unlock`); `commit` persists `insert_execution_plan`+`insert_schedule` atomically in ONE transaction (both-or-neither). `skip_unchanged` reads the additive `ResolveOutcome.changed_vs_prior` signal (§5.3.5 — the worker NEVER re-reads the snapshot table, Q5); the no-op success rides the EXISTING `running → succeeded` `RUN_SUCCEEDED` write via the typed additive `RunSucceededPayload.skipped_unchanged` discriminator (Option B, §0.2 — no new `EventKind`, no v002 events-schema migration, no second transaction). The `OneOffReminder` emit path + the emit/cache/resolver modules stay LITERALLY byte-untouched (additive cutover, §11.1; v1 scheduler untouched).
+    - **11B (deferred)**: `ChannelDigest` (needs the LLM reasoning-chain executor + `summary_prompt`) and stateful `RecurringSeriesFromSource` progress (needs step-13 cross-fire `schedule_state`). **Phase-1 completion lands with 11B.**
 12. **Read-only reasoning + emit-only writes enforcement**: tool-metadata-driven runtime block.
 13. **Cross-fire state with locks + CAS**: state_read / state_write primitives backed by `schedule_state` table + CAS.
 14. **Idempotency + cancellation**: per-emit idempotency keys; paused/archived enforcement; `paused_pending_policy`.
@@ -1499,7 +1541,7 @@ Dependencies (so order isn't arbitrary):
 - Step 8 depends on 4, 7.
 - Step 9 depends on 4, 5, 7, 8 (first cutover; needs binding + authoring + dry-run all live).
 - Step 10 depends on 1, 2, 6.
-- Step 11 depends on 10 + 9 (templates need both source infra and the ScheduleSpec authoring loop).
+- Step 11 depends on 10 + 9 (templates need both source infra and the ScheduleSpec authoring loop). 11A shipped phase 11; 11B deferred (see step 11).
 - Step 12 depends on 2.
 - Step 13 depends on 3.
 - Step 14 depends on 4, 12, 13.
@@ -1758,7 +1800,12 @@ composes precisely.
 **Risk**: every existing tool needs tag audit. Default-on
 (`write_external` for unknowns) is fail-safe but may block
 legitimate reads until tags are corrected. Mitigation: incremental
-tagging pass before step 11 lands.
+tagging pass before the step-12 runtime enforcement
+lands. (Step 11 — the source-driven cutover — shipped in
+phase 11 emit-only with NO reasoning-chain executor, so
+the write-tool-mid-reasoning risk this guard addresses
+does not yet apply; the tag-audit prerequisite carries
+forward to step 12.)
 
 ### D7. Event ledger is the audit source of truth
 

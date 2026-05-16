@@ -119,7 +119,7 @@ live-change wording is reconciled at closeout (same pass).
 How a `skip_unchanged` no-op success is RECORDED in the
 ledger was a fork (same shape as the phase-10 cache-mask):
 
-- **A** — a new `emit_skipped_unchanged` EventKind. REJECTED:
+- **A** — a dedicated skip-unchanged EventKind. REJECTED:
   the `events` table `kind` has a hardcoded `CHECK (kind IN
   (...))` (`app/v2/ddl/v001_initial.sql`); a new kind needs
   a **v002 SQLite table-rebuild of the audit ledger** — out
@@ -158,12 +158,12 @@ reminder-only and hard-gated the source-driven shape
 ExecutionPlan persistence). A working
 `RecurringSeriesFromSource` authoring tool requires
 EXTENDING the shared authoring spine — irreconcilable
-with a literal "OneOff pipeline byte-untouched". Reviewer
-ratified, with binding conditions:
+with keeping the OneOff pipeline literally unmodified.
+Reviewer ratified, with binding conditions:
 
-- **(i) relaxation, scoped.** "OneOff byte-untouched" →
-  "OneOff behaviour-unchanged via ADDITIVE branching" for
-  the SHARED AUTHORING SPINE ONLY
+- **(i) relaxation, scoped.** The literal-no-OneOff-edit
+  constraint relaxed to OneOff-behaviour-unchanged-via-
+  ADDITIVE-branching for the SHARED AUTHORING SPINE ONLY
   (`freeze`/`commit`/`drafts`/`toolsets.authoring`). The
   emit modules / `cache.py` / `resolver.py` stay
   LITERALLY byte-untouched (empty-diff pinned).
@@ -175,10 +175,10 @@ ratified, with binding conditions:
 C1 cron-ONLY freeze un-gate (`{one_off, cron}`; others
 stay gated; the residual rejection message + the
 freeze.py docstring rewritten — code renamed
-`non_oneoff_trigger_blocked_until_real_mode` →
-`trigger_type_pending_step_unlock`, no stale
-"phase-8 OneOff-only"/"phase 10/12" survives in the
-spine). C2 cron specs run the FULL remaining freeze/commit
+the old `..._blocked_until_real_mode` code renamed to
+`trigger_type_pending_step_unlock`; no stale cross-step
+/ phase-scoping wording survives in the spine). C2 cron
+specs run the FULL remaining freeze/commit
 validation (un-gate removes ONLY the trigger-type bypass).
 C3 atomic `insert_execution_plan`+`insert_schedule` in
 commit's ONE existing `transaction(conn)`,
@@ -550,7 +550,7 @@ source input → NO Slack call; the adapter returns
 worker records the no-op success via the TYPED
 `RunSucceededPayload.skipped_unchanged` discriminator on
 the EXISTING single `running → succeeded` `RUN_SUCCEEDED`
-write (Option B, §0.2 — NOT a new `emit_skipped_unchanged`
+write (Option B, §0.2 — NOT a dedicated skip-unchanged
 event kind; no second transaction). Verbatim text
 preservation (§5.3.7) — no reformat of the resolved bytes
 beyond the template-declared envelope.
@@ -763,13 +763,13 @@ tool on the extended spine).
    the now-false `execution_plan_hash is set` example —
    that is the LIVE §12 step-11 source-driven path,
    resolved + emitted, NOT a raise — and the stale
-   "phase-9 emit-only contract" / "phase 10 / 12"
+   emit-only-contract / cross-step phase-scoping
    wording; the class is documented as raised ONLY for
    the two can't-cleanly-fail shapes per Q4:
    `schedule_not_found_at_claim` FK-unwritable +
    template-None ∧ `execution_plan_hash`-None CustomFlow)
-   + the template-None raise message "phase 10 / 12" →
-   "§12 step 12". The end-to-end FAILED /
+   + the template-None raise message reconciled to the
+   §12 step-12 wording. The end-to-end FAILED /
    `require_reapprove` / DRIFT routing through
    `_route_source_failure_policy` and the `retry_later`
    → `alert_admin` + WARNING downgrade were delivered
@@ -1044,7 +1044,7 @@ v1->v2 migration tooling (step 16). §12 step 11 is split
 into 11A (this phase) + 11B (deferred) per the
 reviewer-approved §0 refinement.
 
-Design: docs/CONTRACTS_V2_DESIGN.md §12 step 11, §5.2,
+Design: docs/CONTRACTS_V2_DESIGN.md §12 step 11A, §5.2,
         §5.3, §5.3.3, §5.3.5, §11.1/§11.4
 Plan:   docs/PHASE_11_PLAN.md
 ```
