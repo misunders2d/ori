@@ -212,10 +212,23 @@ def write_snapshot(
         )
         if audit.dedup_by_content_hash:
             existing = list_snapshots_by_hash(conn, content_hash)
-            if existing:
-                # Content-addressed: reuse the prior file,
-                # write only the new row.
-                rel_path = existing[0].content_path
+            # Only a row that actually MATERIALISED a .bin
+            # (non-empty content_path) is a valid dedup
+            # target. A prior store_pointer_only /
+            # hash_only_no_replay row carries content_path
+            # "" — no body exists for that hash on disk, so
+            # reusing it would skip _atomic_write and lose
+            # the body forever (codex slice-4 🔴).
+            materialised = next(
+                (
+                    row
+                    for row in existing
+                    if row.content_path
+                ),
+                None,
+            )
+            if materialised is not None:
+                rel_path = materialised.content_path
                 deduped = True
         if not deduped:
             _atomic_write(repo_root / rel_path, content_bytes)

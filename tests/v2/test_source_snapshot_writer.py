@@ -223,6 +223,75 @@ def test_dedup_reuses_file_and_prune_respects_shared_ref(tmp_path):
     assert not (tmp_path / o1.content_path).exists()
 
 
+@pytest.mark.parametrize(
+    "prior_policy",
+    [
+        OnOversizePolicy.STORE_POINTER_ONLY,
+        OnOversizePolicy.HASH_ONLY_NO_REPLAY,
+    ],
+)
+def test_dedup_skips_bodyless_prior_row(tmp_path, prior_policy):
+    """A prior store_pointer_only / hash_only_no_replay row
+    has content_path "" — NO .bin exists for that hash. A
+    later full snapshot of the same content MUST NOT dedup
+    against it (that would skip the write and lose the body
+    forever); it must materialise the .bin (codex slice-4
+    🔴)."""
+    factory = _db(tmp_path)
+    conn = factory()
+    try:
+        _seed_schedule(conn)
+        _seed_run(conn, "r1", at=_NOW)
+        _seed_run(conn, "r2", at=_NOW + timedelta(minutes=1))
+        _seed_run(conn, "r3", at=_NOW + timedelta(minutes=2))
+        body = "x" * 200  # same content for all three
+
+        # r1: bodyless prior row, same content_hash.
+        o1 = write_snapshot(
+            conn,
+            result=_result(content=body),
+            schedule_id="sched_a",
+            run_id="r1",
+            audit=_audit(max_snapshot_bytes=10, on_oversize=prior_policy),
+            repo_root=tmp_path,
+        )
+        assert o1.content_path == ""
+
+        # r2: full snapshot, same hash → must NOT dedup.
+        o2 = write_snapshot(
+            conn,
+            result=_result(content=body),
+            schedule_id="sched_a",
+            run_id="r2",
+            audit=_audit(),  # 1 MiB cap, dedup on
+            repo_root=tmp_path,
+        )
+        # r3: full snapshot, same hash → NOW dedups against
+        # the materialised r2 (valid dedup still works).
+        o3 = write_snapshot(
+            conn,
+            result=_result(content=body),
+            schedule_id="sched_a",
+            run_id="r3",
+            audit=_audit(),
+            repo_root=tmp_path,
+        )
+    finally:
+        conn.close()
+
+    assert o1.content_hash == o2.content_hash == o3.content_hash
+    assert o2.deduped is False
+    assert o2.content_path != ""
+    written = (tmp_path / o2.content_path).read_bytes()
+    assert (
+        "sha256:" + hashlib.sha256(written).hexdigest()
+        == o2.content_hash
+    )
+    # valid dedup against the materialised row still holds
+    assert o3.deduped is True
+    assert o3.content_path == o2.content_path
+
+
 # ===========================================================================
 # Prune ordering — COMMIT before unlink; survivors intact
 # ===========================================================================
