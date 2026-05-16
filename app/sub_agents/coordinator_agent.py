@@ -206,7 +206,7 @@ root_agent = Agent(
         skill_toolset.SkillToolset(skills=[_scheduling_skill, _approval_skill, _knowledge_graph_skill]),
         # Toolsets — cross-cutting concerns only
         SchedulingToolset(),
-        ContractToolset(),  # contract-driven scheduling — preferred path for recurring tasks
+        ContractToolset(),  # v1 contract pipeline — RETAINED for existing contract:-prefixed tasks only; NOT the path for new scheduled work (SCHEDULING LAW → v2 typed tools below)
         # Phase 9 slice 8 — v2 authoring toolset, ADDITIVE.
         # v1 ContractToolset above stays mounted; v2 tools
         # (schedule_dry_run / schedule_freeze /

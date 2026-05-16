@@ -1349,3 +1349,61 @@ Same as phase 8 plan §10 with phase-9 additions:
     (round-3 L65 fix). The strip is documented in the
     method body comment; tests pin both directions
     (None case stable; populated case re-hashes).
+
+---
+
+## 10. Implementation status (slice-by-slice ledger)
+
+Phase 9 shipped slice-gated under codex review. Commit
+hashes on `evo/amazon_manager` (not pushed until the
+phase-9 closeout tag is approved):
+
+| Slice | Status | Notes |
+|---|---|---|
+| 1 args+strip | SHIPPED | `TemplateRef.args` + `canonical_body` strip |
+| 2 OneOffReminder | SHIPPED | template module + args model |
+| 3 schedule_create_reminder | SHIPPED | production wrapper factory + toolset 18 tools |
+| 4 Slack emit adapter | SHIPPED | `SlackPostResult` |
+| 5 worker emit branch | SHIPPED | get_schedule fetch + staleness guards |
+| 6 `_owner_default` | SHIPPED (codex APPROVED) | env fallback, kwarg precedence |
+| 7 boot autostart + run_bot | SHIPPED (codex APPROVED) | `autostart=False` + `activate()` + slack_client thread + cleanup-on-failure |
+| 8 Coordinator mount | SHIPPED (codex APPROVED) | additive AuthoringToolset mount + instruction SCHEDULING LAW |
+| 8-fix hygiene + desc | SHIPPED (codex PASS) | `prod_schedule_id_factory` moved into `_defaults.py`; `wiring.py` lazy-resolves prod factories (no module-load `_defaults` import, no `uuid.uuid4` outside `_defaults`); `test_phase9_import_hygiene.py` AST pin; Agent `description` rewritten v2-forward + guardrail extended to `root_agent.description`; brick-guard import moved inside the try |
+| 9 e2e pin | SHIPPED | `test_e2e_one_off_reminder.py` — full closure → wakeup (sync, no APScheduler) → worker → Slack → run_succeeded chain + L201 `schedule_not_found_at_claim` defence pin |
+| closeout | pending | acceptance walk + tag `v2-phase-9-complete` (gated on codex pass) |
+
+### 10.1 Coordinator scheduling-surface consistency (slices 8 + 9)
+
+**WHY the v1-as-"preferred path" wording was deleted.**
+Pre-phase-9 the CoordinatorAgent advertised the v1
+`ContractToolset` as the *preferred path for
+recurring/scheduled tasks* in three places: the Agent
+`instruction`, the Agent `description`, and a
+`ContractToolset()` code comment in the `tools=[…]` list.
+Phase 9 introduces the **SCHEDULING LAW** (§11.4): every
+*new* scheduled work item is authored through a v2 typed
+tool. The v1 contract pipeline stays mounted (additive
+cutover per invariant 11) but ONLY for inspecting /
+revising / unscheduling pre-existing `contract:`-prefixed
+tasks — it is no longer a creation path.
+
+All three surfaces must say the same thing or the bot
+will route new schedules inconsistently depending on
+which surface the model attends to:
+
+- instruction — rewritten in slice 8 (SCHEDULING LAW
+  clause; legacy/freeform tools forbidden for new work).
+- description — rewritten in slice-8-fix (was still
+  calling v1 the "preferred path"; codex 🟡).
+- the `ContractToolset()` code comment — corrected in
+  slice 9 (was still "preferred path for recurring
+  tasks"; codex 🔵 non-blocking). Comment-only; carries
+  no behaviour, but left uncorrected it is a drift
+  hazard for the next agent editing the tools list.
+
+`tests/v2/test_coordinator_instruction_guardrail.py`
+hard-pins the instruction AND the description against the
+deprecated freeform signature, the legacy task tools, and
+for the v2 surface names + the SCHEDULING LAW fragment, so
+a future reword that re-introduces the contradiction
+fails CI.
