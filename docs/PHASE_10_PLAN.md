@@ -26,6 +26,44 @@ The v1-path-forbidden gate is already lifted (phase ≥ 9 →
 `is_forbidden` returns False, `check_phase_scope.py:262`).
 Phase 10 does not touch any v1 path regardless.
 
+**Round-2 revision (2026-05-16)** closes 3 bugs + 2 risks
+surfaced by codex on the round-1 plan landing (`7e134d7`)
+and bakes in the codex Q-call answers:
+- 🔴 local-file fence sibling-prefix bypass
+  (`startswith` → `Path.is_relative_to`); §3.2 + a pinned
+  bypass test.
+- 🔴 typed error contract (`SourceAuthError` /
+  `SourceFetchError` / `SourceParseError`) so the
+  resolver distinguishes auth failure from
+  network/parse; auth bypasses cache AND fallback.
+- 🔴 snapshot retention semantics defined precisely
+  (deletes rows + backing files, content-hash-shared-file
+  safe) + a new sanctioned storage mutation + a
+  `docs/CONTRACTS_V2_DESIGN.md` §5.3.5 mechanism clause.
+- 🟡 canonical-bytes spec per content type (hash + write
+  stable across serializers).
+- 🟡 Q1: reuse the EXISTING `AuditPolicy` (retention) +
+  `LiveSourceCachePolicy` (cache) — NO duplicate
+  `SnapshotRetentionPolicy`. `SourceRefSpec` adds only
+  the genuinely-missing `live_change_policy` + explicit
+  default.
+
+Q-call answers folded in: Q1 `SourceRefSpec` yes (reuse
+existing policy models); Q2 distinct cache knobs, both
+pinned; Q3 Protocol DI for Slack/Drive readers; Q4 keep
+the `data/contract_audit/...` design root + local-file
+deny-list still blocks it; Q5 keep 9 slices, do NOT
+bundle the security-heavy `local_file` / `cache` slices.
+
+The §5.3.5 retention-mechanism clause is a
+`docs/CONTRACTS_V2_DESIGN.md` amendment landed in the
+plan-fix commit (rationale in the commit body — it
+clarifies, not contradicts, the shipped §5.3.5 retention
+intent; the append-only invariant in
+`app/v2/storage/source_snapshots.py` is scoped to the
+content-addressed INSERT path, with retention pruning a
+distinct sanctioned mutation).
+
 Read this with:
 - `docs/CONTRACTS_V2_DESIGN.md` §5.3 (source-driven
   content — the loader return contract, §5.3.1 local-file
@@ -67,23 +105,45 @@ Read this with:
      credential path; `USES_OAUTH` tag.
 2. **Per-fire snapshot writer**: content → on-disk
    `data/contract_audit/<schedule_id>/<run_id>/sources/<source_id>.json`
-   + a `source_snapshots` row via the existing
-   `insert_snapshot` (`app/v2/storage/source_snapshots.py:77`).
-   Content-addressed (`sha256:`); dedup-by-content-hash.
-3. **Retention + on_oversize policy** (per ScheduleSpec
-   per §5.3.5): `keep_last_n_snapshots` (default 30),
-   `dedup_by_content_hash` (default true), `redact_fields`,
-   `max_snapshot_bytes` (default 1_000_000), `on_oversize ∈
-   {fail_and_alert, store_pointer_only, redact_and_store,
-   hash_only_no_replay}` (enum already exists:
-   `OnOversizePolicy`, `enums.py:218`).
-4. **Per-source cache + fallback** (per source per
-   §5.3.2): `cache_ttl_seconds`, `stale_max_age_seconds`,
+   (Q4 — design root kept; the local-file deny-list still
+   blocks reads under it, §3.2) + a `source_snapshots`
+   row via the existing `insert_snapshot`
+   (`app/v2/storage/source_snapshots.py:77`).
+   Content-addressed (`sha256:` over the §3.6 canonical
+   bytes); dedup-by-content-hash.
+3. **Retention + on_oversize policy** — REUSES the
+   EXISTING `AuditPolicy` (`app/v2/models/common.py:194`,
+   already a field on `ScheduleSpec.audit`,
+   `models/schedule.py:81`): `keep_last_n_snapshots`
+   (30), `dedup_by_content_hash` (true), `redact_fields`,
+   `max_snapshot_bytes` (1_000_000), `on_oversize`
+   (`OnOversizePolicy`, `enums.py:218`). **No new
+   `SnapshotRetentionPolicy` model** (codex 🟡 — would
+   duplicate `AuditPolicy`). Retention semantics are
+   defined precisely in §3.4 (deletes rows + backing
+   files, content-hash-shared-file safe) — a NEW
+   sanctioned storage mutation, distinct from the
+   append-only content-addressed INSERT path.
+4. **Per-source cache + fallback** — REUSES the EXISTING
+   `LiveSourceCachePolicy` (`app/v2/models/common.py:206`):
+   `cache_ttl_seconds`, `stale_max_age_seconds`,
    `fallback_policy` (`SourceFallbackPolicy`,
    `enums.py:256`). Mirrors the
    `app/v2/registry_cache/loader.py` load/save/is_stale
-   shape. Auth failure NEVER triggers cache fallback —
-   routes to failure for re-auth (§5.3.2).
+   shape. **Q2 — two distinct cache knobs, both pinned:**
+   `InputSpec.cache_for_seconds` (exists,
+   `execution_plan.py:67`) = in-wakeup-window memo (same
+   loader output reused across fires inside ONE wakeup
+   tick); `LiveSourceCachePolicy.cache_ttl_seconds` =
+   cross-fire source cache (snapshot-backed, persists
+   across wakeup ticks). They are orthogonal: the memo
+   short-circuits a repeated fetch within a tick; the TTL
+   governs staleness of the persisted last-good snapshot.
+   **Auth failure NEVER triggers cache OR fallback** —
+   it raises a typed `SourceAuthError` (§3.5) that the
+   resolver routes straight to `SOURCE_FAILED` for
+   re-auth; only `SourceFetchError` (network) is eligible
+   for `fallback_policy` (§5.3.2).
 5. **Live-source change policy** (`LiveChangePolicy`,
    `enums.py:239`): `allow` / `alert_on_shape_change` /
    `require_reapprove_on_shape_change`; shape = item_count
@@ -102,12 +162,32 @@ Read this with:
    (`EventKind`, `enums.py:128-130`, already present;
    events-table CHECK already allows them). Standalone +
    unit-pinned. NOT called from the worker in phase 10.
-8. **Policy model placement** (see §9 Q1 — design
-   question): the per-source policy fields
-   (cache/fallback/live-change) and the per-ScheduleSpec
-   retention block need a typed home. Plan proposes a new
-   `SourceRefSpec` model; ratification gated on codex
-   round-1.
+8. **`SourceRefSpec` model** (Q1 — RATIFIED by codex
+   round-1): a new `app/v2/models/source_ref.py`
+   `SourceRefSpec` that COMPOSES the existing policy
+   models rather than duplicating them:
+   - `loader: str` — registered `SOURCES` key.
+   - `args: dict` — loader args.
+   - `cache: LiveSourceCachePolicy` — REUSED as-is
+     (`common.py:206`).
+   - `live_change_policy: LiveChangePolicy` — the
+     genuinely-missing field (`LiveChangePolicy` enum
+     exists, `enums.py:239`; no model carried it).
+   - `explicit_default: Optional[JsonValue]` — required
+     iff `cache.fallback_policy ==
+     ALERT_AND_USE_DEFAULT` (§5.3.2: valid only when a
+     user-explicit default is present AND shown in
+     dry-run); a model validator enforces the pairing.
+   Retention stays on `ScheduleSpec.audit` (`AuditPolicy`,
+   unchanged). `SourceRefSpec` does NOT re-declare
+   retention. Whether `InputSpec` gains an optional
+   `source_ref: Optional[SourceRefSpec]` field is a
+   slice-1 detail (additive, `extra="forbid"` schema
+   bump pinned by an `ExecutionPlan` body-hash
+   round-trip test) — it does not change any shipped
+   hash because absent `source_ref` is stripped from
+   `canonical_body` (mirrors the phase-9 `template.args`
+   None-strip pattern).
 
 ### Out of scope (phase 10)
 
@@ -137,28 +217,45 @@ app/v2/sources/literal.py             # source_literal loader
 app/v2/sources/local_file.py          # source_local_file + §5.3.1 fence
 app/v2/sources/slack_thread.py        # source_slack_thread loader
 app/v2/sources/drive_file.py          # source_drive_file loader
-app/v2/sources/contract.py            # shared SourceLoader Protocol + return-shape model
+app/v2/sources/contract.py            # SourceLoader Protocol + SourceResult + §3.6 canonical-bytes helper
+app/v2/sources/errors.py              # typed error contract: SourceAuthError / SourceFetchError / SourceParseError
 app/v2/sources/resolver.py            # resolve_source orchestrator
-app/v2/sources/snapshot_writer.py     # per-fire snapshot write + retention + on_oversize
-app/v2/sources/cache.py               # per-source cache + fallback
-app/v2/models/source_ref.py           # SourceRefSpec (pending §9 Q1)
+app/v2/sources/snapshot_writer.py     # per-fire snapshot write + retention prune + on_oversize
+app/v2/sources/cache.py               # per-source cache + fallback (auth-fail bypass)
+app/v2/models/source_ref.py           # SourceRefSpec (composes LiveSourceCachePolicy + LiveChangePolicy)
 
+tests/v2/test_source_contract.py      # return-shape + §3.6 canonical-bytes hash-stability across serializers
+tests/v2/test_source_errors.py        # typed-error taxonomy + isinstance contract
 tests/v2/test_source_literal.py
-tests/v2/test_source_local_file.py    # fence: traversal / symlink / deny-list / mime / size
+tests/v2/test_source_local_file.py    # fence matrix incl. SIBLING-PREFIX bypass (/safe/root_evil vs /safe/root)
 tests/v2/test_source_slack_thread.py
 tests/v2/test_source_drive_file.py
-tests/v2/test_source_contract.py      # return-shape conformance across all 4
-tests/v2/test_source_resolver.py      # orchestration + event emission
-tests/v2/test_source_snapshot_writer.py
+tests/v2/test_source_resolver.py      # orchestration + event emission + auth-bypasses-cache-AND-fallback
+tests/v2/test_source_snapshot_writer.py  # write + dedup-shared-file safety + retention DELETE rows+files + on_oversize
 tests/v2/test_source_cache.py
-tests/v2/test_models_source_ref.py
+tests/v2/test_models_source_ref.py    # explicit_default required iff fallback==ALERT_AND_USE_DEFAULT
 tests/v2/test_phase10_import_hygiene.py  # AST pin (mirrors phase-9)
 ```
 
-Carried-forward edits: `app/v2/enums.py` only if a new
-enum surfaces (none expected — all five source enums
-already exist). `docs/CONTRACTS_V2_DESIGN.md` only if a
-§5.3 amendment is ratified (see §9).
+Edits to existing surface:
+- `app/v2/storage/source_snapshots.py` — slice 4 adds the
+  NEW sanctioned retention mutation
+  `prune_snapshots(conn, *, schedule_id, source_id,
+  keep_last_n)` (joins `runs` for `schedule_id` scope —
+  `source_snapshots` PK is `(run_id, source_id)`, no
+  `schedule_id` column) + amends the module docstring's
+  "No update / delete surface" line to scope it to the
+  content-addressed INSERT path (retention is the one
+  sanctioned delete).
+- `app/v2/models/execution_plan.py` — slice 1 adds
+  `InputSpec.source_ref: Optional[SourceRefSpec] = None`
+  (additive; `canonical_body` strips it when None —
+  phase-9 `template.args` pattern; hash round-trip
+  pinned).
+- `docs/CONTRACTS_V2_DESIGN.md` — slice 0 (this plan-fix)
+  adds the §5.3.5 retention-MECHANISM clause (rows+files,
+  dedup-safe). `app/v2/enums.py` untouched (all five
+  source enums already exist).
 
 ---
 
@@ -168,11 +265,12 @@ already exist). `docs/CONTRACTS_V2_DESIGN.md` only if a
 
 ```python
 class SourceResult(BaseModel):
-    content: JsonValue            # opaque; bytes-faithful (§5.3.7)
+    content: JsonValue            # str | int | float | bool | None | list | dict
+    content_bytes: bytes          # the §3.6 CANONICAL encoding actually hashed + written
     source_kind: str
     source_id: str
     fetched_at: datetime          # tz-aware UTC
-    content_hash: str             # sha256:<64hex>
+    content_hash: str             # "sha256:" + sha256(content_bytes).hexdigest()
     item_count: int
     source_version: Optional[str]
     selection_method: SelectionMethod
@@ -184,21 +282,51 @@ class SourceLoader(Protocol):
         ...DI...) -> SourceResult: ...
 ```
 
-All loaders take injected `clock` + transport DI (no
-`datetime.now` / `uuid.uuid4`; no vendor SDK at module
-load — phase-9 hard rule carries forward).
+`content_hash` and the on-disk snapshot are computed from
+`content_bytes` (the §3.6 canonical encoding), NEVER from
+re-serializing `content` — so the hash is stable
+regardless of which serializer a reader uses. All loaders
+take injected `clock` + transport DI (no `datetime.now` /
+`uuid.uuid4`; no vendor SDK at module load — phase-9 hard
+rule carries forward). A loader signals failure ONLY via
+the §3.5 typed error hierarchy — never a bare
+`Exception` / `return None`.
 
 ### 3.2 `source_local_file` fence (§5.3.1) — explicit
 
 `allowed_roots`: admin-config allowlist, empty default.
 Deny-list always wins: `data/vault*`, `.env*`, secrets,
 `data/contract_state/`, `data/ori-scheduler.db`,
-`data/contract_audit/`, `data/contracts/`. Path =
-`os.path.realpath(os.path.abspath(p))`, must start with an
-allowlisted root prefix (rejects `..` + symlink escape).
-`max_bytes` default 1 MiB → routes to `on_oversize`. Mime
-allowlist: text/markdown/json/yaml; binary refused unless
-explicit opt-in.
+`data/contract_audit/`, `data/contracts/`.
+
+**🔴 codex round-1 fix — sibling-prefix bypass.** The
+round-1 plan said "must start with an allowlisted root
+prefix" → a naive `resolved.startswith(str(root))`
+admits `/safe/root_evil/secret.txt` against an allowed
+root `/safe/root` (string-prefix, not path-component
+match). The fence MUST be **separator-aware**:
+
+```python
+resolved = Path(p).resolve(strict=True)        # follows symlinks
+root     = Path(allowed_root).resolve(strict=True)
+if not resolved.is_relative_to(root):          # py3.9+; component-wise
+    raise SourceFetchError("path_outside_allowed_root")
+```
+
+`Path.resolve(strict=True)` canonicalises `..` AND
+resolves every symlink component before the check, so a
+symlink escaping the root (the resolved target falls
+outside) is rejected too. `is_relative_to` compares path
+COMPONENTS, so `/safe/root_evil` is NOT relative to
+`/safe/root` (string prefix would have wrongly passed).
+The deny-list check runs on the SAME `resolved` path
+(post-symlink) so a symlink INTO `data/vault` is caught.
+`max_bytes` default 1 MiB → routes to `on_oversize`
+(§3.4). Mime allowlist: text/markdown/json/yaml; binary
+refused unless explicit per-root opt-in. Pinned tests
+(§5): the sibling-prefix case, the symlink-escape case,
+the symlink-into-denylist case, `..` traversal,
+empty-allowlist-denies-all.
 
 ### 3.3 `resolve_source` orchestrator (`sources/resolver.py`)
 
@@ -211,20 +339,129 @@ async def resolve_source(
 ```
 
 Steps: cache check → loader dispatch (`SOURCES.require`)
-→ fallback on miss/stale (auth-fail bypasses cache) →
-snapshot write (retention + on_oversize) → shape/drift
-check → append exactly one EventLedger event. Never
-raises into the caller for an expected failure — returns
-a typed resolution (mirrors phase-9 `SlackPostResult`).
+→ on `SourceFetchError` apply `fallback_policy`; on
+`SourceAuthError` bypass cache AND fallback → straight
+to `SOURCE_FAILED` → snapshot write (retention +
+on_oversize) → shape/drift check → append exactly one
+EventLedger event. Never raises into the caller for an
+expected failure — returns a typed resolution (mirrors
+phase-9 `SlackPostResult`).
 
-### 3.4 Snapshot writer (`sources/snapshot_writer.py`)
+### 3.4 Snapshot writer + retention (`sources/snapshot_writer.py`)
 
-Dedup: if `dedup_by_content_hash` and a row with the same
-`content_hash` exists (`list_snapshots_by_hash`), reuse
-its `content_path`, write only the new
-`source_snapshots` row. Retention prune keeps last N per
-`(schedule_id, source_id)`. `on_oversize` branches are
-explicit, no silent fallback (§5.3.5).
+**Dedup:** if `audit.dedup_by_content_hash` and a row
+with the same `content_hash` exists
+(`list_snapshots_by_hash`), reuse its `content_path` —
+write only the new `source_snapshots` row, no second
+file.
+
+**🔴 codex round-1 fix — retention semantics (precise).**
+Retention DELETES, and the storage layer's current "no
+update/delete surface" invariant is scoped to the
+content-addressed INSERT path, not retention. Slice 4
+adds a NEW sanctioned mutation
+`prune_snapshots(conn, *, schedule_id, source_id,
+keep_last_n) -> PruneResult`:
+
+1. Select all `source_snapshots` rows for the
+   `(schedule_id, source_id)` pair — `schedule_id` via
+   `JOIN runs ON runs.id = source_snapshots.run_id`
+   (the table has no `schedule_id` column; PK is
+   `(run_id, source_id)`).
+2. Order by `fetched_at` DESC; keep the newest
+   `keep_last_n`; the rest are prune candidates.
+3. For each prune-candidate row: DELETE the row. Then
+   DELETE its backing `content_path` file **iff no
+   surviving row (this pair OR any other) still
+   references the same `content_path`** — content-
+   addressed files are shared across dedup'd rows, so a
+   file is unlinked only when its last referencing row
+   is gone (`SELECT 1 FROM source_snapshots WHERE
+   content_path = ? LIMIT 1` after the row deletes).
+4. Return `PruneResult(rows_deleted, files_unlinked,
+   files_kept_shared)` for the `source_resolved` /
+   audit event payload.
+
+Whole prune runs in one `transaction(conn)`; a file
+unlink failure is logged + counted, never aborts the row
+delete (mirrors phase-8 best-effort cleanup). Retention
+is invoked by the resolver AFTER a successful snapshot
+write, never mid-fetch. `keep_last_n_snapshots == 0`
+means "keep none beyond the just-written row" (prune all
+older). The `app/v2/storage/source_snapshots.py` module
+docstring is amended in the same slice to say: append-
+only for `insert_snapshot`; `prune_snapshots` is the
+sole sanctioned delete, retention-only.
+
+**`on_oversize`** (`content_size > audit.max_snapshot_bytes`)
+— explicit branches, no silent fallback (§5.3.5):
+- `fail_and_alert` → `SourceFetchError`-class failure →
+  `SOURCE_FAILED`, no row/file.
+- `store_pointer_only` → row written, `content_path`
+  empty / pointer sentinel, no file body.
+- `redact_and_store` → `audit.redact_fields` stripped,
+  re-measured; if still oversize → `fail_and_alert`.
+- `hash_only_no_replay` → row + `content_hash` only,
+  body discarded (replay impossible, flagged in payload).
+
+### 3.5 Typed error contract (`sources/errors.py`)
+
+**🔴 codex round-1 fix.** "Auth failure never triggers
+cache fallback" is unenforceable without a way to TELL
+auth failure apart from network/parse failure. The
+hierarchy:
+
+```python
+class SourceError(Exception):              # base; never raised directly
+    code: str                              # machine code for event payload
+
+class SourceAuthError(SourceError):        # 401/403, token expired, no creds
+    # NEVER eligible for cache OR fallback. Resolver →
+    # SOURCE_FAILED(code) immediately, for admin re-auth.
+
+class SourceFetchError(SourceError):       # network down, 5xx, timeout,
+    # path-fence reject, oversize-fail. Eligible for
+    # `fallback_policy` (use_last_good_snapshot /
+    # alert_and_skip / alert_and_use_default).
+
+class SourceParseError(SourceError):       # fetched bytes unparseable
+    # for the declared kind. NOT a transient — no
+    # fallback; resolver → SOURCE_FAILED(code).
+```
+
+Loaders raise the precise subclass. The resolver branch:
+`SourceAuthError` → `SOURCE_FAILED`, cache + fallback
+both bypassed; `SourceFetchError` → consult
+`fallback_policy`; `SourceParseError` → `SOURCE_FAILED`,
+no fallback. Pinned tests (§5): an auth failure with a
+warm last-good snapshot in cache STILL emits
+`SOURCE_FAILED` (never `SOURCE_RESOLVED`-from-cache) and
+the snapshot is NOT served; a fetch failure with the
+same warm cache + `use_last_good_snapshot` DOES serve
+it. `isinstance` taxonomy pinned so a future loader
+can't accidentally widen auth into the fallback path.
+
+### 3.6 Canonical bytes (`sources/contract.py`)
+
+**🟡 codex round-1 fix.** `content_hash` + the on-disk
+snapshot must be byte-identical regardless of serializer
+(§5.3.7 verbatim). `content_bytes` is computed ONCE at
+load time per declared type and is the ONLY thing hashed
+/ written:
+
+| declared kind | canonical bytes |
+|---|---|
+| text / markdown | the raw fetched bytes, **verbatim**, NO normalisation (preserves trailing whitespace / CRLF / BOM) |
+| json | `json.dumps(parsed, sort_keys=True, separators=(",",":"), ensure_ascii=False).encode("utf-8")` — canonical form; a re-fetch of semantically-equal JSON yields the SAME hash |
+| yaml | the raw fetched bytes verbatim (NOT re-serialized — round-tripping YAML is lossy; treat as opaque text for hash/replay) |
+| dict / list (loader-built, e.g. slack_thread) | same canonical-JSON rule as `json` |
+| binary (opt-in only) | the raw bytes; `content` carries a `{"_b64": ...}` envelope; hash over the raw bytes |
+
+`content_hash = "sha256:" + sha256(content_bytes).hexdigest()`.
+Pinned test (§5): two loads of semantically-equal JSON
+with different key order / whitespace → identical
+`content_hash`; a text source with a trailing newline
+delta → DIFFERENT hash (verbatim, no normalisation).
 
 ---
 
@@ -232,19 +469,20 @@ explicit, no silent fallback (§5.3.5).
 
 | Slice | Module(s) | Tests |
 |---|---|---|
-| 0 (plan) | `docs/PHASE_10_PLAN.md` + `.v2-current-phase` 9→10 + `PHASE_ALLOWLIST[10]` + (cond.) §5.3 design amendment | — |
-| 1 | `sources/contract.py` (`SourceResult` + `SourceLoader` Protocol) + `models/source_ref.py` (`SourceRefSpec`, pending Q1) | `test_source_contract.py`, `test_models_source_ref.py` |
+| 0 (plan-fix) | `docs/PHASE_10_PLAN.md` round-2 + `docs/CONTRACTS_V2_DESIGN.md` §5.3.5 retention-mechanism clause (already staged: `.v2-current-phase` 9→10 + `PHASE_ALLOWLIST[10]` landed round-1 `7e134d7`) | — |
+| 1 | `sources/contract.py` (`SourceResult` + `content_bytes` + §3.6 canonical-bytes helper + `SourceLoader` Protocol) + `sources/errors.py` (§3.5 typed hierarchy) + `models/source_ref.py` (`SourceRefSpec` composing `LiveSourceCachePolicy` + `LiveChangePolicy` + `explicit_default` validator) + `InputSpec.source_ref` additive field + `canonical_body` None-strip | `test_source_contract.py` (incl. canonical-bytes hash-stability), `test_source_errors.py`, `test_models_source_ref.py`, `test_models_execution_plan.py` hash round-trip |
 | 2 | `source_literal` + register | `test_source_literal.py` |
-| 3 | `source_local_file` + full §5.3.1 fence | `test_source_local_file.py` (traversal/symlink/denylist/mime/size matrix) |
-| 4 | `snapshot_writer.py` (write + dedup + retention + on_oversize) | `test_source_snapshot_writer.py` |
-| 5 | `cache.py` (per-source cache + fallback; auth-fail bypass) | `test_source_cache.py` |
-| 6 | `source_slack_thread` (Slack protocol DI) | `test_source_slack_thread.py` |
-| 7 | `source_drive_file` (Drive API + OAuth via registry-cache cred path) | `test_source_drive_file.py` |
-| 8 | `resolver.py` (orchestration + event emission + live-change) + `test_phase10_import_hygiene.py` AST pin | `test_source_resolver.py`, `test_phase10_import_hygiene.py` |
+| 3 | `source_local_file` + full §5.3.1 fence (`Path.is_relative_to`, sibling-prefix + symlink-escape + symlink-into-denylist pinned) | `test_source_local_file.py` |
+| 4 | `snapshot_writer.py` (write + dedup-shared-file safety + `on_oversize`) + `storage/source_snapshots.py` `prune_snapshots` retention mutation + docstring amend | `test_source_snapshot_writer.py`, `test_storage_source_snapshots.py` prune cases |
+| 5 | `cache.py` (per-source cache + fallback; `SourceAuthError` bypasses cache AND fallback) | `test_source_cache.py` |
+| 6 | `source_slack_thread` (Slack-reader Protocol DI) | `test_source_slack_thread.py` |
+| 7 | `source_drive_file` (Drive-reader Protocol DI; OAuth via registry-cache cred path) | `test_source_drive_file.py` |
+| 8 | `resolver.py` (orchestration + typed-error routing + live-change + exactly-one event) + `test_phase10_import_hygiene.py` AST pin | `test_source_resolver.py`, `test_phase10_import_hygiene.py` |
 | closeout | §7 acceptance walk + tag `v2-phase-10-complete` (gated on codex pass) | — |
 
-~9 slices. Reviewer may bundle 2+3 (literal+local-file) or
-6+7 (slack+drive). Each slice: implement → commit (no
+9 slices (Q5 — kept; the security-heavy `local_file`
+(slice 3) and `cache` (slice 5) get separate codex
+review, NOT bundled). Each slice: implement → commit (no
 push) → pause for codex verdict → fix-on-HOLD → GO next.
 
 ---
@@ -252,41 +490,80 @@ push) → pause for codex verdict → fix-on-HOLD → GO next.
 ## 5. Test inventory (highlights)
 
 - **`test_source_contract.py`** — all 4 loaders return a
-  `SourceResult` that round-trips; `content_hash` is
-  `sha256:` of the verbatim bytes; `selection_method` ∈
-  the descriptor's `supported_selection_methods`.
-- **`test_source_local_file.py`** — the fence matrix:
-  `..` traversal refused; symlink escaping an allowed
-  root refused (realpath); deny-list paths refused even
-  if under an allowlisted root; non-allowlisted mime
-  refused; oversize routes to each `on_oversize` branch;
-  empty-allowlist default refuses everything.
+  `SourceResult`; `content_hash == "sha256:"+sha256(
+  content_bytes)`; **§3.6 canonical-bytes stability**:
+  two loads of semantically-equal JSON (key-order /
+  whitespace differ) → IDENTICAL hash; a text source
+  with a trailing-newline delta → DIFFERENT hash
+  (verbatim, no normalisation); `selection_method` ∈ the
+  descriptor's `supported_selection_methods`.
+- **`test_source_errors.py`** — `isinstance` taxonomy:
+  `SourceAuthError`/`SourceFetchError`/`SourceParseError`
+  all subclass `SourceError`; `SourceAuthError` is NOT a
+  `SourceFetchError` (can't leak into the fallback
+  branch); each carries a machine `code`.
+- **`test_source_local_file.py`** — fence matrix:
+  **🔴 sibling-prefix bypass** (`/safe/root_evil/x` vs
+  allowed `/safe/root` → REFUSED via `is_relative_to`,
+  the bug a `startswith` fence would pass); symlink
+  whose resolved target escapes the root → refused;
+  symlink INTO a deny-list path (`data/vault`) → refused
+  on the post-`resolve()` path; `..` traversal refused;
+  non-allowlisted mime refused; oversize → each
+  `on_oversize` branch; empty-allowlist default refuses
+  everything.
 - **`test_source_snapshot_writer.py`** — on-disk path
   shape; `source_snapshots` row via `insert_snapshot`;
-  dedup reuses `content_path`; retention prunes to
-  `keep_last_n`; each `on_oversize` branch pinned; redact
-  fields stripped before write.
+  **dedup-shared-file safety**: two rows same
+  `content_hash` share one file; pruning ONE row does
+  NOT unlink the file while the other row survives;
+  pruning the LAST referencing row DOES unlink;
+  **retention DELETE**: `prune_snapshots` removes rows
+  beyond `keep_last_n` (scoped by `schedule_id` via the
+  `runs` join) + returns `PruneResult`; `keep_last_n==0`
+  prunes all older; each `on_oversize` branch pinned;
+  `redact_fields` stripped before write + re-measure.
+- **`test_storage_source_snapshots.py`** (extend) —
+  `prune_snapshots` happy + dedup-safety + the
+  schedule_id-scoping join; the append-only invariant
+  still holds for `insert_snapshot`.
 - **`test_source_cache.py`** — fresh hit; stale →
   fallback per policy; `use_last_good_snapshot` reads the
-  last `source_snapshots` row; auth-failure NEVER caches
-  (routes to failed); `alert_and_use_default` only when a
-  user-explicit default is present.
+  last `source_snapshots` row; **`SourceAuthError`
+  NEVER caches AND NEVER falls back** — even with a warm
+  last-good snapshot present it routes to `SOURCE_FAILED`
+  and does NOT serve the snapshot; **`SourceFetchError`
+  with the same warm cache + `use_last_good_snapshot`
+  DOES serve it** (proves the auth/fetch split is
+  load-bearing); `alert_and_use_default` only when a
+  user-explicit `explicit_default` is present.
+- **`test_models_source_ref.py`** — `SourceRefSpec`
+  composes `LiveSourceCachePolicy` + `LiveChangePolicy`;
+  validator: `explicit_default` REQUIRED iff
+  `cache.fallback_policy == ALERT_AND_USE_DEFAULT`, else
+  forbidden; no duplicate retention fields (retention
+  lives on `ScheduleSpec.audit`).
+- **`test_models_execution_plan.py`** (extend) —
+  `InputSpec.source_ref` additive; a spec with
+  `source_ref=None` hashes IDENTICALLY to the
+  pre-phase-10 body (None stripped from `canonical_body`,
+  phase-9 `template.args` pattern); a spec WITH a
+  `source_ref` re-hashes deterministically.
 - **`test_source_resolver.py`** — happy → `SOURCE_RESOLVED`
-  event + snapshot row; shape change under
+  + snapshot row; shape change under
   `alert_on_shape_change` → `SOURCE_DRIFT_DETECTED` +
   still resolves; under `require_reapprove_on_shape_change`
-  → `SOURCE_FAILED`, no snapshot; loader exception →
-  `SOURCE_FAILED`; exactly one event per call; resolver
-  never raises for expected failures.
+  → `SOURCE_FAILED`, no snapshot; `SourceAuthError` →
+  `SOURCE_FAILED` cache+fallback bypassed;
+  `SourceParseError` → `SOURCE_FAILED` no fallback;
+  `SourceFetchError` → fallback path; exactly one event
+  per call; resolver never raises for expected failures.
 - **`test_phase10_import_hygiene.py`** — every phase-10
   NEW module: no module-load `app.v2.runtime._defaults`
   import, no `uuid.uuid4` / `datetime.now` call, no
   vendor SDK (`slack_sdk` / `googleapiclient` / `httpx`)
   at module load (transport via DI). Mirrors
   `test_phase9_import_hygiene.py`.
-- Carry-forward: `test_models_execution_plan.py` /
-  `test_descriptors_source.py` updated only if Q1
-  changes `InputSpec` or `SourceDescriptor`.
 
 ---
 
@@ -331,15 +608,26 @@ DI.
    per-slice commits.
 2. All 4 loaders registered in `SOURCES`; each descriptor
    READ-ONLY-tag-valid; return-shape conformance pinned.
-3. `source_local_file` fence: traversal / symlink /
-   deny-list / mime / size all refused per the §5.3.1
-   matrix; empty-allowlist default denies all.
+3. `source_local_file` fence uses `Path.is_relative_to`
+   (separator-aware): the SIBLING-PREFIX bypass
+   (`/safe/root_evil` vs `/safe/root`), symlink-escape,
+   symlink-into-denylist, `..` traversal, non-allowlist
+   mime, oversize all refused; empty-allowlist default
+   denies all.
 4. Snapshot writer: on-disk + `source_snapshots` row;
-   dedup-by-hash; retention prune; every `on_oversize`
-   branch pinned; redact applied pre-write.
-5. Per-source cache + fallback pinned; auth-failure
-   bypasses cache; `alert_and_use_default` gated on
-   user-explicit default.
+   dedup-shared-file safety (file unlinked only when its
+   last referencing row is pruned); `prune_snapshots`
+   retention DELETES rows + files scoped by `schedule_id`
+   (runs join); every `on_oversize` branch pinned;
+   `redact_fields` applied + re-measured pre-write;
+   storage docstring amended (insert append-only; prune
+   the sole sanctioned delete).
+5. Typed error contract (`SourceAuthError` /
+   `SourceFetchError` / `SourceParseError`): auth failure
+   bypasses cache AND fallback → `SOURCE_FAILED` even
+   with a warm last-good snapshot; only `SourceFetchError`
+   is fallback-eligible; `alert_and_use_default` gated on
+   a present `explicit_default`.
 6. Live-change policy: `allow` / `alert_on_shape_change`
    / `require_reapprove_on_shape_change` each pinned with
    the matching EventLedger event.
@@ -356,9 +644,19 @@ DI.
     `run_bot.py` / `app/agent.py` edit.
 11. Phase guard `--diff v2-phase-9-complete` + `--staged`
     exit 0.
-12. Full v2 test suite green (1888 baseline + phase-10
+12. §3.6 canonical bytes: `content_hash` stable across
+    serializers (JSON key-order/whitespace invariant;
+    text verbatim incl. newline deltas); `content_bytes`
+    is the sole hashed/written artifact.
+13. `SourceRefSpec` composes the EXISTING `AuditPolicy`
+    (retention, on `ScheduleSpec.audit`) +
+    `LiveSourceCachePolicy` (cache) — NO duplicate
+    policy model; only `live_change_policy` +
+    `explicit_default` added. `InputSpec.source_ref`
+    additive + hash-neutral when None.
+14. Full v2 test suite green (1888 baseline + phase-10
     adds); no regressions.
-13. Annotated tag `v2-phase-10-complete` created (push
+15. Annotated tag `v2-phase-10-complete` created (push
     gated on codex CLOSEOUT pass, per the phase-5..9
     pattern).
 
@@ -401,65 +699,68 @@ Plan:   docs/PHASE_10_PLAN.md
 
 ---
 
-## 9. Open questions (codex plan review round 1)
+## 9. Codex round-1 disposition (CLOSED)
 
-**Q1 — per-source policy model placement.** `InputSpec`
-(`execution_plan.py:44`) is minimal (`id`, `loader`,
-`args`, `cache_for_seconds`, `extra="forbid"`). The
-per-source policy fields (`cache_ttl_seconds`,
-`stale_max_age_seconds`, `fallback_policy`,
-`live_change_policy`) and the per-ScheduleSpec retention
-block (`keep_last_n_snapshots`, `dedup_by_content_hash`,
-`redact_fields`, `max_snapshot_bytes`, `on_oversize`)
-need a typed home. Options:
-- (a) extend `InputSpec` with optional policy fields —
-  simplest, but widens the ExecutionPlan body-hash
-  surface and `extra="forbid"` means a schema bump.
-- (b) **new `SourceRefSpec` model** referenced by
-  `InputSpec` via an optional `source_ref` field;
-  retention as a separate per-ScheduleSpec
-  `SnapshotRetentionPolicy` block. **(plan's default
-  proposal)** — clean separation, isolates the hash
-  impact to specs that actually use a live source.
-- (c) policies in a side table keyed by
-  `(schedule_id, source_id)` — avoids any model/hash
-  change but splits the spec across two stores
-  (rejected: violates the "frozen spec is
-  self-contained" invariant).
-Plan assumes (b). Confirm or redirect.
+All round-1 findings + Q-calls applied in this plan-fix.
 
-**Q2 — `cache_for_seconds` vs `cache_ttl_seconds`
-overlap.** `InputSpec.cache_for_seconds` already exists
-(cross-fire within a wakeup window). §5.3.2's
-`cache_ttl_seconds` is the live-source cache TTL. Are
-these the same knob (rename/reuse) or two distinct caches
-(in-wakeup-window memo vs cross-fire snapshot-backed
-cache)? Plan treats them as distinct; flagging for
-ratification.
+**🔴 fixes:**
+- **Local-file fence sibling-prefix bypass** — §3.2: the
+  fence is now `Path(p).resolve(strict=True)` +
+  `is_relative_to(root.resolve())` (separator-aware,
+  symlink-resolving); the `startswith` bug is explicitly
+  called out + pinned by a sibling-prefix +
+  symlink-escape + symlink-into-denylist test (§5).
+- **Auth vs fetch error contract** — §3.5 typed
+  `SourceError` hierarchy (`SourceAuthError` /
+  `SourceFetchError` / `SourceParseError`). Resolver
+  routes auth → `SOURCE_FAILED` with cache AND fallback
+  bypassed; only `SourceFetchError` is fallback-eligible.
+  Pinned by the warm-cache auth-bypass test (§5).
+- **Retention semantics** — §3.4: `prune_snapshots`
+  DELETES rows + backing files, content-hash-shared-file
+  safe, scoped by `schedule_id` via a `runs` join; a NEW
+  sanctioned storage mutation; the
+  `source_snapshots.py` "no delete surface" docstring is
+  amended (insert append-only; prune retention-only) and
+  a `docs/CONTRACTS_V2_DESIGN.md` §5.3.5
+  retention-MECHANISM clause lands in this plan-fix
+  commit.
 
-**Q3 — `source_slack_thread` / `source_drive_file`
-transport DI.** Phase 9 established protocol-typed
-transport DI (no vendor SDK at module load) for the emit
-layer. Phase 10 reuses the same pattern for read-side
-loaders. Confirm the loaders should take a
-`SlackThreadReader` / `DriveFileReader` Protocol injected
-by the (future step-11) resolver wiring — same shape as
-`SlackProtocol` — rather than importing the registry-cache
-Google client directly.
+**🟡 fixes:**
+- **Canonical bytes** — §3.6: per-type canonical encoding
+  (`SourceResult.content_bytes`) is the sole
+  hashed/written artifact; JSON canonicalised, text/yaml
+  verbatim, binary opt-in. Hash-stability pinned (§5).
+- **No duplicate policy model** — §1.8: `SourceRefSpec`
+  COMPOSES the existing `AuditPolicy` (retention, stays
+  on `ScheduleSpec.audit`) + `LiveSourceCachePolicy`
+  (cache); only the genuinely-missing
+  `live_change_policy` + `explicit_default` are added.
+  No `SnapshotRetentionPolicy`.
 
-**Q4 — snapshot on-disk root.** §5.3.5 specifies
-`data/contract_audit/<schedule_id>/<run_id>/sources/<source_id>.json`.
-That root is currently a v1 contract path
-(`data/contract_audit/` is in the local-file deny-list,
-§5.3.1). Confirm the v2 snapshot writer shares that root
-(read by future replay tooling) vs a v2-namespaced root
-(e.g. `data/v2_source_snapshots/...`). The
-`source_snapshots.content_path` is stored relative, so
-either is mechanically fine; this is a
-disaster-recovery / RUNBOOK coherence question.
+**Q-call answers (folded in):**
+- **Q1** — `SourceRefSpec` yes; reuse existing
+  `AuditPolicy` + `LiveSourceCachePolicy`; no duplicate
+  retention model. (§1.8)
+- **Q2** — two DISTINCT cache knobs, both pinned:
+  `InputSpec.cache_for_seconds` = in-wakeup-window memo;
+  `LiveSourceCachePolicy.cache_ttl_seconds` = cross-fire
+  source cache. (§1.4)
+- **Q3** — Protocol DI for the Slack/Drive readers
+  (`SlackThreadReader` / `DriveFileReader`), mirroring
+  phase-9 `SlackProtocol`; no vendor SDK at module load.
+  (§3.1, §10.4)
+- **Q4** — keep the design root
+  `data/contract_audit/<schedule_id>/<run_id>/sources/<source_id>.json`;
+  the local-file deny-list STILL blocks reads under
+  `data/contract_audit/` (a source can never read the
+  snapshot audit tree). RUNBOOK coherence note carried
+  to closeout. (§1.2, §3.2)
+- **Q5** — keep 9 slices; the security-heavy `local_file`
+  (slice 3) and `cache` (slice 5) get separate codex
+  review, NOT bundled. (§4)
 
-**Q5 — slice count.** 9 slices proposed. Acceptable, or
-bundle (literal+local-file) and (slack+drive) into 7?
+No open questions remain. Plan-review round 2 requested.
 
 ---
 
@@ -494,8 +795,19 @@ bundle (literal+local-file) and (slack+drive) into 7?
 10. Build-the-layer only: NO worker fire-path wiring, NO
     agent-facing tool, NO production side effect before
     step 11 (§12.1 invariant 2).
-11. Intentional workspace dirt left alone:
+11. Loaders signal failure ONLY via the §3.5 typed
+    `SourceError` hierarchy — never a bare `Exception` /
+    `return None`. `SourceAuthError` is NEVER
+    fallback-eligible (cache + fallback both bypassed).
+12. `content_hash` + the on-disk snapshot are computed
+    from `SourceResult.content_bytes` (the §3.6 canonical
+    encoding) ONLY — never by re-serializing `content`.
+13. Retention (`prune_snapshots`) is the SOLE sanctioned
+    `source_snapshots` delete; `insert_snapshot` stays
+    append-only + content-addressed; a shared file is
+    unlinked only when its last referencing row is
+    pruned.
+14. Intentional workspace dirt left alone:
     `app/tools/youtube.py` + `.playwright-mcp/` + the 3
     `scripts/diag_*` / `amazon_ads_mcp_proxy.py`
     untracked.
-```

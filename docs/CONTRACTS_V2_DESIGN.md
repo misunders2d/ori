@@ -705,12 +705,45 @@ Per-fire snapshot stored:
 - SQLite row in `source_snapshots` keyed by `(run_id, source_id)`,
   pointing at the on-disk file via `content_path`.
 
-Retention per ScheduleSpec:
+Retention per ScheduleSpec (the `AuditPolicy` model,
+`app/v2/models/common.py`, already a field on
+`ScheduleSpec.audit` — there is NO separate retention
+model):
 - `keep_last_n_snapshots: 30` (default)
 - `dedup_by_content_hash: true` (default)
 - `redact_fields: [...]`
 - `max_snapshot_bytes: 1_000_000`
 - `on_oversize ∈ { fail_and_alert, store_pointer_only, redact_and_store, hash_only_no_replay }` — explicit, no silent fallback.
+
+**Retention MECHANISM (phase-10 clarification, 2026-05-16
+— codex plan-review round-1 🔴#3).** The
+`source_snapshots` table is append-only on the
+content-addressed INSERT path (`insert_snapshot`).
+Retention is the ONE sanctioned deletion, applied AFTER a
+successful snapshot write, never mid-fetch, via a
+dedicated `prune_snapshots(conn, *, schedule_id,
+source_id, keep_last_n)` helper:
+1. Scope rows to `(schedule_id, source_id)` —
+   `schedule_id` is resolved by `JOIN runs ON
+   runs.id = source_snapshots.run_id` (the table has no
+   `schedule_id` column; PK is `(run_id, source_id)`).
+2. Order by `fetched_at` DESC, keep the newest
+   `keep_last_n`; DELETE the remaining rows.
+3. For each deleted row, unlink its backing
+   `content_path` file ONLY when no surviving row (any
+   `(run_id, source_id)`) still references that path —
+   dedup-shared files are content-addressed and may be
+   referenced by multiple rows; the file dies with its
+   last referencing row.
+4. Whole prune runs in one transaction; a file-unlink
+   failure is logged + counted, never aborts the row
+   delete. `keep_last_n == 0` prunes every row older
+   than the just-written one.
+This clarifies — does not contradict — the retention
+intent above; the append-only invariant is scoped to
+`insert_snapshot`, with `prune_snapshots` the explicit
+retention-only exception. See `docs/PHASE_10_PLAN.md`
+§3.4.
 
 #### 5.3.6 Sources are READ-ONLY
 
