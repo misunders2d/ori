@@ -41,10 +41,12 @@ from app.v2.runtime._defaults import (
     prod_clock,
     prod_event_id_factory,
     prod_run_id_factory,
+    prod_schedule_id_factory,
 )
 
 
 _UUID4_HEX_RE = re.compile(r"^[0-9a-f]{32}$")
+_SCHEDULE_SLUG_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 def _function_body_calls(fn: Callable, dotted_name: str) -> bool:
@@ -148,6 +150,25 @@ def test_prod_event_id_factory_returns_distinct_ids():
     assert len(ids) == 100, "100 calls produced a collision"
 
 
+def test_prod_schedule_id_factory_matches_slug_constraint():
+    """``prod_schedule_id_factory`` moved here from
+    ``app/v2/wiring.py`` (slice-8 reviewer 🔴). 100 generated
+    ids must all satisfy the ``ScheduleSpec.id`` slug regex
+    (``^[a-z][a-z0-9_]*$``): a bare uuid4 hex can start with
+    0-9 → would fail; the ``s_`` prefix guards it."""
+    for _ in range(100):
+        sid = prod_schedule_id_factory()
+        assert _SCHEDULE_SLUG_RE.match(sid), (
+            f"prod_schedule_id_factory() must satisfy the "
+            f"ScheduleSpec.id slug constraint; got {sid!r}"
+        )
+
+
+def test_prod_schedule_id_factory_returns_distinct_ids():
+    ids = {prod_schedule_id_factory() for _ in range(100)}
+    assert len(ids) == 100, "100 calls produced a collision"
+
+
 def test_run_and_event_factories_do_not_collide():
     """Both factories use UUID4 so cross-stream collisions
     are astronomically unlikely. Pin the property at 100
@@ -215,6 +236,7 @@ def test_prod_factory_bodies_call_uuid4():
     for fn, name in (
         (prod_run_id_factory, "prod_run_id_factory"),
         (prod_event_id_factory, "prod_event_id_factory"),
+        (prod_schedule_id_factory, "prod_schedule_id_factory"),
     ):
         assert _function_body_calls(fn, "uuid.uuid4"), (
             f"{name} must call ``uuid.uuid4(...)`` in its "
@@ -253,11 +275,18 @@ def test_function_body_calls_helper_finds_real_call():
     assert _function_body_calls(calls_for_real, "datetime.utcnow") is False
 
 
-def test_defaults_module_exposes_three_callables():
-    """The three documented production injectables are the
-    public surface. Pin so a regression that quietly drops
-    one of them flips here."""
-    expected = {"prod_clock", "prod_run_id_factory", "prod_event_id_factory"}
+def test_defaults_module_exposes_four_callables():
+    """The four documented production injectables are the
+    public surface (``prod_schedule_id_factory`` joined in
+    slice-8: moved out of ``app/v2/wiring.py`` so this stays
+    the SOLE uuid binding site). Pin so a regression that
+    quietly drops one of them flips here."""
+    expected = {
+        "prod_clock",
+        "prod_run_id_factory",
+        "prod_event_id_factory",
+        "prod_schedule_id_factory",
+    }
     for name in expected:
         assert hasattr(defaults_mod, name), f"missing public callable {name!r}"
         assert callable(getattr(defaults_mod, name))

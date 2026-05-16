@@ -14,6 +14,14 @@ three production wirings that boot / binding callers pass in:
   ``runs.id``.
 - :func:`prod_event_id_factory` -- fresh UUID4 hex for a new
   ``events.id``.
+- :func:`prod_schedule_id_factory` -- fresh ``s_``-prefixed
+  UUID4 hex for a new ``schedules.id`` (phase-9 authoring
+  wiring). Lives here, not in ``app/v2/wiring.py``: this
+  module is the SOLE ``uuid`` / ``datetime.now`` binding
+  site, and the phase-9 hard rule forbids any phase-9 new
+  module (``wiring`` / ``boot`` / ``transports``) from
+  calling ``uuid.uuid4`` or importing this module at module
+  load (slice-8 reviewer 🔴).
 
 A smoke test pins the inverse contract: this module DOES
 import ``uuid`` and DOES call ``datetime.now``. Every OTHER
@@ -71,8 +79,26 @@ def prod_event_id_factory() -> str:
     return uuid.uuid4().hex
 
 
+def prod_schedule_id_factory() -> str:
+    """Return a fresh schedule id matching the
+    ``ScheduleSpec.id`` slug constraint ``^[a-z][a-z0-9_]*$``.
+
+    A bare ``uuid4().hex`` can start with a digit (0-9),
+    which fails the leading-letter requirement; prefix with
+    ``s_`` so every generated id is well-formed regardless
+    of the UUID's first nibble.
+
+    Moved here from ``app/v2/wiring.py`` (slice-8 reviewer
+    🔴): ``_defaults`` is the only runtime module allowed to
+    call ``uuid.uuid4()``; the phase-9 wiring module must
+    pull this in lazily, not bind it at module load.
+    """
+    return f"s_{uuid.uuid4().hex}"
+
+
 __all__ = [
     "prod_clock",
     "prod_event_id_factory",
     "prod_run_id_factory",
+    "prod_schedule_id_factory",
 ]

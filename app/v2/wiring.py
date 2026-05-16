@@ -38,9 +38,7 @@ import logging
 import os
 import pathlib
 import sqlite3
-import uuid
-from datetime import datetime
-from typing import Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from app.v2.authoring.drafts import DraftStore
 from app.v2.authoring.handshake import HandshakeStore
@@ -49,12 +47,11 @@ from app.v2.emit.slack_reminder import SlackProtocol
 from app.v2.models.common import UserRef
 from app.v2.registry_cache.loader import load_cache, save_cache
 from app.v2.registry_cache.schemas import SlackChannelsCache
-from app.v2.runtime._defaults import (
-    prod_clock,
-    prod_event_id_factory,
-)
 from app.v2.runtime._owner_default import DEFAULT_AUTHORING_OWNER_ID
 from app.v2.toolsets.authoring import AuthoringToolset
+
+if TYPE_CHECKING:  # pragma: no cover - type-only import
+    from datetime import datetime
 
 
 _logger = logging.getLogger(__name__)
@@ -81,15 +78,6 @@ session routing lands in a later phase."""
 # ---------------------------------------------------------------------------
 # Production wirings
 # ---------------------------------------------------------------------------
-
-
-def prod_schedule_id_factory() -> str:
-    """Generate a schedule id matching the ``ScheduleSpec.id``
-    slug constraint (``^[a-z][a-z0-9_]*$``). A bare ``uuid4().hex``
-    can start with a digit (0-9), which fails the leading-letter
-    requirement; prefix with ``s_`` so every generated id is
-    well-formed regardless of the UUID's first nibble."""
-    return f"s_{uuid.uuid4().hex}"
 
 
 def _open_state_conn(db_path: str) -> sqlite3.Connection:
@@ -187,9 +175,9 @@ def build_authoring_toolset(
     db_path: str = _DEFAULT_STATE_DB_PATH,
     expected_owner_id: Optional[str] = None,
     slack_client: Optional[SlackProtocol] = None,
-    clock=prod_clock,
-    event_id_factory=prod_event_id_factory,
-    schedule_id_factory=prod_schedule_id_factory,
+    clock: Optional[Callable[[], "datetime"]] = None,
+    event_id_factory: Optional[Callable[[], str]] = None,
+    schedule_id_factory: Optional[Callable[[], str]] = None,
 ) -> AuthoringToolset:
     """Build the production :class:`AuthoringToolset` ready
     for mount on the CoordinatorAgent.
@@ -201,6 +189,18 @@ def build_authoring_toolset(
     constructor raises ``RuntimeError`` with the documented
     startup message.
 
+    The three production wirings (``clock`` /
+    ``event_id_factory`` / ``schedule_id_factory``) default
+    to ``None`` and are resolved from
+    :mod:`app.v2.runtime._defaults` via a **lazy import
+    inside this function body** -- never at module load.
+    ``_defaults`` is the SOLE ``uuid`` / ``datetime.now``
+    binding site; the phase-9 hard rule forbids any phase-9
+    new module (this one included) from importing it at
+    module load or calling ``uuid.uuid4`` directly
+    (slice-8 reviewer 🔴, pinned by
+    ``tests/v2/test_phase9_import_hygiene.py``).
+
     Args:
         db_path: SQLite state DB path. Defaults to the same
             path ``run_bot.py`` boots the v2 runtime against.
@@ -210,14 +210,33 @@ def build_authoring_toolset(
             (Protocol-typed). Phase 9 keeps this ``None``;
             the cache must be pre-populated.
         clock / event_id_factory / schedule_id_factory:
-            Production wirings. Tests pass deterministic
-            stubs.
+            Production wirings. ``None`` → resolved lazily
+            from :mod:`app.v2.runtime._defaults`. Tests pass
+            deterministic stubs to override.
 
     Returns: A :class:`AuthoringToolset` with
         ``schedule_create_reminder`` bound to the production
         closure (or the stub when ``owner`` can't be
         resolved).
     """
+    # Lazy import: phase-9 hard rule forbids a module-load
+    # ``app.v2.runtime._defaults`` import in this phase-9
+    # module (it would re-export the sole uuid/datetime.now
+    # binding surface here). Resolve production wirings at
+    # call time instead.
+    from app.v2.runtime._defaults import (
+        prod_clock,
+        prod_event_id_factory,
+        prod_schedule_id_factory,
+    )
+
+    if clock is None:
+        clock = prod_clock
+    if event_id_factory is None:
+        event_id_factory = prod_event_id_factory
+    if schedule_id_factory is None:
+        schedule_id_factory = prod_schedule_id_factory
+
     resolved_owner_id = (
         expected_owner_id
         if expected_owner_id is not None
@@ -268,5 +287,4 @@ def build_authoring_toolset(
 
 __all__ = [
     "build_authoring_toolset",
-    "prod_schedule_id_factory",
 ]

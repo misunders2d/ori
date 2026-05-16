@@ -5,9 +5,12 @@ Phase 9 slice 8 per ``docs/PHASE_9_PLAN.md`` §3.8.
 
 Pins:
 
-- ``prod_schedule_id_factory`` returns a slug matching the
-  ``ScheduleSpec.id`` constraint ``^[a-z][a-z0-9_]*$`` (a
-  bare uuid4 hex can start with a digit → would fail).
+- ``prod_schedule_id_factory`` (now homed in
+  ``app.v2.runtime._defaults`` per slice-8 reviewer 🔴 —
+  ``_defaults`` is the SOLE uuid binding site) returns a
+  slug matching the ``ScheduleSpec.id`` constraint
+  ``^[a-z][a-z0-9_]*$`` (a bare uuid4 hex can start with a
+  digit → would fail).
 - ``build_authoring_toolset`` with explicit owner →
   AuthoringToolset with the production
   ``schedule_create_reminder`` closure bound (NOT the
@@ -28,8 +31,9 @@ import re
 
 import pytest
 
+from app.v2.runtime._defaults import prod_schedule_id_factory
 from app.v2.toolsets.authoring import AuthoringToolset
-from app.v2.wiring import build_authoring_toolset, prod_schedule_id_factory
+from app.v2.wiring import build_authoring_toolset
 
 
 _SLUG_RE = re.compile(r"^[a-z][a-z0-9_]*$")

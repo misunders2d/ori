@@ -37,11 +37,13 @@ from app.toolsets.contracts import ContractToolset
 # alongside v1 ContractToolset per round-2 reviewer Q4 /
 # §11.1 deprecation timeline. v1 contract tools stay
 # operational; v2 tools are introduced for new schedules.
-# Wrapped in a try/except so a v2 wiring failure (e.g. env
-# var missing on a fresh deploy) does NOT brick the
-# Coordinator — the agent boots without v2 authoring and
-# logs the failure.
-from app.v2.wiring import build_authoring_toolset
+# The `from app.v2.wiring import build_authoring_toolset`
+# import lives INSIDE the try/except below (slice-8 reviewer
+# 🟡): an import-time failure in the v2 stack (broken
+# transitive import on a fresh deploy) must NOT brick the
+# whole Coordinator module — only the toolset build is
+# optional, but a top-level import would crash before the
+# guard could catch it.
 from app.tools.a2a import get_agent_identity, get_my_a2a_key
 from app.tools.google_search import google_search_agent_tool
 from app.tools.web import web_fetch
@@ -65,13 +67,18 @@ _approval_skill = load_skill_from_dir(_skills_dir / "approval-skill")
 _knowledge_graph_skill = load_skill_from_dir(_skills_dir / "knowledge-graph-skill")
 
 # Phase 9 slice 8 — build the v2 authoring toolset once at
-# module load. A wiring failure (missing V2_AUTHORING_OWNER_ID
-# env on a fresh deploy → RuntimeError from the slice-6
-# constructor gate) must NOT brick the Coordinator; v2 is
-# additive in phase 9, so log + continue with v1 only.
+# module load. Both the IMPORT and the build are inside the
+# guard: a wiring failure (missing V2_AUTHORING_OWNER_ID env
+# on a fresh deploy → RuntimeError from the slice-6
+# constructor gate) OR an import-time failure in the v2
+# stack must NOT brick the Coordinator; v2 is additive in
+# phase 9, so log + continue with v1 only (slice-8 reviewer
+# 🟡 — import moved inside the try).
 import logging as _logging
 _v2_logger = _logging.getLogger(__name__)
 try:
+    from app.v2.wiring import build_authoring_toolset
+
     _v2_authoring_toolset = build_authoring_toolset()
     _v2_authoring_tools = [_v2_authoring_toolset]
 except Exception as _v2_exc:  # noqa: BLE001
@@ -87,11 +94,14 @@ root_agent = Agent(
     model=get_model("CoordinatorAgent"),
     description=(
         "The primary interface for the autonomous agent platform. Routes requests, manages "
-        "ad-hoc and recurring scheduling (cron + contract-driven), memory, and system operations. "
-        "Owns the contract pipeline (`contract_draft_validate`, `contract_dry_run`, "
-        "`contract_freeze`, `contract_schedule`, `contract_unschedule`, `contract_revise`, "
-        "`contract_list`, `contract_inspect`, `contract_from_existing`) — the preferred path for "
-        "recurring/scheduled tasks. Routes presentation (.pptx) requests through AmazonHeadAgent → "
+        "ad-hoc and recurring scheduling, memory, and system operations. "
+        "SCHEDULING LAW: every scheduled work item is created via a v2 typed tool — "
+        "one-shot reminders via `schedule_create_reminder` (the `OneOffReminder` template, "
+        "wrapping `schedule_dry_run` → `schedule_freeze` → `schedule_draft_commit`), and "
+        "ad-hoc workflows via the typed authoring tools. The v1 contract pipeline "
+        "(`contract_inspect`, `contract_list`, `contract_revise`, `contract_unschedule`) "
+        "is RETAINED for EXISTING `contract:`-prefixed tasks ONLY — it is NOT the path for "
+        "new scheduled work. Routes presentation (.pptx) requests through AmazonHeadAgent → "
         "AmazonDataAnalystAgent."
     ),
     instruction=(

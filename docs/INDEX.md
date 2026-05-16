@@ -33,7 +33,7 @@ Read this **before** adding new code — most things you'd build already exist.
 - **ClickUpAgent** (Agent) — `app/sub_agents/clickup_agent.py:108`
   - ClickUp task management sub-agent.
 
-- **CoordinatorAgent** (Agent) — `app/sub_agents/coordinator_agent.py:85`
+- **CoordinatorAgent** (Agent) — `app/sub_agents/coordinator_agent.py:92`
 
 - **DeveloperAgent** (Agent) — `app/sub_agents/developer_agent.py:137`
 

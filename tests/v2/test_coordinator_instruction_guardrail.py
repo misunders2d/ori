@@ -49,6 +49,13 @@ def coordinator_instruction() -> str:
     return instr
 
 
+@pytest.fixture(scope="module")
+def coordinator_description() -> str:
+    desc = root_agent.description
+    assert isinstance(desc, str)
+    return desc
+
+
 # ===========================================================================
 # Deprecated-surface absence
 # ===========================================================================
@@ -99,6 +106,86 @@ def test_scheduling_law_clause_present(coordinator_instruction):
         "SCHEDULING LAW: every scheduled work item is "
         "created via a v2 typed tool"
     ) in coordinator_instruction
+
+
+# ===========================================================================
+# root_agent.description — same deprecated-surface / v2-
+# presence pins as the instruction (slice-8 reviewer 🟡:
+# the Agent description still framed the v1 ContractToolset
+# as the 'preferred path', contradicting the SCHEDULING LAW
+# in the instruction; pin the description too so a reword
+# that re-introduces the contradiction flips here).
+# ===========================================================================
+
+
+def test_description_no_contract_freeze_spec_signature(
+    coordinator_description,
+):
+    assert "contract_freeze(spec:" not in coordinator_description
+    assert "contract_freeze(spec " not in coordinator_description
+
+
+def test_description_no_legacy_schedule_task_tools(
+    coordinator_description,
+):
+    assert "schedule_recurring_task(" not in coordinator_description
+    assert "schedule_one_off_task(" not in coordinator_description
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "OneOffReminder",
+        "schedule_dry_run",
+        "schedule_freeze",
+        "schedule_draft_commit",
+        "schedule_create_reminder",
+    ],
+)
+def test_description_references_v2_tool(
+    coordinator_description, tool_name
+):
+    assert tool_name in coordinator_description, (
+        f"Coordinator description must reference the v2 tool "
+        f"{tool_name!r} (slice-8 reviewer 🟡 — v2-forward "
+        f"description)"
+    )
+
+
+def test_description_scheduling_law_clause_present(
+    coordinator_description,
+):
+    assert (
+        "SCHEDULING LAW: every scheduled work item is "
+        "created via a v2 typed tool"
+    ) in coordinator_description
+
+
+def test_description_does_not_call_v1_the_preferred_path(
+    coordinator_description,
+):
+    """Direct regression pin for the slice-8 🟡: the old
+    description called the v1 contract pipeline the
+    'preferred path for recurring/scheduled tasks'. The
+    rewrite must NOT frame v1 as preferred — it is RETAINED
+    for existing `contract:`-prefixed tasks only."""
+    lowered = coordinator_description.lower()
+    assert "preferred path" not in lowered, (
+        "description must not frame any pipeline as the "
+        "'preferred path' — the SCHEDULING LAW makes v2 the "
+        "only path for new scheduled work"
+    )
+    # The v1 pipeline must be explicitly scoped to existing
+    # contract-prefixed tasks (the v2-forward framing).
+    assert "contract:" in coordinator_description
+    assert (
+        "existing" in lowered
+        and "contract pipeline" in lowered
+    ), (
+        "description must scope the v1 contract pipeline to "
+        "EXISTING contract:-prefixed tasks (v2-forward "
+        "wording)"
+    )
 
 
 # ===========================================================================
