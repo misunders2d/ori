@@ -195,6 +195,28 @@ finalises)
    typed outcomes) over the shipped storage CAS — unit tests
    (CAS hit/stale, lineage `StateRunMismatchError`,
    caller-owns-retry, None) + alias-robust AST hygiene pin.
+   **LANDED** — `app/v2/runtime/state.py` (Q5: new module).
+   `StateView{value,version,written_at,written_by_run}` +
+   `StateWriteOutcome{status: written|stale_version,
+   version}` (frozen). `state_read` thin-maps `get_state`;
+   `state_write` delegates to `set_state_cas` — NO SQL, NO
+   DDL, `storage/schedule_state.py` + `models/state.py` +
+   `ddl/` BYTE-UNTOUCHED (empty diff vs `v2-phase-12-complete`).
+   `expected_version=None`/`0` ⇒ first-write sentinel
+   (`set_state_cas(expected_version=0)`; a present row ⇒
+   `stale_version`, NO read-then-write so no TOCTOU, NO
+   unconditional overwrite); `>=1` ⇒ CAS. NO internal
+   retry/spin — a refused write returns `stale_version`
+   (`version=None`) from a SINGLE call (racing-writers test
+   pins the loser does not spin). `StateRunMismatchError` /
+   `NaiveDatetimeError` / `ValueError`(neg version) /
+   `IntegrityError` / `ConnectionNotReady` PROPAGATE
+   (no swallow). DI `now` (no `datetime.now` module-load).
+   `tests/v2/test_runtime_state.py` + alias-robust
+   `test_phase13_import_hygiene.py`; the shipped phase-3
+   `test_storage_schedule_state.py` still green (CAS contract
+   intact). ZERO sources/resolver/cache/emit/worker touch;
+   `PHASE_ALLOWLIST[13]` unchanged (no new surface path).
 2. **Build-the-layer worker/flow seam** (Q1a) — wired, DEAD;
    phase-11 `_fail_run` + phase-12 enforcement boundaries
    regression-pinned UNCHANGED; seam test
