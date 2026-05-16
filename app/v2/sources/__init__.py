@@ -84,6 +84,11 @@ from app.v2.sources.cache import (
     CacheResolution,
     resolve_source_cached,
 )
+from app.v2.sources.resolver import (
+    ResolveOutcome,
+    ResolveStatus,
+    resolve_source,
+)
 from app.v2.sources.snapshot_writer import (
     PruneResult,
     SnapshotWriteResult,
@@ -183,4 +188,7 @@ __all__ = [
     "CacheProvenance",
     "CacheResolution",
     "resolve_source_cached",
+    "ResolveStatus",
+    "ResolveOutcome",
+    "resolve_source",
 ]
