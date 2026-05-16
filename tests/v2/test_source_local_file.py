@@ -10,7 +10,9 @@ genuinely-absent contained file is the fallback-eligible
 
 from __future__ import annotations
 
+import asyncio
 import os
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -318,6 +320,39 @@ class _SwapIntermediateDirAfterFence(LocalFileSource):
         os.symlink(self._evil_dir, self._swap_dir)
 
 
+class _SwapRootToSymlinkAfterFence(LocalFileSource):
+    def __init__(self, *, root_dir: Path, evil_dir: Path, **kw):
+        super().__init__(**kw)
+        self._root_dir = root_dir
+        self._evil_dir = evil_dir
+
+    def _enforce_fence(self, resolved: Path) -> None:
+        super()._enforce_fence(resolved)
+        shutil.rmtree(self._root_dir)
+        os.symlink(self._evil_dir, self._root_dir)
+
+
+class _RemoveRootAfterFence(LocalFileSource):
+    def __init__(self, *, root_dir: Path, **kw):
+        super().__init__(**kw)
+        self._root_dir = root_dir
+
+    def _enforce_fence(self, resolved: Path) -> None:
+        super()._enforce_fence(resolved)
+        shutil.rmtree(self._root_dir)
+
+
+class _SwapIntermediateToFifoAfterFence(LocalFileSource):
+    def __init__(self, *, swap_dir: Path, **kw):
+        super().__init__(**kw)
+        self._swap_dir = swap_dir
+
+    def _enforce_fence(self, resolved: Path) -> None:
+        super()._enforce_fence(resolved)
+        shutil.rmtree(self._swap_dir)
+        os.mkfifo(self._swap_dir)
+
+
 class _GrowAfterFence(LocalFileSource):
     """Simulates the race: the file grows past max_bytes
     AFTER the fence/stat, before the read."""
@@ -374,6 +409,73 @@ async def test_intermediate_dir_swap_after_fence_refuses(tmp_path):
     assert ei.value.payload_code == "symlink_swapped_after_fence"
     assert ei.value.fallback_eligible is False
     assert not isinstance(ei.value, SourceFetchError)
+
+
+@pytest.mark.asyncio
+async def test_root_swapped_to_symlink_after_fence_is_typed(tmp_path):
+    """Allowed root replaced by an out-of-root symlink
+    after the fence → the root-anchor open is wrapped in
+    the typed classifier: a TYPED SourceSecurityError, NOT
+    a raw OSError."""
+    root = tmp_path / "root"
+    root.mkdir()
+    f = root / "ok.txt"
+    f.write_text("legit")
+    evil = tmp_path / "evil"
+    evil.mkdir()
+
+    src = _SwapRootToSymlinkAfterFence(
+        allowed_roots=[root], root_dir=root, evil_dir=evil
+    )
+    with pytest.raises(SourceSecurityError) as ei:
+        await _load(src, f)
+    assert ei.value.payload_code == "symlink_swapped_after_fence"
+    assert ei.value.fallback_eligible is False
+    assert not isinstance(ei.value, OSError)  # typed, not raw
+
+
+@pytest.mark.asyncio
+async def test_root_removed_after_fence_is_typed_not_raw_oserror(
+    tmp_path,
+):
+    """Allowed root removed after the fence → TYPED
+    SourceFetchError (contained-absent / source missing),
+    never a raw OSError leaking the §3.5 contract."""
+    root = tmp_path / "root"
+    root.mkdir()
+    f = root / "ok.txt"
+    f.write_text("legit")
+
+    src = _RemoveRootAfterFence(allowed_roots=[root], root_dir=root)
+    with pytest.raises(SourceFetchError) as ei:
+        await _load(src, f)
+    assert ei.value.payload_code == "source_local_file_not_found"
+    assert ei.value.fallback_eligible is True
+    assert not isinstance(ei.value, OSError)
+
+
+@pytest.mark.asyncio
+async def test_intermediate_fifo_swap_does_not_block_rejected(
+    tmp_path,
+):
+    """Intermediate dir swapped to a FIFO after the fence:
+    O_NONBLOCK means the open returns immediately (no hang
+    waiting for a writer); the S_ISDIR check then rejects
+    it non-fallback. asyncio.wait_for proves no block."""
+    root = tmp_path / "root"
+    sub = root / "sub"
+    sub.mkdir(parents=True)
+    (sub / "leaf.txt").write_text("legit")
+
+    src = _SwapIntermediateToFifoAfterFence(
+        allowed_roots=[root], swap_dir=sub
+    )
+    with pytest.raises(SourceSecurityError) as ei:
+        await asyncio.wait_for(
+            _load(src, sub / "leaf.txt"), timeout=5
+        )
+    assert ei.value.payload_code == "path_traversal_not_dir"
+    assert ei.value.fallback_eligible is False
 
 
 @pytest.mark.asyncio

@@ -216,24 +216,65 @@ class LocalFileSource:
     def _within_an_allowed_root(self, resolved: Path) -> bool:
         return self._containing_root(resolved) is not None
 
+    @staticmethod
+    def _classify_open_oserror(exc: OSError, what: str):
+        """Map an ``openat`` ``OSError`` to a TYPED source
+        error so NO raw OSError escapes the loader (codex
+        slice-3-fix-3 🔴 — the §3.5 contract needs every
+        failure classifiable fallback vs non-fallback).
+        Always raises."""
+        if exc.errno == errno.ELOOP:
+            raise SourceSecurityError(
+                f"{what} became a symlink after the fence "
+                "(O_NOFOLLOW walk)",
+                code="symlink_swapped_after_fence",
+            ) from exc
+        if exc.errno == errno.ENOENT:
+            # Genuinely absent in the race → contained
+            # "source missing" (design §5.3.2) →
+            # fallback-eligible.
+            raise SourceFetchError(
+                f"{what} not found",
+                code="source_local_file_not_found",
+            ) from exc
+        # EACCES / EPERM / ENOTDIR / ELOOP-on-parent / etc.
+        # → non-fallback security.
+        raise SourceSecurityError(
+            f"cannot open {what} no-follow: {exc}",
+            code="path_open_failed",
+        ) from exc
+
     def _open_walked_fd(self, root: Path, resolved: Path) -> int:
         """Open ``resolved`` by walking it component-by-
         component from ``root`` with ``openat`` +
-        ``O_NOFOLLOW`` on EVERY step (codex slice-3-fix-2
-        🔴 — option A).
+        ``O_NOFOLLOW | O_NONBLOCK`` on EVERY step, the root
+        anchor included (codex slice-3-fix-2 🔴 + -fix-3
+        🔴/🟡 — option A).
 
-        Final-component ``O_NOFOLLOW`` alone left an
-        intermediate-directory symlink-swap window: after
-        the fence an attacker could replace a mid-path
-        allowed-root dir with a symlink and a single
-        ``os.open(resolved, …)`` would traverse it OUTSIDE
-        the root. Walking each component through a dir fd
-        with ``O_NOFOLLOW`` (``O_DIRECTORY`` for every
-        non-final component) means ANY symlink anywhere
-        along the path fails ``openat`` (``ELOOP``) — the
-        traversal is structurally swap-proof, not merely
-        re-checked. Returns the final file fd; caller
-        ``fstat`` + reads + closes it.
+        - ``O_NOFOLLOW``: any symlink ANYWHERE (root, leaf
+          or an intermediate allowed-root dir swapped after
+          the fence) fails ``openat`` with ``ELOOP`` →
+          non-fallback ``SourceSecurityError``. The whole
+          traversal is structurally swap-proof.
+        - NO ``O_DIRECTORY``: with it the kernel may return
+          ``ENOTDIR`` for a symlinked component (masking
+          the swap); instead every fd is ``fstat``'d and
+          required ``S_ISDIR`` for the root + every
+          non-final component.
+        - ``O_NONBLOCK``: a post-fence swap of any component
+          to a FIFO / device must not BLOCK the open
+          waiting for a writer (hang / DoS). ``O_NONBLOCK``
+          returns immediately; the subsequent ``S_ISDIR`` /
+          (caller) ``S_ISREG`` check then rejects it
+          non-fallback. ``O_NONBLOCK`` is a no-op for the
+          legit directory / regular-file case (regular-file
+          reads ignore it).
+        - The root anchor open is wrapped in the SAME typed
+          classifier so a swapped/removed root yields a
+          typed error, never a raw ``OSError``.
+
+        Returns the final file fd; caller ``fstat`` + reads
+        + closes it.
         """
         rel_parts = resolved.relative_to(root).parts
         if not rel_parts:
@@ -244,52 +285,43 @@ class LocalFileSource:
                 code="path_not_a_regular_file",
             )
 
-        dir_fd = os.open(
-            root,
-            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-            | os.O_CLOEXEC,
+        _walk_flags = (
+            os.O_RDONLY
+            | os.O_NOFOLLOW
+            | os.O_CLOEXEC
+            | os.O_NONBLOCK
         )
+
         try:
+            dir_fd = os.open(root, _walk_flags)
+        except OSError as exc:
+            self._classify_open_oserror(
+                exc, f"allowed root {str(root)!r}"
+            )
+        try:
+            # The root anchor MUST still be a directory
+            # (could have been swapped to a file / FIFO
+            # after the fence).
+            st = os.fstat(dir_fd)
+            if not _stat.S_ISDIR(st.st_mode):
+                raise SourceSecurityError(
+                    f"allowed root {str(root)!r} is no "
+                    "longer a directory (swapped after the "
+                    "fence)",
+                    code="path_traversal_not_dir",
+                )
             for i, comp in enumerate(rel_parts):
                 is_last = i == len(rel_parts) - 1
-                # NO O_DIRECTORY: with O_DIRECTORY the kernel
-                # may return ENOTDIR for a symlinked
-                # component (the O_DIRECTORY check can win
-                # over O_NOFOLLOW), masking the swap. Open
-                # WITHOUT O_DIRECTORY so a symlinked
-                # component reliably fails O_NOFOLLOW with
-                # ELOOP; then fstat the fd and require
-                # S_ISDIR for every non-final component.
                 try:
                     next_fd = os.open(
-                        comp,
-                        os.O_RDONLY | os.O_NOFOLLOW
-                        | os.O_CLOEXEC,
-                        dir_fd=dir_fd,
+                        comp, _walk_flags, dir_fd=dir_fd
                     )
                 except OSError as exc:
-                    if exc.errno == errno.ELOOP:
-                        raise SourceSecurityError(
-                            f"component {comp!r} of "
-                            f"{str(resolved)!r} became a "
-                            "symlink after the fence "
-                            "(O_NOFOLLOW walk)",
-                            code="symlink_swapped_after_fence",
-                        ) from exc
-                    if exc.errno == errno.ENOENT:
-                        # Contained path vanished in the
-                        # race → genuinely absent (design
-                        # §5.3.2 "source missing").
-                        raise SourceFetchError(
-                            f"local file {str(resolved)!r} "
-                            "not found",
-                            code="source_local_file_not_found",
-                        ) from exc
-                    raise SourceSecurityError(
-                        f"cannot open component {comp!r} "
-                        f"no-follow: {exc}",
-                        code="path_open_failed",
-                    ) from exc
+                    self._classify_open_oserror(
+                        exc,
+                        f"component {comp!r} of "
+                        f"{str(resolved)!r}",
+                    )
                 os.close(dir_fd)
                 dir_fd = next_fd
                 if not is_last:
