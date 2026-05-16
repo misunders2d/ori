@@ -213,6 +213,33 @@ PHASE_ALLOWLIST: dict[int, set[str]] = {
         "run_bot.py",
         "app/agent.py",
     },
+    10: {
+        # Code surface carried forward
+        "app/v2/",
+        "tests/v2/",
+        # CI guard machinery (carried forward)
+        "scripts/check_phase_scope.py",
+        "scripts/install_hooks.py",
+        ".githooks/v2_phase_guard.sh",
+        ".githooks/pre-commit",
+        ".github/workflows/v2_phase_guard.yml",
+        # Phase-tracking artefact
+        ".v2-current-phase",
+        # Plan + design docs
+        "docs/PHASE_10_PLAN.md",
+        "docs/CONTRACTS_V2_DESIGN.md",
+        # Auto-generated index (pre-commit regenerates + stages)
+        "docs/INDEX.md",
+        "docs/AGENTS_INVENTORY.md",
+        # Doc-read marker bookkeeping
+        ".docs_read_marker",
+        # NOT carried from phase 9: coordinator_agent.py /
+        # run_bot.py / app/agent.py were phase-9 cutover-only.
+        # Phase 10 (step 10 — source loaders + snapshot infra)
+        # is a build-the-layer phase: no worker fire-path
+        # wiring, no agent mount, no production side effect
+        # before step 11 (§12.1 invariant 2).
+    },
     # Future phases populate here as they land.
 }
 
