@@ -728,8 +728,8 @@ cases.
 ```
 live_change_policy ∈ {
     allow,                              # source edits flow through
-    alert_on_shape_change,              # log/alert on item_count or schema change; still fire
-    require_reapprove_on_shape_change,  # refuse to fire on shape change; admin re-approves
+    alert_on_shape_change,              # log/alert on content_hash change vs prior snapshot; still fire
+    require_reapprove_on_shape_change,  # content_hash change: withhold content, fresh snapshot STILL written as audit; admin re-approves
 }
 ```
 

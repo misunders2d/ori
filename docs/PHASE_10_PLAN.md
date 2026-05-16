@@ -255,8 +255,10 @@ Read this with:
    regardless of the TTL.
 5. **Live-source change policy** (`LiveChangePolicy`,
    `enums.py:239`): `allow` / `alert_on_shape_change` /
-   `require_reapprove_on_shape_change`; shape = item_count
-   or schema delta vs last snapshot.
+   `require_reapprove_on_shape_change`; shape change =
+   `content_hash` vs the immediately-prior materialised
+   snapshot (`SourceSnapshotMetadata` does NOT persist
+   `item_count`; `content_hash` is the discriminator).
 6. **Item-id / selection-method strategy** (§5.3.4):
    sheets/docs → stable row id / heading anchor /
    revision-pinned id; plain text/markdown → normalized
@@ -743,13 +745,17 @@ push) → pause for codex verdict → fix-on-HOLD → GO next.
   + snapshot row; shape change under
   `alert_on_shape_change` → `SOURCE_DRIFT_DETECTED` +
   still resolves; under `require_reapprove_on_shape_change`
-  → `SOURCE_FAILED`, no snapshot; `SourceAuthError` /
+  → `SOURCE_FAILED` with content WITHHELD but the FRESH
+  snapshot row/file STILL written (the audit evidence the
+  admin must re-approve); `SourceAuthError` /
   `SourceSecurityError` / `SourcePolicyError` /
   `SourceParseError` each → `SOURCE_FAILED`,
   cache+fallback bypassed (single `fallback_eligible`
   rule); `SourceFetchError` → fallback path; exactly one
-  event per call; resolver never raises for expected
-  failures.
+  terminal OUTCOME per call (the terminal event row is
+  best-effort — it may be absent, `event_emitted=False`,
+  when the terminal emit ITSELF fails); resolver never
+  raises into the caller.
 - **`test_phase10_import_hygiene.py`** — every phase-10
   NEW module: no module-load `app.v2.runtime._defaults`
   import, no `uuid.uuid4` / `datetime.now` call, no
@@ -829,9 +835,13 @@ DI.
 6. Live-change policy: `allow` / `alert_on_shape_change`
    / `require_reapprove_on_shape_change` each pinned with
    the matching EventLedger event.
-7. `resolve_source` emits exactly one of `SOURCE_RESOLVED`
-   / `SOURCE_DRIFT_DETECTED` / `SOURCE_FAILED` per call;
-   never raises for an expected failure.
+7. `resolve_source` returns exactly one terminal OUTCOME
+   per call (`RESOLVED` / `DRIFT` / `FAILED`); it attempts
+   one matching `SOURCE_RESOLVED` / `SOURCE_DRIFT_DETECTED`
+   / `SOURCE_FAILED` row, but that row is best-effort —
+   it may be absent (`event_emitted=False`) on a swallowed
+   terminal-emit failure, and the emit failure never flips
+   the terminal status; never raises into the caller.
 8. Worker fire path UNCHANGED — still rejects
    `execution_plan_hash`; resolver not called from the
    worker (step-11 boundary held).
