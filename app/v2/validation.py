@@ -39,6 +39,7 @@ from app.v2.enums import EnforcementMode
 from app.v2.models.execution_plan import ExecutionPlan
 from app.v2.models.schedule import ScheduleSpec
 from app.v2.models.triggers import OneOffTrigger
+from app.v2.reasoning_enforcement import evaluate_reasoning_step
 from app.v2.registry import EmitRegistry, SourceRegistry, ToolRegistry
 
 
@@ -469,6 +470,116 @@ def _validate_referenced_adapters(
     return issues
 
 
+def _validate_reasoning_tool_mode(
+    spec: ScheduleSpec,
+    execution_plans: Optional[Mapping[str, ExecutionPlan]],
+    registries: Optional[RegistrySnapshot],
+) -> list[ValidationIssue]:
+    """Phase-12 §12 step-12 — read-only-reasoning enforcement at
+    the §5.5 chokepoint (Q6: ONE independent additive rule).
+
+    **§11.1 backward-compat.** Iterates ONLY reasoning-bearing
+    plans' reasoning steps. A spec with no
+    ``execution_plan_hash``, no plan body in the index, or an
+    emit-only plan (``reasoning == []``) is an EARLY NO-OP — so
+    every shipped phase-9–11 OneOff / ``RecurringSeriesFromSource``
+    emit spec is byte/behaviour-unchanged (they carry no
+    reasoning).
+
+    **Q2 / §1.1b fail-safe.** Tool→tag resolution rides
+    ``RegistrySnapshot.tools`` (the same seam
+    :func:`_validate_referenced_adapters` uses). With
+    ``registries`` / ``registries.tools`` ``None`` — the state
+    of EVERY shipped call site (§1.1a registry-threading map) —
+    every referenced tool resolves to ``None`` ⇒ a
+    ``read_only`` reasoning-bearing plan is blanket-BLOCKED via
+    ``reasoning_tool_unresolved``. This is the INTENDED,
+    documented, over-block-safe degeneration (defense-in-depth
+    with the phase-11 worker ``_fail_run`` boundary), NEVER a
+    silent allow. ``ToolRegistry.lookup`` — NOT
+    ``ToolRegistry.tags_for`` — is used so an unknown tool
+    resolves to ``None`` (the distinct *unresolved* code), not
+    the fail-safe ``{write_external}`` set (which would conflate
+    it with the *blocked* code).
+
+    **Non-short-circuiting (Q6).** Returns its OWN issue list;
+    iterates EVERY reasoning step and EVERY offending tool, so a
+    malformed plan still surfaces ALL issues (the
+    all-issues-collected contract). The block decision reuses
+    the slice-1 :func:`evaluate_reasoning_step` — the §5.4
+    blocking-tag set is NOT re-declared here.
+    """
+    if spec.execution_plan_hash is None:
+        return []
+    if execution_plans is None:
+        return []
+    plan = execution_plans.get(spec.execution_plan_hash)
+    if plan is None:
+        # Already flagged by _validate_execution_plan_hash_exists.
+        return []
+    if not plan.reasoning:
+        # §11.1: emit-only / no-reasoning plan — early no-op.
+        return []
+
+    tools_reg = registries.tools if registries is not None else None
+
+    def _resolve(name: str):
+        # None ⇒ unresolved (fail-safe BLOCK). lookup (NOT
+        # tags_for) so an unknown tool is None, distinct from a
+        # genuinely write-tagged registered tool.
+        if tools_reg is None:
+            return None
+        descriptor = tools_reg.lookup(name)
+        if descriptor is None:
+            return None
+        return frozenset(descriptor.tags)
+
+    issues: list[ValidationIssue] = []
+    for ri, step in enumerate(plan.reasoning):
+        outcome = evaluate_reasoning_step(
+            step, resolve_tags=_resolve
+        )
+        if outcome.allowed:
+            continue
+        path = f"execution_plan.reasoning[{ri}].tools"
+        for tool_name, tags in outcome.blocked_tools:
+            issues.append(
+                ValidationIssue(
+                    code="reasoning_tool_write_in_read_only",
+                    severity="error",
+                    path=path,
+                    message=(
+                        f"reasoning step {step.id!r} is "
+                        f"tool_mode=read_only but references "
+                        f"{tool_name!r} carrying write-capable "
+                        f"tag(s) {sorted(t.value for t in tags)!r}; "
+                        f"writes must route through an emit "
+                        f"adapter, or the step must opt in with "
+                        f"tool_mode=write_allowed (design §5.4 / "
+                        f"D6)"
+                    ),
+                )
+            )
+        for tool_name in outcome.unresolved_tools:
+            issues.append(
+                ValidationIssue(
+                    code="reasoning_tool_unresolved",
+                    severity="error",
+                    path=path,
+                    message=(
+                        f"reasoning step {step.id!r} "
+                        f"(tool_mode=read_only) references "
+                        f"{tool_name!r} which is unregistered or "
+                        f"untagged; §5.4 fail-safe treats it "
+                        f"write-capable and BLOCKS it (tool "
+                        f"registry "
+                        f"{'absent' if tools_reg is None else 'present'})"
+                    ),
+                )
+            )
+    return issues
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -518,6 +629,9 @@ def validate_schedule_spec(
     )
     issues.extend(
         _validate_referenced_adapters(spec, execution_plans, registries)
+    )
+    issues.extend(
+        _validate_reasoning_tool_mode(spec, execution_plans, registries)
     )
     return ValidationResult(issues=issues)
 

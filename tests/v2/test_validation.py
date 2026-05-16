@@ -28,6 +28,7 @@ from app.v2.enums import (
     EnforcementMode,
     FailureActionType,
     SelectionMethod,
+    ToolMode,
 )
 from app.v2.models.common import (
     AuditPolicy,
@@ -114,7 +115,22 @@ def _plan_with_refs(
     loader_name: str = "source_drive_file",
     tool_name: str = "slack_post_message",
     adapter_name: str = "slack_post_message",
+    tool_mode: ToolMode = ToolMode.WRITE_ALLOWED,
 ) -> ExecutionPlan:
+    # ``tool_mode`` defaults to WRITE_ALLOWED (phase-12 slice-2
+    # coupled-test reconcile, NOT a regression mask): this
+    # SHARED fixture's reasoning step references
+    # ``slack_post_message`` — a write/send tool. Under §12
+    # step-12 / D6 a reasoning step that legitimately calls a
+    # write tool is ONLY valid as ``write_allowed``; a
+    # ``read_only`` step referencing it is now (correctly)
+    # rejected by ``_validate_reasoning_tool_mode``. These 15
+    # callers assert OTHER rules (registry resolution, output
+    # types, enforcement mode) — the pre-step-12 ``read_only``
+    # default was an incidental, now-invalid property
+    # irrelevant to what they test. Read-only-reasoning
+    # enforcement gets its OWN dedicated tests in
+    # ``test_validation_reasoning_tool_mode.py``.
     plan = ExecutionPlan(
         id="daily_audit_plan",
         description="walk the audit",
@@ -125,6 +141,7 @@ def _plan_with_refs(
                 id="reason",
                 entry_agent="CoordinatorAgent",
                 tools=[tool_name],
+                tool_mode=tool_mode,
                 user_template="t",
             )
         ],

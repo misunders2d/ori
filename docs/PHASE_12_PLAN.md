@@ -294,6 +294,29 @@ mid-phase.
 2. **`validate_schedule_spec` static rule** (Q2/Q6) — new
    `_validate_reasoning_tool_mode` + codes; coupled-test
    reconcile; all-issues-collected proof.
+   **LANDED** — `app/v2/validation.py`
+   `_validate_reasoning_tool_mode` wired as ONE independent
+   additive rule (after `_validate_referenced_adapters`,
+   non-short-circuiting). Reuses slice-1
+   `evaluate_reasoning_step` via the `RegistrySnapshot.tools`
+   seam using `ToolRegistry.lookup` (NOT `tags_for`) so an
+   unknown tool ⇒ `None` ⇒ the DISTINCT `reasoning_tool_unresolved`
+   code, a genuinely write-tagged registered tool ⇒
+   `reasoning_tool_write_in_read_only`. §11.1: early no-op for
+   no-hash / no-index / `reasoning == []` (emit-only). §1.1b
+   fail-safe: `registries`/`tools` `None` (every shipped
+   caller) ⇒ blanket-block read_only reasoning-bearing plans
+   (INTENDED). Coupled-test reconcile: the SHARED
+   `test_validation.py::_plan_with_refs` fixture's reasoning
+   step (references the write/send tool `slack_post_message`)
+   defaulted to `tool_mode=WRITE_ALLOWED` — a legitimate
+   fixture correction (post-step-12 a reasoning step calling a
+   write tool is ONLY valid as write_allowed; those 15 callers
+   assert OTHER rules), NOT a regression mask; read-only
+   enforcement gets dedicated tests in
+   `test_validation_reasoning_tool_mode.py` (incl. the
+   all-issues-collected proof + the structural pin that
+   ToolDescriptor forbids an untagged registration).
 3. **Tag-driven CustomFlow friction** (Q5 subset) — additive
    to the authoring path.
 4. **Build-the-layer runtime guard + worker seam** (Q1a/Q3)
