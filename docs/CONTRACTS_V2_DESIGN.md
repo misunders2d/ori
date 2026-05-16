@@ -657,13 +657,33 @@ constraints:
   allowlisted: `data/vault*`, `.env`, secrets paths, and
   `data/contract_state/`, `data/ori-scheduler.db`,
   `data/contract_audit/` are explicitly denied.
-- **No symlink escape**: `realpath()` resolves any symlink; if the
-  resolved path falls outside allowlist roots, refuse.
-- **Path canonicalization**: `os.path.realpath(os.path.abspath(p))`
-  + verify it starts with an allowlisted root prefix. Rejects
-  `..` traversal.
-- **Max size**: per-file `max_bytes` (default 1 MiB). Larger files
-  fail under the snapshot `on_oversize` policy.
+- **Path canonicalization + containment** (phase-10
+  hardening, 2026-05-16 — codex plan-review round-2 🔴):
+  the check is **separator-aware**, NOT a string prefix.
+  `resolved = Path(p).resolve(strict=True)` (canonicalises
+  `..` AND resolves every symlink component); `root =
+  Path(allowed_root).resolve(strict=True)`; refuse unless
+  `resolved.is_relative_to(root)`. **Do NOT use
+  `os.path.realpath(...)` + `startswith(root)`** — string
+  prefix admits the sibling-prefix bypass
+  (`/safe/root_evil/x` against allowed `/safe/root`).
+  `is_relative_to` compares path COMPONENTS so the
+  sibling is rejected. Because `resolve()` follows
+  symlinks before the check, a symlink whose target
+  escapes the root (or points into the deny-list) is
+  rejected too — the deny-list check runs on the SAME
+  post-`resolve()` path. **Plan↔design consistency is
+  load-bearing**: `docs/PHASE_10_PLAN.md` §3.2 and this
+  clause MUST state the identical mechanism; the
+  phase-10 fence test pins the sibling-prefix +
+  symlink-escape + symlink-into-deny-list cases so a
+  future drift in either document is caught by CI, not
+  by an incident.
+- **Max size**: per-file `max_bytes` (default 1 MiB).
+  Larger files fail as a NON-fallback typed policy
+  failure (`SourcePolicyError`, never served from cache —
+  see `docs/PHASE_10_PLAN.md` §3.5) under the snapshot
+  `on_oversize` policy.
 - **Mime-type allowlist**: text / markdown / json / yaml only by
   default. Binary blocked unless explicitly opted in.
 

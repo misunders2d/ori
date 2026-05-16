@@ -48,12 +48,35 @@ and bakes in the codex Q-call answers:
   the genuinely-missing `live_change_policy` + explicit
   default.
 
+**Round-3 revision (2026-05-16)** closes the 4🔴 + 1🟡
+codex surfaced on the round-2 plan landing (`9dcd2a6`) —
+largely plan↔design drift (§9a is the full disposition):
+- 🔴 `docs/CONTRACTS_V2_DESIGN.md` §5.3.1 rewritten to
+  the same `Path.resolve+is_relative_to` fence as plan
+  §3.2 (it still said `realpath()+startswith`); design
+  doc re-grepped clean for fence/prefix wording.
+- 🔴 fence rejects raise NON-fallback
+  `SourceSecurityError`; oversize `fail_and_alert` raises
+  NON-fallback `SourcePolicyError`. The resolver now has
+  a SINGLE rule: `fallback_eligible` ClassVar, True only
+  on `SourceFetchError`; everything else →
+  `SOURCE_FAILED`, no cache/fallback (a denied path /
+  oversize can never serve stale data).
+- 🔴 `prune_snapshots` commits row DELETEs BEFORE any
+  file unlink (post-commit, best-effort, re-query);
+  deleted-file-with-live-row is now structurally
+  impossible.
+- 🟡 on-disk artifact pinned: `<source_id>.bin` holding
+  `content_bytes` verbatim (no JSON envelope);
+  `sha256(file)==content_hash`.
+
 Q-call answers folded in: Q1 `SourceRefSpec` yes (reuse
 existing policy models); Q2 distinct cache knobs, both
 pinned; Q3 Protocol DI for Slack/Drive readers; Q4 keep
-the `data/contract_audit/...` design root + local-file
-deny-list still blocks it; Q5 keep 9 slices, do NOT
-bundle the security-heavy `local_file` / `cache` slices.
+the `data/contract_audit/...` design root (`.bin` file)
++ local-file deny-list still blocks it; Q5 keep 9
+slices, do NOT bundle the security-heavy `local_file` /
+`cache` slices.
 
 The §5.3.5 retention-mechanism clause is a
 `docs/CONTRACTS_V2_DESIGN.md` amendment landed in the
@@ -103,14 +126,21 @@ Read this with:
    - `source_drive_file` — Google Docs / Sheets via the
      Drive API; OAuth via the existing registry-cache
      credential path; `USES_OAUTH` tag.
-2. **Per-fire snapshot writer**: content → on-disk
-   `data/contract_audit/<schedule_id>/<run_id>/sources/<source_id>.json`
-   (Q4 — design root kept; the local-file deny-list still
-   blocks reads under it, §3.2) + a `source_snapshots`
-   row via the existing `insert_snapshot`
-   (`app/v2/storage/source_snapshots.py:77`).
-   Content-addressed (`sha256:` over the §3.6 canonical
-   bytes); dedup-by-content-hash.
+2. **Per-fire snapshot writer**: writes the §3.6
+   `content_bytes` VERBATIM to a raw on-disk file with a
+   neutral extension —
+   `data/contract_audit/<schedule_id>/<run_id>/sources/<source_id>.bin`
+   (🟡 codex round-2 #5 — NOT `.json`: the artifact is
+   raw text / yaml / json / binary `content_bytes`, not a
+   JSON envelope; the file IS the hashed bytes so
+   `sha256(file)` re-verifies `content_hash` trivially;
+   metadata lives in the `source_snapshots` row, NEVER in
+   the file). Q4 — design root kept; the local-file
+   deny-list still blocks reads under it (§3.2). Plus a
+   `source_snapshots` row via the existing
+   `insert_snapshot` (`app/v2/storage/source_snapshots.py:77`).
+   Content-addressed (`content_hash = "sha256:" +
+   sha256(content_bytes)`, §3.6); dedup-by-content-hash.
 3. **Retention + on_oversize policy** — REUSES the
    EXISTING `AuditPolicy` (`app/v2/models/common.py:194`,
    already a field on `ScheduleSpec.audit`,
@@ -218,7 +248,7 @@ app/v2/sources/local_file.py          # source_local_file + §5.3.1 fence
 app/v2/sources/slack_thread.py        # source_slack_thread loader
 app/v2/sources/drive_file.py          # source_drive_file loader
 app/v2/sources/contract.py            # SourceLoader Protocol + SourceResult + §3.6 canonical-bytes helper
-app/v2/sources/errors.py              # typed error contract: SourceAuthError / SourceFetchError / SourceParseError
+app/v2/sources/errors.py              # SourceError + 5 subclasses; only SourceFetchError is fallback_eligible
 app/v2/sources/resolver.py            # resolve_source orchestrator
 app/v2/sources/snapshot_writer.py     # per-fire snapshot write + retention prune + on_oversize
 app/v2/sources/cache.py               # per-source cache + fallback (auth-fail bypass)
@@ -310,17 +340,26 @@ match). The fence MUST be **separator-aware**:
 resolved = Path(p).resolve(strict=True)        # follows symlinks
 root     = Path(allowed_root).resolve(strict=True)
 if not resolved.is_relative_to(root):          # py3.9+; component-wise
-    raise SourceFetchError("path_outside_allowed_root")
+    raise SourceSecurityError("path_outside_allowed_root")
+if _hits_deny_list(resolved):                  # post-resolve()
+    raise SourceSecurityError("path_in_deny_list")
 ```
 
-`Path.resolve(strict=True)` canonicalises `..` AND
-resolves every symlink component before the check, so a
-symlink escaping the root (the resolved target falls
-outside) is rejected too. `is_relative_to` compares path
-COMPONENTS, so `/safe/root_evil` is NOT relative to
-`/safe/root` (string prefix would have wrongly passed).
-The deny-list check runs on the SAME `resolved` path
-(post-symlink) so a symlink INTO `data/vault` is caught.
+Every fence rejection raises `SourceSecurityError`
+(§3.5 — NON-fallback; a denied read can NEVER serve a
+last-good cached snapshot). `Path.resolve(strict=True)`
+canonicalises `..` AND resolves every symlink component
+before the check, so a symlink escaping the root (the
+resolved target falls outside) is rejected too.
+`is_relative_to` compares path COMPONENTS, so
+`/safe/root_evil` is NOT relative to `/safe/root` (string
+prefix would have wrongly passed). The deny-list check
+runs on the SAME `resolved` path (post-symlink) so a
+symlink INTO `data/vault` is caught. **This mechanism is
+identical to `docs/CONTRACTS_V2_DESIGN.md` §5.3.1 verbatim
+(plan↔design consistency is load-bearing — codex
+round-2 🔴#1); the fence test pins it so a drift in
+either doc fails CI.**
 `max_bytes` default 1 MiB → routes to `on_oversize`
 (§3.4). Mime allowlist: text/markdown/json/yaml; binary
 refused unless explicit per-root opt-in. Pinned tests
@@ -339,13 +378,14 @@ async def resolve_source(
 ```
 
 Steps: cache check → loader dispatch (`SOURCES.require`)
-→ on `SourceFetchError` apply `fallback_policy`; on
-`SourceAuthError` bypass cache AND fallback → straight
-to `SOURCE_FAILED` → snapshot write (retention +
-on_oversize) → shape/drift check → append exactly one
-EventLedger event. Never raises into the caller for an
-expected failure — returns a typed resolution (mirrors
-phase-9 `SlackPostResult`).
+→ on a raised `SourceError` apply the single §3.5 rule
+(`fallback_eligible` ⇔ `SourceFetchError` → consult
+`fallback_policy`; ANY other subclass → `SOURCE_FAILED`,
+cache + fallback bypassed) → snapshot write (+ on_oversize)
+→ shape/drift check → retention prune (post-write) →
+append exactly one EventLedger event. Never raises into
+the caller for an expected failure — returns a typed
+resolution (mirrors phase-9 `SlackPostResult`).
 
 ### 3.4 Snapshot writer + retention (`sources/snapshot_writer.py`)
 
@@ -370,33 +410,45 @@ keep_last_n) -> PruneResult`:
    `(run_id, source_id)`).
 2. Order by `fetched_at` DESC; keep the newest
    `keep_last_n`; the rest are prune candidates.
-3. For each prune-candidate row: DELETE the row. Then
-   DELETE its backing `content_path` file **iff no
-   surviving row (this pair OR any other) still
-   references the same `content_path`** — content-
-   addressed files are shared across dedup'd rows, so a
-   file is unlinked only when its last referencing row
-   is gone (`SELECT 1 FROM source_snapshots WHERE
-   content_path = ? LIMIT 1` after the row deletes).
-4. Return `PruneResult(rows_deleted, files_unlinked,
-   files_kept_shared)` for the `source_resolved` /
-   audit event payload.
+3. Collect each prune-candidate's `content_path`, then
+   DELETE the candidate rows. **COMMIT the row deletes
+   FIRST.**
+4. **🔴 codex round-2 fix — unlink AFTER commit, never
+   inside the prune transaction.** Files are NOT
+   unlinked inside the DB transaction: a later rollback
+   would restore rows pointing at already-deleted files
+   (= data loss). Order is strict: (a) row DELETEs in
+   one `transaction(conn)`; (b) `transaction` COMMITs;
+   (c) ONLY THEN, for each collected `content_path`,
+   re-query `SELECT 1 FROM source_snapshots WHERE
+   content_path = ? LIMIT 1` on a fresh connection — if
+   no surviving row references it (content-addressed
+   files are shared across dedup'd rows), best-effort
+   `unlink`. An orphaned file (row gone, file lingers)
+   is harmless and is counted/logged for a separate
+   sweep; a deleted file with a live row is data loss
+   and this ordering makes it impossible. A unlink
+   failure post-commit is logged + counted, never
+   re-raised.
+5. Return `PruneResult(rows_deleted, files_unlinked,
+   files_kept_shared, orphans_logged)` for the
+   `source_resolved` / audit event payload.
 
-Whole prune runs in one `transaction(conn)`; a file
-unlink failure is logged + counted, never aborts the row
-delete (mirrors phase-8 best-effort cleanup). Retention
-is invoked by the resolver AFTER a successful snapshot
-write, never mid-fetch. `keep_last_n_snapshots == 0`
-means "keep none beyond the just-written row" (prune all
-older). The `app/v2/storage/source_snapshots.py` module
-docstring is amended in the same slice to say: append-
-only for `insert_snapshot`; `prune_snapshots` is the
-sole sanctioned delete, retention-only.
+Retention is invoked by the resolver AFTER a successful
+snapshot write, never mid-fetch. `keep_last_n_snapshots
+== 0` means "keep none beyond the just-written row"
+(prune all older). The `app/v2/storage/source_snapshots.py`
+module docstring is amended in the same slice to say:
+append-only for `insert_snapshot`; `prune_snapshots` is
+the sole sanctioned delete, retention-only, and unlinks
+files only AFTER its row-delete transaction commits.
 
 **`on_oversize`** (`content_size > audit.max_snapshot_bytes`)
 — explicit branches, no silent fallback (§5.3.5):
-- `fail_and_alert` → `SourceFetchError`-class failure →
-  `SOURCE_FAILED`, no row/file.
+- `fail_and_alert` → **`SourcePolicyError`** (🔴 codex
+  round-2 #3 — NOT `SourceFetchError`; oversize is a
+  policy refusal, NON-fallback, so it can never serve a
+  stale cached snapshot) → `SOURCE_FAILED`, no row/file.
 - `store_pointer_only` → row written, `content_path`
   empty / pointer sentinel, no file body.
 - `redact_and_store` → `audit.redact_fields` stripped,
@@ -406,40 +458,63 @@ sole sanctioned delete, retention-only.
 
 ### 3.5 Typed error contract (`sources/errors.py`)
 
-**🔴 codex round-1 fix.** "Auth failure never triggers
-cache fallback" is unenforceable without a way to TELL
-auth failure apart from network/parse failure. The
-hierarchy:
+**🔴 codex round-1 + round-2 fix.** Fallback eligibility
+must be unforgeable. **Exactly ONE subclass is
+fallback-eligible (`SourceFetchError`); every other
+`SourceError` subclass routes straight to
+`SOURCE_FAILED` with cache AND fallback bypassed.** This
+single rule (not a per-subclass enumeration) is the
+resolver's only branch — so a denied path / oversize /
+parse failure can never serve a stale cached snapshot.
 
 ```python
-class SourceError(Exception):              # base; never raised directly
-    code: str                              # machine code for event payload
+class SourceError(Exception):          # base; never raised directly
+    code: str                          # machine code for the event payload
+    fallback_eligible: ClassVar[bool] = False   # default DENY
 
-class SourceAuthError(SourceError):        # 401/403, token expired, no creds
-    # NEVER eligible for cache OR fallback. Resolver →
-    # SOURCE_FAILED(code) immediately, for admin re-auth.
+class SourceFetchError(SourceError):   # ONLY: transient network —
+    fallback_eligible = True           # conn refused / DNS / 5xx /
+    # timeout / read reset. The SOLE fallback-eligible class.
 
-class SourceFetchError(SourceError):       # network down, 5xx, timeout,
-    # path-fence reject, oversize-fail. Eligible for
-    # `fallback_policy` (use_last_good_snapshot /
-    # alert_and_skip / alert_and_use_default).
+class SourceAuthError(SourceError):    # 401/403, token expired, no
+    # creds. Non-fallback → SOURCE_FAILED, admin re-auth.
 
-class SourceParseError(SourceError):       # fetched bytes unparseable
-    # for the declared kind. NOT a transient — no
-    # fallback; resolver → SOURCE_FAILED(code).
+class SourceSecurityError(SourceError):  # 🔴 r2 #2 — path-fence
+    # reject, deny-list hit, symlink escape, traversal. A
+    # denied read MUST NEVER serve a last-good snapshot.
+    # Non-fallback → SOURCE_FAILED.
+
+class SourcePolicyError(SourceError):  # 🔴 r2 #3 — oversize
+    # fail_and_alert, mime-not-allowlisted, shape
+    # re-approve refusal. Non-fallback → SOURCE_FAILED.
+
+class SourceParseError(SourceError):   # fetched bytes unparseable
+    # for the declared kind. Non-fallback → SOURCE_FAILED.
 ```
 
-Loaders raise the precise subclass. The resolver branch:
-`SourceAuthError` → `SOURCE_FAILED`, cache + fallback
-both bypassed; `SourceFetchError` → consult
-`fallback_policy`; `SourceParseError` → `SOURCE_FAILED`,
-no fallback. Pinned tests (§5): an auth failure with a
-warm last-good snapshot in cache STILL emits
-`SOURCE_FAILED` (never `SOURCE_RESOLVED`-from-cache) and
-the snapshot is NOT served; a fetch failure with the
-same warm cache + `use_last_good_snapshot` DOES serve
-it. `isinstance` taxonomy pinned so a future loader
-can't accidentally widen auth into the fallback path.
+**Resolver rule (written, unambiguous):** on any
+`SourceError`, if `exc.fallback_eligible` is True
+(⇔ `isinstance(exc, SourceFetchError)`) consult
+`ref.cache.fallback_policy`; **otherwise** emit
+`SOURCE_FAILED(exc.code)` immediately — no cache read,
+no fallback, regardless of any warm last-good snapshot.
+`fallback_eligible` is a `ClassVar` defaulting to
+`False` on the base, set `True` ONLY on
+`SourceFetchError`, so a new subclass is non-fallback by
+construction (fail-safe default). Loaders raise the
+precise subclass; the fence (§3.2) raises
+`SourceSecurityError`; oversize `fail_and_alert` (§3.4)
+raises `SourcePolicyError`. Pinned tests (§5): with a
+warm last-good snapshot present —
+`SourceAuthError` / `SourceSecurityError` /
+`SourcePolicyError` / `SourceParseError` each STILL emit
+`SOURCE_FAILED` and do NOT serve the snapshot; only
+`SourceFetchError` + `use_last_good_snapshot` serves it.
+A taxonomy test asserts `SourceFetchError.fallback_eligible
+is True` and every other subclass `is False`, and that no
+non-fetch subclass `isinstance`-leaks into the fetch
+branch — so a future loader can't widen the
+fallback surface.
 
 ### 3.6 Canonical bytes (`sources/contract.py`)
 
@@ -458,10 +533,27 @@ load time per declared type and is the ONLY thing hashed
 | binary (opt-in only) | the raw bytes; `content` carries a `{"_b64": ...}` envelope; hash over the raw bytes |
 
 `content_hash = "sha256:" + sha256(content_bytes).hexdigest()`.
+
+**On-disk artifact (🟡 codex round-2 #5 — pinned).** The
+snapshot file (`<source_id>.bin`, §1.2) holds EXACTLY
+`content_bytes` and nothing else — no JSON envelope, no
+metadata, no base64 wrapper. So `sha256(open(path,
+"rb").read())` re-derives `content_hash` with zero
+parsing. The in-memory `SourceResult.content` field MAY
+carry a `{"_b64": ...}` envelope for binary so the
+resolver/state-dict stays JSON-shaped, but that envelope
+is NEVER what gets hashed or written — `content_bytes`
+(the raw decoded bytes) is. All snapshot metadata
+(`source_kind`, `selection_method`, `source_version`,
+`fetched_at`, sizes) lives in the `source_snapshots`
+row, never in the file.
+
 Pinned test (§5): two loads of semantically-equal JSON
 with different key order / whitespace → identical
 `content_hash`; a text source with a trailing newline
-delta → DIFFERENT hash (verbatim, no normalisation).
+delta → DIFFERENT hash (verbatim, no normalisation);
+the on-disk `.bin` re-hashes to `content_hash` byte-for-
+byte for every declared kind incl. binary.
 
 ---
 
@@ -497,11 +589,16 @@ push) → pause for codex verdict → fix-on-HOLD → GO next.
   with a trailing-newline delta → DIFFERENT hash
   (verbatim, no normalisation); `selection_method` ∈ the
   descriptor's `supported_selection_methods`.
-- **`test_source_errors.py`** — `isinstance` taxonomy:
-  `SourceAuthError`/`SourceFetchError`/`SourceParseError`
-  all subclass `SourceError`; `SourceAuthError` is NOT a
-  `SourceFetchError` (can't leak into the fallback
-  branch); each carries a machine `code`.
+- **`test_source_errors.py`** — taxonomy (5 subclasses):
+  all subclass `SourceError`; **`SourceFetchError.
+  fallback_eligible is True` and every other subclass
+  (`SourceAuthError` / `SourceSecurityError` /
+  `SourcePolicyError` / `SourceParseError`)
+  `fallback_eligible is False`**; the base default is
+  `False` (fail-safe — a hypothetical new subclass is
+  non-fallback by construction); no non-fetch subclass
+  `isinstance`-leaks into `SourceFetchError`; each
+  carries a machine `code`.
 - **`test_source_local_file.py`** — fence matrix:
   **🔴 sibling-prefix bypass** (`/safe/root_evil/x` vs
   allowed `/safe/root` → REFUSED via `is_relative_to`,
@@ -512,30 +609,39 @@ push) → pause for codex verdict → fix-on-HOLD → GO next.
   non-allowlisted mime refused; oversize → each
   `on_oversize` branch; empty-allowlist default refuses
   everything.
-- **`test_source_snapshot_writer.py`** — on-disk path
-  shape; `source_snapshots` row via `insert_snapshot`;
-  **dedup-shared-file safety**: two rows same
-  `content_hash` share one file; pruning ONE row does
-  NOT unlink the file while the other row survives;
-  pruning the LAST referencing row DOES unlink;
-  **retention DELETE**: `prune_snapshots` removes rows
-  beyond `keep_last_n` (scoped by `schedule_id` via the
-  `runs` join) + returns `PruneResult`; `keep_last_n==0`
-  prunes all older; each `on_oversize` branch pinned;
-  `redact_fields` stripped before write + re-measure.
+- **`test_source_snapshot_writer.py`** — on-disk `.bin`
+  file holds `content_bytes` VERBATIM (no envelope) and
+  `sha256(file)` == `content_hash` for every declared
+  kind incl. binary; `source_snapshots` row via
+  `insert_snapshot`; **dedup-shared-file safety**: two
+  rows same `content_hash` share one file; pruning ONE
+  row does NOT unlink while the other survives; pruning
+  the LAST referencing row DOES unlink; **prune ordering
+  (🔴 r2 #4)**: row DELETEs COMMIT before any unlink; a
+  simulated post-DELETE rollback leaves rows AND files
+  intact (no row points at a deleted file — data-loss
+  impossible); an orphaned file (row gone, unlink
+  failed) is counted in `PruneResult.orphans_logged`,
+  not data loss; `prune_snapshots` scoped by
+  `schedule_id` via the `runs` join; `keep_last_n==0`
+  prunes all older; each `on_oversize` branch pinned
+  (`fail_and_alert` → `SourcePolicyError`);
+  `redact_fields` stripped + re-measured pre-write.
 - **`test_storage_source_snapshots.py`** (extend) —
   `prune_snapshots` happy + dedup-safety + the
   schedule_id-scoping join; the append-only invariant
   still holds for `insert_snapshot`.
 - **`test_source_cache.py`** — fresh hit; stale →
   fallback per policy; `use_last_good_snapshot` reads the
-  last `source_snapshots` row; **`SourceAuthError`
-  NEVER caches AND NEVER falls back** — even with a warm
-  last-good snapshot present it routes to `SOURCE_FAILED`
-  and does NOT serve the snapshot; **`SourceFetchError`
-  with the same warm cache + `use_last_good_snapshot`
-  DOES serve it** (proves the auth/fetch split is
-  load-bearing); `alert_and_use_default` only when a
+  last `source_snapshots` row. **With a warm last-good
+  snapshot present, EACH non-fetch subclass
+  (`SourceAuthError`, `SourceSecurityError`,
+  `SourcePolicyError`, `SourceParseError`) routes to
+  `SOURCE_FAILED` and does NOT serve the snapshot**;
+  ONLY `SourceFetchError` + `use_last_good_snapshot`
+  serves it (proves the single `fallback_eligible` rule
+  is load-bearing — a denied path / oversize can never
+  serve stale data); `alert_and_use_default` only when a
   user-explicit `explicit_default` is present.
 - **`test_models_source_ref.py`** — `SourceRefSpec`
   composes `LiveSourceCachePolicy` + `LiveChangePolicy`;
@@ -553,11 +659,13 @@ push) → pause for codex verdict → fix-on-HOLD → GO next.
   + snapshot row; shape change under
   `alert_on_shape_change` → `SOURCE_DRIFT_DETECTED` +
   still resolves; under `require_reapprove_on_shape_change`
-  → `SOURCE_FAILED`, no snapshot; `SourceAuthError` →
-  `SOURCE_FAILED` cache+fallback bypassed;
-  `SourceParseError` → `SOURCE_FAILED` no fallback;
-  `SourceFetchError` → fallback path; exactly one event
-  per call; resolver never raises for expected failures.
+  → `SOURCE_FAILED`, no snapshot; `SourceAuthError` /
+  `SourceSecurityError` / `SourcePolicyError` /
+  `SourceParseError` each → `SOURCE_FAILED`,
+  cache+fallback bypassed (single `fallback_eligible`
+  rule); `SourceFetchError` → fallback path; exactly one
+  event per call; resolver never raises for expected
+  failures.
 - **`test_phase10_import_hygiene.py`** — every phase-10
   NEW module: no module-load `app.v2.runtime._defaults`
   import, no `uuid.uuid4` / `datetime.now` call, no
@@ -614,20 +722,26 @@ DI.
    symlink-into-denylist, `..` traversal, non-allowlist
    mime, oversize all refused; empty-allowlist default
    denies all.
-4. Snapshot writer: on-disk + `source_snapshots` row;
-   dedup-shared-file safety (file unlinked only when its
-   last referencing row is pruned); `prune_snapshots`
-   retention DELETES rows + files scoped by `schedule_id`
-   (runs join); every `on_oversize` branch pinned;
+4. Snapshot writer: on-disk `<source_id>.bin` holds
+   `content_bytes` verbatim, `sha256(file)==content_hash`
+   (every kind incl. binary); `source_snapshots` row;
+   dedup-shared-file safety; `prune_snapshots` DELETES
+   rows then unlinks files AFTER commit (data-loss
+   impossible; orphan ≠ loss), scoped by `schedule_id`
+   (runs join); every `on_oversize` branch pinned
+   (`fail_and_alert` → `SourcePolicyError`);
    `redact_fields` applied + re-measured pre-write;
    storage docstring amended (insert append-only; prune
-   the sole sanctioned delete).
-5. Typed error contract (`SourceAuthError` /
-   `SourceFetchError` / `SourceParseError`): auth failure
-   bypasses cache AND fallback → `SOURCE_FAILED` even
-   with a warm last-good snapshot; only `SourceFetchError`
-   is fallback-eligible; `alert_and_use_default` gated on
-   a present `explicit_default`.
+   the sole sanctioned delete, unlink post-commit).
+5. Typed error contract (5 subclasses): EXACTLY ONE
+   (`SourceFetchError`) `fallback_eligible`; each of
+   `SourceAuthError` / `SourceSecurityError` /
+   `SourcePolicyError` / `SourceParseError` → `SOURCE_FAILED`
+   with cache AND fallback bypassed even with a warm
+   last-good snapshot (a denied path / oversize NEVER
+   serves stale data); base default non-fallback;
+   `alert_and_use_default` gated on a present
+   `explicit_default`.
 6. Live-change policy: `allow` / `alert_on_shape_change`
    / `require_reapprove_on_shape_change` each pinned with
    the matching EventLedger event.
@@ -699,6 +813,46 @@ Plan:   docs/PHASE_10_PLAN.md
 
 ---
 
+## 9a. Codex round-2 disposition (CLOSED)
+
+Round-2 was a plan↔design drift problem. All 4🔴 + 1🟡:
+
+- **🔴 design §5.3.1 drift** — `docs/CONTRACTS_V2_DESIGN.md`
+  §5.3.1 still said `realpath()+startswith(root prefix)`,
+  reintroducing the sibling-prefix bypass. Rewritten to
+  `Path.resolve(strict=True)+is_relative_to(root.resolve())`,
+  identical to §3.2, with an explicit "plan↔design
+  consistency is load-bearing, CI-pinned" clause. Re-grep
+  of the design doc for `realpath`/`startswith`/`prefix`/
+  fence wording → only §5.3.1 (line 22 "prefix blocks" is
+  unrelated changelog text; line 1633 is a Slack
+  registry allowlist, unrelated). No other drift.
+- **🔴 fence reject is non-fallback** — split
+  `SourceSecurityError` (§3.5): path-fence / deny-list /
+  symlink / traversal rejects raise it; NON-fallback →
+  `SOURCE_FAILED`. A denied read can never serve a
+  last-good snapshot. §3.2 raises it.
+- **🔴 oversize fail_and_alert non-fallback** — new
+  `SourcePolicyError` (§3.5); §3.4 `on_oversize`
+  `fail_and_alert` raises it (was `SourceFetchError`).
+  The resolver rule is now a SINGLE predicate
+  (`fallback_eligible` ClassVar, True only on
+  `SourceFetchError`) so there is no ambiguity and no
+  per-subclass enumeration to drift.
+- **🔴 unlink-inside-transaction data loss** — §3.4
+  reordered: row DELETEs COMMIT first; file unlink is
+  best-effort AFTER commit on a fresh connection with a
+  re-query; orphaned file (harmless) counted in
+  `PruneResult.orphans_logged`; deleted-file-with-live-
+  row is now structurally impossible.
+- **🟡 on-disk format** — §1.2/§3.6: the snapshot file
+  is `<source_id>.bin` holding `content_bytes` VERBATIM
+  (no JSON envelope); `sha256(file) == content_hash`;
+  metadata in the `source_snapshots` row only. Pinned
+  per declared kind incl. binary.
+
+No open questions remain. Plan-review round 3 requested.
+
 ## 9. Codex round-1 disposition (CLOSED)
 
 All round-1 findings + Q-calls applied in this plan-fix.
@@ -751,7 +905,8 @@ All round-1 findings + Q-calls applied in this plan-fix.
   phase-9 `SlackProtocol`; no vendor SDK at module load.
   (§3.1, §10.4)
 - **Q4** — keep the design root
-  `data/contract_audit/<schedule_id>/<run_id>/sources/<source_id>.json`;
+  `data/contract_audit/<schedule_id>/<run_id>/sources/<source_id>.bin`
+  (round-2 🟡: `.bin` raw `content_bytes`, not `.json`);
   the local-file deny-list STILL blocks reads under
   `data/contract_audit/` (a source can never read the
   snapshot audit tree). RUNBOOK coherence note carried
@@ -797,16 +952,25 @@ No open questions remain. Plan-review round 2 requested.
     step 11 (§12.1 invariant 2).
 11. Loaders signal failure ONLY via the §3.5 typed
     `SourceError` hierarchy — never a bare `Exception` /
-    `return None`. `SourceAuthError` is NEVER
-    fallback-eligible (cache + fallback both bypassed).
-12. `content_hash` + the on-disk snapshot are computed
-    from `SourceResult.content_bytes` (the §3.6 canonical
-    encoding) ONLY — never by re-serializing `content`.
+    `return None`. EXACTLY ONE subclass
+    (`SourceFetchError`) is `fallback_eligible`; every
+    other (`SourceAuthError` / `SourceSecurityError` /
+    `SourcePolicyError` / `SourceParseError`) routes
+    straight to `SOURCE_FAILED` with cache AND fallback
+    bypassed. The base default is non-fallback (fail-safe).
+12. `content_hash` + the on-disk `<source_id>.bin` file
+    are derived from `SourceResult.content_bytes` (§3.6)
+    ONLY — the file holds `content_bytes` VERBATIM (no
+    envelope) so `sha256(file) == content_hash`; never
+    re-serialize `content`.
 13. Retention (`prune_snapshots`) is the SOLE sanctioned
     `source_snapshots` delete; `insert_snapshot` stays
-    append-only + content-addressed; a shared file is
-    unlinked only when its last referencing row is
-    pruned.
+    append-only + content-addressed. Row DELETEs COMMIT
+    before any file unlink; a shared file is unlinked
+    (best-effort, post-commit) only when its last
+    referencing row is pruned. Orphaned file ≠ data loss;
+    deleted file with a live row is structurally
+    impossible.
 14. Intentional workspace dirt left alone:
     `app/tools/youtube.py` + `.playwright-mcp/` + the 3
     `scripts/diag_*` / `amazon_ads_mcp_proxy.py`
