@@ -769,8 +769,8 @@ async def test_route_source_failure_abort_silent(tmp_path):
 async def test_route_source_failure_retry_later_downgrades(tmp_path):
     """retry_later → downgraded to alert_admin: an
     admin_alert_sent with a ``downgrade_from`` payload key
-    (the retry chain is step 14). Same shared admin builder
-    as the OneOff path."""
+    (the retry chain is DEFERRED — no §12 step owns it).
+    Same shared admin builder as the OneOff path."""
     factory, spec, run, worker = _route_setup(
         tmp_path, failure_action=FailureActionType.RETRY_LATER
     )

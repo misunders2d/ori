@@ -550,9 +550,15 @@ async def test_retry_later_downgrades_to_admin_alert_with_warning(
     warnings = [
         r for r in caplog.records if r.levelno == logging.WARNING
     ]
+    # Closeout-fix string-reconcile (NOT a mask): the WARNING
+    # text was corrected off the falsified "retry chain lands
+    # in §12 step 14" forward-ref to the accurate "deferred —
+    # no §12 step owns it". Behaviour is unchanged — the
+    # WARNING is still emitted with the downgrade reason; this
+    # assertion tracks the corrected wording, same intent.
     assert any(
         "downgrading to alert_admin" in r.getMessage()
-        and "§12 step 14" in r.getMessage()
+        and "retry chain is deferred" in r.getMessage()
         for r in warnings
     )
 

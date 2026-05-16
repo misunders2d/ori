@@ -12,9 +12,11 @@ when a schedule's status flips:
   no longer dispatches the wakeup).
 - :func:`on_schedule_archived` -- ``active -> archived``.
   Same shape as paused for phase 5; explicit cancellation
-  of existing pending runs is the
-  ``paused_pending_policy`` open question (PHASE_4_PLAN
-  section 12 item 5) and lands when that policy ships.
+  of existing pending runs is owned by the AUTHORING layer
+  (``schedule_archive`` since phase 7; ``schedule_pause``
+  with ``paused_pending_policy=cancel_pending`` since
+  phase 14, via the ``update_status_with_event``
+  cancel-pending seam), NOT this phase-5 runtime hook.
 - :func:`on_schedule_resumed` -- ``paused -> active``.
   Re-registers the schedule. Caller passes the fresh spec
   (status flipped back to active) so register sees the
@@ -66,11 +68,13 @@ def on_schedule_archived(
 
     Same APScheduler-side handling as paused: remove the
     job, leave pending Run rows alone. Explicit
-    cancellation of those rows lands when
-    ``paused_pending_policy`` (PHASE_4_PLAN section 12
-    item 5) ships -- the authoring layer that owns the
-    archive operation will then update each pending Run
-    row alongside this hook call.
+    cancellation of those rows is owned by the AUTHORING
+    layer -- ``schedule_archive`` (since phase 7) and
+    ``schedule_pause`` with
+    ``paused_pending_policy=cancel_pending`` (since
+    phase 14) update each pending Run row via the
+    ``update_status_with_event`` cancel-pending seam,
+    alongside this hook call.
     """
     binding.unregister(schedule_id)
 

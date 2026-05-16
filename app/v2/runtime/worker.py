@@ -159,7 +159,8 @@ class UnsupportedSpecError(Exception):
 
 class UnsupportedFailurePolicyError(Exception):
     """Raised internally when a FailurePolicy action has no
-    executor yet (the retry chain lands in §12 step 14).
+    executor (the retry chain is DEFERRED — no §12 step owns
+    it; PHASE_14_PLAN §1 out-of-scope / §8 NOT-shipped).
     Caught by :meth:`_route_failure_policy` and downgraded
     to a warning log + alert_admin semantics."""
 
@@ -1148,7 +1149,8 @@ class Worker:
         (``retry_later`` / custom) → downgrade to
         ``alert_admin`` semantics with a WARNING and a
         ``downgrade_from`` payload key (the retry chain is
-        step 14). Pure precompute — the caller invokes it at
+        DEFERRED — no §12 step owns it). Pure precompute —
+        the caller invokes it at
         the exact point in its own ``event_id_factory`` /
         ``clock`` call order where the admin event was
         historically built, so the OneOff path's event
@@ -1170,12 +1172,13 @@ class Worker:
                 },
                 correlates=correlates_id,
             )
-        # retry_later / custom — step-14 work. Downgrade to
-        # alert_admin semantics so operators still see it.
+        # retry_later / custom — DEFERRED (no §12 step owns
+        # the retry chain). Downgrade to alert_admin
+        # semantics so operators still see it.
         _logger.warning(
             "worker %s saw FailurePolicy.%s for "
             "schedule_id=%r; downgrading to alert_admin "
-            "(the retry chain lands in §12 step 14)",
+            "(the retry chain is deferred — no §12 step owns it)",
             self._worker_id,
             action.value,
             spec.id,
@@ -1425,8 +1428,8 @@ class Worker:
         :meth:`_commit_failure_atomic` core — same
         single-transaction atomicity invariant as the
         OneOff path. ``retry_later`` is downgraded to
-        ``alert_admin`` + WARNING (retry chain = step 14)
-        by the shared admin builder.
+        ``alert_admin`` + WARNING (retry chain DEFERRED —
+        no §12 step owns it) by the shared admin builder.
         """
         admin_event = self._build_admin_alert_event(
             run=run,
