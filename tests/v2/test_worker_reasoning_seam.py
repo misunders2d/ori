@@ -128,7 +128,8 @@ def test_guard_not_invoked_on_live_dispatch_path():
     names the guard): no actual Call to
     ``self._reasoning_runtime_guard(...)`` exists anywhere in
     ``_dispatch_emit_branch``. The guard stays DEAD on the
-    live fire path until a reasoning executor lands (Q1a/Q3)."""
+    live fire path until a reasoning executor is built (none
+    ships — no §12 step owns it; Q1a/Q3)."""
     src = textwrap.dedent(
         inspect.getsource(Worker._dispatch_emit_branch)
     )
@@ -159,12 +160,15 @@ def test_reason_code_byte_identical():
     ), "the phase-11 reason CODE must stay byte-identical"
 
 
-def test_refined_reasoning_message_no_executor_implication():
-    """Scoped to the REASONING-boundary message only. The
-    CustomFlow/template-None raise in the same method
-    legitimately keeps its own accurate
-    'CustomFlow executor lands in §12 step 12' wording — a
-    DIFFERENT message, out of slice-4 scope.
+def test_no_executor_lands_forward_ref_anywhere_in_dispatch():
+    """Phase-12 closeout sweep (semantic-intent): Q1 ships NO
+    executor, so NO message in ``_dispatch_emit_branch`` may
+    forward-ref an executor that 'lands in §12 step 12'. Both
+    the reasoning-boundary message AND the
+    CustomFlow/template-None raise were reconciled to the
+    shipped reality (enforcement layer + build-the-layer
+    guard/seam; the executor is not built — no §12 step owns
+    it).
 
     The message is built from adjacent ``f"..."`` fragments;
     glue them (strip the ``"<nl><indent>f?"`` concatenation
@@ -172,14 +176,15 @@ def test_refined_reasoning_message_no_executor_implication():
     not make the pin vacuous."""
     raw = inspect.getsource(Worker._dispatch_emit_branch)
     glued = re.sub(r'"\s*\n\s*f?"', "", raw)
-    # Refined reasoning message present + accurate.
+    # Refined reasoning-boundary message present + accurate.
     assert "the read-only-reasoning ENFORCEMENT layer only" in glued
     assert "EXECUTOR is not built (no §12 step owns it)" in glued
-    # The OLD stale reasoning phrasing is gone (it implied the
-    # reasoning executor "lands" here). The CustomFlow-template
-    # message ("the CustomFlow executor lands in §12 step 12")
-    # is DISTINCT (preceded by 'CustomFlow', not 'reasoning')
-    # and intentionally retained.
-    assert "reasoning executor lands in §12 step 12" not in glued
+    # Refined CustomFlow/template-None raise — no 'lands'.
+    assert (
+        "the CustomFlow executor is not built (no §12 step "
+        "owns it" in glued
+    )
+    # NO 'executor lands in §12 step 12' forward-ref survives
+    # anywhere in the method (reasoning OR CustomFlow).
+    assert "executor lands in §12 step 12" not in glued
     assert "the reasoning executor lands" not in glued
-    assert "the CustomFlow executor lands in §12 step 12" in glued

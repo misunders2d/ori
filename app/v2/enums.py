@@ -321,13 +321,21 @@ class ToolMode(str, Enum):
     """ReasoningStep.tool_mode — controls which tools the LLM
     may call inside the reasoning step.
 
-    ``read_only`` (default) — worker hard-blocks tools tagged
+    ``read_only`` (default) — a §12 step-12 read-only-reasoning
+        ENFORCEMENT rule (``validate_schedule_spec``) rejects a
+        reasoning step that references a tool tagged
         ``write_external``, ``send_message``,
-        ``filesystem_write``, or ``privileged``. All writes go
-        through emit adapters.
+        ``filesystem_write``, ``db_write``, or ``privileged``
+        (the §5.4 ``_READ_ONLY_BLOCKING_TAGS`` set — single
+        source of truth in ``tool_tags``). All writes go
+        through emit adapters. A build-the-layer worker runtime
+        guard mirrors this; no reasoning EXECUTOR is shipped
+        (no §12 step owns it).
     ``write_allowed`` — opt-in for the rare workflow that needs
-        the LLM to call a write tool mid-reasoning. Triggers
-        admin approval in CustomFlow authoring.
+        the LLM to call a write tool mid-reasoning. Surfaces a
+        §5.9 advisory friction WARNING at validation; NO
+        admin-approval gate or executor is shipped (the gate
+        is conceptual and DEFERRED).
     """
 
     READ_ONLY = "read_only"

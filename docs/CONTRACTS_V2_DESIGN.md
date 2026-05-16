@@ -894,6 +894,19 @@ Policy composition examples:
 
 Default tag set for new tools: `write_external` (fail-safe).
 
+**LIVE since phase 12 (§12 step 12).** This tag policy is
+consumed by the read-only-reasoning ENFORCEMENT rule + the
+build-the-layer worker guard via the pure helpers in
+`app/v2/tool_tags.py`: `is_blocked_by_read_only_reasoning`
+(the 5-tag `_READ_ONLY_BLOCKING_TAGS` set —
+`write_external`/`send_message`/`filesystem_write`/`db_write`/`privileged`,
+the SINGLE source of truth; never re-declared elsewhere) and
+`requires_admin_approval` (the §5.9 `privileged`/`costly`/`filesystem_write`
+subset). An unresolved / untagged referenced tool is treated
+write-capable (fail-safe BLOCK). `ToolMode`'s own docstring
+mirrors the same 5-tag set (kept in sync at the phase-12
+closeout).
+
 ### 5.5 Single validation entry point
 
 `validate_schedule_spec(spec: ScheduleSpec) → None` is THE
@@ -974,6 +987,21 @@ Admin approval required ONLY when CustomFlow includes:
 
 CustomFlow without any of those: standard typed-tool authoring, no
 friction beyond dry-run handshake.
+
+**Shipped vs deferred (phase 12 — `docs/PHASE_12_PLAN.md` §9,
+Q5 / slice-3 Option A).** Only the TAG-DRIVEN subset is wired,
+and only as a `warning`-severity advisory SIGNAL via
+`validate_schedule_spec` (code `customflow_admin_approval_advisory`
+— NOT a hard reject, NOT a blocking gate): a
+`tool_mode=write_allowed` reasoning step OR a referenced tool
+tagged `privileged`/`costly`/`filesystem_write`
+(`tool_tags.requires_admin_approval`). **Deferred — no §12
+step owns it:** the admin-approval GATE itself + its consuming
+flow, and the 4 orthogonal triggers (dynamic delivery target,
+emit count > 3, previously-unused adapter,
+`require_reapprove_on_shape_change` + recent shape change). The
+signal SURFACES the conceptual gate; it does NOT implement or
+enforce it.
 
 ---
 
@@ -1527,7 +1555,7 @@ so revert is a single git command.
 11. **Source-driven fire-path cutover + `RecurringSeriesFromSource`** (split 2026-05-16 into 11A/11B per `docs/PHASE_11_PLAN.md` §0 — reviewer-approved refinement):
     - **11A (shipped — phase 11)**: the step-10 source layer (loaders / snapshot / cache / resolver), built unwired at step 10, goes LIVE in the worker fire path. A source-driven `ScheduleSpec` (`execution_plan_hash` → `ExecutionPlan` with `InputSpec.source_ref`, zero reasoning) fires end to end: claim → `resolve_source` per source-bearing input on the claimed connection → emit. Ships the `RecurringSeriesFromSource` template with STATELESS strategies only (`whole` / `skip_unchanged`), authored through the SHARED spine EXTENDED additively (§0.3, reviewer-ratified, scoped to the authoring spine): the freeze/commit trigger gate admits `{one_off, cron}` (others → `trigger_type_pending_step_unlock`); `commit` persists `insert_execution_plan`+`insert_schedule` atomically in ONE transaction (both-or-neither). `skip_unchanged` reads the additive `ResolveOutcome.changed_vs_prior` signal (§5.3.5 — the worker NEVER re-reads the snapshot table, Q5); the no-op success rides the EXISTING `running → succeeded` `RUN_SUCCEEDED` write via the typed additive `RunSucceededPayload.skipped_unchanged` discriminator (Option B, §0.2 — no new `EventKind`, no v002 events-schema migration, no second transaction). The `OneOffReminder` emit path + the emit/cache/resolver modules stay LITERALLY byte-untouched (additive cutover, §11.1; v1 scheduler untouched).
     - **11B (deferred)**: `ChannelDigest` (needs the LLM reasoning-chain executor + `summary_prompt`) and stateful `RecurringSeriesFromSource` progress (needs step-13 cross-fire `schedule_state`). **Phase-1 completion lands with 11B.**
-12. **Read-only reasoning + emit-only writes enforcement**: tool-metadata-driven runtime block.
+12. **Read-only reasoning + emit-only writes enforcement** (shipped phase 12 — `docs/PHASE_12_PLAN.md` §9, Q1=(a)): the §5.4 tool-capability-tag policy is wired into ENFORCEMENT. `validate_schedule_spec` (the §5.5 chokepoint) rejects a `tool_mode=read_only` reasoning step that references a `write_external`/`send_message`/`filesystem_write`/`db_write`/`privileged`-tagged tool (an unresolved/untagged referenced tool ⇒ fail-safe BLOCK, §5.4); a build-the-layer worker runtime guard mirrors the same decision at the reasoning seam. The §5.9 CustomFlow friction ships as a `warning`-severity advisory SIGNAL on the same chokepoint (NOT a hard reject). **NOT shipped — deferred, no §12 step owns it:** the LLM reasoning-chain EXECUTOR, and the §5.9 admin-approval GATE / its consuming flow. With no tool registry threaded (every shipped call site) the §5.4 fail-safe degenerates to blanket-blocking any `read_only` reasoning-bearing plan (intended, over-block-safe). The worker still `_fail_run`s every reasoning-bearing plan at the phase-11 boundary (no executor); the guard is dead until an executor lands.
 13. **Cross-fire state with locks + CAS**: state_read / state_write primitives backed by `schedule_state` table + CAS.
 14. **Idempotency + cancellation**: per-emit idempotency keys; paused/archived enforcement; `paused_pending_policy`.
 15. **Observability**: `schedule_status`, `schedule_diff`, `schedule_replay`, background failure monitor over EventLedger.
@@ -1800,12 +1828,19 @@ composes precisely.
 **Risk**: every existing tool needs tag audit. Default-on
 (`write_external` for unknowns) is fail-safe but may block
 legitimate reads until tags are corrected. Mitigation: incremental
-tagging pass before the step-12 runtime enforcement
-lands. (Step 11 — the source-driven cutover — shipped in
-phase 11 emit-only with NO reasoning-chain executor, so
-the write-tool-mid-reasoning risk this guard addresses
-does not yet apply; the tag-audit prerequisite carries
-forward to step 12.)
+tagging pass as tools are threaded into a populated
+`RegistrySnapshot.tools`. **Shipped phase 12 (§12 step 12):**
+the enforcement RULE (`validate_schedule_spec`) + the
+build-the-layer worker guard are LIVE. No shipped
+`validate_schedule_spec` call site threads a registry, so the
+§5.4 fail-safe degenerates to blanket-blocking any `read_only`
+reasoning-bearing plan (intended, over-block-safe, defense in
+depth with the phase-11 worker boundary). NO reasoning-chain
+EXECUTOR is shipped (no §12 step owns it); the worker still
+cleanly `_fail_run`s every reasoning-bearing plan at the
+phase-11 boundary, so the write-tool-mid-reasoning risk this
+guard addresses cannot occur at fire time yet — the guard is
+dead until an executor lands.
 
 ### D7. Event ledger is the audit source of truth
 

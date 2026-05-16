@@ -129,9 +129,11 @@ class UnsupportedSpecError(Exception):
        fail the FK), so the worker cannot record a clean
        failure; it raises instead.
     2. A CustomFlow spec with neither a ``template`` NOR an
-       ``execution_plan_hash`` — an unfireable shape whose
-       executor lands in §12 step 12 (the reasoning /
-       CustomFlow executor).
+       ``execution_plan_hash`` — an unfireable shape. §12
+       step-12 ships only the read-only-reasoning ENFORCEMENT
+       layer (+ a build-the-layer guard/seam); the reasoning
+       / CustomFlow EXECUTOR is not built (no §12 step owns
+       it), so this shape stays unfireable.
 
     Every OTHER out-of-contract case — a missing / invalid
     / reasoning-bearing ExecutionPlan, a source resolve or
@@ -834,7 +836,9 @@ class Worker:
             raise UnsupportedSpecError(
                 f"schedule {spec.id!r} has no template AND "
                 "no execution_plan_hash; the CustomFlow "
-                "executor lands in §12 step 12"
+                "executor is not built (no §12 step owns it "
+                "— §12 step-12 ships read-only-reasoning "
+                "enforcement only)"
             )
 
         template_name = spec.template.name

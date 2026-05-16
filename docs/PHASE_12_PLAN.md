@@ -405,6 +405,41 @@ mid-phase.
    - Any other ToolMode / tag-set wording that drifts from
      `tool_tags.py` (semantic-intent scan, not literal-token).
 
+   **LANDED (closeout).** Full `tests/v2` 2357 passed, 0
+   fail, 0 regression. Phase guards `--staged` +
+   `--diff v2-phase-11-complete` exit 0. `gen_docs`
+   `files_changed=0` (phase-12 modules are not gen_docs
+   symbols — nothing to stage). REPO-WIDE semantic-intent
+   sweep done: carried 🟡 — `worker.py` UnsupportedSpecError
+   docstring + the template-None raise + `commit.py`'s
+   `execution_plan_reasoning_unsupported_pending_step_12`
+   message all rewritten from `"executor lands in §12 step
+   12"` to the Q1 shipped reality (enforcement +
+   build-the-layer guard/seam; the executor is NOT built, no
+   §12 step owns it); the slice-4 seam test pinning the
+   pre-sweep CustomFlow wording reconciled to the new wording
+   (closeout-driven, not a mask). Carried 🔵 — `enums.py`
+   `ToolMode` docstring now lists all 5
+   `_READ_ONLY_BLOCKING_TAGS` (added `db_write`) and no
+   longer implies a live admin-approval gate (it states the
+   §5.9 advisory-warning shipped reality). No
+   `"executor lands in §12 step 12"` / live-§5.9-gate wording
+   survives in `app/v2/` or `tests/v2/` (the only remaining
+   hits are the seam test's own absence-assertions). The ONE
+   `CONTRACTS_V2_DESIGN.md` reconciliation pass applied: §12
+   step-12 shipped-scope (static enforcement +
+   build-the-layer guard + seam, NO executor; deferred set
+   named), §5.4 LIVE note (single SoT
+   `_READ_ONLY_BLOCKING_TAGS`), §5.9 shipped(signal)-vs-
+   deferred(gate), D6 reconciled (step-12 shipped, no
+   executor), each pointing at this plan's §9 Q1–Q6
+   disposition (design ≡ plan ≡ code ≡ tag). 5→12 invariant
+   byte-proof: `app/v2/sources/`, `app/v2/emit/`,
+   `resolver.py`, `cache.py`, `binding.py` EMPTY diff vs
+   `v2-phase-11-complete`. Annotated tag `v2-phase-12-complete`
+   on the final commit, NOT pushed (gated on the
+   claude-reviewer CLOSEOUT PASS).
+
 ## 5. Test inventory (highlights)
 
 - `test_reasoning_enforcement.py` — read_only blocks each
@@ -501,12 +536,19 @@ step 12). The pure tool-capability-tag policy
 enforcement points: validate_schedule_spec rejects a
 tool_mode=read_only reasoning step that references a
 read-only-blocking-tagged tool (write_external /
-send_message / filesystem_write / db_write / privileged),
-enforced at every §5.5 chokepoint; unresolved/untagged
-referenced tools fail safe (blocked). tool_mode=write_allowed
-steps and privileged/costly/filesystem_write tools trip the
-existing admin-approval friction (the tag-driven §5.9
-subset). The runtime guard + worker seam ship build-the-layer
+send_message / filesystem_write / db_write / privileged) via
+the §5.5 chokepoint; unresolved/untagged referenced tools
+fail safe (blocked). With no tool registry threaded (every
+shipped validate_schedule_spec call site) the §5.4 fail-safe
+degenerates to blanket-blocking any read_only
+reasoning-bearing plan — intended, over-block-safe.
+tool_mode=write_allowed steps and privileged/costly/
+filesystem_write tools emit a warning-severity ADVISORY
+SIGNAL (customflow_admin_approval_advisory, the tag-driven
+§5.9 subset) — there is NO admin-approval gate or executor;
+§5.9 stays conceptual and the consuming flow is DEFERRED (no
+§12 step owns it). The runtime guard + worker seam ship
+build-the-layer
 (pure, tested) but are NOT fired end-to-end: there is no LLM
 reasoning-chain executor (no §12 step owns it), so the
 phase-11 worker boundary

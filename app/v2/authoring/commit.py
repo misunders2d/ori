@@ -313,9 +313,11 @@ async def schedule_draft_commit(
                 message=(
                     f"the attached ExecutionPlan carries "
                     f"{len(plan.reasoning)} reasoning step(s); "
-                    f"the reasoning executor lands in §12 "
-                    f"step 12 — phase-11 source-driven plans "
-                    f"are inputs+emit, zero reasoning"
+                    f"the reasoning executor is not built (no "
+                    f"§12 step owns it — §12 step-12 ships "
+                    f"read-only-reasoning enforcement only) — "
+                    f"phase-11 source-driven plans are "
+                    f"inputs+emit, zero reasoning"
                 ),
             )
     elif plan is not None:
