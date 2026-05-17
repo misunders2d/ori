@@ -1315,7 +1315,10 @@ keeps the archive path byte-identical.
   next due_at, jobstore consistency check, pause/archive state,
   unacked alerts count.
 - `schedule_diff(id, hash_a, hash_b)` → unified diff including
-  template metadata + tool tag snapshots.
+  template metadata + tool tag snapshots. **[DEFERRED — see
+  the Phase-15 LIVE realization below: no persisted historical
+  ScheduleSpec body exists to diff; NOT a §15 pure-read
+  primitive.]**
 - `schedule_failures(limit=50)` → query EventLedger for
   `run_failed | emit_failed | source_failed | delivery_failed`
   events recent.
@@ -1323,11 +1326,85 @@ keeps the archive path byte-identical.
 - `schedule_health` → fire-OK rate over last 7d per schedule.
 - `registry_status` → cached enums + staleness.
 - `schedule_replay(id, run_id)` → re-run a past Run with stored
-  inputs + stored source snapshots, in dry-run mode.
+  inputs + stored source snapshots, in dry-run mode. **[DEFERRED
+  — see the Phase-15 LIVE realization below: touches the
+  dry-run / fire path + stored snapshots; NOT a §15 pure-read
+  primitive.]**
 
 Background failure monitor: every N minutes,
 `SELECT * FROM events WHERE kind='admin_alert_sent' AND id NOT IN (SELECT correlates FROM events WHERE kind='admin_alert_acked') AND ts < now - threshold`.
 Re-alert.
+
+**Phase-15 LIVE realization (shipped — design == code).**
+§12 step 15 ships exactly **FIVE** pure read-only
+query / aggregation primitives over the live EventLedger
+substrate (written every fire by the phase-9–14 cores) — a
+pure side-channel: ZERO fire-path control flow, no event the
+dedup / terminal / failure cores do not already write, no new
+EventKind, no v002. Each returns a dedicated typed Pydantic
+result model (`app/v2/observability/`); `ToolResponse` was
+code-verified insufficient and is NOT mutated. They compose
+ONLY the shipped `storage/events.py` /
+`storage/schedules.py` / `registry_cache` pure-read API — NO
+SQL re-implementation.
+
+- `schedule_status(conn, id)` — pause/archive state +
+  per-run summaries (status / duration derived from the
+  lifecycle events) + unacked-alert count. The design line's
+  `next due_at` / `jobstore consistency check` are NOT
+  shipped (they need the APScheduler binding, not a pure
+  ledger read) — honest-scope, recorded.
+- `schedule_failures(conn, id, *, limit=50)` —
+  **per-schedule** (the shipped EventLedger read surface is
+  per-schedule; no global cross-schedule read exists and
+  phase 15 did not add one; a decomposition of
+  schedule_status-over-EventLedger — no new design surface).
+- `schedule_history(conn, id)` — chronological timeline.
+- `schedule_health(conn, id, *, now, window)` — fire-OK rate;
+  `now` is DI; rate is `None` (never a silent 0.0) when no
+  terminal run in the window.
+- `registry_status(*, now, base)` — REUSES the phase-6
+  `registry_cache` `load_cache` / `is_stale` (no DB, no
+  re-implementation).
+
+**`schedule_diff` DEFERRED.** A §9 `schedule_diff` (unified
+diff of two historical ScheduleSpec bodies + tool-tag
+snapshots) needs persisted historical spec bodies. Verified
+NONE exists: the `schedules` table is one-row-per-id
+(current spec only — no spec-version-by-hash store); the
+`schedule_created` event payload is `{hash, template}` only;
+NO `schedule_revised` event emitter exists (the kind is
+reserved in the v001 CHECK but unwritten); `execution_plans`
+is hash-addressed but stores ExecutionPlan (not ScheduleSpec)
+bodies. A real `schedule_diff` requires a spec-version store
+that is NOT shipped — its own future design + DDL decision
+(no-v002-relitigation), NOT a §15 pure-read primitive. A
+metadata-only diff under this name was explicitly rejected as
+a degraded product (honest-scope debt). See
+`docs/PHASE_15_PLAN.md` §9.1 (the slice-1 fork ruling α).
+
+**`schedule_replay` DEFERRED.** Re-running a past Run in
+dry-run mode touches the dry-run / fire path + stored source
+snapshots — NOT a pure read-only side-channel. Its own slice
+or a later step.
+
+**Background failure monitor — build-the-layer PURE detector
+shipped; periodic loop + Re-alert DEFERRED.**
+`app/v2/observability/failure_monitor.py::failure_monitor_scan(conn,
+*, now, threshold)` realises the §9:1329 QUERY ONLY as a pure
+detector: it returns every `admin_alert_sent` whose id is not
+among any `admin_alert_acked.correlates` and whose `ts <
+now - threshold`. The §9:1329 query is an inherently global
+cross-schedule sweep with no shipped composable equivalent
+(the per-run / per-schedule reads cannot express it; a
+per-schedule loop would silently miss paused / archived
+alerts) — so the detector issues the canonical §9:1329
+SELECT directly as a single PURE read (ZERO mutation —
+PURITY-pinned). It is NOT wired: no periodic / APScheduler
+binding and no Re-alert dispatch side-effect are shipped
+(DEFERRED — a future Re-alert needing more than the existing
+`admin_alert_sent` / `admin_alert_acked` kinds is a
+verify-first fork; no new EventKind, no v002).
 
 ---
 

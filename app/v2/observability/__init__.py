@@ -9,11 +9,16 @@ v002. Composes ONLY the shipped ``storage`` /
 ``registry_cache`` pure-read surface (no SQL
 re-implementation).
 
-The five shipped primitives (``schedule_diff`` +
-``schedule_replay`` are DEFERRED — see
-``docs/PHASE_15_PLAN.md`` §9 + the closeout §9
-reconciliation). The background failure-monitor pure detector
-is slice 2 (build-the-layer; NOT wired).
+Exactly FIVE primitives are shipped: ``schedule_status``,
+``schedule_failures``, ``schedule_history``,
+``schedule_health``, ``registry_status``. ``schedule_diff``
+and ``schedule_replay`` are DEFERRED — NOT shipped, NOT §15
+pure-read primitives (see ``docs/PHASE_15_PLAN.md`` §9.1 +
+the closeout §9 reconciliation: no persisted historical
+ScheduleSpec body to diff; replay touches the dry-run / fire
+path). The background failure-monitor pure detector is slice
+2 (build-the-layer; NOT wired — no periodic loop, no
+re-alert dispatch).
 
 References:
 - ``docs/CONTRACTS_V2_DESIGN.md`` §9

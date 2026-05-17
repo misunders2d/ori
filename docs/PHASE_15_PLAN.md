@@ -313,7 +313,8 @@ the live slice).
   phase-15 adds).
 
 ## 7. Acceptance criteria for `v2-phase-15-complete`
-(provisional — finalised after round-1 disposition)
+(FINALISED at closeout — Q1–Q7 + §9.1 (α) baked; walked
+with evidence in §7.1)
 
 1. Branch ahead of `v2-phase-14-complete` by N small
    per-slice commits.
@@ -344,7 +345,68 @@ the live slice).
 10. Annotated tag `v2-phase-15-complete` (push gated on a
     reviewer CLOSEOUT PASS).
 
-## 8. Tag annotation (draft — finalised at closeout)
+### 7.1 Closeout acceptance walk (evidence — 2026-05-17)
+
+All 10 walked, GREEN:
+
+1. **Branch ahead.** `evo/amazon_manager` ahead of
+   `v2-phase-14-complete` @ fc4dd4e by 4 small commits:
+   a1da27b (plan+transition), 3751255 (slice-1), d7be67a
+   (slice-2), + this closeout. NOT pushed.
+2. **Each primitive pure / correct / no-SQL-reimpl /
+   no-mutation.** `test_observability.py` green (15):
+   per-primitive correctness over a seeded ledger; composes
+   ONLY the shipped `storage/events.py` /
+   `storage/schedules.py` / `registry_cache` reads (verified
+   no `conn.execute`-INSERT/UPDATE/DELETE in `primitives.py`);
+   the PURITY pin (events/runs/schedules/schedule_state
+   full-table fingerprint byte-unchanged post every call).
+3. **Detector pure / correct / NOT wired.** Same suite:
+   unacked-overdue oldest-first + ack-clears-correlation +
+   below-threshold-not-flagged + the detector PURITY pin
+   (ZERO mutation); `failure_monitor.py` is a pure fn +
+   model — NO APScheduler / periodic / re-alert / emit
+   (build-the-layer; sweep (d) clean).
+4. **Carried byte-proof.** `emit/` `sources/` `cache.py`
+   `resolver.py` `storage/*` `ddl/` `worker.py`
+   `registry_cache/` + `enums.py` ALL 0-diff vs
+   `v2-phase-14-complete`. No new EventKind, no v002.
+5. **Carried boundaries byte/behaviour-unchanged.**
+   phase-9–14 regression pins UNMODIFIED + green (76:
+   worker-reasoning-seam [11/12], validation-reasoning-tool-
+   mode [12], idempotency-worker-dedup [14],
+   paused-pending-policy [14], runtime-source-fire [11],
+   authoring-lifecycle-helper [archive seam]); no executor;
+   retry chain still DEFERRED (no §12 step owns it).
+6. **Module-load hygiene.** Folded alias-robust AST
+   import-hygiene pin green; no module-load
+   `datetime.now` / `uuid4` / vendor-SDK in
+   `app/v2/observability/` (DI-clock throughout).
+7. **Phase guards.** `check_phase_scope.py --staged` AND
+   `--diff v2-phase-14-complete` exit 0.
+8. **Full suite.** `tests/v2` 2425 passed, 0 fail, 0
+   regression (2410 phase-14 baseline + 11 slice-1 + 4
+   slice-2; closeout adds no tests — docs/docstring-only).
+9. **plan ≡ code ≡ design ≡ tag.** The ONE
+   `CONTRACTS_V2_DESIGN.md` §9 reconciliation pass done
+   (records the EXACT shipped 5-set + `schedule_diff` /
+   `schedule_replay` DEFERRED with substrate evidence +
+   the failure-monitor build-the-layer detector,
+   periodic+re-alert deferred). REPO-WIDE semantic-intent
+   sweep (a/b/c/d) clean: (a) no falsified
+   lands-in-§12-step-15 forward-ref; (b) `schedule_diff` /
+   `schedule_replay` read as DEFERRED everywhere — the (α)
+   containment holds post-closeout (the one ambiguous
+   `observability/__init__.py` docstring tightened in this
+   closeout commit); (c) only the carried+vetted
+   `worker.py:1075` dead-code-marker (states absence,
+   accurate, byte-identical to the phase-14-CLOSEOUT-vetted
+   text); (d) detector reads NOT-wired everywhere.
+10. **Annotated tag.** `v2-phase-15-complete` created
+    below, NOT pushed — push gated on the reviewer CLOSEOUT
+    PASS.
+
+## 8. Tag annotation (FINALISED at closeout — == shipped code)
 
 ```
 v2 phase 15 complete
