@@ -380,6 +380,39 @@ PHASE_ALLOWLIST: dict[int, set[str]] = {
         # boot integration. Mirrors the phase-10/12/13/14
         # build-the-layer allowlist (no agent surface).
     },
+    16: {
+        # Code surface carried forward
+        "app/v2/",
+        "tests/v2/",
+        # CI guard machinery (carried forward)
+        "scripts/check_phase_scope.py",
+        "scripts/install_hooks.py",
+        ".githooks/v2_phase_guard.sh",
+        ".githooks/pre-commit",
+        ".github/workflows/v2_phase_guard.yml",
+        # Phase-tracking artefact
+        ".v2-current-phase",
+        # Plan + design docs
+        "docs/PHASE_16_PLAN.md",
+        "docs/CONTRACTS_V2_DESIGN.md",
+        # Auto-generated index (pre-commit regenerates + stages)
+        "docs/INDEX.md",
+        "docs/AGENTS_INVENTORY.md",
+        # Doc-read marker bookkeeping
+        ".docs_read_marker",
+        # NOT re-added for phase 16: coordinator_agent.py /
+        # run_bot.py / app/agent.py. Step 16 = migration
+        # tooling (v1 → v2). The migration code is
+        # app/v2/-resident and READS v1 (app/contracts/*)
+        # ONLY via runtime import — the v1 READ-ONLY
+        # invariant (PHASE_16_PLAN §0.2) means ZERO v1 files
+        # are modified, so NO v1 path ever enters --staged /
+        # --diff and the allowlist is NOT widened for v1
+        # (PHASE_16_PLAN §0.3 Q5 — surfaced, not a silent
+        # widening). No new agent mount, no boot integration;
+        # GATED CLI, NOT auto-invoked (build-the-layer).
+        # RELAY-TERMINUS: §12 step 16 is the LAST core step.
+    },
     # Future phases populate here as they land.
 }
 
