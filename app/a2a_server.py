@@ -277,22 +277,40 @@ async def _handle_ads_oauth_callback(request):
             status_code=500,
         )
 
-    base = os.environ.get("A2A_BASE_URL", "https://bezosapp.uk").rstrip("/")
+    base = "https://bezosapp.uk"
     redirect_uri = f"{base}{_OAUTH_ADS_CALLBACK_PATH}"
+    logger.info(
+        "Ads OAuth token swap: redirect_uri=%r client_id_tail=%r",
+        redirect_uri,
+        client_id[-8:] if client_id else "",
+    )
 
     try:
+        import urllib.parse
+
         import httpx
 
+        # Build the form body with urllib.parse.urlencode — the same encoder
+        # the helper uses for the authorize URL — so Amazon sees byte-identical
+        # ``redirect_uri`` encoding in both legs of the flow. httpx's default
+        # form encoder (RFC 3986 safe chars) leaves ``:`` and ``/`` un-encoded,
+        # which Amazon LWA treats as a mismatch and rejects with
+        # ``invalid_grant: The request has an invalid grant parameter :
+        # redirect_uri`` (see Amazon Developer Community thread 24837).
+        body = urllib.parse.urlencode(
+            {
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "client_id": client_id,
+                "client_secret": client_secret,
+            }
+        )
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
                 _ADS_TOKEN_URL,
-                data={
-                    "grant_type": "authorization_code",
-                    "code": code,
-                    "redirect_uri": redirect_uri,
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                },
+                content=body,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
         if resp.status_code != 200:
             logger.error(

@@ -88,7 +88,7 @@ SCOPE = "advertising::campaign_management"
 # remote account owner against the bot's public ``/oauth/ads/callback``
 # endpoint instead of a local HTTP server. Must stay in sync with
 # ``app/a2a_server.py:_OAUTH_ADS_CALLBACK_PATH`` and ``_ads_oauth_state_is_valid``.
-_PUBLIC_BASE_URL = os.environ.get("A2A_BASE_URL", "https://bezosapp.uk").rstrip("/")
+_PUBLIC_BASE_URL = "https://bezosapp.uk"
 _PUBLIC_CALLBACK_PATH = "/oauth/ads/callback"
 _PUBLIC_REDIRECT_URI = f"{_PUBLIC_BASE_URL}{_PUBLIC_CALLBACK_PATH}"
 _PUBLIC_STATE_HMAC_LEN = 32
@@ -315,6 +315,7 @@ def _run_public_mode(client_id: str, _client_secret_unused: str) -> int:
     print()
     print(f"Authorize URL: {authorize_url}")
     print(f"Redirect URI:  {_PUBLIC_REDIRECT_URI}")
+    print(f"A2A_BASE_URL env: {os.environ.get('A2A_BASE_URL', '<unset, default https://bezosapp.uk>')!r}")
     print()
     print(
         "Send the authorize URL to the account owner. Once they click it "
