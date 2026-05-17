@@ -231,6 +231,46 @@ the live slice).
    `admin_alert_sent` / `admin_alert_acked` (no new kind).
    Carries the §11.1 byte-proof + phase-9–14 boundary
    regression pins (the live-substrate slice).
+   **LANDED** (slice-2; folded in-commit per the phase-11
+   §0.3 / phase-14 §9.2 discipline). New
+   `app/v2/observability/failure_monitor.py`:
+   `failure_monitor_scan(conn, *, now, threshold) ->
+   list[OverdueAlert]` + `OverdueAlert` typed model.
+   Realises the design §9:1329 query — `admin_alert_sent`
+   whose `id` ∉ `{admin_alert_acked.correlates}` AND
+   `sent_ts < now - threshold`, oldest-first. **§9:1329 is
+   an inherently GLOBAL cross-schedule sweep; the shipped
+   read surface is per-run / per-schedule and NONE composes
+   a global admin-alert query** — slice-2 may not add a
+   storage read (§11.1 byte-proof), and per-schedule
+   iteration would silently MISS unacked alerts on
+   paused/archived schedules (a correctness bug + the
+   phase-11-ChannelDigest-(b) honest-scope anti-pattern). So
+   the detector issues the canonical §9:1329 query directly
+   as a PURE read (SELECT only, ZERO mutation —
+   PURITY-pinned); this is the detector's OWN canonical
+   query, NOT a re-implementation of any shipped
+   per-schedule helper (none exists for the global sweep —
+   the slice-2 pre-arm "NO SQL reimpl IF a shipped read
+   composes it" conditional explicitly anticipated this; NO
+   FORK — no busted premise, the conditional resolved by
+   code-check). DI-`now` (no module-load clock). NOT wired:
+   NO periodic / APScheduler binding, NO re-alert dispatch —
+   DEFERRED, closeout-recorded; reuses both v001-CHECK kinds
+   (no new EventKind, no v002). A future re-alert needing
+   otherwise = a verify-first fork. `tests/v2/test_observability.py`
+   extended: unacked-overdue returned oldest-first +
+   ack-clears-correlation + below-threshold-not-flagged + a
+   PURITY pin (full-table fingerprint byte-unchanged); the
+   package AST import-hygiene glob auto-covers the new
+   module. 2425 v2 tests, 0 fail, 0 regression (2421
+   slice-1 + 4 slice-2). §11.1 byte-proof: `emit/`
+   `sources/` `cache.py` `resolver.py` `storage/` `ddl/`
+   `worker.py` ALL 0-diff vs `v2-phase-14-complete`;
+   phase-9–14 boundary regression pins (worker-reasoning-seam
+   / validation-reasoning-tool-mode / idempotency-worker-dedup
+   / paused-pending-policy / runtime-source-fire) UNMODIFIED
+   + green. `PHASE_ALLOWLIST[15]` unchanged.
 3. **closeout** — full `tests/v2`, §7 acceptance walk, phase
    guards `--staged` + `--diff v2-phase-14-complete`,
    `gen_docs` regen+stage, REPO-WIDE SEMANTIC-INTENT

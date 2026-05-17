@@ -22,6 +22,7 @@ References:
 
 from __future__ import annotations
 
+from app.v2.observability.failure_monitor import failure_monitor_scan
 from app.v2.observability.primitives import (
     registry_status,
     schedule_failures,
@@ -32,6 +33,7 @@ from app.v2.observability.primitives import (
 from app.v2.observability.results import (
     FailureEvent,
     HistoryEntry,
+    OverdueAlert,
     RegistryCacheStatus,
     RegistryStatusResult,
     RunSummary,
@@ -48,6 +50,9 @@ __all__ = [
     "schedule_history",
     "schedule_health",
     "registry_status",
+    # failure-monitor pure detector (build-the-layer, NOT wired)
+    "failure_monitor_scan",
+    "OverdueAlert",
     # result models
     "RunSummary",
     "ScheduleStatusResult",

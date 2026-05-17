@@ -29,6 +29,7 @@ import pytest
 from app.v2.enums import EventKind
 from app.v2.models.event import Event
 from app.v2.observability import (
+    failure_monitor_scan,
     registry_status,
     schedule_failures,
     schedule_health,
@@ -285,6 +286,84 @@ def test_all_primitives_are_pure_no_mutation(tmp_path):
     after = _fingerprint(conn)
 
     assert before == after  # ZERO mutation — pure side-channel
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# failure_monitor_scan — PURE detector (build-the-layer, NOT wired)
+# ---------------------------------------------------------------------------
+
+
+def _alert(conn, eid, *, kind, ts, correlates=None):
+    """Schedule-level admin-alert event (run_id=None — skips
+    the append_event run cross-check; admin alerts are
+    schedule-scoped here)."""
+    _ev(conn, eid, kind=kind, run_id=None, ts=ts,
+        correlates=correlates)
+
+
+def test_failure_monitor_returns_unacked_overdue(tmp_path):
+    conn = _conn(tmp_path)
+    _seed_schedule(conn, schedule_id="sched_alpha")
+    now = _UTC_NOW
+    thr = timedelta(hours=1)
+    # Two overdue (unacked, ts < now - 1h), oldest-first.
+    _alert(conn, "s_old", kind=EventKind.ADMIN_ALERT_SENT,
+           ts=now - timedelta(hours=5))
+    _alert(conn, "s_mid", kind=EventKind.ADMIN_ALERT_SENT,
+           ts=now - timedelta(hours=2))
+
+    out = failure_monitor_scan(conn, now=now, threshold=thr)
+    assert [a.alert_event_id for a in out] == ["s_old", "s_mid"]
+    assert out[0].age_seconds == 5 * 3600
+    assert all(a.schedule_id == "sched_alpha" for a in out)
+    conn.close()
+
+
+def test_failure_monitor_ack_clears_correlation(tmp_path):
+    conn = _conn(tmp_path)
+    _seed_schedule(conn, schedule_id="sched_alpha")
+    now = _UTC_NOW
+    thr = timedelta(hours=1)
+    _alert(conn, "s1", kind=EventKind.ADMIN_ALERT_SENT,
+           ts=now - timedelta(hours=3))
+    # An ack correlating s1 clears it even though it is overdue.
+    _alert(conn, "ack1", kind=EventKind.ADMIN_ALERT_ACKED,
+           ts=now - timedelta(hours=2), correlates="s1")
+
+    out = failure_monitor_scan(conn, now=now, threshold=thr)
+    assert out == []
+    conn.close()
+
+
+def test_failure_monitor_below_threshold_not_flagged(tmp_path):
+    conn = _conn(tmp_path)
+    _seed_schedule(conn, schedule_id="sched_alpha")
+    now = _UTC_NOW
+    thr = timedelta(hours=1)
+    # Unacked but only 30min old — NOT overdue.
+    _alert(conn, "fresh", kind=EventKind.ADMIN_ALERT_SENT,
+           ts=now - timedelta(minutes=30))
+    out = failure_monitor_scan(conn, now=now, threshold=thr)
+    assert out == []
+    conn.close()
+
+
+def test_failure_monitor_is_pure_no_mutation(tmp_path):
+    conn = _conn(tmp_path)
+    _seed_schedule(conn, schedule_id="sched_alpha")
+    now = _UTC_NOW
+    _alert(conn, "s1", kind=EventKind.ADMIN_ALERT_SENT,
+           ts=now - timedelta(hours=3))
+    _alert(conn, "ack1", kind=EventKind.ADMIN_ALERT_ACKED,
+           ts=now - timedelta(hours=2), correlates="s1")
+    _alert(conn, "s2", kind=EventKind.ADMIN_ALERT_SENT,
+           ts=now - timedelta(hours=4))
+
+    before = _fingerprint(conn)
+    failure_monitor_scan(conn, now=now, threshold=timedelta(hours=1))
+    after = _fingerprint(conn)
+    assert before == after  # ZERO mutation — pure detector
     conn.close()
 
 

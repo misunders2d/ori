@@ -162,6 +162,28 @@ class RegistryCacheStatus(BaseModel):
     )
 
 
+class OverdueAlert(BaseModel):
+    """One unacked-AND-overdue ``admin_alert_sent`` ledger
+    row, returned by the build-the-layer failure-monitor
+    pure detector (``failure_monitor_scan``). The detector is
+    NOT wired — no periodic loop, no re-alert dispatch (Q1/Q2
+    build-the-layer; deferred, closeout-recorded)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    alert_event_id: str = Field(
+        description="The admin_alert_sent event id (the id "
+        "that an admin_alert_acked.correlates would clear).",
+    )
+    schedule_id: str
+    run_id: Optional[str] = None
+    sent_ts: datetime
+    age_seconds: int = Field(
+        description="now - sent_ts in whole seconds (>= the "
+        "threshold by construction).",
+    )
+
+
 class RegistryStatusResult(BaseModel):
     """`registry_status` — cached enums + staleness, REUSING
     the shipped phase-6 ``registry_cache`` read surface
@@ -182,4 +204,5 @@ __all__ = [
     "ScheduleHealthResult",
     "RegistryCacheStatus",
     "RegistryStatusResult",
+    "OverdueAlert",
 ]
