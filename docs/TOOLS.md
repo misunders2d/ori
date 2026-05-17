@@ -288,14 +288,14 @@ Tools for researching bugs, library docs, and package versions.
 ## `app/tools/scheduling.py`
 - `get_current_time` (line 8) — Returns the current date and time in the specified timezone.
 - `schedule_one_off_task` (line 242) — Schedules the agent to execute a specific task once at a specific date and time.
-- `schedule_recurring_task` (line 338) — Schedules the agent to execute a task automatically on a recurring schedule.
-- `list_scheduled_tasks` (line 439) — Lists the current user's scheduled tasks/reminders.
-- `get_scheduled_task_logs` (line 480) — Returns recent fire events from the scheduler job log (JSONL).
-- `delete_scheduled_task` (line 597) — Deletes a scheduled task/reminder.
-- `edit_scheduled_task` (line 628) — Edits an existing scheduled task — all fields are optional, pass only what you want to change.
-- `schedule_system_task` (line 782) — Schedules a one-off system maintenance task that runs with admin privileges.
-- `run_system_task_now` (line 864) — Immediately launches a system maintenance task in the background with admin privileges.
-- `schedule_recurring_system_task` (line 929) — Schedules a recurring system maintenance task that runs with admin privileges on a cron schedule.
+- `schedule_recurring_task` (line 354) — Schedules the agent to execute a task automatically on a recurring schedule.
+- `list_scheduled_tasks` (line 470) — Lists the current user's scheduled tasks/reminders.
+- `get_scheduled_task_logs` (line 511) — Returns recent fire events from the scheduler job log (JSONL).
+- `delete_scheduled_task` (line 628) — Deletes a scheduled task/reminder.
+- `edit_scheduled_task` (line 659) — Edits an existing scheduled task — all fields are optional, pass only what you want to change.
+- `schedule_system_task` (line 813) — Schedules a one-off system maintenance task that runs with admin privileges.
+- `run_system_task_now` (line 895) — Immediately launches a system maintenance task in the background with admin privileges.
+- `schedule_recurring_system_task` (line 960) — Schedules a recurring system maintenance task that runs with admin privileges on a cron schedule.
 
 ## `app/tools/scratchpad.py`
 Session-scoped scratchpad for multi-step research tasks.
@@ -376,6 +376,6 @@ Data visualization tool — executes plotting code in a restricted scope.
 - `async list_access_control` (line 36) — List all whitelisted and blacklisted IDs, including those from environment variables.
 
 ## `app/tools/youtube.py`
-Multimodal YouTube summarization tool using Gemini 3.
+Multimodal YouTube summarization tool using Gemini 2.0+.
 
-- `async youtube_summary` (line 14) — Answer questions about a specific YouTube video, focusing on a specific query.
+- `async youtube_summary` (line 11) — Answer questions about a specific YouTube video, focusing on a specific query.

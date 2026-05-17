@@ -144,14 +144,27 @@ When `allowed_tools` is empty or absent on a step, enforcement falls back to the
 
 ## 5. Scheduler re-entry
 
-APScheduler fires a scheduled task → creates a fresh session → seeds a plan (if the task carries `steps`) → runs the agent for one turn. The agent executes one step, calls `complete_step`, and emits a user-facing summary message.
+APScheduler fires a scheduled task → the run executes in its durable side-session (see §5.1) → seeds a plan (if the task carries `steps`) → runs the agent. The agent executes the step(s), calls `complete_step`, and emits a user-facing summary message.
 
 Then the scheduler checks `plan_has_pending_steps(session_id)`:
 
 - Yes → re-invoke the agent in the same session for the next step. The same plan is still in storage; `plan_enforcer` keeps injecting context.
-- No → mark the run successful, post any final user-facing output to the configured channel (Slack/Telegram), close the session.
+- No → mark the run successful, post any final user-facing output to the configured channel (Slack/Telegram).
 
 The loop is bounded by `MAX_PLAN_STEPS_PER_RUN` (default 20) to defend against accidentally-infinite plans.
+
+### 5.1 v1fix Slice-1 — durable, reliable scheduled fire path
+
+The **user** scheduled path (`schedule_one_off_task` / `schedule_recurring_task` → `app/tasks.py:run_scheduled_task`) no longer fabricates a throwaway ephemeral session per fire. (System maintenance tasks — `run_system_task` — are unchanged.) Slice-1 (reliability CORE only):
+
+- **Durable side-session, linked to the chat.** The run uses session id `"<chat_session>::job::<job_id>"` under the chat's `user_id`, recovered at fire time from `notify.origin_session_id` (no new schedule-time plumbing). It is **get-or-create, never deleted** — so cross-fire state survives. It is deliberately *not* the live chat session, so a fire never collides with the user typing.
+- **D5 (load-bearing).** The run goes through the **same boot Runner** (`run_bot.get_runner()`, `app=ori_app`), so the scheduled turn resolves under the **same ADK `app_name`** the live chat uses. A divergent `app_name` silently writes an orphan row and the in-chat follow-up breaks with no error — the acceptance test asserts the identity tuple and **fails loud** on divergence. (A per-fire `App` is *not* needed here; it arrives with the later per-job `SequentialAgent` slice, which **must** then add a runtime `app_name`-equality assertion.)
+- **Logical-occurrence cursor.** `state["job:<id>:cursor"]` + `state["job:<id>:delivered_occurrences"]` live in the durable session state (written natively via `update_session_state`). After downtime every missed occurrence is computed from the job's trigger, delivered as **one consolidated message**, and recorded so a re-fire **never double-sends** (idempotent skip).
+- **Delivery- AND agent-gated advance.** The cursor advance + delivered-marking happen **only when both** the channel accepted the message (`_deliver_with_fallback` now returns a bool) **and** the agent produced a genuine result (`agent_ok` — not raised, not empty, not a guardrail block, no terminal `AgentResponse.error`). A delivered *failure notice* is **not** a delivered occurrence. So a recoverable channel failure **or** a transient agent failure (LLM 503, tool timeout, rate/context limit) on a recurring job re-attempts that occurrence next wake; a one-off has no retry vehicle so it is logged-not-retried. At-least-once, never silently dropped (Rule 13, occurrence named in the log).
+- **Per-job reliability kwargs.** The two user `add_job` sites pass `misfire_grace_time=None` (a late wake still fires — it was previously *dropped* past the global 1 h grace), `coalesce=True` (the cursor fans out the collapse), `max_instances=1` (single-writer guard for the cursor read-modify-write). The process-**global** default in `app/scheduler_instance.py` is **left untouched** — it also governs contract/system jobs and must not be flipped under them.
+- **In-chat visibility.** The clean result is delivered to the channel and mirrored as one model event into the chat session (`_inject_into_session`, unchanged), so the user's next chat turn sees it.
+
+**Out of Slice-1 (later, gated):** the per-job `SequentialAgent`/`LoopAgent` builder + universal job spec, per-step fidelity (QB), defer-blocks-downstream (QC), typed multi-target delivery + Sheets strict-append + forum-topic.
 
 ---
 
@@ -174,7 +187,8 @@ Bad pattern: a single 30-step plan where every step is `allowed_tools: ["*"]`. T
 |---|---|
 | `tests/test_planner.py` | Plan create / advance / complete / abandon |
 | `tests/test_plan_enforcer.py` (Phase 3, new) | Hard-block: tool outside `allowed_tools` returns refusal; `mark_step_done` advances; absence of plan = pass-through |
-| `tests/test_scheduled_task_cleanup.py` | Scheduler re-entry doesn't leak plans across sessions |
+| `tests/test_scheduled_task_cleanup.py` | Durable side-session is never deleted; per-fire plan/scratchpad sidecar still reset |
+| `tests/test_v1fix_scheduler_reliability.py` | Slice-1: D5 identity (fail-loud), durable linked side-session, never-double-send, outage catch-up consolidation, in-chat visibility, delivery/agent-failure ordering, per-job kwargs, global default unchanged |
 
 ---
 

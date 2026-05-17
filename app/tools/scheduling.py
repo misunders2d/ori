@@ -308,6 +308,9 @@ def schedule_one_off_task(
         "task_prompt": task_prompt,
         "notify": notify,
         "owner_user_id": owner_user_id,
+        # Stable id so the durable side-session (and its catch-up cursor) is
+        # consistent across fires — see app/tasks.py run_scheduled_task.
+        "job_id": job_id,
     }
     if validated_steps:
         job_kwargs["steps"] = validated_steps
@@ -317,6 +320,19 @@ def schedule_one_off_task(
         run_date=run_date,
         kwargs=job_kwargs,
         id=job_id,
+        # v1fix Slice-1 reliability — PER-JOB (the process-global default in
+        # scheduler_instance.py is left untouched: it also governs contract /
+        # system jobs and must not be flipped under them).
+        #   misfire_grace_time=None  -> a wake delayed past the global 1h grace
+        #       still fires (was silently DROPPED); the cursor owns occurrence
+        #       truth, so a late wake is correct, not stale.
+        #   coalesce=True            -> many missed wakes collapse to ONE wake;
+        #       the cursor then fans them out into ONE consolidated message.
+        #   max_instances=1          -> retained as the single-writer guard for
+        #       the cursor read-modify-write (no overlap of this job with self).
+        misfire_grace_time=None,
+        coalesce=True,
+        max_instances=1,
     )
 
     dest = deliver_to or "current chat"
@@ -407,6 +423,9 @@ def schedule_recurring_task(
         "task_prompt": task_prompt,
         "notify": notify,
         "owner_user_id": owner_user_id,
+        # Stable id so the durable side-session (and its catch-up cursor) is
+        # consistent across fires — see app/tasks.py run_scheduled_task.
+        "job_id": job_id,
     }
     if validated_steps:
         job_kwargs["steps"] = validated_steps
@@ -415,6 +434,18 @@ def schedule_recurring_task(
         trigger=trigger,
         kwargs=job_kwargs,
         id=job_id,
+        # v1fix Slice-1 reliability — PER-JOB (the process-global default in
+        # scheduler_instance.py is left untouched: it also governs contract /
+        # system jobs and must not be flipped under them).
+        #   misfire_grace_time=None  -> a wake delayed past the global 1h grace
+        #       still fires (recurring occurrences were silently DROPPED).
+        #   coalesce=True            -> N missed wakes collapse to ONE wake;
+        #       the cursor fans them into ONE consolidated message.
+        #   max_instances=1          -> retained single-writer guard for the
+        #       cursor read-modify-write.
+        misfire_grace_time=None,
+        coalesce=True,
+        max_instances=1,
     )
 
     dest = deliver_to or "current chat"

@@ -1,7 +1,8 @@
+import hashlib
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,121 @@ def _cleanup_ephemeral_task_state(session_id: str) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# v1fix Slice-1 — durable, D5-correct, reliably-firing scheduled path.
+#
+# The scheduled fire path used to fabricate an ephemeral ADK session per fire
+# (user_id="system_scheduler", session_id=task_id), delete+recreate it every
+# run, and wipe its sidecar — so cross-run progress, crash-resume, and
+# never-double-send were structurally impossible, and a fire delayed past the
+# process-global misfire_grace_time was silently dropped.
+#
+# Slice-1 re-homes the run onto a DURABLE side-session LINKED to the creating
+# chat (session_id = "<chat_session>::job::<job_key>", under the chat's
+# user_id), run through the SAME boot Runner (run_bot.get_runner(), app=ori_app)
+# — so the scheduled turn resolves under the SAME (app_name) ADK identity the
+# live chat uses (D5: app_name divergence => orphan row => in-chat follow-up
+# silently breaks). A logical-occurrence cursor kept in the durable session
+# state makes catch-up after downtime never-skip + never-double-send.
+#
+# NOT in Slice-1 (LATER, gated): the per-job SequentialAgent/LoopAgent builder,
+# per-step fidelity (QB), defer-blocks-downstream (QC), typed multi-target /
+# strict-append. Slice-1 is the reliability CORE only.
+# ---------------------------------------------------------------------------
+
+# Hard caps so very-long downtime can't enumerate/track unbounded occurrences.
+_MAX_CATCHUP_OCCURRENCES = 500
+_MAX_DELIVERED_TRACKED = 500
+
+
+def _stable_job_key(job_id: str | None, owner_user_id: str, notify: dict, task_prompt: str) -> str:
+    """A stable identifier for the durable side-session.
+
+    Prefers the APScheduler job_id (threaded through from the scheduling
+    tools). Legacy jobs persisted before this contract carry no job_id kwarg —
+    derive a deterministic key from owner + origin + prompt so those jobs still
+    get a CONSISTENT durable session across fires (v1 prod keeps working) rather
+    than crashing or churning a fresh session every fire.
+    """
+    if job_id:
+        return job_id
+    origin = (notify or {}).get("origin_session_id") or (notify or {}).get("target_session_id") or ""
+    raw = f"{owner_user_id}|{origin}|{task_prompt}".encode("utf-8", "replace")
+    return "legacy_" + hashlib.sha1(raw).hexdigest()[:12]
+
+
+def _chat_identity_from_notify(notify: dict) -> str | None:
+    """Recover the creating chat's ADK session id at fire time.
+
+    No new schedule-time plumbing: the chat identity is already on the job in
+    notify.origin_session_id (stamped by _stamp_ownership). For chat sessions
+    ADK user_id == session_id == channel (telegram_poller / slack_poller), so
+    the single origin value is both. Returns None when it can't be recovered
+    (legacy notify dict) — caller falls back to an isolated durable session.
+    """
+    return (notify or {}).get("origin_session_id") or None
+
+
+def _linked_side_session_id(chat_session_id: str | None, job_key: str) -> str:
+    """Durable side-session id, LINKED to the chat but ISOLATED from the live
+    chat turn (QA-locked: avoids collision with the user typing mid-fire)."""
+    return f"{chat_session_id or 'nochat'}::job::{job_key}"
+
+
+def _compute_occurrences(job_id: str | None, last_cursor_iso: str | None, now_dt: datetime) -> list[datetime]:
+    """Enumerate logical fire times in (last_cursor, now].
+
+    Recurring (cron) jobs persist in the jobstore, so the trigger is reachable
+    and every missed occurrence is computed (QD: nothing collapsed silently).
+    One-off jobs are removed from the store after firing, and the first-ever
+    fire has no cursor — both yield a single occurrence. NEVER raises: a failed
+    enumeration must not drop the fire, so it degrades to a single occurrence
+    and logs (Rule 13 — nothing fails silently).
+    """
+    if not job_id or not last_cursor_iso:
+        return [now_dt]
+    try:
+        from app.scheduler_instance import scheduler
+
+        job = scheduler.get_job(job_id)
+        trigger = getattr(job, "trigger", None) if job else None
+        if trigger is None:
+            return [now_dt]
+        prev = datetime.fromisoformat(last_cursor_iso)
+        occ: list[datetime] = []
+        pointer = prev
+        guard = 0
+        while guard < _MAX_CATCHUP_OCCURRENCES + 5:
+            nxt = trigger.get_next_fire_time(pointer, pointer)
+            if nxt is None or nxt > now_dt:
+                break
+            occ.append(nxt)
+            pointer = nxt
+            guard += 1
+        if not occ:
+            return [now_dt]
+        if len(occ) > _MAX_CATCHUP_OCCURRENCES:
+            logger.critical(
+                "Scheduled job %s: %d missed occurrences after downtime exceeds "
+                "the %d cap — delivering the most recent %d and advancing the "
+                "cursor past the rest.",
+                job_id, len(occ), _MAX_CATCHUP_OCCURRENCES, _MAX_CATCHUP_OCCURRENCES,
+            )
+            occ = occ[-_MAX_CATCHUP_OCCURRENCES:]
+        return occ
+    except Exception:
+        logger.warning(
+            "Occurrence enumeration failed for job %s; single-occurrence "
+            "fallback (the fire still happens, once).",
+            job_id, exc_info=True,
+        )
+        return [now_dt]
+
+
+def _occ_key(dt: datetime) -> str:
+    return dt.isoformat(timespec="minutes")
+
+
 async def _drive_plan_to_completion(
     runner,
     user_id: str,
@@ -148,6 +264,7 @@ async def run_scheduled_task(
     owner_user_id: str,
     task_id: str = None,
     steps: list[str] = None,
+    job_id: str = None,
 ):
     """
     Executed by APScheduler when a scheduled task fires.
@@ -164,7 +281,7 @@ async def run_scheduled_task(
     LLM cannot skip or paraphrase steps. If `steps` is None, the task runs
     under normal (LLM-decided) flow.
     """
-    from app.core.agent_executor import extract_agent_response
+    from app.core.agent_executor import extract_agent_response, update_session_state
     from run_bot import get_runner
     import uuid
 
@@ -193,24 +310,29 @@ async def run_scheduled_task(
 
     runner = get_runner()
 
-    if runner:
-        # Ephemeral session per fire — isolates plan state, conversation history,
-        # and scratchpad between concurrent/sequential scheduled tasks.
-        user_id = "system_scheduler"
-        session_id = task_id  # task_id already carries a 'sched_' or 'immediate_' prefix
-        query = (
-            f"Scheduled Task: {task_prompt}\n"
-            "(This is an automated reminder. Execute the task or deliver the reminder to the user. "
-            "Do not ask for missing credentials; stop gracefully if something is missing.)"
-        )
+    # Set inside the durable run path once the occurrence(s) for this fire are
+    # known; consumed AFTER delivery so the cursor only advances on a real
+    # send (reviewer 🟡 — never mark an occurrence delivered before it is).
+    cursor_advance = None
+    # True ONLY when the agent produced a genuine result this fire (did not
+    # raise, not empty, not a guardrail block, no terminal AgentResponse
+    # error). A delivered failure-NOTICE is NOT a delivered occurrence: the
+    # cursor advance is gated on (delivered_ok AND agent_ok) so a transient
+    # agent failure on a RECURRING job re-attempts next wake instead of
+    # consuming the occurrence (reviewer 🟡 round 2 — restores the
+    # at-least-once-on-agent-failure property of the first slice).
+    agent_ok = False
 
-        # The scheduler runs tasks under a synthetic user_id ("system_scheduler")
-        # so the session is isolated from the owner's chat. But per-user tools
-        # (Google, preferences, admin checks) need state["user_id"] to be the
-        # real owner — we inject it via actual_caller_id, which state_setter
-        # then promotes into session state. owner_user_id is a required kwarg
-        # on this function; if it's missing, the job is stale (created before
-        # this contract) and no per-user tool can succeed.
+    if runner:
+        # Slice-1: run the scheduled turn in a DURABLE side-session LINKED to
+        # the creating chat, through the SAME boot Runner (app=ori_app) — so
+        # the turn resolves under the SAME ADK app_name the live chat uses.
+        # D5: a divergent app_name silently writes an orphan session row and
+        # the in-chat follow-up breaks with NO error. The boot Runner makes
+        # this correct by construction (it IS Runner(app=ori_app)), so Slice-1
+        # needs no per-fire App — that arrives with the LATER per-job
+        # SequentialAgent slice. owner_user_id is required; a missing value
+        # means a stale pre-contract job.
         if not owner_user_id:
             logger.error(
                 "Scheduled task %s has no owner_user_id. The job was persisted "
@@ -229,22 +351,100 @@ async def run_scheduled_task(
             await _deliver_with_fallback(notify, response, task_id=task_id)
             return
 
-        try:
-            try:
-                await runner.session_service.delete_session(
-                    app_name=runner.app_name, user_id=user_id, session_id=session_id
-                )
-            except Exception:
-                pass
-            _cleanup_ephemeral_task_state(session_id)
+        job_key = _stable_job_key(job_id, owner_user_id, notify, task_prompt)
+        chat_session_id = _chat_identity_from_notify(notify)
+        if not chat_session_id:
+            logger.warning(
+                "Scheduled task %s (job %s): no origin_session_id on notify — "
+                "running in an isolated durable side-session (legacy notify "
+                "dict; in-chat follow-up still routes via the delivery target).",
+                task_id, job_key,
+            )
+        session_id = _linked_side_session_id(chat_session_id, job_key)
+        # Side-session lives UNDER the chat's user_id (== chat session_id for
+        # chats). Owner identity is still promoted into state via
+        # actual_caller_id so per-user tools (Google, prefs, admin) work.
+        user_id = chat_session_id or "system_scheduler"
 
-            await runner.session_service.create_session(
+        try:
+            # DURABLE: get-or-create, NEVER delete. The cursor in
+            # session.state must survive across fires. The per-fire
+            # plan/scratchpad sidecar is still reset so a steps task starts
+            # each fire from its frozen seeded plan (Slice-1 keeps current
+            # per-fire step behaviour; cross-run plan persistence is the LATER
+            # fidelity slice). _cleanup_ephemeral_task_state only removes the
+            # tmp/plans file + scratchpad keyed by session_id — it does NOT
+            # touch ADK session.state, so the durable cursor is unaffected.
+            session = await runner.session_service.get_session(
                 app_name=runner.app_name, user_id=user_id, session_id=session_id
             )
+            if session is None:
+                session = await runner.session_service.create_session(
+                    app_name=runner.app_name, user_id=user_id, session_id=session_id
+                )
 
-            # Enforced task: seed the plan BEFORE the agent's first turn so
-            # plan_enforcer has something to inject immediately. The LLM has
-            # no opportunity to skip create_plan — the plan already exists.
+            state = dict(session.state) if session and session.state else {}
+            cursor_key = f"job:{job_key}:cursor"
+            delivered_key = f"job:{job_key}:delivered_occurrences"
+            last_cursor = state.get(cursor_key)
+            delivered = list(state.get(delivered_key) or [])
+
+            now_dt = datetime.now(timezone.utc)
+            occurrences = _compute_occurrences(job_id, last_cursor, now_dt)
+            occ_keys = [_occ_key(o) for o in occurrences]
+            new_occ_keys = [k for k in occ_keys if k not in delivered]
+
+            if not new_occ_keys:
+                # Every occurrence this wake represents was already delivered:
+                # an APScheduler replay or a process restart re-firing the same
+                # logical occurrence must NOT double-send (QD: never-double-send).
+                logger.info(
+                    "Scheduled task %s (job %s): all %d occurrence(s) already "
+                    "delivered — idempotent skip, no double-send.",
+                    task_id, job_key, len(occ_keys),
+                )
+                ACTIVE_TASKS[task_id]["status"] = "Skipped (already delivered)"
+                ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
+                _log_job_event(
+                    "fire_end", task_id=task_id, kind="scheduled",
+                    owner_user_id=owner_user_id or "",
+                    status="skipped_already_delivered", job_id=job_key,
+                )
+                return
+
+            # Capture the occurrence context now (the agent may raise below).
+            # The cursor is advanced + occurrences marked delivered only AFTER
+            # _deliver_with_fallback confirms the send (reviewer 🟡): on a
+            # recoverable channel failure a RECURRING job must re-attempt this
+            # occurrence next wake, not silently lose it.
+            cursor_advance = {
+                "user_id": user_id,
+                "session_id": session_id,
+                "cursor_key": cursor_key,
+                "delivered_key": delivered_key,
+                "prev_delivered": list(delivered),
+                "new_occ_keys": list(new_occ_keys),
+                "new_cursor": max(occ_keys),
+            }
+
+            query = (
+                f"Scheduled Task: {task_prompt}\n"
+                "(This is an automated reminder. Execute the task or deliver the reminder to the user. "
+                "Do not ask for missing credentials; stop gracefully if something is missing.)"
+            )
+            if len(new_occ_keys) > 1:
+                # Coalesced catch-up after downtime: ONE consolidated message
+                # for every missed occurrence (QD), never N separate sends.
+                query += (
+                    f"\n\n[CATCH-UP] The assistant was offline; this run consolidates "
+                    f"{len(new_occ_keys)} missed occurrences ({', '.join(new_occ_keys)}). "
+                    "Produce ONE consolidated result covering all of them — do not "
+                    "emit separate messages per occurrence."
+                )
+
+            # Per-fire plan/scratchpad reset (keeps current steps behaviour;
+            # does NOT touch the durable session.state cursor).
+            _cleanup_ephemeral_task_state(session_id)
             if steps:
                 from app.tools.planner import seed_plan
                 seed_plan(session_id, task_prompt[:5000], steps)
@@ -263,6 +463,11 @@ async def run_scheduled_task(
                     actual_caller_id=owner_user_id or None,
                     task_id=task_id,
                 )
+            # Inspect the AgentResponse BEFORE stringifying: .error is the
+            # terminal-failure signal (rate limit / context limit / readonly /
+            # max-retries) — the text is then a user-facing error notice, NOT
+            # the task result, so it must NOT count as a delivered occurrence.
+            resp_err = getattr(response, "error", None)
             response = response.text if hasattr(response, "text") else str(response)
             if not response or not response.strip():
                 # Agent returned empty — treat as failure so user sees something.
@@ -276,8 +481,15 @@ async def run_scheduled_task(
                 response = f":warning: Scheduled task `{task_id}` hit a guardrail.\n{response}"
                 ACTIVE_TASKS[task_id]["status"] = "Failed (guardrail)"
                 _log_job_event("error", task_id=task_id, kind="scheduled", owner_user_id=owner_user_id or "", error="guardrail intervention")
+            elif resp_err:
+                # Terminal agent error — the notice text is already user-facing
+                # (set by extract_agent_response). Deliver it, but do NOT mark
+                # the occurrence delivered (agent_ok stays False).
+                ACTIVE_TASKS[task_id]["status"] = f"Failed (agent error: {resp_err})"
+                _log_job_event("error", task_id=task_id, kind="scheduled", owner_user_id=owner_user_id or "", error=f"agent error: {resp_err}")
             else:
                 ACTIVE_TASKS[task_id]["status"] = "Completed"
+                agent_ok = True  # genuine result this fire
             ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
         except Exception as e:
             logger.exception("Scheduled task agent execution failed")
@@ -290,17 +502,6 @@ async def run_scheduled_task(
             ACTIVE_TASKS[task_id]["error"] = str(e)
             ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
             _log_job_event("error", task_id=task_id, kind="scheduled", owner_user_id=owner_user_id or "", error=f"{type(e).__name__}: {e}")
-        finally:
-            try:
-                await runner.session_service.delete_session(
-                    app_name=runner.app_name, user_id=user_id, session_id=session_id
-                )
-            except Exception:
-                pass
-            # Clean up sidecar state created during this fire. Recurring jobs
-            # reuse task_id as session_id, so stale plans/scratchpads must not
-            # bleed into the next run if an earlier cleanup missed them.
-            _cleanup_ephemeral_task_state(session_id)
     else:
         # Runner unavailable — bot is starting up or shutting down. Report honestly.
         response = (
@@ -312,7 +513,62 @@ async def run_scheduled_task(
         _log_job_event("error", task_id=task_id, kind="scheduled", owner_user_id=owner_user_id or "", error="runner unavailable")
 
     # Deliver to the user's channel, with fallback to origin on failure.
-    await _deliver_with_fallback(notify, response, task_id=task_id)
+    delivered_ok = await _deliver_with_fallback(notify, response, task_id=task_id)
+
+    # GATE the durable cursor advance on actual delivery (reviewer 🟡): mark
+    # the occurrence(s) delivered + advance the cursor ONLY when the channel
+    # accepted the message. On a recoverable send failure we deliberately do
+    # NOT advance — a RECURRING job then re-attempts this occurrence next
+    # wake instead of silently dropping a reminder inside the deliver-to-
+    # target seam Slice-1 exists to make reliable. A one-off has no next
+    # wake, so it is logged-not-retried (unchanged; no retry vehicle without
+    # re-arming the trigger, which is out of Slice-1 scope).
+    if cursor_advance is not None:
+        if delivered_ok and agent_ok:
+            try:
+                prev = cursor_advance["prev_delivered"]
+                merged = prev + [
+                    k for k in cursor_advance["new_occ_keys"] if k not in prev
+                ]
+                if len(merged) > _MAX_DELIVERED_TRACKED:
+                    merged = merged[-_MAX_DELIVERED_TRACKED:]
+                await update_session_state(
+                    runner,
+                    cursor_advance["user_id"],
+                    cursor_advance["session_id"],
+                    {
+                        cursor_advance["cursor_key"]: cursor_advance["new_cursor"],
+                        cursor_advance["delivered_key"]: merged,
+                    },
+                )
+            except Exception:
+                logger.error(
+                    "Scheduled task %s (job %s): FAILED to advance durable "
+                    "cursor after delivery — next wake may re-deliver %s.",
+                    task_id, job_key, cursor_advance["new_occ_keys"],
+                    exc_info=True,
+                )
+        elif delivered_ok and not agent_ok:
+            # Channel was healthy and a failure NOTICE was delivered, but the
+            # agent did not produce a genuine result (raised / empty /
+            # guardrail / terminal error). The occurrence is NOT consumed: a
+            # RECURRING job re-attempts it next wake (restores the
+            # at-least-once-on-agent-failure property; a one-off has no retry
+            # vehicle so it is logged-not-retried). Rule 13: named, not silent.
+            logger.error(
+                "Scheduled task %s (job %s): agent FAILED for occurrence(s) "
+                "%s (failure notice delivered) — cursor NOT advanced; a "
+                "recurring job re-attempts next wake (a one-off has no retry "
+                "vehicle).",
+                task_id, job_key, cursor_advance["new_occ_keys"],
+            )
+        else:
+            logger.error(
+                "Scheduled task %s (job %s): delivery FAILED for occurrence(s) "
+                "%s — cursor NOT advanced; a recurring job re-attempts next "
+                "wake (a one-off has no retry vehicle).",
+                task_id, job_key, cursor_advance["new_occ_keys"],
+            )
     duration_ms = int((datetime.now() - start_ts).total_seconds() * 1000)
     _log_job_event(
         "fire_end",
@@ -537,7 +793,7 @@ async def _deliver_message(
     return delivered
 
 
-async def _deliver_with_fallback(notify: dict, message: str, task_id: str, file_path: str | None = None) -> None:
+async def _deliver_with_fallback(notify: dict, message: str, task_id: str, file_path: str | None = None) -> bool:
     """Deliver to notify's channel; if that fails AND the creator's
     session is a different channel, route a failure notice to the
     creator so they're never left in the dark.
@@ -547,10 +803,15 @@ async def _deliver_with_fallback(notify: dict, message: str, task_id: str, file_
     pre-2026-05-14 notify dicts. ``target_session_id`` is the
     intended primary destination; same-channel checks compare
     against IT.
+
+    Returns True iff the message reached the user (primary channel OR
+    the fallback creator session). The scheduled fire path gates its
+    durable cursor advance on this — a recoverable send failure must
+    NOT mark the occurrence delivered (reviewer 🟡).
     """
     delivered = await _deliver_message(notify, message, task_id=task_id, file_path=file_path)
     if delivered:
-        return
+        return True
 
     # Fallback — ALWAYS the creator's session. The 2026-05-13 audit
     # found that legacy ``_stamp_ownership`` clobbered
@@ -561,7 +822,7 @@ async def _deliver_with_fallback(notify: dict, message: str, task_id: str, file_
     origin = (notify or {}).get("origin_session_id", "")
     primary = (notify or {}).get("chat_id") or (notify or {}).get("channel", "")
     if not origin or not primary:
-        return
+        return False
     # Skip the fallback if origin == primary channel (no point in
     # retrying the same destination).
     if (
@@ -569,18 +830,18 @@ async def _deliver_with_fallback(notify: dict, message: str, task_id: str, file_
         or origin == f"tg_{primary}"
         or origin.endswith(f"_{primary}")
     ):
-        return
+        return False
 
     from app.core.transport import parse_notify_from_session_id
     fallback_notify = parse_notify_from_session_id(origin)
     if not fallback_notify:
-        return
+        return False
 
     fallback_msg = (
         f":warning: Could not deliver scheduled task `{task_id}` to its target channel. "
         f"Routing to the session that scheduled it.\n\n{message}"
     )
-    await _deliver_message(fallback_notify, fallback_msg, task_id=task_id, file_path=file_path)
+    return await _deliver_message(fallback_notify, fallback_msg, task_id=task_id, file_path=file_path)
 
 
 async def _inject_into_session(notify: dict, message: str):
