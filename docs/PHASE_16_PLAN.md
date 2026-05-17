@@ -224,6 +224,53 @@ verify-first fork explicitly ratifies it.
    `migration_dry_run` (decision/pure layer, ZERO write,
    ZERO v1 mutation). Mapping-fidelity + honest-skip +
    dry-run-no-write tests + the folded hygiene pin.
+   **LANDED** (slice-1; folded in-commit per the phase-11
+   §0.3 / phase-14 §9.2 / phase-15 §9.1 discipline). New
+   `app/v2/migration/` package (`__init__.py`,
+   `results.py`, `mapper.py`). NO code-busted premise this
+   slice (the v1 read shape matched §0.0). Reads v1 ONLY
+   via `from app.contracts.store import ContractStore`
+   (`list_all` / `load_latest`) + `app.contracts.schema`
+   models — NEVER `app.contracts.executor` / `app.tasks` /
+   `app.scheduler_instance` / any v1 write path (pinned by
+   an alias-robust AST import scan). `assess_contract` is
+   the pure structural Q3 cut collecting ALL honest skip
+   reasons (the `validate_schedule_spec` all-issues
+   discipline): SKIPPED for a non-cron trigger /
+   reasoning-bearing / deterministic-inputs / multi-emit /
+   gated-or-abort emit / sub-8 description / non-default
+   `on_failure` / non-default `acceptance` — NEVER silently
+   coerced or lossily partial-migrated.
+   `contract_to_schedule_spec` maps ONLY a
+   `MIGRATABLE_WITH_BINDING` contract → an in-memory
+   UNFROZEN v2 `ScheduleSpec` (`hash==""` — slice-1 is
+   PURE, no `with_fresh_hash`, ZERO write); a SKIPPED
+   contract raises the typed `ContractNotMigratable`. The
+   two v2 fields v1 does not carry 1:1
+   (`owner.platform` — v1 `author` has no platform;
+   `delivery.target_session_id` — the v1 emit destination
+   is an adapter-specific template arg, NOT a schema field)
+   are explicit operator-supplied `MigrationBinding`
+   values, NEVER fabricated. `migration_dry_run` enumerates
+   `store.list_all()`→`load_latest()`→`assess` into a typed
+   `MigrationPlanReport` (Q7 honest MIGRATABLE-vs-SKIPPED;
+   ZERO write — the functions take no DB conn). Typed
+   Pydantic result models throughout (Q4/§3.5 — no loose
+   dicts). `tests/v2/test_migration_mapping.py`: assess
+   migratable + per-reason honest SKIP + all-reasons-not-
+   first-fail + faithful-unfrozen map + refuse-skipped +
+   dry-run enumeration over a read-only stub store + the
+   v1-READ-ONLY-import pin + the folded alias-robust AST
+   module-load-hygiene pin. 2438 v2 tests, 0 fail, 0
+   regression (2425 phase-15 + 13 slice-1). **v1 byte-proof
+   (BINDING): `app/contracts/*` + `app/tasks.py` +
+   `app/scheduler_instance.py` + `data/contracts/*` ALL
+   0-diff vs `v2-phase-15-complete`.** Carried 5→16 +
+   phase-15 `observability/` + `enums.py` 0-diff; no new
+   EventKind, no v002. NO gated-write / NO backfill / NO
+   CLI (slice 2). `PHASE_ALLOWLIST[16]` unchanged
+   (`app/v2/` covers `migration/`; the v1-read is an
+   import dependency, ZERO v1 files changed — Q5 holds).
 2. **GATED migrate + ledger backfill** — `migrate_v1_to_v2`
    (explicit confirm, idempotent) composing the shipped
    authoring/storage + `append_event` (backfill
@@ -346,15 +393,78 @@ Design: docs/CONTRACTS_V2_DESIGN.md §12 step 16
 Plan:   docs/PHASE_16_PLAN.md
 ```
 
-## 9. claude-reviewer round-1 disposition (PENDING)
+## 9. claude-reviewer round-1 disposition (CLOSED — Q1–Q7 RATIFIED)
 
-Round 1 to be baked here VERBATIM (the phase-10–15
-disposition-log discipline) so a future drift is caught
-against the decision, not re-litigated. Any code-busted
-premise gets a verbatim record + an inline **SUPERSEDED**
-annotation (the phase-14 §0.1/§9.2 + phase-15 §9.1
-precedent — a busted premise must NOT silently persist as
-plan wording; the recurring stale-wording lesson).
+Round 1 PASS (second consecutive clean plan-round — the
+§0.0 v1-premise independently confirmed genuine;
+verify-first genuinely honoured; no code-busted premise).
+Baked VERBATIM (the phase-10–15 disposition-log discipline)
+so a future drift is caught against the decision, not
+re-litigated. Conditions binding. No SUPERSEDED record
+needed this phase (no bust); the discipline stands for any
+future one.
+
+- **Q1 = build-the-layer GATED CLI RATIFIED.** Cond: NO
+  auto-boot / binding wiring; the migrate path is
+  admin-GATED + idempotent + dry-run-first (any wiring
+  deferred, closeout-recorded).
+- **Q2 = v1 READ-ONLY via the shipped `ContractStore`
+  import RATIFIED (strongest cond).** Migration imports
+  ONLY the `ContractStore` READ methods — NEVER
+  `executor.py` / `tasks.py` / any v1 write path; ZERO v1
+  mutation / behaviour-change; BINDING byte-proof every
+  slice + closeout (`app/contracts/*` + `app/tasks.py` +
+  `app/scheduler_instance.py` + `data/contracts/*` 0-diff
+  vs `v2-phase-15-complete`).
+- **Q3 = honest mapping cut RATIFIED.** Cron +
+  v2-expressible shape migrates; reasoning-bearing /
+  OnDemand / Event / un-portable `InputSpec` / `OutputSpec`
+  SKIPPED + explicitly FLAGGED (per-contract skip-reason in
+  the dry-run report) — NEVER silently coerced / dropped
+  (ChannelDigest-(b) + §13 audit-truth: a migrated v2 spec
+  must not misrepresent the v1 contract). Cond: a
+  partial / lossy migration of an un-portable contract is
+  REJECTED (skip+flag); the closeout §12-step-16
+  reconciliation records the exact migratable subset vs
+  honestly-deferred constructs (no v1-fully-migrates
+  over-claim).
+- **Q4 = backfill provenance RATIFIED.** Via the shipped
+  `append_event` (no SQL reimpl); backfilled events
+  honestly provenance-marked in PAYLOAD
+  (`backfill` / `migrated_from`), NOT a new EventKind, NOT
+  masquerading as live fires (phase-14 `cancelled_reason`
+  §13 discipline). Cond: a consumer can distinguish
+  backfilled vs live-fired; no new EventKind / v002; the
+  backfill window is an explicit GATED-CLI parameter with a
+  documented bounded default (NOT implicit all-history).
+- **Q5 = allowlist treatment RATIFIED (verified sound).**
+  Cond: the v1-READ-ONLY byte-proof is BINDING — if any v1
+  file ever appears in a migration diff, Q5 collapses and
+  the allowlist gate correctly HOLDs; the Q5 rationale +
+  the rejected alternative (an explicit read-only v1
+  allowlist entry) are recorded verbatim (§0.3 Q5 / §6 /
+  §10 — NOT a silent widening).
+- **Q6 = gated + idempotent CLI RATIFIED.** Cond:
+  idempotency PINNED (re-run = NO duplicate v2 schedule, NO
+  duplicate backfilled event — reuse the phase-14
+  idempotency / content-addressed discipline; a test);
+  admin-gated (explicit invocation, not boot-wired); the
+  write requires an explicit flag (dry-run default).
+- **Q7 = dry-run RATIFIED.** Cond: dry-run is PURE (ZERO
+  v2 write, ZERO v1 mutation — byte-proof + purity pin);
+  the report = the honest Q3 migratable-vs-skipped
+  enumeration; the write path is strictly slice-2, gated,
+  idempotent.
+
+**RELAY-TERMINUS re-affirmed (binds at phase-16 closeout,
+not before).** §12 step 16 is the LAST core step;
+phase-16 closeout = the v2 §12 core plan COMPLETE. Step 17
+(Phase-2+ triggers) = a large NEW scope, NOT within the
+all-remaining directive's natural terminus, NOT entered
+autonomously. claude-reviewer issues an explicit flag to
+conductor / Sergey at phase-16 closeout: core plan
+complete; step-17 entry requires an explicit Sergey
+decision. Build phase 16 normally.
 
 ## 10. Hard rules (carried forward from phases 9–15)
 
