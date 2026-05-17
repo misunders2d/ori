@@ -376,7 +376,8 @@ verify-first fork explicitly ratifies it.
   phase-16 adds).
 
 ## 7. Acceptance criteria for `v2-phase-16-complete`
-(provisional — finalised after round-1 disposition)
+(FINALISED at closeout — Q1–Q7 + §9.1 (α) baked; walked
+with evidence in §7.1)
 
 1. Branch ahead of `v2-phase-15-complete` by N small
    per-slice commits.
@@ -409,7 +410,75 @@ verify-first fork explicitly ratifies it.
 11. Annotated tag `v2-phase-16-complete` (push gated on a
     reviewer CLOSEOUT PASS). RELAY-TERMINUS recorded.
 
-## 8. Tag annotation (draft — finalised at closeout)
+### 7.1 Closeout acceptance walk (evidence — 2026-05-17)
+
+All 11 walked, GREEN:
+
+1. **Branch ahead.** ahead of `v2-phase-15-complete` @
+   eae4320 by 4: bba8e6f (plan+transition), 4b3b854
+   (slice-1), c623c19 (slice-2), + this closeout. NOT
+   pushed.
+2. **Pure mapping correct / honest skip.**
+   `test_migration_mapping.py` green: assess-migratable +
+   per-reason honest SKIP + all-reasons-not-first-fail +
+   faithful-unfrozen map + refuse-skipped; unmappable v1
+   honestly flagged, never silently coerced.
+3. **Dry-run PURE / GATED idempotent.**
+   `test_migration_commit.py` green: dry-run-default
+   fingerprint byte-unchanged (ZERO write); confirm=True
+   migrates ATOMICALLY; idempotent re-run (no dup
+   schedule / no dup lineage); in-TX both-or-neither
+   rollback.
+4. **Backfill = lineage via shipped append_event.** ONE
+   `migration_v1_to_v2_complete` per migrated schedule,
+   payload-provenance-marked, distinguishable from a live
+   fire + from `schedule_created`; no new EventKind, no
+   v002 (`enums.py` / `ddl/` 0-diff). Per-fire replay NOT
+   shipped (honest-scope, §9.1).
+5. **v1 byte-proof (BINDING).** `app/contracts/*` +
+   `app/tasks.py` + `app/scheduler_instance.py` +
+   `data/contracts/*` + `data/contract_audit/*` +
+   `data/contract_failures.jsonl` ALL 0-diff vs
+   `v2-phase-15-complete` — ZERO v1 mutation.
+6. **Carried 5→16 + boundaries.** emit / `sources/` /
+   `cache.py` / `resolver.py` / `storage/*` / `ddl/` /
+   `worker.py` / `registry_cache/` / phase-15
+   `observability/` + `enums.py` 0-diff; phase-9–15
+   regression pins UNMODIFIED + green (73); no executor;
+   retry chain DEFERRED.
+7. **Module-load hygiene + v1 import-confinement.** The
+   slice-1 package AST pin (auto-covers `commit.py`):
+   no `app.contracts.executor` / `app.tasks` /
+   `app.scheduler_instance` import, no `data/contract_audit`
+   read, no module-load `datetime.now`/`uuid4`/vendor.
+8. **Phase guards.** `check_phase_scope.py --staged` AND
+   `--diff v2-phase-15-complete` exit 0;
+   `PHASE_ALLOWLIST[16]` NOT widened for v1 (Q5 holds —
+   no v1 path in the diff).
+9. **Full suite.** `tests/v2` 2445 passed, 0 fail, 0
+   regression (2425 phase-15 + 13 slice-1 + 7 slice-2;
+   closeout adds no tests — docs-only).
+10. **plan ≡ code ≡ design ≡ tag.** The ONE
+    `CONTRACTS_V2_DESIGN.md` §12-step-16 reconciliation
+    done: a Phase-16 LIVE realization block (exact
+    migratable subset vs honestly-deferred constructs +
+    lineage backfill + build-the-layer GATED-not-auto); the
+    §12 step-16 line + the CRITICAL §14-Q9 inline-RESOLVED;
+    the §11.2 original migration narrative SUPERSEDED-bannered
+    (the busted ExecutionPlan-wrap / per-fire-replay /
+    auto-apscheduler / deploy-boundary-script wording reads
+    as current NOWHERE). REPO-WIDE semantic-intent sweep
+    (a/b) clean: no falsified lands-in-§12-step-16; the
+    busted Q4/per-fire sub-premise is contained to the
+    annotated SUPERSEDED/RESOLVED/§9.1 records (all
+    remaining `replay` hits are unrelated v2 concepts —
+    FireReason.REPLAY / APScheduler misfire /
+    source-snapshot replay).
+11. **Annotated tag.** `v2-phase-16-complete` created below,
+    NOT pushed — push gated on the reviewer CLOSEOUT PASS.
+    RELAY-TERMINUS recorded (§9 / §10).
+
+## 8. Tag annotation (FINALISED at closeout — == shipped code)
 
 ```
 v2 phase 16 complete — migration tooling (§12 step 16); v2
@@ -417,17 +486,36 @@ core plan COMPLETE
 
 Build-the-layer v1→v2 migration: pure Contract→ScheduleSpec
 mapping (read v1 via the shipped ContractStore pure-read API
-ONLY — v1 byte-untouched) + a dry-run + an explicit
-admin-GATED, idempotent migrate entry-point composing the
-shipped authoring/storage write path; ledger backfill via the
-shipped append_event, honestly backfill-provenance-marked
-(§13 audit-truth — NOT masquerading as live fires). NOT
-auto-invoked at boot, NOT binding-wired. The cleanly-mappable
-subset (cron contracts) migrates; OnDemand/Event triggers +
-the full ReasoningStep/InputSpec/OutputSpec port are HONESTLY
-skipped+flagged (no silent lossy coercion). v1 READ-ONLY:
-app/contracts/* + app/tasks.py + app/scheduler_instance.py +
-data/contracts/* byte-unchanged. No new EventKind, no v002.
+ONLY — v1 byte-untouched) + a dry-run (confirm=False DEFAULT,
+PURE) + an explicit admin-GATED (confirm=True), idempotent
+migrate composing the shipped storage spine ONLY (with_fresh_hash
+→ ONE transaction(conn): insert_schedule +
+append_event(schedule_created) +
+append_event(migration_v1_to_v2_complete) — both-or-neither;
+no bespoke commit, no SQL reimpl, no new DDL/v002). Ledger
+backfill = exactly ONE shipped migration_v1_to_v2_complete
+lineage event per migrated schedule (already in the v001
+EventKind CHECK), payload-provenance-marked
+(migrated_from:<id>@<hash>, backfill:true) — §13 audit-truth:
+distinguishable from a live fire AND from schedule_created.
+HONEST-SCOPE: per-fire historical replay is NOT shipped —
+there is NO shipped pure-read v1-fire-history API
+(ContractStore is contracts-only; data/contract_audit/*.jsonl
++ contract_failures.jsonl have no shipped reader); a per-fire
+backfill is future work gated on such an API, NOT a
+migration-tool side-parser (slice-2 fork ruling α; β bespoke
+parser + γ drop-backfill REJECTED). NOT auto-invoked at boot,
+NOT binding-wired. The cleanly-mappable subset (cron, no
+reasoning, no inputs, single plain emit, desc≥8, default
+failure/acceptance) migrates; OnDemand/Event triggers,
+reasoning-bearing, InputSpec, multi/gated emit, non-default
+failure/acceptance are HONESTLY skipped+flagged (no silent
+lossy coercion); owner.platform + delivery.target_session_id
+are operator-supplied MigrationBinding, NEVER fabricated. v1
+READ-ONLY: app/contracts/* + app/tasks.py +
+app/scheduler_instance.py + data/contracts/* +
+data/contract_audit/* + data/contract_failures.jsonl
+byte-unchanged. No new EventKind, no v002.
 
 Phase-9–15 fire path + emit adapters + observability
 primitives/detector byte/behaviour-unchanged; carried

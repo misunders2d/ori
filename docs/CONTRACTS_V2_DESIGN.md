@@ -1511,6 +1511,31 @@ Migration strategy:
 
 `data/contracts/*/v*.json` already on disk. Migration:
 
+> **[SUPERSEDED by the Phase-16 LIVE realization under §12 +
+> `docs/PHASE_16_PLAN.md` §9.1 — this ENTIRE §11.2 migration
+> description below (the numbered steps 1–4 AND the trailing
+> "Migration is a one-time script … manifest event"
+> paragraph, incl. "bounded to last N fires") is the
+> ORIGINAL design intent, preserved for history; NONE of it
+> describes the shipped surface. Code-verified
+> corrections: (1) the migratable subset does NOT become an
+> `execution_plans` row — phase-16 migrates ONLY
+> reasoning-free / input-free single-plain-emit cron
+> contracts to a plan-less `ScheduleSpec`; reasoning-bearing
+> contracts are HONESTLY SKIPPED, not wrapped. (2) "Backfill
+> ledger events for prior fires (read per-fire JSONL audit
+> files, replay … bounded to last N)" is BUSTED — there is
+> NO shipped pure-read v1-fire-history API; backfill =
+> exactly ONE `migration_v1_to_v2_complete` lineage event
+> per migrated schedule; per-fire replay is NOT shipped. (3)
+> No automatic `apscheduler_jobs` rewrite / deploy-boundary
+> auto-script — the tooling is build-the-layer, GATED
+> (dry-run default, admin-invoked), NOT auto-invoked, NOT
+> binding-wired. (4) v1 is READ-ONLY (byte-proof BINDING) —
+> it keeps firing unchanged; the migration neither rewrites
+> nor unschedules it. β (a bespoke v1-audit parser) and γ
+> (dropping backfill) were REJECTED.]**
+
 1. **Wrap into ScheduleSpec + ExecutionPlan.** Each frozen v1
    contract becomes:
    - One row in `execution_plans` table with the v1 contract's
@@ -1727,7 +1752,7 @@ so revert is a single git command.
 13. **Cross-fire state with locks + CAS** (shipped phase 13 — `docs/PHASE_13_PLAN.md` §9, Q1a/Q2): the §6.5 `state_read` / `state_write` RUNTIME primitives ship in `app/v2/runtime/state.py` as a thin typed layer over the phase-3 storage CAS (`schedule_state` + `get_state`/`set_state_cas`, byte-untouched — NO SQL/DDL change). "locks + CAS" = the `version` CAS plus the EXISTING per-schedule single-flight run claim; **NO new lock primitive** (Q2). Per-schedule D5; cross-schedule shared namespace DEFERRED (Q4). A build-the-layer `Worker._cross_fire_state_seam` is wired where a future DETERMINISTIC state-loader would `state_read → pick → state_write`, but is DEAD — **no stateful-flow / reasoning EXECUTOR is shipped** (no §12 step owns it — Q1a); the live fire path never consults it, and the phase-11 `_fail_run` boundary + phase-12 enforcement are byte/behaviour-unchanged. Stateful `RecurringSeriesFromSource` progress remains deferred (it needs that executor).
 14. **Idempotency + cancellation**: per-emit idempotency keys; paused/archived enforcement; `paused_pending_policy`.
 15. **Observability**: `schedule_status`, `schedule_diff`, `schedule_replay`, background failure monitor over EventLedger.
-16. **Migration tooling**: v1 contract → v2 wrap; legacy job → ScheduleSpec import; ledger backfill.
+16. **Migration tooling**: v1 contract → v2 wrap; legacy job → ScheduleSpec import; ledger backfill. **[SHIPPED — see the Phase-16 LIVE realization below: "ledger backfill" = ONE `migration_v1_to_v2_complete` lineage event per migrated schedule; per-fire historical replay is NOT shipped (no shipped v1-fire-history API).]**
 17. **Phase 2+**: interval / conditional / branch / loop / parallel triggers and steps.
 
 Dependencies (so order isn't arbitrary):
@@ -1743,6 +1768,66 @@ Dependencies (so order isn't arbitrary):
 - Step 14 depends on 4, 12, 13.
 - Step 15 depends on most of the above.
 - Step 16 can land in parallel with later phases.
+
+**Phase-16 LIVE realization (shipped — design == code).**
+§12 step 16 is the LAST core step; phase-16 closeout = the
+v2 §12 core plan COMPLETE. The migration tooling is
+build-the-layer, v1 READ-ONLY, GATED — NOT auto-invoked at
+boot, NOT binding-wired:
+
+- **v1 READ-ONLY.** Reads v1 ONLY via the shipped pure-read
+  `app.contracts.store.ContractStore`
+  (`list_all` / `load_latest`) + the `app.contracts.schema`
+  models — NEVER `executor.py` / `app.tasks` /
+  `scheduler_instance.py` / any v1 write path; NEVER
+  `data/contract_audit/` or `data/contract_failures.jsonl`.
+  ZERO v1 mutation (byte-proof BINDING). v1 keeps running
+  its contracts live, unchanged.
+- **Honest mapping cut (the EXACT migratable subset).** A
+  v1 `Contract` migrates to a v2 `ScheduleSpec` ONLY when
+  structurally v2-expressible: a `CronTrigger`, no
+  `reasoning`, no `inputs`, exactly one plain `EmitStep`
+  (no gate / no `abort_on_gate_fail`), description ≥ 8,
+  default `on_failure`, default `acceptance`. Everything
+  else — `OnDemandTrigger` / `EventTrigger`,
+  reasoning-bearing, deterministic `InputSpec`, multi /
+  gated emit, sub-minimum description, non-default
+  failure / acceptance — is SKIPPED with an explicit
+  per-contract reason, NEVER silently coerced or
+  lossily-partial-migrated. The two v2 fields v1 does not
+  carry 1:1 (`owner.platform`; `delivery.target_session_id`
+  — the v1 emit destination is an adapter-specific template
+  arg, NOT a schema field) are operator-supplied
+  `MigrationBinding` values, NEVER fabricated.
+- **GATED idempotent write.** `confirm=False` (DEFAULT) ⇒
+  a PURE dry-run (ZERO write). `confirm=True` ⇒ per
+  migratable+bound contract, ONE atomic
+  `transaction(conn)`: `insert_schedule` +
+  `append_event(schedule_created)` +
+  `append_event(migration_v1_to_v2_complete)` —
+  both-or-neither. Idempotent (a `get_schedule` +
+  content-addressed `migrated_from` precheck; re-run
+  creates no duplicate schedule or lineage event).
+- **Ledger backfill = lineage, NOT per-fire replay.**
+  Exactly ONE shipped `migration_v1_to_v2_complete` event
+  (already in the v001 EventKind CHECK — no new EventKind,
+  no v002) per migrated schedule, payload
+  `{migrated_from:<id>@<hash>, backfill:true,
+  v1_contract_id, v1_contract_hash}` — §13 audit-truth:
+  the ledger honestly records the v2 schedule originated
+  from a v1 migration, distinguishable from a live fire AND
+  from `schedule_created`. **Per-fire historical replay is
+  NOT shipped**: there is NO shipped pure-read
+  v1-fire-history API (`ContractStore` is contracts-only;
+  `data/contract_audit/*.jsonl` /
+  `data/contract_failures.jsonl` have no shipped reader).
+  A per-fire-replay backfill is its own future work, gated
+  on a shipped v1-fire-history API that does not exist —
+  it is NOT a migration-tool side-parser (the
+  compose-the-shipped-read-surface discipline). See
+  `docs/PHASE_16_PLAN.md` §9.1 (the slice-2 fork ruling α;
+  β = a bespoke v1-audit parser and γ = dropping backfill
+  were both REJECTED).
 
 ### 12.1 Phase commit discipline (mandatory)
 
@@ -2063,7 +2148,21 @@ implementation:
 8. **Admin approval flow specifics**: today's "Approve ACT-..."
    pattern reused for CustomFlow approvals? Or new mechanism?
 9. **Migration ledger backfill window**: how many prior fires
-   per legacy contract get replayed into events?
+   per legacy contract get replayed into events? **[RESOLVED
+   by phase 16 (slice-2 fork ruling α; see the Phase-16 LIVE
+   realization under §12 + `docs/PHASE_16_PLAN.md` §9.1): the
+   "how many prior fires replayed" premise is code-verified
+   BUSTED — there is NO shipped pure-read v1-fire-history API
+   (`ContractStore` is contracts-only;
+   `data/contract_audit/*.jsonl` /
+   `data/contract_failures.jsonl` have no shipped reader), so
+   the "window / per-fire replay" question is N/A. SHIPPED:
+   "ledger backfill" = exactly ONE
+   `migration_v1_to_v2_complete` lineage event per migrated
+   schedule (§13 audit-truth — distinguishable from a live
+   fire). Per-fire historical replay is NOT shipped; it is
+   future work gated on a v1-fire-history API that does not
+   exist — NOT a migration-tool side-parser.]**
 10. **Multi-process safety**: bot is single-process today. If
     we ever fork (multiple supervisor children), the worker
     pool's single-flight assumption needs reconsideration.
