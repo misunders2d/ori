@@ -271,11 +271,59 @@ verify-first fork explicitly ratifies it.
    CLI (slice 2). `PHASE_ALLOWLIST[16]` unchanged
    (`app/v2/` covers `migration/`; the v1-read is an
    import dependency, ZERO v1 files changed — Q5 holds).
-2. **GATED migrate + ledger backfill** — `migrate_v1_to_v2`
+2. **GATED migrate + ledger backfill** — `migrate_contracts`
    (explicit confirm, idempotent) composing the shipped
    authoring/storage + `append_event` (backfill
    provenance-marked). Carries the v1 byte-proof + the
    phase-9–15 boundary regression pins (the v1-read slice).
+   **LANDED** (slice-2; backfill fork ruling α §9.1; folded
+   in-commit per the phase-11 §0.3 / phase-14 §9.2 /
+   phase-15 §9.1 discipline). New
+   `app/v2/migration/commit.py::migrate_contracts(*, store,
+   conn, bindings, event_id_factory, clock, confirm=False)`.
+   `confirm=False` (DEFAULT) ⇒ PURE dry-run (ZERO write —
+   purity-pinned). `confirm=True` ⇒ per migratable+bound
+   contract: idempotency precheck (`get_schedule` OR a
+   content-addressed `migrated_from` lineage precheck via
+   the shipped `list_events_for_schedule`) → SKIP if present
+   → else `spec.with_fresh_hash()` → ONE
+   `with transaction(conn): insert_schedule(conn, spec) +
+   append_event(SCHEDULE_CREATED{hash,template:None}) +
+   append_event(MIGRATION_V1_TO_V2_COMPLETE)` —
+   both-or-neither (the phase-14 `_commit_success_atomic`
+   discipline: no schedule without lineage, no lineage
+   without schedule; an in-TX `sqlite3.IntegrityError` rolls
+   the WHOLE TX back). Backfill = exactly ONE shipped
+   `MIGRATION_V1_TO_V2_COMPLETE` event (already in the v001
+   CHECK — NO new EventKind, NO v002) per migrated schedule,
+   payload `{migrated_from:<id>@<hash>, backfill:true,
+   v1_contract_id, v1_contract_hash}` — §13 audit-truth:
+   distinguishable from a live fire AND from
+   `schedule_created`; via the shipped `append_event`, NO
+   SQL reimpl, NO bespoke v1-audit-JSONL parser, NO read of
+   `data/contract_audit/` or `contract_failures.jsonl`
+   (β/γ REJECTED — §9.1). GATED: admin-invoked, dry-run
+   DEFAULT, write requires explicit `confirm=True`; NOT
+   auto-boot, NOT binding-wired. Reads v1 ONLY via the
+   shipped `ContractStore` (through slice-1 `mapper`) —
+   import-confined (the slice-1 package AST pin auto-covers
+   `commit.py`). Typed Pydantic results (`MigrationOutcome`
+   / `MigrationCommitEntry` / `MigrationCommitReport` — no
+   loose dicts). `tests/v2/test_migration_commit.py`:
+   dry-run-default-pure (fingerprint byte-unchanged) +
+   confirm-migrates-atomic-with-lineage +
+   idempotent-rerun (no dup schedule, no dup lineage) +
+   in-TX both-or-neither rollback + skipped-not-migratable
+   / skipped-no-binding (ZERO write) + a no-bespoke-SQL AST
+   pin. 2445 v2 tests, 0 fail, 0 regression (2438 slice-1
+   + 7 slice-2). **v1 byte-proof (BINDING): `app/contracts/*`
+   + `app/tasks.py` + `app/scheduler_instance.py` +
+   `data/contracts/*` + `data/contract_audit/*` +
+   `data/contract_failures.jsonl` ALL 0-diff vs
+   `v2-phase-15-complete`.** Carried 5→16 + phase-15
+   `observability/` + `enums.py` 0-diff; no new EventKind,
+   no v002. `PHASE_ALLOWLIST[16]` unchanged (Q5 holds — no
+   v1 path in the diff).
 3. **closeout** — full `tests/v2`, §7 acceptance walk, phase
    guards `--staged` + `--diff v2-phase-15-complete`,
    `gen_docs` regen+stage, REPO-WIDE SEMANTIC-INTENT
@@ -437,6 +485,18 @@ future one.
   backfilled vs live-fired; no new EventKind / v002; the
   backfill window is an explicit GATED-CLI parameter with a
   documented bounded default (NOT implicit all-history).
+  **[SUPERSEDED by §9.1 (slice-2 fork ruling α): the
+  "backfill window / per-historical-fire" sub-premise was
+  code-verified BUSTED — there is NO shipped pure-read
+  v1-fire-history API (`ContractStore` is contracts-only;
+  `data/contract_audit/*.jsonl` / `contract_failures.jsonl`
+  have no shipped reader). The "window" param is therefore
+  N/A. Backfill = exactly ONE shipped
+  `MIGRATION_V1_TO_V2_COMPLETE` lineage event per migrated
+  schedule (α). The Q4 audit-truth INTENT (the ledger
+  honestly records v2-from-v1-migration, distinguishable
+  from live fires) is preserved; per-historical-fire replay
+  is NOT shipped. β/γ REJECTED — see §9.1.]**
 - **Q5 = allowlist treatment RATIFIED (verified sound).**
   Cond: the v1-READ-ONLY byte-proof is BINDING — if any v1
   file ever appears in a migration diff, Q5 collapses and
@@ -455,6 +515,70 @@ future one.
   the report = the honest Q3 migratable-vs-skipped
   enumeration; the write path is strictly slice-2, gated,
   idempotent.
+
+### 9.1 Slice-2 backfill fork ruling (CLOSED — α; Q4 sub-premise code-verified-bust)
+
+Slice-2 surfaced (pre-code, verify-first) a code-verified
+bust of the ratified-Q4 SUB-premise that "ledger backfill"
+means replaying historical v1 fires over a bounded window.
+Folded into the slice-2 commit per the phase-14 §9.2 /
+phase-15 §9.1 discipline. Baked verbatim:
+
+- **(a) Sub-premise bust (code-verified).** A
+  per-historical-fire backfill needs a readable v1
+  fire-history. Verified NONE is a shipped surface:
+  `app/contracts/store.ContractStore` is contracts-only
+  (`list_all` / `load_latest` / `load` / `list_versions` —
+  no fire/run history); v1 DOES persist fires to
+  `data/contract_audit/<id>/<ts>.jsonl` (`worker.py:79`) +
+  `data/contract_failures.jsonl` (`admin_alert.py:49`) but
+  there is NO shipped pure-read API for either. The Q4
+  "backfill window / per-fire" wording is therefore FALSE —
+  recorded verbatim in Q4 with an inline **[SUPERSEDED]** so
+  it reads as current NOWHERE outside that annotated record
+  (the recurring phase-9–15 stale-wording lesson). The v1
+  v2-write spine had NO fork (`schedule_draft_commit`
+  composes `transaction` + `insert_schedule` +
+  `append_event(SCHEDULE_CREATED)`; migrate composes those
+  on a `with_fresh_hash` spec — the phase-14 pattern).
+- **(b) Ruling = (α).** "Ledger backfill" = the §13
+  audit-truth INTENT realised honestly: exactly ONE shipped
+  `MIGRATION_V1_TO_V2_COMPLETE` event (already in the v001
+  EventKind CHECK — no new EventKind, no v002) per migrated
+  schedule, via the shipped `append_event`, payload
+  `{migrated_from:<id>@<hash>, backfill:true,
+  v1_contract_id, v1_contract_hash}` — distinguishable from
+  a live fire AND from `schedule_created`. The Q4 "window"
+  param is N/A (documented, NOT silently dropped); per-fire
+  replay is its own future work, gated on a shipped
+  v1-fire-history API that does not exist.
+- **(β) REJECTED.** A bespoke `data/contract_audit/*.jsonl`
+  / `contract_failures.jsonl` parser is the exact silent
+  v1-internals extension the verify-first /
+  compose-the-shipped-read-surface discipline forbids (no
+  shipped reader to compose; brushes the v1-READ-ONLY
+  spirit; lossy/ambiguous per-fire reconstruction = the
+  phase-11-ChannelDigest-(b) degraded-product). It needs
+  its own design + a shipped v1-fire-history API FIRST —
+  NOT a migration-tool side-parser. Recorded REJECTED so a
+  future reader does not optimize toward a v1-audit parser.
+- **(γ) REJECTED.** Q4 ratified backfill; dropping it
+  entirely = silent under-delivery. Recorded REJECTED.
+- **Scope pin.** Slice-2 = the GATED idempotent migrate +
+  the (α) lineage backfill ONLY. ZERO v1 mutation (byte-proof
+  BINDING incl `data/contract_audit/*` +
+  `contract_failures.jsonl`); reads v1 ONLY via the shipped
+  `ContractStore`; NO `data/contract_audit` /
+  `contract_failures` read; composes ONLY the shipped
+  `transaction` / `insert_schedule` / `append_event` /
+  `get_schedule` / `list_events_for_schedule` primitives —
+  no bespoke commit, no SQL reimpl, no new DDL / v002. The
+  `CONTRACTS_V2_DESIGN.md` §12-step-16 amendment (record:
+  migration = v1-read-only contract→v2 wrap +
+  `MIGRATION_V1_TO_V2_COMPLETE` lineage backfill; per-fire
+  historical replay NOT shipped — no shipped v1-fire-history
+  API; honest-scope) → the ONE closeout reconciliation
+  pass, NOT slice 2.
 
 **RELAY-TERMINUS re-affirmed (binds at phase-16 closeout,
 not before).** §12 step 16 is the LAST core step;

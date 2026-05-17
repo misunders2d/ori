@@ -114,6 +114,61 @@ class MigrationBinding(BaseModel):
     )
 
 
+class MigrationOutcome(str, Enum):
+    """Per-contract outcome of a :func:`migrate_contracts` pass.
+
+    ``dry_run_would_migrate`` — confirm=False (the DEFAULT):
+        the contract is migratable + bound; NOTHING was
+        written (dry-run is PURE).
+    ``migrated`` — confirm=True: the v2 schedule +
+        ``schedule_created`` + ``migration_v1_to_v2_complete``
+        lineage event were written ATOMICALLY (both-or-neither).
+    ``skipped_not_migratable`` — the structural Q3 cut
+        rejected it (honest skip_reasons).
+    ``skipped_no_binding`` — migratable but the operator
+        supplied no :class:`MigrationBinding` for it (v2
+        owner.platform / delivery.target_session_id are
+        operator-supplied, NEVER fabricated).
+    ``skipped_already_exists`` — a v2 schedule with this id
+        already exists (idempotent re-run; NO duplicate
+        schedule, NO duplicate lineage event).
+    """
+
+    DRY_RUN_WOULD_MIGRATE = "dry_run_would_migrate"
+    MIGRATED = "migrated"
+    SKIPPED_NOT_MIGRATABLE = "skipped_not_migratable"
+    SKIPPED_NO_BINDING = "skipped_no_binding"
+    SKIPPED_ALREADY_EXISTS = "skipped_already_exists"
+
+
+class MigrationCommitEntry(BaseModel):
+    """One contract's :func:`migrate_contracts` result."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    contract_id: str
+    outcome: MigrationOutcome
+    schedule_id: Optional[str] = None
+    skip_reasons: list[str] = Field(default_factory=list)
+    lineage_event_id: Optional[str] = Field(
+        default=None,
+        description="The migration_v1_to_v2_complete event id "
+        "(set only on outcome == migrated).",
+    )
+
+
+class MigrationCommitReport(BaseModel):
+    """The full :func:`migrate_contracts` pass report. When
+    ``dry_run`` is True NOTHING was written (PURE)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    dry_run: bool
+    entries: list[MigrationCommitEntry] = Field(default_factory=list)
+    migrated_count: int = 0
+    skipped_count: int = 0
+
+
 class ContractNotMigratable(Exception):
     """Raised by ``contract_to_schedule_spec`` when the
     contract is ``SKIPPED`` (not structurally v2-expressible).
@@ -126,5 +181,8 @@ __all__ = [
     "ContractMigrationAssessment",
     "MigrationPlanReport",
     "MigrationBinding",
+    "MigrationOutcome",
+    "MigrationCommitEntry",
+    "MigrationCommitReport",
     "ContractNotMigratable",
 ]

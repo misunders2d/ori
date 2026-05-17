@@ -18,6 +18,7 @@ References:
 
 from __future__ import annotations
 
+from app.v2.migration.commit import migrate_contracts
 from app.v2.migration.mapper import (
     assess_contract,
     contract_to_schedule_spec,
@@ -27,6 +28,9 @@ from app.v2.migration.results import (
     ContractMigrationAssessment,
     ContractNotMigratable,
     MigrationBinding,
+    MigrationCommitEntry,
+    MigrationCommitReport,
+    MigrationOutcome,
     MigrationPlanReport,
     MigrationStatus,
 )
@@ -35,9 +39,13 @@ __all__ = [
     "assess_contract",
     "contract_to_schedule_spec",
     "migration_dry_run",
+    "migrate_contracts",
     "MigrationStatus",
     "ContractMigrationAssessment",
     "MigrationPlanReport",
     "MigrationBinding",
+    "MigrationOutcome",
+    "MigrationCommitEntry",
+    "MigrationCommitReport",
     "ContractNotMigratable",
 ]
