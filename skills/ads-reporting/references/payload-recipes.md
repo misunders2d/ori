@@ -109,9 +109,47 @@ is implied by the tool. Marketplace filter does not apply here.
 
 `reporting-retrieve_report` body = `{"reportIds": ["<id>", …]}` (array of
 strings, required). NOT `reportId` / `id` / `reports[]`. The id comes
-from the create response. Poll with backoff until status is
-`COMPLETED`/`SUCCESS`; then a result location (URL) appears — download &
-parse the CSV (may be gzipped). Never log/echo the presigned URL.
+from the create response. Poll until status is `COMPLETED`/`SUCCESS`;
+then a result location (URL) appears — download & parse the CSV (may be
+gzipped). Never log/echo the presigned URL.
+
+The helper polls for a production-sensible budget (default **600 s**,
+clamped 60–1200 s, vault key `ADS_API_REPORT_POLL_SECONDS`, 15 s
+interval). If still generating at the budget it returns
+`{"status": "pending", "message": …, "retry": {account, marketplace,
+report_family, period, date_range}}` — a distinct non-error status with
+ONLY the deterministic request params (no reportId, no URL, no account
+id). The bot relays the message and can resume simply by re-issuing the
+same request (deterministic — no data lost). Terminal `FAILED` surfaces
+`failureReason`.
+
+## 4b. Response envelope (verified live 2026-05-18)
+
+`reporting-create_report` and `reporting-retrieve_report` wrap their
+result in an envelope:
+
+```json
+{"error": null,
+ "success": [{"index": 0, "report": {
+     "reportId": "...", "status": "PENDING|COMPLETED|FAILED",
+     "failureCode": null, "failureReason": null,
+     "completedReportParts": [{"url": "https://…"}],
+     "periods": [...], "query": {...}, "format": "CSV"}}]}
+```
+
+- `error` non-null → Amazon rejected the call; the message is the real
+  failure (relay it; mask account ids). Do NOT report a generic "no
+  reportId".
+- `error` null → real payload is `success` (a **list** of
+  `{index, report}`). `reportId`/`status` live at `success[i].report.*`.
+- Result file URL(s): `success[i].report.completedReportParts[].url`
+  (present once `status == COMPLETED`).
+- `query_advertiser_account` is **not** enveloped — `advertiserAccounts`
+  is top-level. Unwrap defensively but expect either.
+
+The helper handles all of this and fails loud (`_ApiError` for an
+Amazon-reported error, `_UnrecognizedShape` for an unknown shape) — never
+silently mis-reads.
 
 ## 5. Throttling
 

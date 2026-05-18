@@ -70,7 +70,27 @@ class AmazonAdsAuthError(RuntimeError):
     """Raised when the Amazon Ads LWA token cannot be minted/refreshed.
 
     Surfaced verbatim to the agent (Rule 13) — never swallowed.
+
+    Flags steer how the bot should react:
+
+    * ``reauth_required`` — the refresh token is missing or definitively
+      rejected by LWA (``invalid_grant`` / ``invalid_client`` / 401 / 403).
+      ONLY then should the bot ask the user to re-authorize.
+    * ``transient`` — a temporary failure (429 / 5xx / network). The token
+      may still be valid; the background refresher retries automatically.
+      The bot must NOT prompt for re-authorization.
     """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reauth_required: bool = False,
+        transient: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.reauth_required = reauth_required
+        self.transient = transient
 
 
 class _AccessTokenCache:
@@ -233,7 +253,7 @@ def _require(key: str) -> str:
             f"ADS_API_CLIENT_SECRET are populated."
         )
         logger.error(msg)
-        raise AmazonAdsAuthError(msg)
+        raise AmazonAdsAuthError(msg, reauth_required=True)
     return val
 
 
@@ -292,16 +312,50 @@ def _mint_access_token() -> tuple[str, int]:
             timeout=30.0,
         )
     except httpx.HTTPError as exc:
-        msg = f"Amazon Ads LWA token request failed (network): {exc!r}"
+        # Network/timeout = transient. Token may still be valid; the
+        # refresher retries. Do NOT prompt re-authorization.
+        msg = (
+            "Amazon Ads LWA token request failed (network/timeout) — "
+            "temporary, automatic retry in progress; no re-authorization "
+            f"needed: {type(exc).__name__}"
+        )
         logger.error(msg)
-        raise AmazonAdsAuthError(msg) from exc
+        raise AmazonAdsAuthError(msg, transient=True) from exc
 
     if resp.status_code != 200:
-        # Do not log the response body verbatim — it can echo the secret.
+        # Classify WITHOUT logging the body verbatim (can echo the secret).
+        # Parse only the LWA `error` code.
+        err_code = ""
+        try:
+            err_code = str(resp.json().get("error", "")).lower()
+        except Exception:
+            err_code = ""
+        sc = resp.status_code
+        definitive_reauth = (
+            err_code in ("invalid_grant", "invalid_client", "unauthorized_client")
+            or sc in (401, 403)
+        )
+        if definitive_reauth:
+            msg = (
+                f"Amazon Ads LWA rejected the refresh token "
+                f"(HTTP {sc}/{err_code or 'auth'}). Re-authorization is "
+                f"required — run `uv run python scripts/ads_oauth_helper.py`."
+            )
+            logger.error(msg)
+            raise AmazonAdsAuthError(msg, reauth_required=True)
+        if sc == 429 or sc >= 500:
+            msg = (
+                f"Amazon Ads LWA temporary failure (HTTP {sc}) — automatic "
+                f"retry in progress; no re-authorization needed."
+            )
+            logger.error(msg)
+            raise AmazonAdsAuthError(msg, transient=True)
+        # Other 4xx (e.g. invalid_request): a real config/contract problem,
+        # not a token-revocation. Surface loudly, but not as reauth.
         msg = (
-            f"Amazon Ads LWA token exchange rejected: HTTP {resp.status_code}. "
-            f"Refresh token may be expired/rotated — re-run "
-            f"`uv run python scripts/ads_oauth_helper.py`."
+            f"Amazon Ads LWA token exchange failed (HTTP {sc}/"
+            f"{err_code or 'unknown'}). Check ADS_API_CLIENT_ID/SECRET "
+            f"configuration."
         )
         logger.error(msg)
         raise AmazonAdsAuthError(msg)

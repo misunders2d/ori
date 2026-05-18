@@ -89,6 +89,28 @@ The deployment may be a **worktree**, not a single checkout. `git worktree list`
 
 ---
 
+### Amazon Ads auth refresh
+
+Amazon Ads access tokens are short-lived and must be minted automatically from
+the vault-backed `ADS_API_REFRESH_TOKEN`. The bot should ask the user to run the
+OAuth helper only when the refresh token is missing or LWA definitively rejects
+it (`invalid_grant`, `invalid_client`, `unauthorized_client`, HTTP 401, or HTTP
+403). Network errors, HTTP 429, and HTTP 5xx are transient; surface them loudly
+and let the background refresher retry without prompting re-authorization.
+
+Credential reads go through `deploy.vault.get()`. It must prefer `os.environ`
+after normal boot hydration, then fall back to the locked vault file and hydrate
+the environment for later fast-path reads. This prevents a valid refresh token
+written to `data/vault/credentials.json` after process start from being treated
+as absent. Never log raw LWA response bodies, access tokens, refresh tokens, or
+client secrets; status codes and OAuth error codes are enough for diagnosis.
+
+The Ads config keys belong in `ALLOWED_CONFIG_KEYS` so `/init` can provision
+them, but not in `AGENT_CONFIG_KEYS`; they are integration secrets/settings, not
+LLM-facing agent behavior.
+
+---
+
 ## 4. Restart
 
 ### Clean restart from inside the chat (preferred — no shell access needed)

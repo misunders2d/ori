@@ -6,6 +6,7 @@ No live HTTP: the LWA token mint is always monkeypatched. conftest's
 
 import asyncio
 import logging
+import os
 import types
 
 import pytest
@@ -391,29 +392,75 @@ class TestReportsHelper:
         with pytest.raises(_UnrecognizedShape):
             _extract_accounts({"unexpected": []})
 
-    def test_extract_report_ids_pinned_and_loud(self):
+    def test_unwrap_envelope(self):
         from app.tools.amazon_ads_reports import (
+            _ApiError,
+            _UnrecognizedShape,
+            _unwrap_envelope,
+        )
+
+        # Verified live shape: {"error": None, "success": [...]}.
+        assert _unwrap_envelope(
+            {"error": None, "success": [1, 2]}, "x") == [1, 2]
+        # Non-enveloped passes through (e.g. query_advertiser_account).
+        assert _unwrap_envelope(
+            {"advertiserAccounts": []}, "x") == {"advertiserAccounts": []}
+        # Amazon-side error → _ApiError, ids masked.
+        with pytest.raises(_ApiError) as ei:
+            _unwrap_envelope(
+                {"error": "bad acct amzn1.ads-account.g.deadbeef0000",
+                 "success": None}, "create_report")
+        assert "amzn1" not in str(ei.value) and "<id>" in str(ei.value)
+        with pytest.raises(_UnrecognizedShape):
+            _unwrap_envelope({"error": None, "success": None}, "x")
+
+    def test_extract_report_ids_envelope(self):
+        from app.tools.amazon_ads_reports import (
+            _ApiError,
             _UnrecognizedShape,
             _extract_report_ids,
         )
 
-        assert _extract_report_ids({"reportId": "r1"}) == ["r1"]
-        assert _extract_report_ids(
-            {"reports": [{"reportId": "r2"}]}) == ["r2"]
+        env = {"error": None,
+               "success": [{"index": 0,
+                            "report": {"reportId": "r1",
+                                       "status": "PENDING"}}]}
+        assert _extract_report_ids(env) == ["r1"]
+        with pytest.raises(_ApiError):
+            _extract_report_ids({"error": "nope", "success": None})
         with pytest.raises(_UnrecognizedShape):
-            _extract_report_ids({"something": "else"})
+            _extract_report_ids({"error": None, "success": [{"x": 1}]})
 
-    def test_extract_status_pinned_and_loud(self):
+    def test_extract_status_envelope_and_failure(self):
         from app.tools.amazon_ads_reports import (
             _UnrecognizedShape,
             _extract_status,
         )
 
-        assert _extract_status({"status": "completed"}) == "COMPLETED"
-        assert _extract_status(
-            {"reports": [{"state": "pending"}]}) == "PENDING"
+        ok = {"error": None,
+              "success": [{"index": 0,
+                           "report": {"status": "completed"}}]}
+        assert _extract_status(ok) == ("COMPLETED", None)
+        failed = {"error": None,
+                  "success": [{"index": 0,
+                               "report": {"status": "FAILED",
+                                          "failureReason": "bad fields"}}]}
+        assert _extract_status(failed) == ("FAILED", "bad fields")
         with pytest.raises(_UnrecognizedShape):
-            _extract_status({"no": "status"})
+            _extract_status({"error": None, "success": [{"report": {}}]})
+
+    def test_extract_result_url_from_completed_parts(self):
+        from app.tools.amazon_ads_reports import _extract_result_url
+
+        env = {"error": None, "success": [{"index": 0, "report": {
+            "status": "COMPLETED",
+            "completedReportParts": [
+                {"url": "https://example.test/part1.csv.gz"}]}}]}
+        assert _extract_result_url(env) == (
+            "https://example.test/part1.csv.gz")
+        # Amazon error envelope → no url, never raises here.
+        assert _extract_result_url(
+            {"error": "x", "success": None}) is None
 
     def test_csv_parser_flags_unresolved_metrics(self):
         from app.tools.amazon_ads_reports import _parse_report_csv
@@ -505,6 +552,156 @@ class TestReportsHelper:
             rep.amazon_ads_performance_report(
                 account="acme", report="targeting"))
         assert out["status"] == "error" and "disabled" in out["message"]
+
+
+class TestPollBudget:
+    def test_default_and_clamp(self, monkeypatch):
+        from app.tools import amazon_ads_reports as rep
+
+        monkeypatch.setattr(rep, "_DEFAULT_POLL_SECONDS", 600)
+        monkeypatch.setattr(auth.vault, "get", lambda k, d="": d)
+        assert rep._resolve_poll_budget() == 600
+        monkeypatch.setattr(
+            auth.vault, "get",
+            lambda k, d="": "99999" if "POLL" in k else d)
+        assert rep._resolve_poll_budget() == rep._MAX_POLL_SECONDS
+        monkeypatch.setattr(
+            auth.vault, "get", lambda k, d="": "5" if "POLL" in k else d)
+        assert rep._resolve_poll_budget() == rep._MIN_POLL_SECONDS
+        monkeypatch.setattr(
+            auth.vault, "get", lambda k, d="": "abc" if "POLL" in k else d)
+        assert rep._resolve_poll_budget() == 600
+
+    def test_poll_tries_positive(self, monkeypatch):
+        from app.tools import amazon_ads_reports as rep
+
+        monkeypatch.setattr(auth.vault, "get", lambda k, d="": d)
+        assert rep._poll_tries() >= 1
+        assert rep._poll_tries() == int(600 / rep._POLL_INTERVAL)
+
+    def test_pending_result_is_sanitized(self):
+        from app.tools.amazon_ads_reports import _pending_result
+
+        out = _pending_result(
+            account_label="Acme Test Account", marketplace="US",
+            report_family="campaign", period="yesterday",
+            start="2026-05-17", end="2026-05-17", waited_s=600)
+        assert out["status"] == "pending"
+        blob = repr(out)
+        # No ids / URLs / tokens leaked.
+        assert "amzn1" not in blob and "http" not in blob
+        assert "Bearer" not in blob
+        assert out["retry"]["report_family"] == "campaign"
+        assert out["retry"]["date_range"] == {
+            "start": "2026-05-17", "end": "2026-05-17"}
+
+
+class TestVaultFileFallback:
+    def test_get_falls_back_to_vault_file(self, monkeypatch, tmp_path):
+        from deploy import vault as dv
+
+        vdir = tmp_path / "vault"
+        vdir.mkdir()
+        vfile = vdir / "credentials.json"
+        vfile.write_text('{"ADS_API_REFRESH_TOKEN": "rt-on-disk"}')
+        monkeypatch.setattr(dv, "VAULT_DIR", str(vdir))
+        monkeypatch.setattr(dv, "VAULT_FILE", str(vfile))
+        monkeypatch.setattr(dv, "VAULT_LOCK", str(vdir / ".lock"))
+        monkeypatch.setattr(dv, "VAULT_BACKUP", str(vdir / ".bak"))
+        monkeypatch.delenv("ADS_API_REFRESH_TOKEN", raising=False)
+
+        # Not in env → must read the file (the bug: previously returned "").
+        assert dv.get("ADS_API_REFRESH_TOKEN") == "rt-on-disk"
+        # And it hydrates env for the fast path.
+        assert os.environ.get("ADS_API_REFRESH_TOKEN") == "rt-on-disk"
+        assert dv.get("ADS_NOPE", "d") == "d"
+
+
+class TestConfigKeys:
+    def test_ads_keys_are_configurable(self):
+        from app.app_utils.config import ALLOWED_CONFIG_KEYS
+
+        for k in (
+            "ADS_API_CLIENT_ID",
+            "ADS_API_CLIENT_SECRET",
+            "ADS_API_REFRESH_TOKEN",
+            "ADS_API_REGION",
+        ):
+            assert k in ALLOWED_CONFIG_KEYS, k
+
+
+class TestMintClassification:
+    def _resp(self, status, payload):
+        class _R:
+            status_code = status
+
+            def json(self_inner):
+                return payload
+
+        return _R()
+
+    def _vault(self, monkeypatch):
+        monkeypatch.setattr(
+            auth.vault, "get",
+            lambda k, d="": {
+                "ADS_API_CLIENT_ID": "c",
+                "ADS_API_CLIENT_SECRET": "s",
+                "ADS_API_REFRESH_TOKEN": "r",
+            }.get(k, d),
+        )
+
+    def test_invalid_grant_is_reauth(self, monkeypatch):
+        self._vault(monkeypatch)
+        monkeypatch.setattr(
+            auth.httpx, "post",
+            lambda *a, **k: self._resp(400, {"error": "invalid_grant"}))
+        with pytest.raises(auth.AmazonAdsAuthError) as ei:
+            auth._mint_access_token()
+        assert ei.value.reauth_required is True
+        assert ei.value.transient is False
+
+    def test_5xx_is_transient_not_reauth(self, monkeypatch):
+        self._vault(monkeypatch)
+        monkeypatch.setattr(
+            auth.httpx, "post", lambda *a, **k: self._resp(503, {}))
+        with pytest.raises(auth.AmazonAdsAuthError) as ei:
+            auth._mint_access_token()
+        assert ei.value.transient is True
+        assert ei.value.reauth_required is False
+
+    def test_429_is_transient(self, monkeypatch):
+        self._vault(monkeypatch)
+        monkeypatch.setattr(
+            auth.httpx, "post", lambda *a, **k: self._resp(429, {}))
+        with pytest.raises(auth.AmazonAdsAuthError) as ei:
+            auth._mint_access_token()
+        assert ei.value.transient is True
+
+    def test_network_error_is_transient(self, monkeypatch):
+        self._vault(monkeypatch)
+
+        def _boom(*a, **k):
+            raise auth.httpx.ConnectError("down")
+
+        monkeypatch.setattr(auth.httpx, "post", _boom)
+        with pytest.raises(auth.AmazonAdsAuthError) as ei:
+            auth._mint_access_token()
+        assert ei.value.transient is True
+        assert ei.value.reauth_required is False
+
+    def test_missing_refresh_token_is_reauth(self, monkeypatch):
+        monkeypatch.setattr(auth.vault, "get", lambda k, d="": d)
+        with pytest.raises(auth.AmazonAdsAuthError) as ei:
+            auth._mint_access_token()
+        assert ei.value.reauth_required is True
+
+    def test_success_returns_token(self, monkeypatch):
+        self._vault(monkeypatch)
+        monkeypatch.setattr(
+            auth.httpx, "post",
+            lambda *a, **k: self._resp(
+                200, {"access_token": "AT", "expires_in": 3600}))
+        assert auth._mint_access_token() == ("AT", 3600)
 
 
 class TestToolset:

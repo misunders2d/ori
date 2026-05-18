@@ -117,8 +117,31 @@ def load_vault():
 
 
 def get(key: str, default: str = "") -> str:
-    """Read a credential. Prefers os.environ (already loaded), falls back to vault file."""
-    return os.environ.get(key, default)
+    """Read a credential. Prefers os.environ (already loaded), falls back to
+    the vault file on disk.
+
+    The env fast-path covers the normal case (``load_vault()`` ran at
+    startup). The file fallback matters when a key was written to the vault
+    *after* this process started, or in a code path where ``load_vault()``
+    has not run yet — without it, callers like ``amazon_ads_auth`` would
+    wrongly conclude a credential is absent and prompt the user to
+    re-authorize even though the refresh token is present on disk.
+    """
+    val = os.environ.get(key)
+    if val is not None:
+        return val
+    try:
+        data = _with_lock(_read_vault)
+    except OSError as e:
+        logger.error("Vault file read failed for key %r: %s", key, e)
+        return default
+    file_val = data.get(key)
+    if file_val is None:
+        return default
+    file_val = str(file_val)
+    # Hydrate env so subsequent reads hit the fast path.
+    os.environ[key] = file_val
+    return file_val
 
 
 def set(key: str, value: str):

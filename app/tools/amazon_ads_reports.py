@@ -36,6 +36,7 @@ import csv
 import gzip
 import io
 import logging
+import re
 from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -81,8 +82,62 @@ _SUM_METRICS = {
     "metric.unitsSold": "units",
 }
 
-_POLL_TRIES = 24
-_POLL_INTERVAL = 10.0
+_POLL_INTERVAL = 15.0
+# Production-sensible, NOT infinite. Reports often take a few minutes.
+# Tunable via vault ADS_API_REPORT_POLL_SECONDS; clamped to a hard ceiling
+# so a stuck report can never block an agent turn forever.
+_DEFAULT_POLL_SECONDS = 600
+_MIN_POLL_SECONDS = 60
+_MAX_POLL_SECONDS = 1200
+
+
+def _resolve_poll_budget() -> int:
+    """Total seconds to poll, from vault (default 600), clamped
+    [60, 1200]. Invalid → default."""
+    from app.tools import amazon_ads_auth as auth
+
+    raw = auth.vault.get("ADS_API_REPORT_POLL_SECONDS", "").strip()
+    try:
+        secs = int(raw) if raw else _DEFAULT_POLL_SECONDS
+    except ValueError:
+        secs = _DEFAULT_POLL_SECONDS
+    return max(_MIN_POLL_SECONDS, min(_MAX_POLL_SECONDS, secs))
+
+
+def _poll_tries() -> int:
+    return max(1, int(_resolve_poll_budget() / _POLL_INTERVAL))
+
+
+def _pending_result(
+    *,
+    account_label: str,
+    marketplace: str,
+    report_family: str,
+    period: str,
+    start: str,
+    end: str,
+    waited_s: int,
+) -> dict:
+    """Sanitized 'still generating' result — distinct status so the bot
+    relays a retry hint. Carries ONLY deterministic request params (no
+    reportId, no URL, no account id) so the user can simply re-issue the
+    same ask to resume/retry."""
+    return {
+        "status": "pending",
+        "message": (
+            f"Amazon is still generating the {report_family} report for "
+            f"{start}..{end} (waited {waited_s}s). It was accepted and is "
+            "queued server-side. Re-issue the same request shortly to "
+            "fetch it — the request is deterministic, no data was lost."
+        ),
+        "retry": {
+            "account": account_label,
+            "marketplace": marketplace or None,
+            "report_family": report_family,
+            "period": period,
+            "date_range": {"start": start, "end": end},
+        },
+    }
 
 
 def _resolve_period(
@@ -139,15 +194,78 @@ class _UnrecognizedShape(RuntimeError):
     """
 
 
+class _ApiError(RuntimeError):
+    """Amazon returned a structured error inside the MCP envelope.
+
+    Distinct from ``_UnrecognizedShape`` (we don't know the shape): here
+    the shape IS known and Amazon explicitly reported a failure. The
+    helper relays this verbatim to the user (ids masked).
+    """
+
+
 def _top_keys(obj: Any) -> list[str]:
     return sorted(obj.keys()) if isinstance(obj, dict) else [type(obj).__name__]
 
 
-def _extract_accounts(qobj: Any) -> list[tuple[str, str]]:
-    """Pinned path (verified live 2026-05-18):
-    ``{"advertiserAccounts":[{"advertiserAccountId","displayName",...}]}``.
-    Name == ``displayName``. Fail loud on any other shape.
+def _mask_ids(s: str) -> str:
+    """Strip account/id-looking tokens from text surfaced to the user."""
+    s = re.sub(r"amzn1[\w.\-]+", "<id>", s)
+    s = re.sub(r"\bg\.[a-z0-9]{12,}\b", "<id>", s)
+    s = re.sub(r"\b\d{10,}\b", "<num>", s)
+    return s[:400]
+
+
+def _unwrap_envelope(obj: Any, what: str) -> Any:
+    """Amazon's MCP wraps tool results as ``{"error":<x>,"success":<y>}``
+    (verified live 2026-05-18). Some tools (query_advertiser_account) are
+    NOT enveloped — those pass through unchanged.
+
+    * ``error`` truthy  → ``_ApiError`` (relay verbatim, ids masked).
+    * ``error`` falsy   → return ``success`` (the real payload).
+    * neither usable    → ``_UnrecognizedShape``.
     """
+    if not isinstance(obj, dict) or not (
+        "success" in obj and "error" in obj
+    ):
+        return obj  # not the envelope (or already unwrapped)
+    err = obj.get("error")
+    if err:
+        raise _ApiError(f"Amazon {what} error: {_mask_ids(str(err))}")
+    succ = obj.get("success")
+    if succ is None:
+        raise _UnrecognizedShape(
+            f"{what}: envelope has neither error nor success "
+            f"(keys: {_top_keys(obj)})"
+        )
+    return succ
+
+
+def _report_objs(payload: Any, what: str) -> list[dict]:
+    """Normalize the create/retrieve `success` payload to a list of
+    ``report`` dicts. Pinned shape (verified): ``[{"index":int,
+    "report":{...}}, ...]``; also tolerates a bare report dict / list."""
+    items = payload if isinstance(payload, list) else [payload]
+    out: list[dict] = []
+    for it in items:
+        if isinstance(it, dict) and isinstance(it.get("report"), dict):
+            out.append(it["report"])
+        elif isinstance(it, dict) and "reportId" in it:
+            out.append(it)  # already a bare report dict
+    if not out:
+        raise _UnrecognizedShape(
+            f"{what}: success payload had no report objects "
+            f"(type={type(payload).__name__})"
+        )
+    return out
+
+
+def _extract_accounts(qobj: Any) -> list[tuple[str, str]]:
+    """Pinned (verified live 2026-05-18). query_advertiser_account is NOT
+    enveloped, but unwrap defensively in case that changes. Shape:
+    ``{"advertiserAccounts":[{"advertiserAccountId","displayName",...}]}``.
+    Name == ``displayName``. Fail loud otherwise.
+    """
+    qobj = _unwrap_envelope(qobj, "query_advertiser_account")
     if not isinstance(qobj, dict) or "advertiserAccounts" not in qobj:
         raise _UnrecognizedShape(
             "query_advertiser_account: missing 'advertiserAccounts' "
@@ -170,76 +288,70 @@ def _extract_accounts(qobj: Any) -> list[tuple[str, str]]:
 
 
 def _extract_report_ids(cobj: Any) -> list[str]:
-    """Pinned create-response paths only — no arbitrary key recursion.
-
-    Accepts: top-level ``reportId`` (str) / ``reportIds`` (list[str]), or
-    ``reports: [{"reportId"|"id": str}, ...]``. Anything else → fail loud.
-    """
-    if not isinstance(cobj, dict):
-        raise _UnrecognizedShape(
-            f"create_report: response not an object ({type(cobj).__name__})"
-        )
+    """Envelope-aware. Pinned: ``success[].report.reportId``. Any
+    Amazon-side error in the envelope is raised verbatim (``_ApiError``);
+    an unknown shape fails loud (``_UnrecognizedShape``)."""
+    payload = _unwrap_envelope(cobj, "create_report")
     ids: list[str] = []
-    rid = cobj.get("reportId")
-    if isinstance(rid, str):
-        ids.append(rid)
-    rids = cobj.get("reportIds")
-    if isinstance(rids, list):
-        ids += [x for x in rids if isinstance(x, str)]
-    reports = cobj.get("reports")
-    if isinstance(reports, list):
-        for r in reports:
-            if isinstance(r, dict):
-                v = r.get("reportId") or r.get("id")
-                if isinstance(v, str):
-                    ids.append(v)
+    for rep in _report_objs(payload, "create_report"):
+        v = rep.get("reportId") or rep.get("id")
+        if isinstance(v, str):
+            ids.append(v)
     ids = list(dict.fromkeys(ids))
     if not ids:
         raise _UnrecognizedShape(
-            "create_report: no reportId at any pinned path "
+            "create_report: no reportId in success[].report "
             f"(top-level keys: {_top_keys(cobj)})"
         )
     return ids
 
 
-def _extract_status(robj: Any) -> str:
-    """Pinned retrieve-response status: top ``status``/``state`` or
-    ``reports[0].status``/``state``. Fail loud if absent."""
-    if not isinstance(robj, dict):
-        raise _UnrecognizedShape(
-            f"retrieve_report: response not an object ({type(robj).__name__})"
-        )
-    for key in ("status", "state"):
-        v = robj.get(key)
-        if isinstance(v, str):
-            return v.upper()
-    reports = robj.get("reports")
-    if isinstance(reports, list) and reports and isinstance(reports[0], dict):
-        for key in ("status", "state"):
-            v = reports[0].get(key)
-            if isinstance(v, str):
-                return v.upper()
+def _extract_status(robj: Any) -> tuple[str, str | None]:
+    """Envelope-aware. Returns ``(STATUS, failure_detail_or_None)`` from
+    ``success[].report.{status,failureReason,failureCode}``. Fail loud if
+    no status."""
+    payload = _unwrap_envelope(robj, "retrieve_report")
+    for rep in _report_objs(payload, "retrieve_report"):
+        st = rep.get("status") or rep.get("state")
+        if isinstance(st, str):
+            detail = rep.get("failureReason") or rep.get("failureCode")
+            return st.upper(), (
+                _mask_ids(str(detail)) if detail else None
+            )
     raise _UnrecognizedShape(
-        "retrieve_report: no status at any pinned path "
+        "retrieve_report: no status in success[].report "
         f"(top-level keys: {_top_keys(robj)})"
     )
 
 
 def _extract_result_url(robj: Any) -> str | None:
-    """Pinned result-location paths: top ``location``/``url`` or
-    ``reports[0].{location,url,downloadUri,reportUri}``. None if absent."""
-    if not isinstance(robj, dict):
+    """Envelope-aware. Pinned container: ``success[].report`` and its
+    ``completedReportParts`` list. Returns the first https URL found in
+    those (and only those) locations."""
+    try:
+        payload = _unwrap_envelope(robj, "retrieve_report")
+        reps = _report_objs(payload, "retrieve_report")
+    except (_ApiError, _UnrecognizedShape):
         return None
-    for key in ("location", "url"):
-        v = robj.get(key)
-        if isinstance(v, str) and v.startswith("http"):
-            return v
-    reports = robj.get("reports")
-    if isinstance(reports, list) and reports and isinstance(reports[0], dict):
-        for key in ("location", "url", "downloadUri", "reportUri"):
-            v = reports[0].get(key)
+    url_keys = ("url", "downloadUrl", "location", "reportPartUrl", "uri")
+    for rep in reps:
+        for key in url_keys:
+            v = rep.get(key)
             if isinstance(v, str) and v.startswith("http"):
                 return v
+        parts = rep.get("completedReportParts")
+        if isinstance(parts, list):
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                for key in url_keys:
+                    v = part.get(key)
+                    if isinstance(v, str) and v.startswith("http"):
+                        return v
+                # last resort, still bounded to the part dict
+                for v in part.values():
+                    if isinstance(v, str) and v.startswith("http"):
+                        return v
     return None
 
 
@@ -396,8 +508,11 @@ async def amazon_ads_performance_report(
       fields: explicit metric/dimension field list — only for
         ``report='custom'``.
 
-    Returns ``{"status": "success", ...}`` with totals + metadata, or
-    ``{"status": "error", "message": ...}`` (Rule 13).
+    Returns ``{"status": "success", ...}`` with totals + metadata;
+    ``{"status": "pending", "retry": {...}}`` if Amazon is still
+    generating at the poll budget (re-issue the same request to resume —
+    no ids/URLs exposed); or ``{"status": "error", "message": ...}``
+    (Rule 13).
     """
     from app.tools import amazon_ads_auth as auth
 
@@ -488,6 +603,14 @@ async def amazon_ads_performance_report(
                         }
                     try:
                         pairs = _extract_accounts(qobj)
+                    except _ApiError as exc:
+                        return {
+                            "status": "error",
+                            "message": (
+                                f"Amazon errored listing advertiser "
+                                f"accounts: {exc}"
+                            ),
+                        }
                     except _UnrecognizedShape as exc:
                         return {
                             "status": "error",
@@ -545,6 +668,14 @@ async def amazon_ads_performance_report(
                     }
                 try:
                     ids = _extract_report_ids(cobj)
+                except _ApiError as exc:
+                    return {
+                        "status": "error",
+                        "message": (
+                            f"Amazon rejected the {fam} report request "
+                            f"({mkt or '-'}/{start}..{end}): {exc}"
+                        ),
+                    }
                 except _UnrecognizedShape as exc:
                     return {
                         "status": "error",
@@ -554,7 +685,8 @@ async def amazon_ads_performance_report(
                     }
 
                 final: Any = None
-                for _ in range(_POLL_TRIES):
+                tries = _poll_tries()
+                for _ in range(tries):
                     await asyncio.sleep(_POLL_INTERVAL)
                     rr = await _safe_call(
                         s,
@@ -582,7 +714,15 @@ async def amazon_ads_performance_report(
                             ),
                         }
                     try:
-                        st = _extract_status(final)
+                        st, fail_detail = _extract_status(final)
+                    except _ApiError as exc:
+                        return {
+                            "status": "error",
+                            "message": (
+                                f"Amazon errored retrieving the {fam} "
+                                f"report: {exc}"
+                            ),
+                        }
                     except _UnrecognizedShape as exc:
                         return {
                             "status": "error",
@@ -597,18 +737,20 @@ async def amazon_ads_performance_report(
                             "status": "error",
                             "message": (
                                 f"Amazon report generation {st} "
-                                f"({fam}/{start}..{end})."
+                                f"({fam}/{start}..{end})"
+                                + (f": {fail_detail}" if fail_detail else ".")
                             ),
                         }
                 else:
-                    return {
-                        "status": "error",
-                        "message": (
-                            f"Report not ready after "
-                            f"{int(_POLL_TRIES * _POLL_INTERVAL)}s "
-                            "(still generating). Retry shortly."
-                        ),
-                    }
+                    return _pending_result(
+                        account_label=account.strip() or "(explicit id)",
+                        marketplace=mkt,
+                        report_family=fam,
+                        period=period,
+                        start=start,
+                        end=end,
+                        waited_s=int(tries * _POLL_INTERVAL),
+                    )
 
                 url = _extract_result_url(final)
                 if not url:
@@ -670,7 +812,20 @@ async def amazon_ads_performance_report(
                     "acos_pct": acos,
                 }
     except Exception as exc:  # noqa: BLE001 — Rule 13
+        from app.tools.amazon_ads_auth import AmazonAdsAuthError
+
         logger.error("amazon_ads_performance_report failed: %r", exc)
+        if isinstance(exc, AmazonAdsAuthError):
+            # Only flag reauth when LWA definitively rejected / token
+            # missing. Transient → tell the bot NOT to prompt reauth.
+            return {
+                "status": "error",
+                "message": str(exc),
+                "reauth_required": bool(
+                    getattr(exc, "reauth_required", False)
+                ),
+                "transient": bool(getattr(exc, "transient", False)),
+            }
         return {
             "status": "error",
             "message": (

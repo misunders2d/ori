@@ -68,7 +68,7 @@ Amazon Ads MCP — auth/header bridge for the ADK ``McpToolset``.
 ### `app/tools/amazon_ads_reports.py`
 Deterministic Amazon Ads reporting helper layer.
 
-- `async amazon_ads_performance_report` (line 363) — Run an Amazon Ads report deterministically and return a summary.
+- `async amazon_ads_performance_report` (line 475) — Run an Amazon Ads report deterministically and return a summary.
 
 ### `app/tools/analyze_data.py`
 Data analysis tool — run pandas code on uploaded files.
