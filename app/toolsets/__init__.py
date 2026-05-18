@@ -14,6 +14,7 @@ from .clickup import ClickUpToolset
 from .planner import PlannerToolset
 from .graph import GraphToolset
 from .h10 import H10Toolset
+from .amazon_ads import AmazonAdsToolset
 
 __all__ = [
     "SchedulingToolset",
@@ -33,4 +34,5 @@ __all__ = [
     "PlannerToolset",
     "GraphToolset",
     "H10Toolset",
+    "AmazonAdsToolset",
 ]

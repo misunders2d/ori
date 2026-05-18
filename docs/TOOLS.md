@@ -22,6 +22,14 @@ All public tool functions grouped by file. Private helpers (`_name`) excluded.
 - `export_dna` (line 1037) — Packages project files into a .tar.gz archive and returns a download URL.
 - `import_dna` (line 1157) — Imports DNA into the sandbox for verification by fetching a .tar.gz archive from the given URL.
 
+## `app/tools/amazon_ads_auth.py`
+Amazon Ads MCP — auth/header bridge for the ADK ``McpToolset``.
+
+- `credentials_present` (line 240) — True iff all three LWA secrets are in the vault.
+- `resolve_region` (line 253) — Region code (NA/EU/FE) from the vault, defaulting to NA.
+- `mcp_url` (line 267) — Region-specific Amazon Ads MCP endpoint URL.
+- `header_provider` (line 359) — ADK ``McpToolset(header_provider=...)`` callable.
+
 ## `app/tools/analyze_data.py`
 Data analysis tool — run pandas code on uploaded files.
 

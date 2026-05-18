@@ -12,7 +12,7 @@ Read this **before** adding new code — most things you'd build already exist.
 ## Sub-agents (10)
 
 
-- **AmazonAgent** (Agent) — `app/sub_agents/amazon_agent.py:33`
+- **AmazonAgent** (Agent) — `app/sub_agents/amazon_agent.py:36`
   - Amazon Manager sub-agent — product research, pricing, competitors, listing management.
 
 - **AmazonDataAnalystAgent** (Agent) — `app/sub_agents/amazon_data_analyst_agent.py:35`
@@ -39,7 +39,7 @@ Read this **before** adding new code — most things you'd build already exist.
 
 - **KnowledgeAgent** (Agent) — `app/sub_agents/knowledge_agent.py:38`
 
-## Tools (231 public functions across 40 files)
+## Tools (235 public functions across 41 files)
 
 
 ### `app/tools/a2a.py`
@@ -56,6 +56,14 @@ Read this **before** adding new code — most things you'd build already exist.
 - `update_friend_address` (line 930) — Updates the registered address for a friend. 
 - `export_dna` (line 1037) — Packages project files into a .tar.gz archive and returns a download URL.
 - `import_dna` (line 1157) — Imports DNA into the sandbox for verification by fetching a .tar.gz archive from the given URL.
+
+### `app/tools/amazon_ads_auth.py`
+Amazon Ads MCP — auth/header bridge for the ADK ``McpToolset``.
+
+- `credentials_present` (line 240) — True iff all three LWA secrets are in the vault.
+- `resolve_region` (line 253) — Region code (NA/EU/FE) from the vault, defaulting to NA.
+- `mcp_url` (line 267) — Region-specific Amazon Ads MCP endpoint URL.
+- `header_provider` (line 359) — ADK ``McpToolset(header_provider=...)`` callable.
 
 ### `app/tools/analyze_data.py`
 Data analysis tool — run pandas code on uploaded files.
@@ -415,8 +423,11 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
 
 - `async youtube_summary` (line 11) — Answer questions about a specific YouTube video, focusing on a specific query.
 
-## Toolsets (19)
+## Toolsets (20)
 
+
+- **AmazonAdsToolset** — `app/toolsets/amazon_ads.py:117`
+  - Amazon Ads — remote MCP (Streamable HTTP), filtered to 23 tools.
 
 - **ClickUpToolset** — `app/toolsets/clickup.py:5`
   - ClickUp task management — workspace discovery, task CRUD, comments.
@@ -494,11 +505,12 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
   - AI image generation and editing — text-to-image, image-to-image, prompt enhancement.
   - tools: `enhance_image_prompt`, `generate_image`
 
-## Callbacks (17)
+## Callbacks (18)
 
 
 - `admin_tool_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails/admin.py:24` — Runtime Guardrail: Intercepts highly privileged tool calls before execution.
 - `admin_only_guardrail` (before_model | state) — `app/callbacks/guardrails/admin.py:176` — Runtime Guardrail: Checks if the user is explicitly set in ADMIN_USER_IDS setup.
+- `amazon_ads_allowlist_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails/amazon_ads.py:47` — Block any Amazon-Ads-namespace tool not on the approved allowlist.
 - `strip_delivered_files_before_model` (before_model | state) — `app/callbacks/guardrails/attachments.py:45` — Before-model callback. Remove server-injected inline_data Parts
 - `file_attachment_capture` (before_tool | after_tool) — `app/callbacks/guardrails/attachments.py:93` — After-tool callback: stash a tool's emitted file_path so the next
 - `file_attachment_inject` (before_model | state) — `app/callbacks/guardrails/attachments.py:166` — After-model callback: drain ``__pending_file_parts__`` and append
@@ -515,9 +527,11 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
 - `plan_step_enforcer` (before_tool | after_tool) — `app/callbacks/guardrails/plan.py:82` — before_tool guard: block tool calls outside the active step's allowed_tools.
 - `a2a_privacy_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails/privacy.py:23` — Deterministic secret-matching guardrail for A2A tools.
 
-## Skills (20)
+## Skills (22)
 
 
+- **account-context-identifiers** — `skills/account-context-identifiers/SKILL.md` — Use the right account scope on every Amazon Ads API call. Read before using any account-scoped tool.
+- **ads-reporting** — `skills/ads-reporting/SKILL.md` — Create and retrieve Amazon Ads reports. Use this when the user asks for ad performance data, campaign metrics, or reporting.
 - **amazon-routing-skill** — `skills/amazon-routing-skill/SKILL.md` — How to route Amazon business requests to the right specialist agent. Use this skill when you need to decide which agent handles a request — product research, knowledge/memory, BigQuery analytics, Google Workspace, or data analysis. Also use when coordinating multi-agent workflows where data passes between agents via the scratchpad.
 - **approval-skill** — `skills/approval-skill/SKILL.md` — How to handle privileged tool calls that require explicit admin approval (ACT-XXXXXX tokens, optional TOTP 2FA). Load this when a tool returns an action token or when the user replies 'Approve ACT-...'.
 - **bigquery-skill** — `skills/bigquery-skill/SKILL.md` — Domain knowledge for querying Mellanni BigQuery datasets. Table catalog, access control, query patterns, and aggregation rules for the BigQueryAgent.

@@ -10,7 +10,7 @@ Augment by hand for fields the AST cannot infer (parent_agent, when_to_use, etc)
 
 
 ## AmazonAgent
-- File: `app/sub_agents/amazon_agent.py:33` (Agent)
+- File: `app/sub_agents/amazon_agent.py:36` (Agent)
 - Module variable: `amazon_agent`
 - Module doc: Amazon Manager sub-agent — product research, pricing, competitors, listing management.
 

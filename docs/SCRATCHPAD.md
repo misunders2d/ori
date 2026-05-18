@@ -93,6 +93,17 @@ If you find yourself writing the same scratchpad on every session, that's a sign
 
 Within a single session (e.g. Coordinator delegated to AmazonAgent), all sub-agents share the same `session_id` — so a scratchpad written by AmazonAgent is readable by Coordinator on the way back. No special mechanism needed.
 
+### Amazon Ads → DataAnalyst handoff contract
+
+`AmazonDataAnalystAgent` has **no Amazon Ads tools** (the Ads MCP is mounted only on `AmazonAgent`, gated to a 23-tool read-heavy allowlist — no campaign/budget/target mutation). When an Ads request needs charts / statistics / a deck, the handoff is the standard same-session scratchpad pattern with a fixed naming convention:
+
+1. `AmazonAgent` runs the Ads MCP report (`reporting-create_report` → poll `reporting-retrieve_report`).
+2. It writes the raw output to a scratchpad named **`ads_<kind>_<id>`** (e.g. `ads_campaign_report_2026-05-14`). Owner is auto-tagged `AmazonAgent`.
+3. It transfers back to `AmazonHeadAgent` with the pad name (not the data).
+4. `AmazonHeadAgent` routes to `AmazonDataAnalystAgent`, which reads it via `scratchpad_read(name, owner="AmazonAgent")` and runs `analyze_data` / charts / `generate_presentation`.
+
+No ad-hoc files under `data/`, no direct sibling calls, no re-fetching the report. This reuses the existing cross-agent mechanism above — the only addition is the `ads_*` name convention so the analyst can locate the pad deterministically. Routing rule mirrored in `skills/amazon-routing-skill/SKILL.md`.
+
 Across A2A: scratchpads do not cross the wire. If ori-A wants to ship a large blob to ori-B, use the Phase 4 A2A `file_ref` mechanism (which itself uses a scratchpad as the staging area on the sender side).
 
 ---

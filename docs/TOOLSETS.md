@@ -7,6 +7,10 @@
 `BaseToolset` subclasses. Agents prefer these over raw tool imports.
 
 
+## AmazonAdsToolset
+- File: `app/toolsets/amazon_ads.py:117`
+- Amazon Ads — remote MCP (Streamable HTTP), filtered to 23 tools.
+
 ## ClickUpToolset
 - File: `app/toolsets/clickup.py:5`
 - ClickUp task management — workspace discovery, task CRUD, comments.

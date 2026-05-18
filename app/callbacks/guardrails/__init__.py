@@ -18,6 +18,7 @@ created once on import, shared across all callbacks that need it.
 """
 
 from .admin import admin_only_guardrail, admin_tool_guardrail
+from .amazon_ads import amazon_ads_allowlist_guardrail
 from .attachments import (
     _FILE_ATTACHMENT_MARKER,
     _PENDING_FILE_PARTS_KEY,
@@ -44,6 +45,7 @@ from .privacy import a2a_privacy_guardrail
 __all__ = [
     "admin_only_guardrail",
     "admin_tool_guardrail",
+    "amazon_ads_allowlist_guardrail",
     "a2a_privacy_guardrail",
     "file_attachment_capture",
     "file_attachment_inject",
