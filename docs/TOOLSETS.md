@@ -10,6 +10,7 @@
 ## AmazonAdsToolset
 - File: `app/toolsets/amazon_ads.py:117`
 - Amazon Ads — remote MCP (Streamable HTTP), filtered to 23 tools.
+- Bundled tools: `amazon_ads_performance_report`
 
 ## ClickUpToolset
 - File: `app/toolsets/clickup.py:5`

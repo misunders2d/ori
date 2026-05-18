@@ -9,6 +9,17 @@ visibility: public
 
 This skill creates and retrieves Amazon Ads reports using reporting tools.
 
+## Preferred path (Ori)
+
+For most performance asks, call the deterministic `amazon_ads_performance_report`
+tool (account / marketplace / period / report family params) instead of
+hand-writing payloads — it builds, polls, retrieves, and parses for you.
+Only hand-build `reporting-*` payloads for asks it does not cover. The
+live-verified payload contracts (period/timezone/account-context/family
+schemas/retrieve/throttling) are in
+[payload-recipes.md](references/payload-recipes.md) — read it before
+constructing any payload by hand.
+
 ## Prerequisites
 
 Before executing, verify that ALL of the following MCP tools are available. The MCP server prefix may vary — match by the tool name suffix:

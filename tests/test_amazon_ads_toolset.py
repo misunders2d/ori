@@ -311,7 +311,212 @@ class TestAuthBridge:
 # Toolset wiring
 # ---------------------------------------------------------------------------
 
+class TestReportsHelper:
+    """Deterministic reporting layer — pure logic, no network."""
+
+    def test_period_resolver_relative(self):
+        from app.tools.amazon_ads_reports import _resolve_period
+
+        for p in ("yesterday", "today", "last_7_days", "last_30_days",
+                  "this_month", "last_month"):
+            r = _resolve_period(p, "", "", "America/Los_Angeles")
+            assert isinstance(r, tuple), p
+            s, e = r
+            assert s <= e
+
+    def test_period_custom_and_errors(self):
+        from app.tools.amazon_ads_reports import _resolve_period
+
+        assert _resolve_period("custom", "2026-05-01", "2026-05-10",
+                               "America/Los_Angeles") == (
+            "2026-05-01", "2026-05-10")
+        assert isinstance(
+            _resolve_period("custom", "", "", "America/Los_Angeles"), str)
+        assert isinstance(
+            _resolve_period("custom", "bad", "x", "UTC"), str)
+        assert isinstance(
+            _resolve_period("nope", "", "", "America/Los_Angeles"), str)
+        assert isinstance(
+            _resolve_period("yesterday", "", "", "Mars/Phobos"), str)
+
+    def test_build_body_families(self):
+        from app.tools.amazon_ads_reports import _build_body
+
+        camp = _build_body("campaign", "g.x", "2026-05-17", "2026-05-17",
+                           "US", None)
+        assert camp["reports"][0]["query"]["filter"]["on"]["values"] == ["US"]
+        assert "budgetCurrency.value" in camp["reports"][0]["query"]["fields"]
+
+        prod = _build_body("product", "g.x", "2026-05-17", "2026-05-17",
+                           "US", None)
+        assert "query" not in prod["reports"][0]
+        assert "periods" in prod["reports"][0]
+
+        cust = _build_body("custom", "g.x", "2026-05-17", "2026-05-17",
+                           "", ["dateRange.value", "metric.clicks"])
+        assert cust["reports"][0]["query"]["fields"] == [
+            "dateRange.value", "metric.clicks"]
+        assert "filter" not in cust["reports"][0]["query"]  # no marketplace
+
+        assert isinstance(
+            _build_body("bogus", "g.x", "a", "b", "US", None), str)
+
+    def test_tool_for_family(self):
+        from app.tools.amazon_ads_reports import _tool_for_family
+
+        assert _tool_for_family("campaign") == "reporting-create_report"
+        assert _tool_for_family("product") == (
+            "reporting-create_product_report")
+        assert _tool_for_family("inventory") == (
+            "reporting-create_inventory_report")
+
+    def test_extract_accounts_pinned_path(self):
+        from app.tools.amazon_ads_reports import _extract_accounts
+
+        # Pinned live shape advertiserAccounts[].{advertiserAccountId,
+        # displayName}. Fake placeholder name only (F2 — no real account).
+        out = _extract_accounts(
+            {"advertiserAccounts": [
+                {"advertiserAccountId": "amzn1.ads-account.g.fake",
+                 "displayName": "Acme Test Account",
+                 "isGlobalAccount": True}]})
+        assert out == [("Acme Test Account", "amzn1.ads-account.g.fake")]
+
+    def test_extract_accounts_fails_loud_on_bad_shape(self):
+        from app.tools.amazon_ads_reports import (
+            _UnrecognizedShape,
+            _extract_accounts,
+        )
+
+        with pytest.raises(_UnrecognizedShape):
+            _extract_accounts({"unexpected": []})
+
+    def test_extract_report_ids_pinned_and_loud(self):
+        from app.tools.amazon_ads_reports import (
+            _UnrecognizedShape,
+            _extract_report_ids,
+        )
+
+        assert _extract_report_ids({"reportId": "r1"}) == ["r1"]
+        assert _extract_report_ids(
+            {"reports": [{"reportId": "r2"}]}) == ["r2"]
+        with pytest.raises(_UnrecognizedShape):
+            _extract_report_ids({"something": "else"})
+
+    def test_extract_status_pinned_and_loud(self):
+        from app.tools.amazon_ads_reports import (
+            _UnrecognizedShape,
+            _extract_status,
+        )
+
+        assert _extract_status({"status": "completed"}) == "COMPLETED"
+        assert _extract_status(
+            {"reports": [{"state": "pending"}]}) == "PENDING"
+        with pytest.raises(_UnrecognizedShape):
+            _extract_status({"no": "status"})
+
+    def test_csv_parser_flags_unresolved_metrics(self):
+        from app.tools.amazon_ads_reports import _parse_report_csv
+
+        good = b"metric.clicks,metric.sales\n3,10\n2,5\n"
+        rows, totals, cols, matched = _parse_report_csv(good)
+        assert matched and rows == 2 and totals["clicks"] == 5.0
+        bad = b"foo,bar\n1,2\n"
+        rows, totals, cols, matched = _parse_report_csv(bad)
+        assert matched is False and totals == {}
+
+    def test_safe_call_fails_closed(self):
+        # Helper is a raw MCP path (bypasses tool_filter + guardrail) — it
+        # MUST self-enforce: only approved, only read-only.
+        from app.tools.amazon_ads_reports import _HelperToolGuard, _safe_call
+
+        class _Sess:
+            def __init__(self):
+                self.called = []
+
+            async def call_tool(self, name, args):
+                self.called.append(name)
+                return "ok"
+
+        sess = _Sess()
+        # Approved read tool → forwarded.
+        assert asyncio.run(
+            _safe_call(sess, "reporting-create_report", {}, 5)
+        ) == "ok"
+        # State-changing (on allowlist but denied for the helper).
+        for bad in (
+            "reporting-delete_report",
+            "account_management-update_account_timezone",
+            "campaign_management-dsp_create_conversion_tracking_products",
+        ):
+            with pytest.raises(_HelperToolGuard):
+                asyncio.run(_safe_call(sess, bad, {}, 5))
+        # Off-allowlist entirely.
+        with pytest.raises(_HelperToolGuard):
+            asyncio.run(
+                _safe_call(sess, "campaign_management-create_campaign", {}, 5)
+            )
+        assert sess.called == ["reporting-create_report"]
+
+    def test_helper_guards_missing_credentials(self, monkeypatch):
+        from app.tools import amazon_ads_reports as rep
+
+        monkeypatch.setattr(
+            "app.tools.amazon_ads_auth.credentials_present", lambda: False)
+        out = asyncio.run(rep.amazon_ads_performance_report())
+        assert out["status"] == "error" and "not configured" in out["message"]
+
+    def test_helper_rejects_unknown_family(self, monkeypatch):
+        from app.tools import amazon_ads_reports as rep
+
+        monkeypatch.setattr(
+            "app.tools.amazon_ads_auth.credentials_present", lambda: True)
+        out = asyncio.run(
+            rep.amazon_ads_performance_report(report="frobnicate"))
+        assert out["status"] == "error" and "report family" in out["message"]
+
+    def test_helper_custom_period_needs_dates(self, monkeypatch):
+        from app.tools import amazon_ads_reports as rep
+
+        monkeypatch.setattr(
+            "app.tools.amazon_ads_auth.credentials_present", lambda: True)
+        out = asyncio.run(
+            rep.amazon_ads_performance_report(
+                account="acme", period="custom"))
+        assert out["status"] == "error" and "custom" in out["message"]
+
+    def test_helper_requires_account(self, monkeypatch):
+        from app.tools import amazon_ads_reports as rep
+
+        monkeypatch.setattr(
+            "app.tools.amazon_ads_auth.credentials_present", lambda: True)
+        out = asyncio.run(rep.amazon_ads_performance_report())
+        assert out["status"] == "error"
+        assert "account is required" in out["message"]
+        # No real account name leaked anywhere in the message.
+        assert "Mellanni" not in out["message"]
+
+    def test_helper_rejects_targeting(self, monkeypatch):
+        from app.tools import amazon_ads_reports as rep
+
+        monkeypatch.setattr(
+            "app.tools.amazon_ads_auth.credentials_present", lambda: True)
+        out = asyncio.run(
+            rep.amazon_ads_performance_report(
+                account="acme", report="targeting"))
+        assert out["status"] == "error" and "disabled" in out["message"]
+
+
 class TestToolset:
+    def test_helper_function_tool_always_present(self, monkeypatch):
+        # Deterministic helper must be exposed even when MCP degrades.
+        monkeypatch.setattr(
+            "app.tools.amazon_ads_auth.credentials_present", lambda: False)
+        ts = AmazonAdsToolset()
+        tools = asyncio.run(ts.get_tools())
+        names = {getattr(t, "name", "") for t in tools}
+        assert "amazon_ads_performance_report" in names
+
     def test_basetoolset_contract_attrs_present(self):
         # Regression: __init__ MUST call super() — ADK reads tool_name_prefix
         # / tool_filter via get_tools_with_prefix at agent load. Missing =
@@ -327,7 +532,10 @@ class TestToolset:
         )
         ts = AmazonAdsToolset()
         tools = asyncio.run(ts.get_tools_with_prefix())
-        assert tools == []
+        # Helper FunctionTool stays available even when MCP is degraded.
+        assert {getattr(t, "name", "") for t in tools} == {
+            "amazon_ads_performance_report"
+        }
 
     def test_degrades_loudly_without_credentials(self, monkeypatch, caplog):
         monkeypatch.setattr(
@@ -336,7 +544,9 @@ class TestToolset:
         ts = AmazonAdsToolset()
         with caplog.at_level(logging.CRITICAL):
             tools = asyncio.run(ts.get_tools())
-        assert tools == []
+        assert {getattr(t, "name", "") for t in tools} == {
+            "amazon_ads_performance_report"
+        }
         assert any(
             "Amazon Ads MCP DISABLED" in r.message for r in caplog.records
         )
@@ -363,7 +573,9 @@ class TestToolset:
         monkeypatch.setattr(ts, "_build_inner", lambda *a, **k: _FakeInner())
         with caplog.at_level(logging.CRITICAL):
             tools = asyncio.run(ts.get_tools())
-        assert tools == []
+        assert {getattr(t, "name", "") for t in tools} == {
+            "amazon_ads_performance_report"
+        }
         assert any("matched ZERO" in r.message for r in caplog.records)
         assert ts._degraded is True
 
@@ -388,7 +600,9 @@ class TestToolset:
         monkeypatch.setattr(ts, "_build_inner", lambda *a, **k: _FakeInner())
         with caplog.at_level(logging.CRITICAL):
             tools = asyncio.run(ts.get_tools())
-        assert tools == []
+        assert {getattr(t, "name", "") for t in tools} == {
+            "amazon_ads_performance_report"
+        }
         assert any(
             "auth or tool listing failed" in r.message for r in caplog.records
         )
@@ -432,7 +646,10 @@ class TestToolset:
         assert builds["n"] == 1, "rebuilt despite unchanged token generation"
         assert ts._inner is inner_after_1
         assert closes["n"] == 0
-        assert len(first) == 1
+        # helper FunctionTool + the (faked) MCP tool
+        names = {getattr(t, "name", "") for t in first}
+        assert names == {"amazon_ads_performance_report",
+                         "reporting-create_report"}
 
         # Rotate the token: generation bumps -> exactly one rebuild + close.
         monkeypatch.setattr(auth._token_cache, "_token_generation", 8)

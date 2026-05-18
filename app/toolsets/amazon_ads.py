@@ -173,8 +173,21 @@ class AmazonAdsToolset(BaseToolset):
             header_provider=header_provider,
         )
 
+    def _function_tools(self) -> list:
+        # Deterministic helper(s) — always present, even when the MCP path
+        # degrades, because the helper self-guards credentials and returns a
+        # clean Rule-13 error. Keeps the common "<account>, <marketplace>,
+        # yesterday's performance" ask off the LLM's hand-written payloads.
+        from google.adk.tools.function_tool import FunctionTool
+
+        from app.tools.amazon_ads_reports import amazon_ads_performance_report
+
+        return [FunctionTool(func=amazon_ads_performance_report)]
+
     async def get_tools(self, readonly_context=None):
         from app.tools.amazon_ads_auth import credentials_present
+
+        fts = self._function_tools()
 
         if not credentials_present():
             # Rule 13: do not disengage silently. Empty toolset is acceptable
@@ -187,7 +200,7 @@ class AmazonAdsToolset(BaseToolset):
                 "tools. Run `uv run python scripts/ads_oauth_helper.py`."
             )
             self._degraded = True
-            return []
+            return fts
 
         try:
             # Reviewer fix #3: mint the LWA token OFF the event loop so the
@@ -230,7 +243,7 @@ class AmazonAdsToolset(BaseToolset):
                 exc,
             )
             self._degraded = True
-            return []
+            return fts
 
         if not tools:
             # Reviewer fix #1: connection succeeded but the allowlist matched
@@ -245,10 +258,10 @@ class AmazonAdsToolset(BaseToolset):
                 "the live `tools/list`. AmazonAgent has NO Amazon Ads tools."
             )
             self._degraded = True
-            return []
+            return fts
 
         self._degraded = False
-        return tools
+        return fts + tools
 
     async def close(self) -> None:
         # NOTE: Amazon's remote MCP returns HTTP 403 to the streamable-http

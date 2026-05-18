@@ -39,7 +39,7 @@ Read this **before** adding new code — most things you'd build already exist.
 
 - **KnowledgeAgent** (Agent) — `app/sub_agents/knowledge_agent.py:38`
 
-## Tools (235 public functions across 41 files)
+## Tools (236 public functions across 42 files)
 
 
 ### `app/tools/a2a.py`
@@ -64,6 +64,11 @@ Amazon Ads MCP — auth/header bridge for the ADK ``McpToolset``.
 - `resolve_region` (line 253) — Region code (NA/EU/FE) from the vault, defaulting to NA.
 - `mcp_url` (line 267) — Region-specific Amazon Ads MCP endpoint URL.
 - `header_provider` (line 359) — ADK ``McpToolset(header_provider=...)`` callable.
+
+### `app/tools/amazon_ads_reports.py`
+Deterministic Amazon Ads reporting helper layer.
+
+- `async amazon_ads_performance_report` (line 363) — Run an Amazon Ads report deterministically and return a summary.
 
 ### `app/tools/analyze_data.py`
 Data analysis tool — run pandas code on uploaded files.
@@ -428,6 +433,7 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
 
 - **AmazonAdsToolset** — `app/toolsets/amazon_ads.py:117`
   - Amazon Ads — remote MCP (Streamable HTTP), filtered to 23 tools.
+  - tools: `amazon_ads_performance_report`
 
 - **ClickUpToolset** — `app/toolsets/clickup.py:5`
   - ClickUp task management — workspace discovery, task CRUD, comments.
