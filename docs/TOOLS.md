@@ -25,10 +25,10 @@ All public tool functions grouped by file. Private helpers (`_name`) excluded.
 ## `app/tools/amazon_ads_auth.py`
 Amazon Ads MCP — auth/header bridge for the ADK ``McpToolset``.
 
-- `credentials_present` (line 240) — True iff all three LWA secrets are in the vault.
-- `resolve_region` (line 253) — Region code (NA/EU/FE) from the vault, defaulting to NA.
-- `mcp_url` (line 267) — Region-specific Amazon Ads MCP endpoint URL.
-- `header_provider` (line 359) — ADK ``McpToolset(header_provider=...)`` callable.
+- `credentials_present` (line 260) — True iff all three LWA secrets are in the vault.
+- `resolve_region` (line 273) — Region code (NA/EU/FE) from the vault, defaulting to NA.
+- `mcp_url` (line 287) — Region-specific Amazon Ads MCP endpoint URL.
+- `header_provider` (line 413) — ADK ``McpToolset(header_provider=...)`` callable.
 
 ## `app/tools/amazon_ads_reports.py`
 Deterministic Amazon Ads reporting helper layer.
