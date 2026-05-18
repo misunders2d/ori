@@ -122,6 +122,11 @@ class AmazonAdsToolset(BaseToolset):
     """
 
     def __init__(self) -> None:
+        # ADK BaseToolset.__init__ sets self.tool_filter / self.tool_name_prefix.
+        # ADK assembles agent tools via get_tools_with_prefix(), which reads
+        # self.tool_name_prefix — skipping super() raises AttributeError at
+        # agent load (the only repo toolset that overrides __init__).
+        super().__init__()
         self._inner: Any = None
         self._degraded = False
         # Token generation the cached _inner was built with. Rebuild only

@@ -54,6 +54,17 @@ Do not refuse, guess, or answer outside your domain.
 2. **ADK transfer scope is implicit.** ADK 1.x allows `transfer_to_agent` to parent and to sub-agents by default. Sideways/cross-tree transfer works via name lookup, but bounce-to-parent is the simplest cross-version-safe pattern.
 3. **Loop prevention.** Coordinator is the only terminus. Every fallback eventually arrives there. No mid-tier loops are possible because each agent only ever bounces UP.
 
+## 3b. Amazon Ads constraint (mid-tier hard rule)
+
+`AmazonHeadAgent` MUST route ad spend / ACOS / ROAS / campaign / ad-group /
+target / sponsored-ads-performance / ads-account / ad-eligibility / ad-report
+questions to **`AmazonAgent`** (Amazon Ads MCP). These MUST NOT go to
+`BigQueryAgent` — BigQuery holds warehouse/BI tables, not live Amazon Ads.
+Route to BigQuery only when the user explicitly names BigQuery / SQL /
+warehouse / historical BI; never infer it from the words "account",
+"spend", or "metrics". Mirrored in `skills/amazon-routing-skill/SKILL.md`
+and the `AmazonHeadAgent` instruction ROUTING HINTS.
+
 ## 4. When adding a NEW agent
 
 Per `docs/AI_EDITS.md` AGENT/DOC SYNC rule (TIER 3 in `app/sub_agents/developer_agent.py`):

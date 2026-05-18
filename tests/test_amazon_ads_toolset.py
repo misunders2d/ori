@@ -312,6 +312,23 @@ class TestAuthBridge:
 # ---------------------------------------------------------------------------
 
 class TestToolset:
+    def test_basetoolset_contract_attrs_present(self):
+        # Regression: __init__ MUST call super() — ADK reads tool_name_prefix
+        # / tool_filter via get_tools_with_prefix at agent load. Missing =
+        # AttributeError on the live bot ('no attribute tool_name_prefix').
+        ts = AmazonAdsToolset()
+        assert ts.tool_name_prefix is None
+        assert ts.tool_filter is None
+
+    def test_get_tools_with_prefix_does_not_raise(self, monkeypatch):
+        # Exercise the exact ADK code path that crashed in production.
+        monkeypatch.setattr(
+            "app.tools.amazon_ads_auth.credentials_present", lambda: False
+        )
+        ts = AmazonAdsToolset()
+        tools = asyncio.run(ts.get_tools_with_prefix())
+        assert tools == []
+
     def test_degrades_loudly_without_credentials(self, monkeypatch, caplog):
         monkeypatch.setattr(
             "app.tools.amazon_ads_auth.credentials_present", lambda: False
