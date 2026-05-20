@@ -190,10 +190,76 @@ def pop_forward(session_id) -> ForwardCapture | None
 
 ---
 
+## Transport ABC strict variants (slice 3)
+
+Adapter-level support for tool-grade error surfacing. The existing
+`send_message` / `send_media` methods log non-200 responses and return
+`None` — fine for the poller's fire-and-forget delivery, useless for an
+agent tool that must surface the Telegram error verbatim (Law 6).
+
+Three new abstract methods on `TransportAdapter` (`app/core/transport.py`):
+
+```python
+async def send_text_strict(
+    self, target_id: str | int, text: str
+) -> dict: ...
+
+async def send_media_strict(
+    self,
+    target_id: str | int,
+    data: bytes | None,
+    mime_type: str,
+    caption: str = "",
+    *,
+    file_id: str | None = None,
+    file_type: str | None = None,
+    file_ref: str | None = None,
+    owner_user_id: str | None = None,
+    file_path: str | None = None,
+) -> dict: ...
+
+async def copy_message_strict(
+    self, target_id: str | int, from_chat_id: int, message_id: int
+) -> dict: ...
+```
+
+**Return contract.** Adapters MUST return one of:
+
+```python
+{"ok": True, "message_id": int, ...}
+{"ok": False, "error_code": int, "description": str}
+```
+
+They MUST NOT raise on a platform-level non-200 (that path is reserved
+for programmer errors / network failures). They MUST NOT return `None`.
+
+**send_media_strict modes.**
+1. **Re-send by cached file_id** — caller passes `file_id` + `file_type`;
+   adapter picks the Bot API method from `file_type`
+   (`sendPhoto` / `sendDocument` / `sendAudio` / `sendVideo` /
+   `sendVoice` / `sendVideoNote`). MIME alone cannot disambiguate voice
+   from audio or video_note from video.
+2. **Bytes upload** — caller passes `data` + `mime_type`; adapter
+   picks the method via MIME prefix mapping (existing behavior).
+   `file_type` may be supplied to override the mapping.
+
+On success, if `file_ref` (explicit) or `file_path` (auto-derive) plus a
+non-empty `owner_user_id` are supplied, the adapter writes the result
+into `outbound_files` for later forwarding.
+
+**v1 implementation status.**
+- `TelegramAdapter` — slice-3 ships stubs that raise
+  `NotImplementedError`. Real impls land in slice 4.
+- `SlackAdapter` — raises `NotImplementedError` (no `file_id`-equivalent
+  in the Slack Web API; cross-chat file forwarding is Telegram-only per
+  proposal §8).
+- Both subclasses remain instantiable (verified by
+  `tests/test_transport_strict_abc.py`) so the live poller does not break.
+
+---
+
 ## (Remaining sections land with subsequent slices.)
 
-- Slice 3 — `TransportAdapter` strict variants (`send_text_strict`,
-  `send_media_strict`, `copy_message_strict`).
 - Slice 4 — `TelegramAdapter` strict impls.
 - Slice 5 — `media_items` shape extension.
 - Slice 6 — poller delivery loop auto-derive `file_ref`.

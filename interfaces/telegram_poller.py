@@ -235,6 +235,44 @@ class TelegramAdapter(TransportAdapter):
         except Exception:
             logger.exception("Failed to send media to chat %s via %s", chat_id, method)
 
+    # ----------------------------------------------------------------------
+    # Strict variants — slice 3 stubs (raise so the ABC does not block
+    # instantiation). Slice 4 replaces these with real implementations
+    # backed by ``_post`` and the outbound-files cache.
+    # ----------------------------------------------------------------------
+
+    async def send_text_strict(self, target_id: str | int, text: str) -> dict:
+        raise NotImplementedError(
+            "TelegramAdapter.send_text_strict not yet implemented (slice 4)"
+        )
+
+    async def send_media_strict(
+        self,
+        target_id: str | int,
+        data: bytes | None,
+        mime_type: str,
+        caption: str = "",
+        *,
+        file_id: str | None = None,
+        file_type: str | None = None,
+        file_ref: str | None = None,
+        owner_user_id: str | None = None,
+        file_path: str | None = None,
+    ) -> dict:
+        raise NotImplementedError(
+            "TelegramAdapter.send_media_strict not yet implemented (slice 4)"
+        )
+
+    async def copy_message_strict(
+        self,
+        target_id: str | int,
+        from_chat_id: int,
+        message_id: int,
+    ) -> dict:
+        raise NotImplementedError(
+            "TelegramAdapter.copy_message_strict not yet implemented (slice 4)"
+        )
+
     async def download_file(self, file_id: str) -> Optional[tuple[bytes, str, str]]:
         try:
             url = TELEGRAM_API.format(token=self._token, method="getFile")

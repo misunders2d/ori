@@ -77,6 +77,74 @@ class TransportAdapter(ABC):
     async def download_file(self, file_id: str) -> Optional[tuple[bytes, str, str]]:
         """Download a file attachment. Returns (bytes, mime_type, filename) or None."""
 
+    # ------------------------------------------------------------------
+    # Strict variants — used by agent tools that MUST surface the
+    # underlying platform error verbatim (Law 6). Existing best-effort
+    # ``send_message`` / ``send_media`` methods stay for fire-and-forget
+    # poller paths. See docs/TELEGRAM_SKILLS.md for the full contract.
+    #
+    # Return shape on success::
+    #
+    #     {"ok": True, "message_id": int, ...}
+    #
+    # Return shape on failure (NEVER raise NEVER return None)::
+    #
+    #     {"ok": False, "error_code": int, "description": str}
+    #
+    # Adapters that do not implement these (e.g. Slack v1, CLI) raise
+    # ``NotImplementedError`` from the abstract methods below.
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    async def send_text_strict(
+        self, target_id: str | int, text: str
+    ) -> dict:
+        """Strict variant of ``send_message``. See class docstring above."""
+
+    @abstractmethod
+    async def send_media_strict(
+        self,
+        target_id: str | int,
+        data: bytes | None,
+        mime_type: str,
+        caption: str = "",
+        *,
+        file_id: str | None = None,
+        file_type: str | None = None,
+        file_ref: str | None = None,
+        owner_user_id: str | None = None,
+        file_path: str | None = None,
+    ) -> dict:
+        """Strict variant of ``send_media``.
+
+        Two send modes:
+          1. **Re-send by cached file_id** — caller passes ``file_id`` and
+             ``file_type``; adapter picks the Bot API method from
+             ``file_type`` (sendPhoto / sendDocument / sendAudio /
+             sendVideo / sendVoice / sendVideoNote). MIME alone cannot
+             disambiguate voice from audio or video_note from video.
+          2. **Bytes upload** — caller passes ``data`` + ``mime_type``;
+             adapter picks the method via MIME prefix mapping.
+             ``file_type`` may be supplied to override the mapping.
+
+        On success, when ``file_ref`` (explicit) or ``file_path``
+        (auto-derive) is supplied AND ``owner_user_id`` is non-empty,
+        the adapter writes a row to ``outbound_files`` so the file can
+        be re-forwarded later without re-uploading bytes. Adapters that
+        do not implement a file cache may ignore those kwargs.
+        """
+
+    @abstractmethod
+    async def copy_message_strict(
+        self,
+        target_id: str | int,
+        from_chat_id: int,
+        message_id: int,
+    ) -> dict:
+        """Strict variant of Telegram's ``copyMessage`` (or platform
+        equivalent). Used as the fallback path when ``send_media_strict``
+        with a cached ``file_id`` fails."""
+
 
 # ---------------------------------------------------------------------------
 # Global adapter registry

@@ -291,3 +291,45 @@ class SlackAdapter(TransportAdapter):
         except Exception:
             logger.exception("Error downloading Slack file from %s", file_url)
         return None
+
+    # ------------------------------------------------------------------
+    # Strict variants — not implemented for Slack in v1. Telegram's
+    # ``file_id`` reuse and ``copyMessage`` have no direct equivalent in
+    # the Slack Web API; the planned cross-chat file forwarding flows
+    # are Telegram-only for now (proposal §8). Stubs raise so the
+    # abstract base does not block instantiation.
+    # ------------------------------------------------------------------
+
+    async def send_text_strict(
+        self, target_id: str | int, text: str
+    ) -> dict:
+        raise NotImplementedError(
+            "SlackAdapter does not implement send_text_strict (v1)"
+        )
+
+    async def send_media_strict(
+        self,
+        target_id: str | int,
+        data: bytes | None,
+        mime_type: str,
+        caption: str = "",
+        *,
+        file_id: str | None = None,
+        file_type: str | None = None,
+        file_ref: str | None = None,
+        owner_user_id: str | None = None,
+        file_path: str | None = None,
+    ) -> dict:
+        raise NotImplementedError(
+            "SlackAdapter does not implement send_media_strict (v1)"
+        )
+
+    async def copy_message_strict(
+        self,
+        target_id: str | int,
+        from_chat_id: int,
+        message_id: int,
+    ) -> dict:
+        raise NotImplementedError(
+            "SlackAdapter does not implement copy_message_strict (v1)"
+        )
