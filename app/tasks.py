@@ -407,6 +407,175 @@ async def _notify_admins_safe(text: str, *, task_id: str) -> None:
         )
 
 
+# Known-bad phrases the LLM has produced in the wild when fabricating a
+# failure cause. Kept narrow (curated, not extensible by the LLM) so the
+# detector stays a high-signal Law-6 enforcement layer. All matched as
+# case-insensitive substrings.
+#
+# Sourced from the 2026-05-20 cron_97f22322 incident:
+#   * Slack post: "Note: Google Drive upload was bypassed as the
+#     account is not connected."
+#   * Bot monitor reply: "permission/scope mismatch at exact moment of
+#     execution"
+# Neither phrase appears anywhere in app/, skills/, docs/, or
+# interfaces/ — both are LLM compositions.
+_SUSPECT_PHRASES: tuple[str, ...] = (
+    "drive upload was bypassed",
+    "upload was bypassed",
+    "as the account is not connected",
+    "permission/scope mismatch",
+    "at exact moment of execution",
+)
+
+
+async def _check_suspect_phrase_for_scheduled_fire(
+    *,
+    runner,
+    user_id: str,
+    session_id: str,
+    task_id: str,
+    owner_user_id: str,
+    response: str,
+    start_epoch: float,
+) -> tuple[str, bool]:
+    """Fix 2.3 — orthogonal Law-6 enforcement that triggers on the
+    LLM's *output* (independent of the prompt-trigger map in Fix 2.2).
+
+    Runs ONLY when Fix 2.2 left the fire in a success posture
+    (agent_ok=True). Returns the (possibly-prefixed) response and a
+    new ``agent_ok`` boolean. A return of ``False`` flips the fire to
+    a fail-the-task posture; the cursor-advance gate at the bottom of
+    ``run_scheduled_task`` then refuses to advance.
+
+    Three branches — every one fails the task and admin-alerts:
+
+      (a) Event scan fails → status "Failed (suspect-phrase scan
+          failed)", CRITICAL log (from the helper), admin alert,
+          response prefixed with "cannot self-verify".
+      (b) Real tool error recorded in the session AND the LLM
+          response paraphrased it → status "Failed (suspect phrase
+          + real tool error paraphrased)", logger.error, admin
+          alert, response prepended with the verbatim tool error
+          messages.
+      (c) No real tool error in the session → status "Failed
+          (suspect phrase + no recorded tool error: fabricated)",
+          logger.critical (pure fabrication — the LLM invented a
+          failure narrative with no observed cause), admin alert,
+          response prefixed with the "treat as fabricated" notice.
+    """
+    if not response:
+        return response, True
+    lower = response.lower()
+    if not any(p in lower for p in _SUSPECT_PHRASES):
+        return response, True
+
+    from app.core.agent_executor import list_invocation_tool_calls
+
+    try:
+        calls = await list_invocation_tool_calls(
+            runner, user_id, session_id, since_epoch=start_epoch,
+        )
+    except Exception:
+        await _notify_admins_safe(
+            f"Suspect phrase detected in scheduled task `{task_id}` "
+            f"AND session event scan failed. Manual ADK-event "
+            f"inspection required for `{session_id}`.",
+            task_id=task_id,
+        )
+        ACTIVE_TASKS[task_id]["status"] = "Failed (suspect-phrase scan failed)"
+        ACTIVE_TASKS[task_id]["error"] = "suspect-phrase scan failed"
+        _log_job_event(
+            "error", task_id=task_id, kind="scheduled",
+            owner_user_id=owner_user_id or "",
+            error="suspect-phrase scan failed",
+            session_id=session_id,
+        )
+        response = (
+            "⚠️ (suspect phrase detected; event scan failed; admin "
+            "notified)\n\n" + response
+        )
+        return response, False
+
+    real_errors = [
+        c for c in calls
+        if c.get("response_status") == "error"
+        and isinstance(c.get("response_message"), str)
+        and c.get("response_message")
+    ]
+
+    if real_errors:
+        # Branch (b): the LLM had a real verbatim error available and
+        # paraphrased it into a suspect phrase. Law-6 violation —
+        # surface the verbatim error AND fail the task so the cursor
+        # does not advance.
+        verbatim_block = "\n".join(
+            f"  - {c['name']}: {c['response_message']}" for c in real_errors
+        )
+        response = (
+            f"⚠️ Scheduled task `{task_id}` — Law 6 violation: LLM "
+            f"produced suspect failure language while real tool "
+            f"errors were recorded. Verbatim tool errors (LLM wording "
+            f"below may be unreliable):\n"
+            + verbatim_block
+            + "\n\n--- LLM's (paraphrased) response ---\n" + response
+        )
+        logger.error(
+            "Scheduled task %s: suspect-phrase Law-6 violation; "
+            "prepended %d verbatim tool error(s).",
+            task_id, len(real_errors),
+        )
+        await _notify_admins_safe(
+            f"Suspect-phrase Law-6 violation in scheduled task "
+            f"`{task_id}`: LLM paraphrased a real tool error. "
+            f"Session: `{session_id}`.",
+            task_id=task_id,
+        )
+        ACTIVE_TASKS[task_id]["status"] = (
+            "Failed (suspect phrase + real tool error paraphrased)"
+        )
+        ACTIVE_TASKS[task_id]["error"] = "suspect-phrase law6 paraphrase"
+        _log_job_event(
+            "error", task_id=task_id, kind="scheduled",
+            owner_user_id=owner_user_id or "",
+            error="suspect-phrase law6 paraphrase",
+            tool_error_count=len(real_errors),
+            session_id=session_id,
+        )
+        return response, False
+
+    # Branch (c): suspect phrase with NO recorded tool error → pure
+    # fabrication. Severity CRITICAL — the LLM invented a failure
+    # narrative against an empty error record.
+    logger.critical(
+        "Scheduled task %s: suspect failure language with NO tool "
+        "error in the session. Law 6 violation — fabricated cause. "
+        "Response prefix: %r",
+        task_id, response[:300],
+    )
+    await _notify_admins_safe(
+        f"Suspect Law-6 violation in scheduled task `{task_id}`: "
+        f"response contains failure language with no recorded tool "
+        f"error. Session: `{session_id}`. Inspect ADK events.",
+        task_id=task_id,
+    )
+    ACTIVE_TASKS[task_id]["status"] = (
+        "Failed (suspect phrase + no recorded tool error: fabricated)"
+    )
+    ACTIVE_TASKS[task_id]["error"] = "suspect-phrase fabricated cause"
+    _log_job_event(
+        "error", task_id=task_id, kind="scheduled",
+        owner_user_id=owner_user_id or "",
+        error="suspect-phrase fabricated cause",
+        session_id=session_id,
+    )
+    response = (
+        "⚠️ This task's response contains failure claims that do not "
+        "match any recorded tool error. Treat as fabricated.\n\n"
+        + response
+    )
+    return response, False
+
+
 def _cleanup_ephemeral_task_state(session_id: str) -> None:
     """Best-effort cleanup for scheduler-owned session sidecar state."""
     try:
@@ -862,6 +1031,23 @@ async def run_scheduled_task(
                     task_id=task_id,
                     owner_user_id=owner_user_id,
                     task_prompt=task_prompt,
+                    response=response,
+                    start_epoch=start_epoch,
+                )
+
+            # Fix 2.3 — orthogonal suspect-phrase scan. Triggered by the
+            # LLM's output (not the prompt), so it complements Fix 2.2 on
+            # the case where the prompt doesn't trip a trigger but the
+            # LLM still produced known-bad failure language. Only runs
+            # when Fix 2.2 left the fire in a success posture — Fix 2.2's
+            # warning prefix already names the problem if it fired.
+            if agent_ok:
+                response, agent_ok = await _check_suspect_phrase_for_scheduled_fire(
+                    runner=runner,
+                    user_id=user_id,
+                    session_id=session_id,
+                    task_id=task_id,
+                    owner_user_id=owner_user_id,
                     response=response,
                     start_epoch=start_epoch,
                 )
