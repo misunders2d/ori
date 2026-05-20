@@ -344,8 +344,43 @@ identifier" or similar error (slice 7 forward flow).
 
 ---
 
+## media_items.file_path threading (slice 5)
+
+`extract_agent_response` (`app/core/agent_executor.py`) emits an
+`AgentResponse(media_items=[...])` for the transport pollers to ship.
+Each item used to be `{"data": bytes, "mime_type": str}`. Slice 5
+widens the dict shape with a third optional key:
+
+```python
+{
+    "data": bytes,
+    "mime_type": str,
+    "file_path": str | None,
+}
+```
+
+- Function-response branch (tool returned `{"file_path": "..."}`):
+  `file_path` is the absolute path of the source file.
+- Inline-data branch with the `__contract_file:<abs path>` display_name
+  marker (set by `file_attachment_inject`): `file_path` is the absolute
+  marker path.
+- User-uploaded inline_data (no marker): `file_path = None`. The
+  transport MUST NOT write a cache row for somebody else's upload.
+
+Slice 6 reads this key in the Telegram poller's delivery loop and
+threads it into `send_media_strict(file_path=..., owner_user_id=...)`
+so bot-generated charts auto-populate the outbound-files cache. Slack
+and any other consumer can keep using `item["data"]` /
+`item["mime_type"]` exactly as before — the new key is additive.
+
+Tests (`tests/test_executor.py`, 3 new cases on top of the existing 5):
+- function-response branch emits absolute `file_path`.
+- inline-data marker branch emits absolute marker path.
+- inline-data without marker (user upload) → `file_path` is `None`.
+
+---
+
 ## (Remaining sections land with subsequent slices.)
-- Slice 5 — `media_items` shape extension.
 - Slice 6 — poller delivery loop auto-derive `file_ref`.
 - Slice 7 — agent-callable tools in `app/tools/telegram.py`.
 - Slice 8 — poller short-circuits (`/alias`, `/forward`, `/cap`,

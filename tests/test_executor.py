@@ -220,3 +220,136 @@ async def test_extract_agent_response_string_message():
     assert new_message is not None
     assert new_message.role == "user"
     assert any(hasattr(p, "text") and p.text for p in new_message.parts)
+
+
+# ---------------------------------------------------------------------------
+# slice 5: media_items[*]["file_path"] is threaded so the transport layer
+# can auto-derive a file_ref for the Telegram outbound-files cache.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_function_response_branch_includes_file_path(tmp_path):
+    """Tool emits a `file_path`; the produced media_item must carry it
+    so slice-6's poller delivery loop can pass it into
+    `send_media_strict(file_path=..., owner_user_id=...)`."""
+    chart = tmp_path / "q1_revenue.png"
+    chart.write_bytes(b"\x89PNGbytes")
+
+    runner = MagicMock()
+    runner.app_name = "ori"
+    runner.session_service = AsyncMock()
+    session = MagicMock()
+    session.id = "tg_chat_x"
+    session.events = []
+    runner.session_service.get_session.return_value = session
+
+    async def mock_run_async(*args, **kwargs):
+        fr_part = MagicMock()
+        fr_part.text = None
+        fr_part.inline_data = None
+        fr_part.function_response = MagicMock()
+        fr_part.function_response.response = {
+            "status": "success",
+            "file_path": str(chart),
+        }
+        event = MagicMock()
+        event.content = MagicMock()
+        event.content.parts = [fr_part]
+        event.actions = None
+        yield event
+
+    runner.run_async = mock_run_async
+    response = await extract_agent_response(runner, "tg_123", "tg_chat_x", "go")
+
+    assert len(response.media_items) == 1
+    item = response.media_items[0]
+    assert item["mime_type"] == "image/png"
+    assert item["file_path"] == os.path.abspath(str(chart))
+
+
+@pytest.mark.asyncio
+async def test_inline_data_branch_includes_marker_path(tmp_path):
+    """`file_attachment_inject` adds an inline_data Part with the
+    `__contract_file:<abs path>` display_name marker. The path must
+    be exposed as `media_items[i]["file_path"]` so slice 6 can route it
+    into the file cache without double-attaching (existing dedup intact).
+    """
+    chart = tmp_path / "bar.png"
+    chart.write_bytes(b"\x89PNGbytes")
+
+    runner = MagicMock()
+    runner.app_name = "ori"
+    runner.session_service = AsyncMock()
+    session = MagicMock()
+    session.id = "tg_chat_x"
+    session.events = []
+    runner.session_service.get_session.return_value = session
+
+    async def mock_run_async(*args, **kwargs):
+        text_part = MagicMock()
+        text_part.text = "Chart attached."
+        text_part.thought = False
+        text_part.inline_data = None
+        text_part.function_response = None
+
+        inline_part = MagicMock()
+        inline_part.text = None
+        inline_part.thought = False
+        inline_part.function_response = None
+        inline_part.inline_data = MagicMock()
+        inline_part.inline_data.data = b"\x89PNGbytes"
+        inline_part.inline_data.mime_type = "image/png"
+        inline_part.inline_data.display_name = (
+            f"__contract_file:{os.path.abspath(str(chart))}"
+        )
+
+        event = MagicMock()
+        event.content = MagicMock()
+        event.content.parts = [text_part, inline_part]
+        event.actions = None
+        yield event
+
+    runner.run_async = mock_run_async
+    response = await extract_agent_response(runner, "tg_123", "tg_chat_x", "go")
+
+    assert len(response.media_items) == 1
+    item = response.media_items[0]
+    assert item["mime_type"] == "image/png"
+    assert item["file_path"] == os.path.abspath(str(chart))
+
+
+@pytest.mark.asyncio
+async def test_inline_data_user_upload_has_none_file_path():
+    """A user-uploaded inline_data Part has no `__contract_file:` marker,
+    so `file_path` must be None — transport must not write a cache row
+    for somebody else's upload."""
+    runner = MagicMock()
+    runner.app_name = "ori"
+    runner.session_service = AsyncMock()
+    session = MagicMock()
+    session.id = "tg_chat_y"
+    session.events = []
+    runner.session_service.get_session.return_value = session
+
+    async def mock_run_async(*args, **kwargs):
+        inline_part = MagicMock()
+        inline_part.text = None
+        inline_part.thought = False
+        inline_part.function_response = None
+        inline_part.inline_data = MagicMock()
+        inline_part.inline_data.data = b"USER-UPLOAD"
+        inline_part.inline_data.mime_type = "image/jpeg"
+        inline_part.inline_data.display_name = ""  # NO marker
+
+        event = MagicMock()
+        event.content = MagicMock()
+        event.content.parts = [inline_part]
+        event.actions = None
+        yield event
+
+    runner.run_async = mock_run_async
+    response = await extract_agent_response(runner, "tg_123", "tg_chat_y", "ignore")
+
+    assert len(response.media_items) == 1
+    assert response.media_items[0]["file_path"] is None

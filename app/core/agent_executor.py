@@ -80,6 +80,17 @@ class AgentResponse:
     Callers that loop on agent invocation MUST check this and break out
     instead of retrying — the underlying session is poisoned and further
     calls will fail the same way, burning quota.
+
+    `media_items` is a list of dicts with the following keys:
+
+    - ``data`` (``bytes``): the file payload.
+    - ``mime_type`` (``str``): MIME type, e.g. ``image/png``.
+    - ``file_path`` (``str | None``): the on-disk path the bytes came
+      from when available (function-response ``file_path`` field or the
+      ``__contract_file:`` marker on inline_data). ``None`` for user
+      uploads or any payload whose origin we don't track. Slice 6 reads
+      this so the Telegram transport can auto-derive a ``file_ref`` for
+      the outbound-files cache; consumers that don't need it can ignore.
     """
     text: str = ""
     media_items: list[dict] = field(default_factory=list)
@@ -331,6 +342,11 @@ async def extract_agent_response(
                                         media_items.append({
                                             "data": f.read(),
                                             "mime_type": mime or "application/octet-stream",
+                                            # slice 5: thread the path so the
+                                            # transport layer can auto-derive a
+                                            # file_ref for the outbound-files
+                                            # cache.
+                                            "file_path": fp_abs,
                                         })
                                     _attached_file_paths.add(fp_abs)
                         # Capture inline binary data (images, audio, etc.)
@@ -346,6 +362,11 @@ async def extract_agent_response(
                             media_items.append({
                                 "data": part.inline_data.data,
                                 "mime_type": part.inline_data.mime_type or "application/octet-stream",
+                                # slice 5: thread the marker path (if any) so
+                                # the transport layer can auto-derive a
+                                # file_ref. Empty when the inline_data came
+                                # from a user upload, not file_attachment_inject.
+                                "file_path": marked_path or None,
                             })
                             if marked_path:
                                 _attached_file_paths.add(marked_path)
