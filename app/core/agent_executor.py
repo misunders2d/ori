@@ -523,3 +523,96 @@ async def process_message_for_context(runner, user_id: str, session_id: str, mes
         content=content
     )
     await runner.session_service.append_event(session, event)
+
+
+async def list_invocation_tool_calls(
+    runner,
+    user_id: str,
+    session_id: str,
+    since_epoch: float,
+) -> list[dict]:
+    """Return tool calls + responses recorded in the session since
+    ``since_epoch`` (Unix float).
+
+    Used by ``app.tasks.run_scheduled_task``'s fabrication detector to
+    decide whether a scheduled fire actually invoked the tools its
+    prompt requires. Read-only — never mutates state. Logs CRITICAL and
+    re-raises on read failure (Law 6: no silent empty list).
+
+    ADK Event timestamps are float Unix epoch values (set via
+    ``time.time()`` when events are appended — see this module's
+    ``update_session_state`` and the legacy paths above). Callers must
+    therefore pass a float epoch; comparing against a ``datetime``
+    would raise ``TypeError`` on every event.
+
+    Returns a list of dicts, each shaped:
+        {"name": str,
+         "args_keys": list[str],            # function_call only
+         "response_status": str | None,     # function_response only
+         "response_message": str | None,    # function_response only
+         "timestamp": float}
+    Function calls and function responses appear as separate entries so
+    callers can correlate them (or count distinct call sites).
+    """
+    try:
+        session = await runner.session_service.get_session(
+            app_name=runner.app_name,
+            user_id=user_id,
+            session_id=session_id,
+        )
+    except Exception as exc:
+        logger.critical(
+            "list_invocation_tool_calls: failed to load session %r for "
+            "user %r: %s",
+            session_id, user_id, exc, exc_info=True,
+        )
+        raise
+
+    if not session or not session.events:
+        logger.warning(
+            "list_invocation_tool_calls: session %r has no events — "
+            "scheduled fire produced zero tool activity",
+            session_id,
+        )
+        return []
+
+    out: list[dict] = []
+    for ev in session.events:
+        ts = getattr(ev, "timestamp", None)
+        # ADK Event.timestamp is float Unix epoch. Guard for None and
+        # non-numeric — some synthetic events may lack a timestamp.
+        if not isinstance(ts, (int, float)) or ts < since_epoch:
+            continue
+        content = getattr(ev, "content", None)
+        parts = getattr(content, "parts", None) if content is not None else None
+        if not parts:
+            continue
+        for part in parts:
+            fc = getattr(part, "function_call", None)
+            if fc and getattr(fc, "name", None):
+                args = getattr(fc, "args", {}) or {}
+                out.append({
+                    "name": fc.name,
+                    "args_keys": list(args.keys()) if hasattr(args, "keys") else [],
+                    "response_status": None,
+                    "response_message": None,
+                    "timestamp": float(ts),
+                })
+            fr = getattr(part, "function_response", None)
+            if fr and getattr(fr, "name", None):
+                resp = getattr(fr, "response", None)
+                status = None
+                message = None
+                if isinstance(resp, dict):
+                    status = resp.get("status")
+                    raw_msg = resp.get("message")
+                    if isinstance(raw_msg, str):
+                        message = raw_msg
+                out.append({
+                    "name": fr.name,
+                    "args_keys": [],
+                    "response_status": status,
+                    "response_message": message,
+                    "timestamp": float(ts),
+                })
+    return out
