@@ -372,7 +372,18 @@ Tool for spawning sibling agent containers.
 ## `app/tools/telegram.py`
 Telegram-specific agent tools.
 
-- `async telegram_send_dm` (line 21) — Send a direct message to a Telegram user by name or username.
+- `async telegram_send_dm` (line 205) — Send a direct message to a Telegram user by name or username.
+- `async telegram_send_to_chat` (line 267) — Send a text message to a group/channel/supergroup or by raw chat_id.
+- `async telegram_save_alias` (line 317) — Persist a chat alias for the caller. Requires `manage_aliases`.
+- `async telegram_save_last_forward_alias` (line 371) — Save the most recently forwarded message (in the caller's DM) as
+- `async telegram_list_aliases` (line 435) — List the caller's saved chat aliases. Self-scoped; no capability
+- `async telegram_delete_alias` (line 453) — Remove a saved alias. Requires `manage_aliases`.
+- `async telegram_resolve_alias` (line 483) — Resolve an alias to its chat_id. Self-scoped; no capability
+- `async telegram_forward` (line 514) — Re-send a cached file (by file_ref) to a target chat.
+- `async telegram_list_cached_files` (line 625) — List the caller's cached outbound files. Self-scoped.
+- `async telegram_grant_capability` (line 645) — Grant a capability to a user. ACT+TOTP-gated by
+- `async telegram_revoke_capability` (line 679) — Revoke a capability from a user. ACT+TOTP-gated by
+- `async telegram_list_capabilities` (line 711) — List a user's capabilities. No-arg → self (no capability). With
 
 ## `app/tools/visualize.py`
 Data visualization tool — executes plotting code in a restricted scope.

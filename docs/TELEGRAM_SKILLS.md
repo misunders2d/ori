@@ -441,8 +441,92 @@ to drive the full `poll_telegram` loop in tests).
 
 ---
 
+## Agent-callable tools (slice 7)
+
+`app/tools/telegram.py` now exposes the full agent-facing surface for
+the three new features. Every signature carries
+`tool_context: ToolContext = None`. Caller identity is read from
+`tool_context.state["user_id"]`; missing context returns
+`{"status": "error", "message": "Missing caller user_id in
+tool_context.state — refusing to proceed..."}` rather than silently
+permitting the operation.
+
+### Capability matrix (locked in v3)
+
+| Tool | Capability |
+|---|---|
+| `telegram_send_dm` | — (existing) |
+| `telegram_send_to_chat` | `send_to_groups` (only when target is non-DM) |
+| `telegram_save_alias` | `manage_aliases` |
+| `telegram_save_last_forward_alias` | `manage_aliases` |
+| `telegram_list_aliases` | — (self-scope) |
+| `telegram_delete_alias` | `manage_aliases` |
+| `telegram_resolve_alias` | — (self-scope) |
+| `telegram_forward` | `forward_files` (only when target is non-DM) |
+| `telegram_list_cached_files` | — (self-scope) |
+| `telegram_grant_capability` | admin (ACT+TOTP via guardrail — slice 10) |
+| `telegram_revoke_capability` | admin (ACT+TOTP via guardrail — slice 10) |
+| `telegram_list_capabilities` | self-scope; cross-user → admin inline check |
+
+### Target resolution
+
+`_resolve_target(caller_user_id, target)` recognizes three forms:
+
+- `tg_-1001234` / `tg_111` — prefixed canonical id; chat_type unknown.
+- `-1001234` / `111` — raw signed/unsigned int; chat_type unknown.
+- any other token — alias lookup scoped to `caller_user_id`.
+
+`_is_non_dm(chat_id, chat_type)` is the cap-check classifier:
+- alias-resolved row carries `chat_type` → channel/supergroup/group are
+  always non-DM.
+- raw target with no chat_type → negative chat_id is non-DM (Telegram
+  convention); positive chat_id is DM-shaped per proposal §12 v2-c (no
+  cap, fail loud at Telegram).
+
+### Forward flow
+
+1. Resolve target.
+2. Capability check (`forward_files` for non-DM).
+3. `telegram_store.get_file(caller, file_ref)` (eager-prunes expired
+   rows, slides `expires_at` forward on hit).
+4. `adapter.send_media_strict(chat_id, data=None, mime_type=row.mime_type,
+   file_id=row.file_id, file_type=row.file_type, caption=row.caption)`.
+5. On `ok`: return `status=success, method="file_id"`.
+6. On Telegram-side error AND row has `source_chat_id`/`source_message_id`:
+   try `adapter.copy_message_strict(target, source_chat, source_msg)`.
+7. On combined failure: return error with both descriptions.
+8. On error without source ids: return error suggesting re-upload.
+
+### Tests (4 files, 54 cases)
+
+- `tests/test_telegram_send_to_chat.py` — 10 cases. happy-path with
+  alias + cap; cap-missing blocks before adapter call; bot-not-member
+  surfaces Telegram description verbatim; raw negative chat_id (with /
+  without cap); positive raw chat_id skips cap (v2-c); `tg_-`-prefixed
+  target; unknown alias; missing caller user_id refused; admin implicit
+  bypass.
+- `tests/test_telegram_forward.py` — 15 cases. file_id resend +
+  parametrized per-file_type routing for all 6 types;
+  voice/audio + video_note/video disambiguation; cache miss; expired;
+  wrong-owner isolation; copyMessage fallback success; combined-failure
+  error; no-source-ids error suggesting re-upload; cap gating; positive
+  raw target skips cap; admin implicit bypass.
+- `tests/test_telegram_alias_tools.py` — 15 cases. save/list/delete/
+  resolve happy paths; cap matrix enforcement; DM-type rejection;
+  chat_id type validation; owner-scoped lists isolate; save_last_forward
+  happy / no-stash / no-cap; missing-context refusal across all
+  five tools.
+- `tests/test_telegram_capability_tools.py` — 14 cases. grant happy /
+  unknown-name error / required-fields; revoke happy / no-op;
+  list-self / list-self-via-arg / cross-user blocked / admin
+  cross-user / admin implicit-all; missing-context refused.
+
+Auto-generated `docs/INDEX.md` and `docs/TOOLS.md` are refreshed by
+`scripts/gen_docs.py` and committed alongside the slice.
+
+---
+
 ## (Remaining sections land with subsequent slices.)
-- Slice 7 — agent-callable tools in `app/tools/telegram.py`.
 - Slice 8 — poller short-circuits (`/alias`, `/forward`, `/cap`,
   `/savefile`, forward-extract).
 - Slice 9 — `TelegramSkillsToolset`.
