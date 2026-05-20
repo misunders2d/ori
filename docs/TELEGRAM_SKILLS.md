@@ -380,8 +380,68 @@ Tests (`tests/test_executor.py`, 3 new cases on top of the existing 5):
 
 ---
 
+## Poller delivery loop auto-derive (slice 6)
+
+The Telegram poller's `_process_and_send` (in
+`interfaces/telegram_poller.py`) historically shipped media via the
+best-effort `adapter.send_media(...)`. Slice 6 switches to the strict
+variant and threads the new `file_path` key so bot-generated files
+(charts, presentations, exports) auto-populate `outbound_files` without
+the agent having to call any cache tool.
+
+### Module-level helper: `_deliver_media_items`
+
+```python
+async def _deliver_media_items(
+    adapter: TelegramAdapter,
+    chat_id: str | int,
+    owner_user_id: str | None,
+    media_items: list[dict],
+) -> list[dict]:
+    ...
+```
+
+For each item in `media_items`:
+- skip malformed entries (non-dict, missing/wrong-type `data`).
+- call `adapter.send_media_strict(chat_id, data, mime_type,
+  file_path=item.get("file_path"), owner_user_id=owner_user_id)`.
+- if `result["ok"]` is False: log at ERROR with Telegram's `description`
+  verbatim (Law 6); DO NOT raise; continue with the next item.
+
+Extracting the helper makes the wiring testable in isolation (no need
+to drive the full `poll_telegram` loop in tests).
+
+### Cache flow end-to-end
+
+1. Tool generates a chart, returns `{"file_path": "/tmp/q1_revenue.png", "status": "success"}`.
+2. `extract_agent_response` walks the function_response and inline_data
+   parts; emits `media_items=[{"data": ..., "mime_type": "image/png",
+   "file_path": "/tmp/q1_revenue.png"}]` (slice 5).
+3. Poller's `_process_and_send` calls `_deliver_media_items(adapter,
+   chat_id, user_id, response.media_items)`.
+4. Adapter's `send_media_strict` (slice 4) uploads bytes, extracts the
+   outbound `file_id`, and writes a row to `outbound_files` keyed by
+   `owner_user_id=tg_111`, `file_ref="q1_revenue"` (case-folded
+   basename, sans extension), `file_type="photo"`.
+5. Later the user / agent can `/forward q1_revenue to <alias>` and the
+   slice-7 tool will resolve the alias, look up the cache row, and
+   re-send via `file_id` (no byte upload).
+
+### Tests (`tests/test_telegram_autoderive_file_ref.py`, 6 cases)
+
+- helper threads `file_path` + `owner_user_id` for every item.
+- helper uses strict, not best-effort (regression pin).
+- helper logs each failure and continues with the next item.
+- helper skips non-dict / missing-data items defensively.
+- end-to-end integration with a fake httpx client: real
+  `TelegramAdapter.send_media_strict` populates the cache with the
+  auto-derived ref.
+- `file_path=None` items reach the adapter with the same value so no
+  cache row is written.
+
+---
+
 ## (Remaining sections land with subsequent slices.)
-- Slice 6 — poller delivery loop auto-derive `file_ref`.
 - Slice 7 — agent-callable tools in `app/tools/telegram.py`.
 - Slice 8 — poller short-circuits (`/alias`, `/forward`, `/cap`,
   `/savefile`, forward-extract).

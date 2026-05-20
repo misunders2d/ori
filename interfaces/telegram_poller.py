@@ -172,6 +172,47 @@ def _derive_file_ref(file_ref: str | None, file_path: str | None) -> str | None:
     return None
 
 
+async def _deliver_media_items(
+    adapter: "TelegramAdapter",
+    chat_id: str | int,
+    owner_user_id: str | None,
+    media_items: list[dict],
+) -> list[dict]:
+    """Ship every item in ``media_items`` to ``chat_id`` via the strict
+    adapter so bot-generated files auto-populate the outbound-files
+    cache (slice 6 of the Telegram skills plan).
+
+    Returns the list of per-item result dicts (one per send). Failures
+    are logged at ERROR but DO NOT raise — the user has already received
+    the text portion of the agent's response; abandoning the rest of the
+    loop would silently swallow remaining items.
+    """
+    results: list[dict] = []
+    for media_item in media_items:
+        if not isinstance(media_item, dict):
+            continue
+        data = media_item.get("data")
+        if not isinstance(data, (bytes, bytearray)):
+            continue
+        mime_type = media_item.get("mime_type") or "application/octet-stream"
+        file_path = media_item.get("file_path")
+        result = await adapter.send_media_strict(
+            chat_id,
+            bytes(data),
+            mime_type,
+            file_path=file_path,
+            owner_user_id=owner_user_id,
+        )
+        if not result.get("ok"):
+            logger.error(
+                "Telegram media delivery failed for chat %s: %s",
+                chat_id,
+                result.get("description", "<no description>"),
+            )
+        results.append(result)
+    return results
+
+
 class TelegramAdapter(TransportAdapter):
     """Telegram implementation of the transport adapter."""
 
@@ -647,12 +688,18 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                         import re
                         clean_text = re.sub(r"^Metadata:.*?\n", "", response.text).lstrip()
                         await adapter.send_message(_chat_id, clean_text or response.text)
-                    # Send any media attachments the agent produced
-                    for media_item in response.media_items:
-                        await adapter.send_media(
+                    # Send any media attachments the agent produced. Use
+                    # the strict adapter so (a) failures are logged with
+                    # Telegram's description verbatim per Law 6, and (b)
+                    # bot-generated files auto-populate outbound_files
+                    # via the file_path threaded through media_items
+                    # (slice 5 → slice 6 wiring).
+                    if response.media_items:
+                        await _deliver_media_items(
+                            adapter,
                             _chat_id,
-                            media_item["data"],
-                            media_item["mime_type"],
+                            _user_id,
+                            response.media_items,
                         )
                 except asyncio.CancelledError:
                     pass
