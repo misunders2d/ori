@@ -15,6 +15,7 @@ from app.core.agent_executor import (
     extract_agent_response,
     process_message_for_context,
 )
+from app.core import telegram_store
 from app.core.transport import TransportAdapter, register_adapter
 
 # New imports for whitelist and logging
@@ -112,6 +113,63 @@ def _scrub_secrets(text: str) -> str:
 
 TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
 TELEGRAM_FILE_API = "https://api.telegram.org/file/bot{token}/{path}"
+
+
+# --------------------------------------------------------------------------- strict-variant helpers
+
+
+def _photo_file_id(result: dict) -> str:
+    """sendPhoto returns ``photo: [size_variants]``; take the largest.
+
+    Defensive: a malformed result (missing key on the last variant, or a
+    non-dict in the list) must NOT raise — the strict layer would then
+    return success-as-exception instead of the shaped {"ok": …} dict.
+    """
+    sizes = result.get("photo") or []
+    if not sizes:
+        return ""
+    largest = sizes[-1]
+    if not isinstance(largest, dict):
+        return ""
+    return largest.get("file_id", "")
+
+
+def _file_id_from_field(field: str):
+    def _extract(result: dict) -> str:
+        obj = result.get(field) or {}
+        return obj.get("file_id", "")
+    return _extract
+
+
+# file_type -> (method, form_field, file_id_extractor)
+_FILE_TYPE_SEND_META: dict[str, tuple[str, str, "callable"]] = {
+    "photo": ("sendPhoto", "photo", _photo_file_id),
+    "document": ("sendDocument", "document", _file_id_from_field("document")),
+    "audio": ("sendAudio", "audio", _file_id_from_field("audio")),
+    "video": ("sendVideo", "video", _file_id_from_field("video")),
+    "voice": ("sendVoice", "voice", _file_id_from_field("voice")),
+    "video_note": ("sendVideoNote", "video_note", _file_id_from_field("video_note")),
+}
+
+
+def _mime_to_file_type(mime_type: str) -> str:
+    prefix = (mime_type or "").split("/")[0]
+    if prefix == "image":
+        return "photo"
+    if prefix == "audio":
+        return "audio"
+    if prefix == "video":
+        return "video"
+    return "document"
+
+
+def _derive_file_ref(file_ref: str | None, file_path: str | None) -> str | None:
+    if file_ref:
+        return file_ref.strip().casefold() or None
+    if file_path:
+        base = os.path.splitext(os.path.basename(file_path))[0]
+        return base.strip().casefold() or None
+    return None
 
 
 class TelegramAdapter(TransportAdapter):
@@ -236,15 +294,99 @@ class TelegramAdapter(TransportAdapter):
             logger.exception("Failed to send media to chat %s via %s", chat_id, method)
 
     # ----------------------------------------------------------------------
-    # Strict variants — slice 3 stubs (raise so the ABC does not block
-    # instantiation). Slice 4 replaces these with real implementations
-    # backed by ``_post`` and the outbound-files cache.
+    # Strict variants — surface Telegram errors verbatim per Law 6.
+    # Contract documented on TransportAdapter (app/core/transport.py).
     # ----------------------------------------------------------------------
 
+    async def _post(
+        self,
+        method: str,
+        *,
+        json: dict | None = None,
+        data: dict | None = None,
+        files: dict | None = None,
+    ) -> dict:
+        """POST to a Bot API method and return the parsed Telegram response.
+
+        Telegram's response is always ``{"ok": bool, ...}``. Network /
+        non-JSON failures are wrapped into the same shape so callers can
+        treat every failure uniformly — never raises on platform errors.
+        """
+        url = TELEGRAM_API.format(token=self._token, method=method)
+        try:
+            if files is not None:
+                resp = await self._client.post(url, data=data, files=files)
+            else:
+                resp = await self._client.post(url, json=json)
+        except httpx.HTTPError as e:
+            # SECURITY: httpx exceptions can echo the request URL, which
+            # contains the bot token. The strict-variant return value is
+            # surfaced to users via tool output, so scrub before
+            # returning. Production proof 2026-05-12 (OAuth URL leak in
+            # outbound markdown) is the prior art on never-trust-echo.
+            return {
+                "ok": False,
+                "error_code": 0,
+                "description": _scrub_secrets(f"HTTP transport error: {e}"),
+            }
+        try:
+            body = resp.json()
+        except ValueError:
+            return {
+                "ok": False,
+                "error_code": resp.status_code,
+                "description": _scrub_secrets(
+                    f"non-JSON response: {resp.text[:300]}"
+                ),
+            }
+        if not isinstance(body, dict):
+            return {
+                "ok": False,
+                "error_code": resp.status_code,
+                "description": _scrub_secrets(
+                    f"unexpected response shape: {body!r}"
+                ),
+            }
+        return body
+
     async def send_text_strict(self, target_id: str | int, text: str) -> dict:
-        raise NotImplementedError(
-            "TelegramAdapter.send_text_strict not yet implemented (slice 4)"
+        # Re-use the security + URL-escape pipeline that the best-effort
+        # send_message path uses (production 2026-05-12 OAuth bug).
+        text = _scrub_secrets(text)
+        if len(text) > 4096:
+            return {
+                "ok": False,
+                "error_code": 0,
+                "description": (
+                    "text exceeds Telegram's 4096 char sendMessage limit; "
+                    "chunk before calling send_text_strict"
+                ),
+            }
+
+        # Try Markdown first; fall back to plain text if Telegram rejects.
+        md_text = _escape_urls_for_telegram_md(text)
+        body = await self._post(
+            "sendMessage",
+            json={"chat_id": target_id, "text": md_text, "parse_mode": "Markdown"},
         )
+        if not body.get("ok"):
+            body = await self._post(
+                "sendMessage",
+                json={"chat_id": target_id, "text": text},
+            )
+
+        if body.get("ok"):
+            result = body.get("result") or {}
+            return {
+                "ok": True,
+                "message_id": result.get("message_id"),
+                "chat_id": (result.get("chat") or {}).get("id"),
+            }
+        return {
+            "ok": False,
+            "error_code": body.get("error_code", 0),
+            "description": body.get("description", ""),
+        }
 
     async def send_media_strict(
         self,
@@ -259,9 +401,112 @@ class TelegramAdapter(TransportAdapter):
         owner_user_id: str | None = None,
         file_path: str | None = None,
     ) -> dict:
-        raise NotImplementedError(
-            "TelegramAdapter.send_media_strict not yet implemented (slice 4)"
-        )
+        # ---- argument validation (errors are platform-shaped so callers
+        # can propagate the description without special-casing) ----
+        if file_id and not file_type:
+            return {
+                "ok": False,
+                "error_code": 0,
+                "description": "file_type required when sending by file_id",
+            }
+        if not file_id and data is None:
+            return {
+                "ok": False,
+                "error_code": 0,
+                "description": "either file_id or data is required",
+            }
+
+        if file_type:
+            ft = file_type.strip().lower()
+        else:
+            ft = _mime_to_file_type(mime_type)
+        meta = _FILE_TYPE_SEND_META.get(ft)
+        if meta is None:
+            return {
+                "ok": False,
+                "error_code": 0,
+                "description": (
+                    f"unsupported file_type {ft!r}; expected one of "
+                    f"{sorted(_FILE_TYPE_SEND_META)}"
+                ),
+            }
+        method, field, extract_id = meta
+
+        # Captions can leak the same secrets that text bodies do.
+        safe_caption = _scrub_secrets(caption) if caption else ""
+
+        if file_id:
+            payload: dict[str, object] = {
+                "chat_id": str(target_id),
+                field: file_id,
+            }
+            if safe_caption:
+                payload["caption"] = safe_caption
+            body = await self._post(method, json=payload)
+        else:
+            # Bytes upload — derive a sensible filename for the form part.
+            assert data is not None  # narrowed by the validation block
+            if file_path:
+                upload_name = os.path.basename(file_path) or "attachment"
+            else:
+                ext = mimetypes.guess_extension(mime_type) or ""
+                upload_name = (
+                    f"attachment_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
+                )
+            form_data: dict[str, str] = {"chat_id": str(target_id)}
+            if safe_caption:
+                form_data["caption"] = safe_caption
+            files_payload = {
+                field: (upload_name, data, mime_type or "application/octet-stream")
+            }
+            body = await self._post(method, data=form_data, files=files_payload)
+
+        if not body.get("ok"):
+            return {
+                "ok": False,
+                "error_code": body.get("error_code", 0),
+                "description": body.get("description", ""),
+            }
+
+        result = body.get("result") or {}
+        outgoing_file_id = extract_id(result)
+        message_id = result.get("message_id")
+        chat_obj = result.get("chat") or {}
+        chat_id_out = chat_obj.get("id")
+
+        # ---- opportunistic cache write (auto-derive file_ref) ----
+        effective_ref = _derive_file_ref(file_ref, file_path)
+        if effective_ref and owner_user_id and outgoing_file_id:
+            try:
+                await telegram_store.put_file(
+                    owner_user_id=owner_user_id,
+                    file_ref=effective_ref,
+                    file_id=outgoing_file_id,
+                    file_type=ft,
+                    filename=(
+                        os.path.basename(file_path) if file_path else None
+                    ),
+                    mime_type=mime_type or None,
+                    source_chat_id=chat_id_out,
+                    source_message_id=message_id,
+                    caption=safe_caption or None,
+                )
+            except Exception:
+                # Cache write failure is non-fatal — the file was sent.
+                # Surface in logs (Law 6) but do not fail the strict call.
+                logger.exception(
+                    "telegram_store.put_file failed for owner=%s ref=%s",
+                    owner_user_id,
+                    effective_ref,
+                )
+
+        return {
+            "ok": True,
+            "message_id": message_id,
+            "chat_id": chat_id_out,
+            "file_id": outgoing_file_id,
+            "file_type": ft,
+        }
 
     async def copy_message_strict(
         self,
@@ -269,9 +514,26 @@ class TelegramAdapter(TransportAdapter):
         from_chat_id: int,
         message_id: int,
     ) -> dict:
-        raise NotImplementedError(
-            "TelegramAdapter.copy_message_strict not yet implemented (slice 4)"
+        body = await self._post(
+            "copyMessage",
+            json={
+                "chat_id": str(target_id),
+                "from_chat_id": from_chat_id,
+                "message_id": message_id,
+            },
         )
+        if body.get("ok"):
+            result = body.get("result") or {}
+            return {
+                "ok": True,
+                "message_id": result.get("message_id"),
+                "chat_id": str(target_id),
+            }
+        return {
+            "ok": False,
+            "error_code": body.get("error_code", 0),
+            "description": body.get("description", ""),
+        }
 
     async def download_file(self, file_id: str) -> Optional[tuple[bytes, str, str]]:
         try:

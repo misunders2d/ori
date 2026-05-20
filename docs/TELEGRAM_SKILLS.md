@@ -258,9 +258,93 @@ into `outbound_files` for later forwarding.
 
 ---
 
-## (Remaining sections land with subsequent slices.)
+## TelegramAdapter strict impls (slice 4)
 
-- Slice 4 — `TelegramAdapter` strict impls.
+`TelegramAdapter` (`interfaces/telegram_poller.py`) now implements all
+three strict variants. The fire-and-forget `send_message` / `send_media`
+paths are unchanged — the poller's outbound delivery loop still uses
+them. New code (tools, /forward command, etc.) routes through the
+strict variants.
+
+### `_post(method, *, json=None, data=None, files=None) -> dict`
+
+Private helper. POSTs to the Bot API and returns the parsed response.
+Telegram's body is always `{"ok": bool, ...}`. Transport errors and
+non-JSON responses are wrapped into the same shape so the layer above
+can branch on `body["ok"]` without try/except boilerplate. NEVER raises
+on a platform 4xx.
+
+### `send_text_strict(target_id, text)`
+
+- Re-uses `_scrub_secrets` and `_escape_urls_for_telegram_md`
+  (production proof 2026-05-12 Google OAuth bug).
+- Rejects text > 4096 chars pre-flight; strict callers chunk before
+  sending.
+- Tries Markdown parse_mode first; on Telegram-side rejection retries
+  in plain text (matches the existing `send_message` fallback).
+- Returns `{"ok": True, "message_id", "chat_id"}` or
+  `{"ok": False, "error_code", "description"}`.
+
+### `send_media_strict(...)`
+
+Two modes:
+
+**1. Re-send by cached file_id.** Requires `file_type` (proposal #1 —
+voice/audio and video_note/video cannot be disambiguated by MIME alone).
+JSON POST to the matching Bot API method with the `file_id` value under
+the matching field.
+
+**2. Bytes upload.** When `file_id is None`. Picks the method via the
+MIME-prefix mapping in `_mime_to_file_type` (image→photo, audio→audio,
+video→video, else→document). `file_type` may override that mapping.
+Multipart upload with caption (secrets-scrubbed).
+
+On success, extracts the outgoing `file_id` per type
+(`photo` is a `[size...]` list — pick the largest; everything else is a
+single object). When `file_ref` (explicit) or `file_path` (auto-derive
+case-folded basename, sans extension) is supplied AND `owner_user_id`
+is non-empty, writes an `outbound_files` row via
+`telegram_store.put_file` so the file can be re-forwarded later. Cache
+failure is non-fatal (logged at EXCEPTION; the send already succeeded).
+
+### `copy_message_strict(target_id, from_chat_id, message_id)`
+
+Thin wrapper over Bot API `copyMessage`. Used as the fallback path when
+re-sending by `file_id` is rejected by Telegram with a "wrong file
+identifier" or similar error (slice 7 forward flow).
+
+### Per-type file_id extraction map
+
+| `file_type` | Bot API method | Response shape |
+|---|---|---|
+| `photo` | `sendPhoto` | `result.photo[-1].file_id` (largest size) |
+| `document` | `sendDocument` | `result.document.file_id` |
+| `audio` | `sendAudio` | `result.audio.file_id` |
+| `video` | `sendVideo` | `result.video.file_id` |
+| `voice` | `sendVoice` | `result.voice.file_id` |
+| `video_note` | `sendVideoNote` | `result.video_note.file_id` |
+
+`sticker` intentionally NOT in this table (v1 scope per proposal §8).
+
+### Tests
+
+`tests/test_telegram_adapter_strict.py` — 23 cases:
+- `send_text_strict`: success, markdown fallback, verbatim error
+  surfacing, oversize-rejected pre-flight, HTTP transport-error wrap.
+- `send_media_strict` by file_id: parametrized routing for all six
+  allowed types; voice-vs-audio disambiguation; video_note-vs-video
+  disambiguation; refusal when `file_id` is set but `file_type` is not;
+  refusal when neither `data` nor `file_id` is provided.
+- `send_media_strict` bytes upload: MIME-prefix fallback to photo;
+  unknown-MIME fallback to document; explicit `file_type` overrides MIME.
+- Cache write side-effect: row appears in `outbound_files` when
+  `file_ref` + `owner_user_id` are passed; auto-derive from `file_path`;
+  no cache row when `owner_user_id` is missing.
+- `copy_message_strict`: success and verbatim-failure paths.
+
+---
+
+## (Remaining sections land with subsequent slices.)
 - Slice 5 — `media_items` shape extension.
 - Slice 6 — poller delivery loop auto-derive `file_ref`.
 - Slice 7 — agent-callable tools in `app/tools/telegram.py`.

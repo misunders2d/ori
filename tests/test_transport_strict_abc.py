@@ -5,8 +5,11 @@ Confirms:
       declared abstract on the base class.
     - A concrete subclass that omits any of them cannot be instantiated.
     - SlackAdapter (v1) stubs raise NotImplementedError.
-    - TelegramAdapter (slice-3 stub) raises NotImplementedError but
-      remains instantiable. Slice 4 replaces these with real impls.
+    - Both existing adapter subclasses (Slack, Telegram) remain
+      instantiable.
+
+TelegramAdapter's real strict-variant behavior is exercised in
+tests/test_telegram_adapter_strict.py (slice 4).
 """
 
 from __future__ import annotations
@@ -76,19 +79,6 @@ async def test_slack_adapter_stubs_raise_not_implemented():
         await adapter.send_media_strict("C123", b"x", "image/png")
     with pytest.raises(NotImplementedError, match="copy_message_strict"):
         await adapter.copy_message_strict("C123", 0, 0)
-
-
-@pytest.mark.asyncio
-async def test_telegram_adapter_slice3_stubs_raise_not_implemented():
-    async with httpx.AsyncClient() as client:
-        adapter = telegram_poller.TelegramAdapter(client, "fake-token")
-
-    with pytest.raises(NotImplementedError, match="send_text_strict"):
-        await adapter.send_text_strict(123, "hi")
-    with pytest.raises(NotImplementedError, match="send_media_strict"):
-        await adapter.send_media_strict(123, b"x", "image/png")
-    with pytest.raises(NotImplementedError, match="copy_message_strict"):
-        await adapter.copy_message_strict(123, 0, 0)
 
 
 def test_existing_adapter_subclasses_still_instantiable():
