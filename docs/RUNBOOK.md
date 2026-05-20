@@ -296,3 +296,122 @@ python scripts/check_connectivity.py
 3. **One change at a time.** When the bot is broken, change one variable, restart, observe — don't bundle.
 4. **Read the journal before grep.** `journalctl --user -u ori -n 200` shows the real error 90% of the time.
 5. **Vault is read-only during incidents.** If a credential is wrong, fix it via the setup wizard, not by hand-editing JSON.
+
+---
+
+## 12. Scheduled-task fabrication defenses (2026-05-20)
+
+Triggered by the cron_97f22322 incident: a Mon/Wed/Fri 12:30 Kyiv
+scheduled task ("FBA Shipment Discrepancy Report for Top 50 ASINs")
+fired in 14.875 s with synthesized discrepancy numbers and a Slack
+post saying *"Drive upload was bypassed as the account is not
+connected"* — phrasing absent from every source file. OAuth refresh
+succeeded mid-fire; the model simply skipped BigQuery + Drive +
+Sheets entirely and invented an excuse. The bot's monitor reply
+later compounded the issue with *"permission/scope mismatch at
+exact moment of execution"* — also LLM-composed.
+
+Two complementary Law-6 layers were added in `app/tasks.py:run_scheduled_task`:
+
+**Fix 2.2 — prompt-trigger detector** (`_match_triggers` +
+`_bigquery_predicate` + `PROMPT_TRIGGERS` + helper
+`_check_fabrication_for_scheduled_fire`). Maps prompt-shape
+predicates to required tool sets:
+
+- `bigquery` — literal "BigQuery" OR dotted-table backtick
+  (`reports.<t>`, `sellercloud.<t>`, `mellanni-medic.<ds>.<t>`) OR
+  `query`/`sql` AND a known BQ companion token (conjunctive — bare
+  `query`/`sql` does NOT trigger).
+- `sheets/spreadsheet` → `sheets_read`/`sheets_write`/`sheets_create`/`sheets_list_tabs`.
+- `csv report` → `data_to_csv`/`export_report_to_csv`/`generate_file`.
+- `sp-api` → SP-API tool group.
+- `upload to Drive` → **unrunnable** (no satisfying tool exists in
+  this build; read-only `drive_list_files`/`drive_download_file`
+  do NOT count).
+
+Fires only on the agent-success path. Group-disjoint match → flips
+`agent_ok = False`, status `"Failed (fabrication detected: ...)"`,
+emits `_log_job_event("error", ...)`, admin-alerts via
+`_notify_admins_safe`. Required-group miss = `logger.error`;
+un-runnable = `logger.critical`. Cursor refuses to advance (existing
+gate at `app/tasks.py:526-527`); recurring jobs retry next wake.
+
+**Fix 2.3 — suspect-phrase output scan**
+(`_check_suspect_phrase_for_scheduled_fire`). Curated 5-phrase tuple
+`_SUSPECT_PHRASES` (drive upload was bypassed, upload was bypassed,
+as the account is not connected, permission/scope mismatch, at exact
+moment of execution). Runs only when Fix 2.2 passed. Three branches,
+all fail-the-task:
+
+- **Scan failure** → `logger.critical` + admin alert, status
+  `"Failed (suspect-phrase scan failed)"`.
+- **Real tool error paraphrased** → `logger.error` + admin alert,
+  status `"Failed (suspect phrase + real tool error paraphrased)"`,
+  verbatim tool errors prepended above the LLM response.
+- **Pure fabrication** (suspect phrase + zero recorded tool errors)
+  → `logger.critical` + admin alert, status `"Failed (suspect
+  phrase + no recorded tool error: fabricated)"`.
+
+**Fix 2.4 — monitor honesty rule** on CoordinatorAgent's
+`instruction=`. When the user asks "did my task fail?",
+Coordinator MUST quote `get_scheduled_task_logs` fields verbatim and
+MUST NOT infer a cause beyond what those fields literally state.
+Inventing a technical-sounding cause is an explicit Law-6 violation
+spelled out in the prompt.
+
+**Existing Law-6 surface preserved.** `surface_error_loudly_after_tool`
+(`app/callbacks/guardrails/bouncer.py:187-232`) still wraps any tool
+returning `{"status": "error", ...}` with `[TOOL FAILURE — RELAY
+VERBATIM ...]` + an `agent_directive` field. It structurally cannot
+fire when the model skips the tool entirely; Fix 2.2 + 2.3 cover
+that gap. Pinned by `tests/test_amazon_workspace_after_tool_wrapper.py`.
+
+**Operator playbook for a flagged cron**:
+
+If a scheduled task gets the `"Failed (fabrication detected: ...)"`
+or `"Failed (suspect phrase + ...)"` status, the LLM was not doing
+the work the prompt asked for. Two real remediation paths (NOT a
+detection-only patch):
+
+1. **Edit the prompt + add enforced steps** (interim, soft
+   enforcement only — `seed_plan` without `step_constraints` is
+   soft per `app/tools/planner.py:76-80`):
+   ```
+   edit_scheduled_task(
+       job_id="cron_<id>",
+       new_task_prompt="<rewritten prompt referencing only registered tools>",
+       new_steps=[
+           "Run the BigQuery SQL", "Generate the CSV via data_to_csv",
+           "Post the Slack summary",
+       ],
+   )
+   ```
+   `edit_scheduled_task` is owner/admin-gated via `_can_access_job`
+   (no ACT-token/TOTP — owner drives the edit themselves).
+
+2. **Migrate to a v1 contract** (production-grade — deterministic
+   emit dispatch with no LLM improvisation). Real sequence:
+   ```
+   contract_from_existing(job_id="cron_<id>")
+       → returns {"status": "draft", "spec": {...}}
+   # Operator/agent tightens spec.inputs (bigquery_query loader
+   # with the discrepancy filter inline as SQL WHERE/CASE),
+   # spec.emit (sheet_append OR slack_post), spec.trigger.
+   contract_dry_run(spec=tightened)
+   contract_freeze(spec=tightened)  # refuses unless STRICT
+       → {"status": "frozen", "id": "...", "version": N, "hash": "..."}
+   contract_schedule(contract_id=<frozen.id>)
+   # Operator manually deletes the legacy cron_<id> after the new
+   # contract has run at least one successful fire.
+   ```
+   `ReasoningStep` is *"One LLM call in the reasoning chain"* per
+   `app/contracts/schema.py:166-168` — NOT pure-Python. Put
+   deterministic filters in the BigQuery SQL inside the loader,
+   not in a `reasoning` step.
+
+**Ghost-tool note**. `drive_upload_file` does NOT exist in
+`GoogleWorkspaceToolset`. References to it in
+`app/tools/presentations.py:18-19`, `docs/PRESENTATIONS.md:52`,
+`skills/presentation-skill/SKILL.md:91` are slated for cleanup in a
+follow-on slice. The un-runnable trigger in Fix 2.2 catches any
+prompt that still asks for a Drive upload.
