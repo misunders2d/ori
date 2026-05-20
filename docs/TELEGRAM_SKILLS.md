@@ -93,10 +93,105 @@ row whose value is not a list of strings, or non-string capability entries.
 
 ---
 
+## Persistence layer (slice 2)
+
+`app/core/telegram_store.py` is the async SQLite layer for two distinct
+concerns + an in-memory cache. Single DB file: `data/telegram_skills.db`.
+
+### Tables
+
+```sql
+CREATE TABLE IF NOT EXISTS chat_aliases (
+    owner_user_id TEXT NOT NULL,
+    alias         TEXT NOT NULL,           -- case-folded by writer
+    chat_id       INTEGER NOT NULL,
+    chat_type     TEXT NOT NULL,           -- 'channel'|'supergroup'|'group'
+    title         TEXT,
+    username      TEXT,
+    created_at    TEXT NOT NULL,           -- ISO-8601 UTC
+    last_used_at  TEXT,
+    PRIMARY KEY (owner_user_id, alias)
+);
+CREATE INDEX IF NOT EXISTS idx_chat_aliases_owner ON chat_aliases(owner_user_id);
+
+CREATE TABLE IF NOT EXISTS outbound_files (
+    file_ref          TEXT NOT NULL,       -- case-folded by writer
+    owner_user_id     TEXT NOT NULL,
+    file_id           TEXT NOT NULL,       -- Telegram-side ID; reusable across chats
+    file_type         TEXT NOT NULL,       -- 'photo'|'document'|'audio'|'video'|'voice'|'video_note'
+    filename          TEXT,
+    mime_type         TEXT,
+    source_chat_id    INTEGER,             -- copyMessage fallback
+    source_message_id INTEGER,
+    caption           TEXT,
+    created_at        TEXT NOT NULL,
+    expires_at        TEXT NOT NULL,
+    PRIMARY KEY (owner_user_id, file_ref)
+);
+CREATE INDEX IF NOT EXISTS idx_outbound_files_expires ON outbound_files(expires_at);
+```
+
+### I/O contract (Law 5)
+
+- All disk operations use `aiosqlite`.
+- Schema is created lazily via `_ensure_schema()` on first call. No
+  import-time DB writes.
+- Each operation opens a short-lived `aiosqlite.connect(...)` connection
+  and closes via the async context manager. Concurrent operations are
+  serialized by SQLite itself; schema init is double-checked under a
+  module-level `asyncio.Lock`.
+
+### TTL semantics
+
+- File cache default: `TELEGRAM_FILE_CACHE_TTL_HOURS` env var (default
+  168 hours = 7 days). Bad / empty values fall back to default and emit a
+  WARNING.
+- `get_file(..., slide=True)` (default) refreshes `expires_at` forward by
+  the configured TTL on every successful hit.
+- Expired rows are eagerly pruned on lookup; `prune_expired_files()` is
+  available for batch sweeping.
+- Last-forward cache: 5 minutes, in-memory only, lost on restart.
+
+### Validation
+
+- `chat_type` for aliases is restricted to `channel` / `supergroup` /
+  `group`. DM aliases raise `ValueError`; the cross-platform roster
+  (`app/core/roster.py`) is the canonical namespace for DM targets.
+- `file_type` for outbound files is restricted to the six Bot API send
+  methods we re-emit. Sticker is intentionally NOT in the enum (v1 scope
+  per proposal §8).
+- Aliases and file_refs are case-folded on write and lookup; `Engineering`
+  and `engineering` are the same row.
+
+### API (all async unless noted)
+
+```python
+# Aliases
+async def save_alias(owner_user_id, alias, chat_id, chat_type, title=None, username=None) -> None
+async def list_aliases(owner_user_id) -> list[dict]
+async def resolve_alias(owner_user_id, alias) -> dict | None    # slides last_used_at
+async def delete_alias(owner_user_id, alias) -> bool
+
+# Files
+async def put_file(owner_user_id, file_ref, file_id, file_type, *,
+                   filename=None, mime_type=None,
+                   source_chat_id=None, source_message_id=None,
+                   caption=None, ttl=None) -> dict
+async def get_file(owner_user_id, file_ref, *, slide=True) -> dict | None
+async def list_files(owner_user_id) -> list[dict]
+async def delete_file(owner_user_id, file_ref) -> bool
+async def prune_expired_files() -> int
+
+# Last-forward cache (sync, in-memory)
+def stash_forward(session_id, chat_id, chat_type, title=None, username=None) -> None
+def peek_forward(session_id) -> ForwardCapture | None
+def pop_forward(session_id) -> ForwardCapture | None
+```
+
+---
+
 ## (Remaining sections land with subsequent slices.)
 
-- Slice 2 — `app/core/telegram_store.py` (aiosqlite layer for `chat_aliases`,
-  `outbound_files`, in-memory `last_forward_cache`).
 - Slice 3 — `TransportAdapter` strict variants (`send_text_strict`,
   `send_media_strict`, `copy_message_strict`).
 - Slice 4 — `TelegramAdapter` strict impls.
