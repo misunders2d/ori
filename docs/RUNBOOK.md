@@ -410,8 +410,53 @@ detection-only patch):
    not in a `reasoning` step.
 
 **Ghost-tool note**. `drive_upload_file` does NOT exist in
-`GoogleWorkspaceToolset`. References to it in
-`app/tools/presentations.py:18-19`, `docs/PRESENTATIONS.md:52`,
-`skills/presentation-skill/SKILL.md:91` are slated for cleanup in a
-follow-on slice. The un-runnable trigger in Fix 2.2 catches any
-prompt that still asks for a Drive upload.
+`GoogleWorkspaceToolset`. The three historical references in
+`app/tools/presentations.py`, `docs/PRESENTATIONS.md`, and
+`skills/presentation-skill/SKILL.md` were stripped in slice 6a and
+each now sits next to an explicit "this tool does NOT exist"
+disclaimer + 2026-05-20 incident citation. Two runtime defenses
+catch future regressions:
+
+* The un-runnable trigger in Fix 2.2 catches any prompt that still
+  asks for a Drive upload.
+* `app/core/instruction_validator.py` runs two scans at boot via
+  `run_boot_validation(agent, scheduler)`, wired from `run_bot.py`
+  after `scheduler.start(paused=True)`:
+
+  1. **`validate_agent_tool_refs(agent)`** — walks the root agent
+     + every sub-agent (cycle-safe). For each agent it scans both
+     the `instruction` text AND the `.instructions` body of every
+     Skill attached via `SkillToolset` (real ADK shape:
+     `_list_skills()` / `_skills` dict, falling back to the public
+     `.skills` attribute for synthetic test doubles). The regex
+     matches a tool-invocation verb (`call` / `invoke` / `run` /
+     `execute` / `trigger` + suffixes) followed by a backticked
+     snake_case identifier with at least one underscore — narrow
+     enough that bare-word literals (`error`, `status`, `id`),
+     schema field references in skill docs (`order_date`,
+     `entity_id`, `kpi_grid`), and ADK callback hook names
+     (`before_tool_callback`) don't false-flag, but `call
+     \`drive_upload_file\`` style ghost-tool wording still
+     triggers. The matched name must NOT resolve to a tool
+     registered anywhere in the agent tree AND NOT sit on the
+     curated `_WHITELIST` (ADK builtins like `transfer_to_agent`,
+     cross-agent planner terms like `complete_step`, common
+     state-key references like `response_preview` / `deliver_to`).
+     Disclaimer-style refs ("there is no `drive_upload_file`
+     primitive") deliberately do NOT match — they have no
+     invocation verb. The slice 6a static test
+     `tests/test_no_ghost_drive_upload_refs.py` is the
+     disclaimer-aware static gate for declarative ghost wording.
+     Unresolved references log CRITICAL + admin-alert.
+  2. **`audit_persisted_jobs(scheduler)`** — every persisted
+     APScheduler job whose `kwargs.task_prompt` trips
+     `app.tasks._match_triggers` AND has `kwargs.steps` empty/None
+     gets flagged as at-risk-of-fabrication. The audit surfaces
+     risk pre-emptively so an operator can edit the cron OR migrate
+     to a contract before the next fire. CRITICAL + admin-alert per
+     flagged job.
+
+  Both scans swallow their own failures (logging ERROR + admin-alert)
+  so a broken validator never blocks bot boot. Wired
+  fire-and-forget via `asyncio.create_task` — production tasks
+  must not wait on the audit.

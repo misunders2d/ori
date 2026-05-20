@@ -231,7 +231,23 @@ async def main():
     # has had a chance to ``register_adapter`` itself.
     scheduler.start(paused=True)
     tasks = []
-    
+
+    # Fire-and-forget boot validation (slice 6b of the cron_97f22322
+    # fabrication-defense work): scan the agent's instruction text for
+    # ghost-tool references AND scan persisted scheduled jobs for
+    # fabrication-risk prompts with no enforced steps. Both scans log
+    # CRITICAL + admin-alert on hits; neither blocks boot. Runs after
+    # the scheduler is up + the runner is constructed so the audit
+    # sees the full job store + agent tree.
+    try:
+        from app.core.instruction_validator import run_boot_validation
+        from app.agent import root_agent as _root_agent
+        tasks.append(asyncio.create_task(
+            run_boot_validation(_root_agent, scheduler)
+        ))
+    except Exception as exc:
+        logger.warning("Boot instruction-validator scheduling skipped: %s", exc)
+
     # 1. A2A Native Server
     try:
         import uvicorn
