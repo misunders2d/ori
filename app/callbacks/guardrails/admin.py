@@ -101,6 +101,13 @@ def admin_tool_guardrail(tool, args, tool_context, **kwargs) -> dict | None:
         "evolution_sync_local_to_upstream",
         "get_my_a2a_key",
         "reembed_entities",
+        # Telegram capability mutations (slice 10). Deterministic
+        # `/cap grant|revoke` commands in the poller layer skip this
+        # gate because they're already explicit admin keystrokes,
+        # mirroring `/models set`. When the LLM calls these tools
+        # programmatically, ACT+TOTP staging is required.
+        "telegram_grant_capability",
+        "telegram_revoke_capability",
     ]:
         current_state = tool_context.state.to_dict()
         user_id = current_state.get("user_id", "")

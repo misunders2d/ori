@@ -30,6 +30,7 @@ from app.toolsets import (
     SystemToolset,
     ScratchpadToolset,
     CreativesToolset,
+    TelegramSkillsToolset,
 )
 from app.toolsets.planner import PlannerToolset
 from app.toolsets.contracts import ContractToolset
@@ -43,8 +44,6 @@ from app.tools.slack import (
     slack_list_channels,
     slack_read_history,
 )
-from app.tools.telegram import telegram_send_dm
-
 _slack_enabled = bool(os.environ.get("SLACK_BOT_TOKEN", "").strip())
 _slack_tools = (
     [slack_post_message, slack_list_channels, slack_read_history] if _slack_enabled else []
@@ -163,6 +162,7 @@ root_agent = Agent(
         ScratchpadToolset(),
         PlannerToolset(),
         CreativesToolset(),
+        TelegramSkillsToolset(),  # send-to-chat, alias CRUD, file forward, cap admin
         # Individual tools
         *([google_search_agent_tool] if google_search_agent_tool else []),
         web_fetch,
@@ -171,7 +171,6 @@ root_agent = Agent(
         get_my_a2a_key,
         whitelist_chat,
         blacklist_chat,
-        telegram_send_dm,
         *_slack_tools,
     ],
     before_agent_callback=[state_setter],

@@ -33,7 +33,7 @@ Read this **before** adding new code — most things you'd build already exist.
 - **ClickUpAgent** (Agent) — `app/sub_agents/clickup_agent.py:108`
   - ClickUp task management sub-agent.
 
-- **CoordinatorAgent** (Agent) — `app/sub_agents/coordinator_agent.py:58`
+- **CoordinatorAgent** (Agent) — `app/sub_agents/coordinator_agent.py:57`
 
 - **DeveloperAgent** (Agent) — `app/sub_agents/developer_agent.py:137`
 
@@ -530,7 +530,7 @@ Multimodal YouTube summarization tool using Gemini 2.0+.
 
 
 - `admin_tool_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails/admin.py:24` — Runtime Guardrail: Intercepts highly privileged tool calls before execution.
-- `admin_only_guardrail` (before_model | state) — `app/callbacks/guardrails/admin.py:176` — Runtime Guardrail: Checks if the user is explicitly set in ADMIN_USER_IDS setup.
+- `admin_only_guardrail` (before_model | state) — `app/callbacks/guardrails/admin.py:183` — Runtime Guardrail: Checks if the user is explicitly set in ADMIN_USER_IDS setup.
 - `amazon_ads_allowlist_guardrail` (before_tool | after_tool) — `app/callbacks/guardrails/amazon_ads.py:47` — Block any Amazon-Ads-namespace tool not on the approved allowlist.
 - `strip_delivered_files_before_model` (before_model | state) — `app/callbacks/guardrails/attachments.py:45` — Before-model callback. Remove server-injected inline_data Parts
 - `file_attachment_capture` (before_tool | after_tool) — `app/callbacks/guardrails/attachments.py:93` — After-tool callback: stash a tool's emitted file_path so the next
