@@ -570,3 +570,44 @@ All exposed via `ContractToolset` on CoordinatorAgent.
 | `contract_list()` | every contract on disk + scheduler state |
 | `contract_inspect(id, version?)` | full body for review |
 | `contract_from_existing(job_id)` | draft a spec from a legacy job (migration helper) |
+
+## Author identity vs. scheduled-task caller identity
+
+These are **independent surfaces** and must not be conflated when
+debugging an auth-shaped failure.
+
+* **Contract emit adapters** resolve the Google/OAuth caller via
+  `_contract_author(state)` (`app/contracts/emit.py:257`). The
+  author email is set at freeze time + carried in the contract
+  body; the worker injects it into `state["__contract__"]["author"]`
+  for every fire (`app/contracts/worker.py:327-336`). Adapters that
+  need a token (`sheet_append`, `drive_doc_fill`) call
+  `_google_token_for_author(_contract_author(state))` —
+  author-driven, NOT chat-driven.
+
+* **LLM-driven scheduled tasks** (`run_scheduled_task` /
+  `schedule_recurring_task` / `cron_*` jobs) resolve per-user tools
+  via `state["user_id"]`. The scheduler injects the chat's session
+  id into the durable side-session AND ships the owner identity
+  through the caller-tag mechanism: `extract_agent_response(...,
+  actual_caller_id=owner_user_id)` prepends a `[__caller_id:X__]`
+  marker which the Coordinator-only `state_setter`
+  before-agent-callback strips + writes into `state["user_id"]`
+  (`app/callbacks/guardrails/core.py:693-700`). Per-user tools like
+  `sheets_write` / `drive_list_files` then read `state["user_id"]`
+  via `_get_user_email(tool_context)`.
+
+When a scheduled task fails with a Google-not-connected error,
+check which path it took:
+
+* `cron_*` / `oneoff_*` / `sched_*` task IDs → LLM-driven path →
+  trace the caller-tag chain through `state_setter` → confirm
+  `state["user_id"]` was populated correctly.
+* `contract:*` task IDs → contract path → trace `_contract_author`
+  and the frozen contract body — the author email was set at freeze
+  time and survives across all fires of the same contract version.
+
+Mis-attributing an LLM-driven fabrication to a contract auth bug
+(or vice versa) sent the 2026-05-20 cron_97f22322 investigation
+down the wrong rabbit hole for one full proposal revision. See
+`docs/RUNBOOK.md §12`.
