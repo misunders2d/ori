@@ -15,6 +15,7 @@ from .planner import PlannerToolset
 from .graph import GraphToolset
 from .h10 import H10Toolset
 from .amazon_ads import AmazonAdsToolset
+from .telegram_skills import TelegramSkillsToolset
 
 __all__ = [
     "SchedulingToolset",
@@ -35,4 +36,5 @@ __all__ = [
     "GraphToolset",
     "H10Toolset",
     "AmazonAdsToolset",
+    "TelegramSkillsToolset",
 ]

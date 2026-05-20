@@ -626,6 +626,45 @@ catches broader `Exception` to log + reply with the underlying error
 
 ---
 
+## TelegramSkillsToolset (slice 9)
+
+`app/toolsets/telegram_skills.py` exposes `TelegramSkillsToolset(BaseToolset)`
+— the agent-facing bundle for the twelve telegram tools. Re-exported
+from `app/toolsets/__init__.py` so consumer agents can
+`from app.toolsets import TelegramSkillsToolset`.
+
+The toolset lazy-imports `app.tools.telegram` inside `get_tools()` so
+constructing the toolset does NOT drag in adapter / httpx setup at
+import time. Tools returned (in declaration order):
+
+```python
+[
+    FunctionTool(func=telegram_send_dm),
+    FunctionTool(func=telegram_send_to_chat),
+    FunctionTool(func=telegram_save_alias),
+    FunctionTool(func=telegram_save_last_forward_alias),
+    FunctionTool(func=telegram_list_aliases),
+    FunctionTool(func=telegram_delete_alias),
+    FunctionTool(func=telegram_resolve_alias),
+    FunctionTool(func=telegram_forward),
+    FunctionTool(func=telegram_list_cached_files),
+    FunctionTool(func=telegram_grant_capability),
+    FunctionTool(func=telegram_revoke_capability),
+    FunctionTool(func=telegram_list_capabilities),
+]
+```
+
+Tests (`tests/test_telegram_skills_toolset.py`, 5 cases):
+- `get_tools()` returns the exact twelve canonical tool names.
+- Tool count == 12.
+- Re-exported in `app.toolsets.__all__` and importable directly.
+- Constructor does NOT eager-import `app.tools.telegram`.
+- First `get_tools()` call populates `sys.modules` lazily.
+
+The Coordinator mount + dropping the direct `telegram_send_dm` import
+land in slice 10.
+
+---
+
 ## (Remaining sections land with subsequent slices.)
-- Slice 9 — `TelegramSkillsToolset`.
 - Slice 10 — Coordinator mount + admin-gate wiring.

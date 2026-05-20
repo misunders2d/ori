@@ -97,6 +97,11 @@
 - Core system lifecycle tools.
 - Bundled tools: `check_active_tasks`, `execute_approved_action`, `inspect_secure_env`, `list_spawned_agents`, `list_thinking_levels`, `report_health`, `reset_thinking_level`, `session_refresh`, `set_thinking_level`, `set_thinking_mode`, `spawn_agent`, `stop_spawned_agent`, `trigger_rollback`, `update_self`
 
+## TelegramSkillsToolset
+- File: `app/toolsets/telegram_skills.py:17`
+- Telegram skill tools — send-to-chat, alias CRUD, file forwarding,
+- Bundled tools: `telegram_delete_alias`, `telegram_forward`, `telegram_grant_capability`, `telegram_list_aliases`, `telegram_list_cached_files`, `telegram_list_capabilities`, `telegram_resolve_alias`, `telegram_revoke_capability`, `telegram_save_alias`, `telegram_save_last_forward_alias`, `telegram_send_dm`, `telegram_send_to_chat`
+
 ## VisualizationToolset
 - File: `app/toolsets/visualization.py:5`
 - Data visualization and file export — charts, CSVs, Excel, PDFs.
