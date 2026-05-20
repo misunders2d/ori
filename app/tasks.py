@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 
@@ -64,6 +65,191 @@ _PLAN_CONTINUATION_PROMPT = (
     "Only produce a final summary after complete_step reports "
     "'All steps completed!'."
 )
+
+
+# ---------------------------------------------------------------------------
+# Fabrication-detector trigger map (slice 2 of scheduling-fixes proposal).
+#
+# Maps prompt-shape predicates to required tool sets. A scheduled fire whose
+# prompt trips a "required_any" trigger but whose ADK session events do not
+# show at least one tool call from the corresponding tool group is flagged
+# as likely-fabricated by ``run_scheduled_task`` (wiring lands in slice 3).
+#
+# Anchored to actual registered tool names (sourced from
+# ``app/sub_agents/bigquery_agent.py:75-86`` for BigQuery, ``app/toolsets/
+# google_workspace.py`` for Drive/Sheets, ``app/toolsets/sp_api.py`` for
+# SP-API, ``app/toolsets/visualization.py`` + ``app/toolsets/sp_api.py``
+# for CSV generation). Drive *upload* is intentionally an "unrunnable"
+# trigger because no registered Drive-upload primitive exists in this
+# build — read-only ``drive_list_files`` / ``drive_download_file`` do not
+# satisfy it.
+#
+# Triggered by the 2026-05-20 cron_97f22322 incident: the prompt requested
+# "Query `sellercloud.fba_shipments_partitioned`" + "upload the CSV to
+# Google Drive" but the fire produced a Slack message in 14.875 s with
+# synthesized discrepancy numbers and no BigQuery/Drive/Sheets tool call.
+# Conjunctive BigQuery predicate (literal "BigQuery" OR dotted-table
+# regex OR (query|sql + known BQ companion token)) avoids false-flagging
+# unrelated "customer query" / SP-API / Neo4j prompts.
+# ---------------------------------------------------------------------------
+
+
+# Known BigQuery project/dataset/table tokens that act as conjunctive
+# companions for the bare "query"/"sql" keyword. Drawn from the
+# mellanni-bigquery skill catalog + the actual cron_97f22322 prompt.
+# Keep narrow: these are tokens that almost never appear outside a
+# BigQuery context within Ori prompts.
+_BQ_COMPANION_TOKENS: frozenset[str] = frozenset({
+    "mellanni-medic",
+    "reports.",
+    "sellercloud.",
+    "business_report_asin",
+    "fba_shipments_partitioned",
+    "fba_inventory_planning",
+})
+
+_BQ_TOOLS: frozenset[str] = frozenset({
+    "execute_sql",
+    "list_tables",
+    "get_table_info",
+    "list_datasets",
+    "list_table_ids",
+    "get_dataset_info",
+    "ask_data_insights",
+})
+
+# Backtick-wrapped dotted-table reference: `reports.<table>`,
+# `sellercloud.<table>`, or the 3-segment `mellanni-medic.<dataset>.<table>`
+# fully-qualified form. v6's regex was broken (required ``[a-z0-9_]+`` after
+# the project/dataset before the dot); the version below matches the
+# cron_97f22322 prompt verbatim.
+_BQ_TABLE_RE = re.compile(
+    r"`(?:(?:reports|sellercloud)\.[a-z0-9_]+"
+    r"|mellanni-medic\.[a-z0-9_]+\.[a-z0-9_]+)`",
+    re.I,
+)
+
+_BIGQUERY_LITERAL_RE = re.compile(r"\bbigquery\b", re.I)
+_QUERY_OR_SQL_RE = re.compile(r"\b(?:query|sql)\b", re.I)
+
+
+def _bigquery_predicate(prompt: str) -> str | None:
+    """Return a human-readable matched-text string if the prompt triggers
+    the BigQuery required_any group; ``None`` otherwise.
+
+    Conjunctive design (proposal §3 Fix 2.2, v6 blocker #4):
+
+    * Literal "BigQuery" alone triggers.
+    * A dotted-table backtick ref alone triggers.
+    * Bare "query"/"sql" alone does NOT trigger — too broad ("customer
+      query", "SQL injection guide", SP-API "report query", Neo4j Cypher
+      queries all collide). It only triggers when accompanied by a known
+      BigQuery companion token elsewhere in the prompt.
+
+    Companion tokens are matched as plain substrings (case-insensitive).
+    """
+    if not prompt:
+        return None
+    if _BIGQUERY_LITERAL_RE.search(prompt):
+        return "bigquery"
+    m = _BQ_TABLE_RE.search(prompt)
+    if m:
+        return m.group(0)
+    if _QUERY_OR_SQL_RE.search(prompt):
+        prompt_lc = prompt.lower()
+        for tok in _BQ_COMPANION_TOKENS:
+            if tok in prompt_lc:
+                return f"query/sql + {tok}"
+    return None
+
+
+# Flat predicates (regex), each with a required_any tool set OR ``None``
+# for "unrunnable" (no registered tool can satisfy the action — flag
+# every fire whose prompt mentions it).
+#
+# BigQuery is handled by ``_bigquery_predicate`` separately because it
+# needs conjunctive logic. The list below is purely keyword/regex.
+PROMPT_TRIGGERS: list[tuple[re.Pattern[str], frozenset[str] | None, str]] = [
+    # Sheets / Spreadsheet writes.
+    (
+        re.compile(
+            r"\b(?:google\s+sheets?|spreadsheet|append.{0,30}sheet|write.{0,30}sheet)\b",
+            re.I,
+        ),
+        frozenset({"sheets_read", "sheets_write", "sheets_create", "sheets_list_tabs"}),
+        "required_any",
+    ),
+    # CSV generation.
+    (
+        re.compile(r"\b(?:csv\s+report|create\s+a\s+csv|emit\s+a\s+csv)\b", re.I),
+        frozenset({"data_to_csv", "export_report_to_csv", "generate_file"}),
+        "required_any",
+    ),
+    # SP-API operations.
+    (
+        re.compile(r"\bsp[\s\-_]?api\b", re.I),
+        frozenset({
+            "sp_get_catalog_item", "sp_search_catalog", "sp_get_listing",
+            "sp_get_competitive_pricing", "sp_get_fees_estimate",
+            "sp_get_order_items", "sp_get_inventory_summaries",
+            "sp_request_report", "sp_check_report", "sp_download_report",
+            "sp_get_account_health", "sp_list_reports",
+        }),
+        "required_any",
+    ),
+    # Drive UPLOAD — UN-RUNNABLE in this build.
+    #
+    # ``GoogleWorkspaceToolset`` exposes read-only Drive primitives only
+    # (``drive_list_files``, ``drive_download_file``). Read-only tools do
+    # NOT satisfy "upload to Drive" — that wording in any scheduled prompt
+    # is a structural fabrication trap because the LLM has no satisfying
+    # primitive and the path of least resistance is to invent a reason.
+    #
+    # The 2026-05-20 cron_97f22322 fire ran this trap and produced
+    # "Drive upload was bypassed as the account is not connected" — a
+    # lie. v3 stripped the corresponding ghost references in
+    # ``app/tools/presentations.py:18-19``, ``docs/PRESENTATIONS.md:52``
+    # and ``skills/presentation-skill/SKILL.md:91``; this trigger is the
+    # matching runtime defense.
+    # DOTALL on the gap so a newline between "upload" and "drive" still
+    # matches — the cron_97f22322 prompt breaks the line between
+    # "upload the" and "CSV to Google Drive" and would otherwise slip.
+    (re.compile(r"\bupload\b.{0,40}\bgoogle\s*drive\b", re.I | re.DOTALL), None, "unrunnable"),
+    (re.compile(r"\bupload\b.{0,40}\bdrive\b", re.I | re.DOTALL), None, "unrunnable"),
+]
+
+
+def _match_triggers(
+    prompt: str,
+) -> list[tuple[str, frozenset[str] | None, str]]:
+    """Return a list of ``(matched_text, required_any_or_None, kind)``
+    for every triggered predicate.
+
+    ``matched_text`` is the first match string (or a synthesised label
+    for the conjunctive BigQuery predicate), included so the
+    fabrication-detector's user-facing warning can quote what tripped
+    the rule.
+
+    ``kind`` is ``"required_any"`` (fire must call at least one tool in
+    the set) or ``"unrunnable"`` (no satisfying tool exists; warning
+    fires unconditionally — operator must restructure the prompt).
+
+    Duplicate triggers (e.g. both Drive-upload regexes matching the same
+    string) are returned in the order they appear in
+    ``PROMPT_TRIGGERS``; downstream uses set semantics when collapsing
+    the unsatisfied groups, so duplicates do not double-count.
+    """
+    out: list[tuple[str, frozenset[str] | None, str]] = []
+    if not prompt:
+        return out
+    bq = _bigquery_predicate(prompt)
+    if bq is not None:
+        out.append((bq, _BQ_TOOLS, "required_any"))
+    for pred, required, kind in PROMPT_TRIGGERS:
+        m = pred.search(prompt)
+        if m:
+            out.append((m.group(0), required, kind))
+    return out
 
 
 def _cleanup_ephemeral_task_state(session_id: str) -> None:
