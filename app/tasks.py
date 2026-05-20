@@ -252,6 +252,161 @@ def _match_triggers(
     return out
 
 
+async def _check_fabrication_for_scheduled_fire(
+    *,
+    runner,
+    user_id: str,
+    session_id: str,
+    task_id: str,
+    owner_user_id: str,
+    task_prompt: str,
+    response: str,
+    start_epoch: float,
+) -> tuple[str, bool]:
+    """Inspect a scheduled fire's prompt + session events to decide
+    whether the LLM-produced response is plausibly fabricated.
+
+    Returns the (possibly-prefixed) response and a new ``agent_ok``
+    boolean. Caller passes the existing ``agent_ok=True`` in (only
+    called on the success path); a return of ``False`` flips the
+    fire to a fail-the-task posture so the cursor-advance gate at
+    the bottom of ``run_scheduled_task`` refuses to advance.
+
+    Side-effects on detection (any branch):
+      * ``ACTIVE_TASKS[task_id]["status"]`` updated to a "Failed
+        (fabrication detected: ...)" string.
+      * ``_log_job_event("error", ...)`` written with structured
+        details.
+      * ``notify_admins(...)`` called; failure of the admin alert
+        itself logs CRITICAL (Rule 13 cascade).
+      * ``logger.error`` for required-group-not-called, or
+        ``logger.critical`` for the un-runnable ghost-tool branch.
+
+    Read-only event scan failure (session DB hiccup) is treated as a
+    diagnostic failure of equal weight: status flipped to a "Failed
+    (event scan failed)" string, CRITICAL logged, admin alerted, and
+    the response carries an explicit "cannot self-verify" prefix.
+    """
+    matched = _match_triggers(task_prompt or "")
+    if not matched:
+        return response, True
+
+    # Lazy import to avoid circular import (agent_executor → app.tasks).
+    from app.core.agent_executor import list_invocation_tool_calls
+
+    try:
+        calls = await list_invocation_tool_calls(
+            runner, user_id, session_id, since_epoch=start_epoch,
+        )
+    except Exception:
+        # Helper already CRITICAL-logged. Surface to admin and fail the task.
+        await _notify_admins_safe(
+            f"Scheduled task `{task_id}` fabrication-detector could not "
+            f"load session events for `{session_id}`. Manual ADK-event "
+            f"inspection required.",
+            task_id=task_id,
+        )
+        ACTIVE_TASKS[task_id]["status"] = "Failed (event scan failed)"
+        ACTIVE_TASKS[task_id]["error"] = "fabrication scan failed"
+        _log_job_event(
+            "error", task_id=task_id, kind="scheduled",
+            owner_user_id=owner_user_id or "",
+            error="fabrication scan failed",
+            session_id=session_id,
+        )
+        response = (
+            f"⚠️ Scheduled task `{task_id}` cannot self-verify "
+            f"(session event scan failed; admin notified).\n\n" + response
+        )
+        return response, False
+
+    actually_called = {c["name"] for c in calls if c.get("name")}
+    problems: list[str] = []
+    has_unrunnable = False
+    for matched_text, required, kind in matched:
+        if kind == "unrunnable":
+            has_unrunnable = True
+            problems.append(
+                f"prompt requests an un-runnable action "
+                f"(matched: {matched_text!r}); no registered tool "
+                f"satisfies it — output is necessarily fabricated for "
+                f"this step"
+            )
+        elif kind == "required_any" and required is not None:
+            if required.isdisjoint(actually_called):
+                problems.append(
+                    f"prompt mentions {matched_text!r} but the fire "
+                    f"did not call any tool from the required group "
+                    f"{sorted(required)}"
+                )
+
+    if not problems:
+        return response, True
+
+    short_reasons = [p.split(";")[0].strip() for p in problems]
+    short_reason = "; ".join(short_reasons)[:200]
+    status_msg = f"Failed (fabrication detected: {short_reason})"
+    ACTIVE_TASKS[task_id]["status"] = status_msg
+    ACTIVE_TASKS[task_id]["error"] = (
+        "fabrication_detected_unrunnable" if has_unrunnable
+        else "fabrication_detected_required_group"
+    )
+    _log_job_event(
+        "error", task_id=task_id, kind="scheduled",
+        owner_user_id=owner_user_id or "",
+        error=f"fabrication_detected: {short_reason}",
+        details=problems,
+        actually_called=sorted(actually_called),
+        session_id=session_id,
+        has_unrunnable=has_unrunnable,
+    )
+    if has_unrunnable:
+        logger.critical(
+            "Scheduled task %s: un-runnable ghost-tool requirement in "
+            "prompt; output is necessarily fabricated. Details: %s. "
+            "Actually called: %s.",
+            task_id, problems, sorted(actually_called),
+        )
+    else:
+        logger.error(
+            "Scheduled task %s: required tool group not invoked; "
+            "output is likely fabricated. Details: %s. Actually "
+            "called: %s.",
+            task_id, problems, sorted(actually_called),
+        )
+    await _notify_admins_safe(
+        "Fabrication detected in scheduled task `" + task_id +
+        "` (session `" + session_id + "`):\n"
+        + "\n".join(f"  - {p}" for p in problems)
+        + f"\nTools actually called: {sorted(actually_called)}",
+        task_id=task_id,
+    )
+    response = (
+        "⚠️ This scheduled task failed self-verification — output is "
+        "likely fabricated:\n"
+        + "\n".join(f"  - {p}" for p in problems)
+        + f"\nTools actually called: {sorted(actually_called)}.\n\n"
+        + "--- LLM's (suspect) response below ---\n"
+        + response
+    )
+    return response, False
+
+
+async def _notify_admins_safe(text: str, *, task_id: str) -> None:
+    """Best-effort admin-alert with Rule 13 cascade — failure of the
+    alert itself logs CRITICAL so the failure-of-the-failure-handler
+    is still visible."""
+    try:
+        from app.contracts.admin_alert import notify_admins
+        await notify_admins(text)
+    except Exception:
+        logger.critical(
+            "Scheduled task %s: admin-alert delivery failed — Rule 13 "
+            "cascade.",
+            task_id, exc_info=True,
+        )
+
+
 def _cleanup_ephemeral_task_state(session_id: str) -> None:
     """Best-effort cleanup for scheduler-owned session sidecar state."""
     try:
@@ -476,6 +631,12 @@ async def run_scheduled_task(
         task_id = f"sched_{uuid.uuid4().hex[:8]}"
 
     start_ts = datetime.now()
+    # Float-epoch companion for ``list_invocation_tool_calls``: ADK events
+    # carry float ``time.time()`` timestamps, so the fabrication detector
+    # in this fire needs a float cutoff (a ``datetime`` would TypeError
+    # against every event). Captured here at fire entry so the detector
+    # only sees events appended during THIS fire.
+    start_epoch = time.time()
     ACTIVE_TASKS[task_id] = {
         "prompt": task_prompt,
         "type": "scheduled",
@@ -678,6 +839,32 @@ async def run_scheduled_task(
                 ACTIVE_TASKS[task_id]["status"] = "Completed"
                 agent_ok = True  # genuine result this fire
             ACTIVE_TASKS[task_id]["end_time"] = datetime.now().isoformat()
+
+            # Fabrication detection — Fix 2.2 of the cron_97f22322 work.
+            #
+            # Runs ONLY when the agent claimed success (agent_ok). Other
+            # branches above already mark Failed and set agent_ok = False;
+            # re-flagging them would double-log and obscure the original
+            # failure cause.
+            #
+            # Hits the trigger map against the prompt and, if anything
+            # fires, scans the durable side-session's events for the
+            # required tools. Group-disjoint => fabrication. Cursor will
+            # then refuse to advance because agent_ok is flipped back to
+            # False — recurring jobs naturally re-attempt next wake via
+            # the existing ``elif delivered_ok and not agent_ok:`` branch
+            # at the bottom of this function.
+            if agent_ok:
+                response, agent_ok = await _check_fabrication_for_scheduled_fire(
+                    runner=runner,
+                    user_id=user_id,
+                    session_id=session_id,
+                    task_id=task_id,
+                    owner_user_id=owner_user_id,
+                    task_prompt=task_prompt,
+                    response=response,
+                    start_epoch=start_epoch,
+                )
         except Exception as e:
             logger.exception("Scheduled task agent execution failed")
             response = (
