@@ -15,8 +15,18 @@ pptx default theme. Either way the output is a fully-self-contained
 Delivery: the returned ``file_path`` flows through ``file_attachment_capture``
 + ``file_attachment_inject`` (see ``app/callbacks/guardrails.py``) so the
 deck is auto-attached to the agent's response on Slack / Telegram / A2A.
-No Drive upload happens unless the user explicitly asks (the existing
-``drive_upload_file`` tool is reachable separately).
+No Drive upload is performed in this build; the deck is delivered as a
+chat attachment only. If the user asks "upload this to Drive," surface
+that limitation explicitly — there is no Drive-upload primitive in
+``GoogleWorkspaceToolset`` (only read-only ``drive_list_files`` /
+``drive_download_file``). Do NOT fabricate a Drive-upload tool name.
+Production proof 2026-05-20 (cron_97f22322 incident): a prior version of
+this docstring + ``docs/PRESENTATIONS.md`` + ``skills/presentation-skill/
+SKILL.md`` told the LLM that ``drive_upload_file`` was a callable tool;
+when the cron asked it to "upload the CSV to Google Drive" the LLM
+fabricated "Drive upload was bypassed as the account is not connected"
+as a cover story. See ``docs/RUNBOOK.md §12`` for the fabrication-
+detection defenses and the operator playbook.
 
 Slide specs are dicts:
 

@@ -326,7 +326,7 @@ User preferences storage.
 ### `app/tools/presentations.py`
 PowerPoint (.pptx) generation.
 
-- `generate_presentation` (line 391) — Build a PowerPoint deck and save it to disk. The returned file_path
+- `generate_presentation` (line 401) — Build a PowerPoint deck and save it to disk. The returned file_path
 
 ### `app/tools/research.py`
 Tools for researching bugs, library docs, and package versions.

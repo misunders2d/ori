@@ -88,7 +88,7 @@ If you need multiple charts in one deck, generate them all first, collect the pa
 ## Hard rules
 
 1. **Never fabricate metrics.** Every number on a slide must come from a prior tool output, user-provided data, or scratchpad content. If you don't have the data, say so — don't guess.
-2. **No Drive upload unless the user explicitly asks.** The deck is delivered as a chat attachment. If the user says "upload this to Drive" or "save to Drive folder X", call `drive_upload_file` separately AFTER `generate_presentation`. Otherwise leave it as a chat attachment.
+2. **No Drive upload is available in this build.** The deck is delivered as a chat attachment only. `GoogleWorkspaceToolset` exposes only read-only Drive tools (`drive_list_files`, `drive_download_file`); there is no `drive_upload_file` primitive. If the user says "upload this to Drive" or "save to Drive folder X," state plainly that the bot has no Drive-upload tool and offer the chat attachment instead. **Do NOT invent a tool name** — the 2026-05-20 incident proved that LLMs given a phantom tool reference will fabricate excuses ("Drive upload was bypassed as the account is not connected") rather than admit the gap.
 3. **Keep slide count proportional to content.** A weekly summary doesn't need 20 slides. Five focused slides beat fifteen padded ones.
 4. **Don't reuse `kpi_grid` for everything.** If the user wants narrative, use `text`. If they want a list, use `bullets`. Tile dashboards are for headline metrics only.
 5. **Output filename is automatic** unless the user specifies one. If they do specify, pass it via `filename=` (the tool adds `.pptx` if missing).

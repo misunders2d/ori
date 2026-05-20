@@ -47,9 +47,9 @@ The path goes through `file_attachment_capture` (mounted on AmazonDataAnalystAge
 
 20 MB attachment cap applies (same as `_FILE_ATTACHMENT_MAX_BYTES`). Decks well under that for any reasonable slide count + chart embeds; raise the cap before generating 100-slide decks.
 
-## No Drive upload by default
+## No Drive upload available
 
-Decks ship as chat attachments and stop there. If the user wants the file in Drive, they ask explicitly and the agent calls `drive_upload_file` separately. We didn't bundle the upload into `generate_presentation` because (a) most decks are throwaway and Drive clutter is real, and (b) the auth/scope path for Drive is separate from PPTX generation. Two clean tools beat one tangled one.
+Decks ship as chat attachments and stop there. **No Drive-upload primitive exists in `GoogleWorkspaceToolset`** — the only Drive tools registered are read-only (`drive_list_files`, `drive_download_file`). If the user says "upload this to Drive" or "save to Drive folder X," surface that limitation explicitly: the bot has no Drive-upload tool, so the deck stays as a chat attachment unless the user fetches it and uploads manually. Do NOT fabricate a tool name. The 2026-05-20 cron_97f22322 incident showed what happens when an LLM is told (via prior versions of this doc) that a `drive_upload_file` tool exists: it tried, got nothing, and invented "Drive upload was bypassed as the account is not connected" as a cover story. See `docs/RUNBOOK.md §12`.
 
 ## Failure modes
 
