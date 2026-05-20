@@ -526,8 +526,106 @@ Auto-generated `docs/INDEX.md` and `docs/TOOLS.md` are refreshed by
 
 ---
 
+## Poller short-circuits (slice 8)
+
+Five deterministic, pre-LLM command handlers live as module-level
+functions in `interfaces/telegram_poller.py`. Each returns `True` when
+it consumed the message (the outer poll loop `continue`s). They run
+AFTER the whitelist gate and BEFORE the agent runner is invoked.
+
+### Order of evaluation (orchestrated by `_run_short_circuits`)
+
+The five handlers are dispatched in a fixed order by the module-level
+`_run_short_circuits(adapter, msg, text, chat_id, chat_type,
+caller_user_id, session_id) -> bool`. Order is load-bearing —
+forward-extract must run BEFORE any text/empty-message guard because a
+forwarded channel post is often pure metadata (no text, no file).
+
+1. `_handle_forward_extract` — DM-only. Detects `forward_origin` /
+   `forward_from_chat` / `forward_from` metadata, replies with the
+   captured chat_id + title + username, and stashes
+   group/channel/supergroup forwards into
+   `telegram_store.last_forward_cache` (5-min TTL) so `/alias save
+   <name>` can pop it. DM-from-user and hidden_user forwards are
+   acknowledged but NOT stashed (DM aliases out of v1 scope).
+2. `_handle_savefile_command` — caption-driven. DM-only. Triggers on
+   the EXACT `/savefile` TOKEN (`/savefilex` is not consumed). Free-text
+   `save as <name>` is not a trigger (proposal §4 — reviewer rejected
+   the ambiguous form). Captures the inbound `file_id` for the first
+   recognized file kind (photo / document / audio / video / voice /
+   video_note) and writes to `outbound_files` keyed by `<name>`. Source
+   chat_id + message_id are recorded for the `copyMessage` fallback.
+3. `_handle_alias_command` — DM-only. `/alias save|delete|list|resolve|help`.
+   - `save` / `delete` require `manage_aliases`.
+   - `list` / `resolve` are self-scope and need no capability.
+   - `save` pops the last-forward cache; expired or absent stash
+     replies with a refresh prompt.
+   - `has_capability` lookups are wrapped: store failures return a
+     fail-loud reply + EXCEPTION log (Law 6) instead of propagating.
+4. `_handle_forward_command` — `/forward <ref> to <alias-or-chatid>`.
+   Group/DM allowed (the `forward_files` cap is enforced by
+   `telegram_forward` for non-DM targets). Splits on the LAST `" to "`
+   so file_refs containing that substring survive.
+5. `_handle_cap_command` — `/cap grant|revoke|list|help`. Group/DM
+   allowed (admin gate inline). Mutations + cross-user reads require
+   `ADMIN_USER_IDS` membership (parity with `/models set`, no ACT+TOTP
+   — proposal §12 v2-a). Every grant/revoke logs at INFO with the
+   admin id; cross-user list ALLOWED/DENIED both log at INFO for audit
+   symmetry with the LLM-tool path.
+
+All four `/`-prefixed commands use **token-exact** matching:
+`_command_token(text)` returns the first whitespace-separated token,
+and the handler bails when that token is not the exact command
+(`/savefile`, `/alias`, `/forward`, `/cap`). Strings like `/savefilex`,
+`/aliasfoo`, `/capextra` are NOT consumed.
+
+### Wiring
+
+Inside `poll_telegram`'s main `for update in data["result"]:` loop,
+the call lives right after roster recording and BEFORE the file-
+handling / empty-message-reject block:
+
+```python
+if await _run_short_circuits(
+    adapter=adapter,
+    msg=msg,
+    text=text,
+    chat_id=chat_id,
+    chat_type=chat_type,
+    caller_user_id=user_id,
+    session_id=session_id,
+):
+    continue
+```
+
+Each handler swallows `ValueError` as a user-facing reject message and
+catches broader `Exception` to log + reply with the underlying error
+(no silent failure — Law 6).
+
+### Tests (4 files, 72 cases)
+
+- `tests/test_telegram_poller_forward_extract.py` — 10. channel /
+  supergroup / group forwards via modern + legacy fields; DM-from-user
+  + hidden_user explanation paths; non-DM and no-metadata pass-through;
+  5-min TTL; partial origin payload defensive path.
+- `tests/test_telegram_alias_commands.py` — 21. all four subcommands
+  + help + bare; cap gating on save/delete; save with no last-forward
+  + happy + missing-name; list empty + populated; delete miss; resolve
+  miss; unknown subcommand falls back to usage; `/forward` happy +
+  help + bare + bad-syntax + tool-error pass-through.
+- `tests/test_telegram_cap_commands.py` — 12. /cap list self
+  (no-arg / via-arg-self / cross-user-denied / cross-user-admin /
+  empty); /cap grant non-admin blocked; admin grant + revoke happy;
+  unknown-capability rejected; missing-args usage; cross-user
+  ALLOWED/DENIED audit log assertions.
+- `tests/test_telegram_savefile_command.py` — 13. free-text 'save as'
+  NOT consumed; no-caption pass-through; no-name usage; help usage;
+  no-attachment prompt; document + photo happy; parametrized over
+  audio / video / voice / video_note; duplicate overwrite; owner-scope
+  isolation.
+
+---
+
 ## (Remaining sections land with subsequent slices.)
-- Slice 8 — poller short-circuits (`/alias`, `/forward`, `/cap`,
-  `/savefile`, forward-extract).
 - Slice 9 — `TelegramSkillsToolset`.
 - Slice 10 — Coordinator mount + admin-gate wiring.

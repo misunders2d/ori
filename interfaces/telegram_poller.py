@@ -15,7 +15,7 @@ from app.core.agent_executor import (
     extract_agent_response,
     process_message_for_context,
 )
-from app.core import telegram_store
+from app.core import capabilities, telegram_store
 from app.core.transport import TransportAdapter, register_adapter
 
 # New imports for whitelist and logging
@@ -170,6 +170,776 @@ def _derive_file_ref(file_ref: str | None, file_path: str | None) -> str | None:
         base = os.path.splitext(os.path.basename(file_path))[0]
         return base.strip().casefold() or None
     return None
+
+
+# --------------------------------------------------------------------------- slice 8: deterministic command handlers
+#
+# All five helpers below run in the poll loop AFTER the whitelist gate and
+# BEFORE the agent is invoked. They are pure pre-LLM short-circuits — same
+# pattern as ``/chatid``, ``/models``, ``/reset``. Each returns True when
+# the message was consumed (the outer loop ``continue``s).
+#
+# Capability matrix (proposal §2.5 + reviewer A6):
+#   /alias save | delete                       → manage_aliases
+#   /alias list | resolve                      → none (self-scope)
+#   /forward (non-DM target)                   → forward_files
+#   /cap grant | revoke | list <other>         → admin (ADMIN_USER_IDS env)
+#   /cap list (no arg)                         → none (self-scope)
+#   /savefile <name>                           → none (whitelist already passed)
+#
+# /cap is deterministic — no ACT+TOTP, parity with /models set. The
+# LLM-invoked counterparts in app.tools.telegram do go through ACT+TOTP via
+# admin_tool_guardrail (slice 10).
+
+
+def _command_token(text: str | None) -> tuple[str, str]:
+    """Return ``(first_token, rest)`` from a leading-stripped message.
+
+    ``first_token`` is empty when the message has no content. Used to
+    enforce EXACT command-prefix matching — ``/savefile`` consumes only
+    ``/savefile``, not ``/savefilex``.
+    """
+    if not text:
+        return "", ""
+    stripped = text.lstrip()
+    if not stripped:
+        return "", ""
+    parts = stripped.split(None, 1)
+    first = parts[0]
+    rest = parts[1].strip() if len(parts) > 1 else ""
+    return first, rest
+
+
+def _is_admin_caller(user_id: str) -> bool:
+    """Mirror of app.tools.telegram._is_admin for the poller layer."""
+    if not user_id:
+        return False
+    raw = os.environ.get("ADMIN_USER_IDS", "")
+    admins = {u.strip() for u in raw.split(",") if u.strip()}
+    if user_id in admins:
+        return True
+    if user_id.startswith("tg_") and user_id[3:] in admins:
+        return True
+    if user_id.isdigit() and f"tg_{user_id}" in admins:
+        return True
+    return False
+
+
+def _extract_forward_origin(msg: dict) -> dict | None:
+    """Parse modern (forward_origin) AND legacy (forward_from_chat /
+    forward_from) Telegram forward metadata into a single normalized
+    shape::
+
+        {"kind": "channel"|"chat"|"user"|"hidden_user",
+         "chat_id": int | None, "title": str, "username": str,
+         "name": str}
+
+    Returns None if no forward metadata is present.
+    """
+    fo = msg.get("forward_origin")
+    if isinstance(fo, dict):
+        kind = fo.get("type") or ""
+        if kind == "channel":
+            chat = fo.get("chat") or {}
+            return {
+                "kind": "channel",
+                "chat_id": chat.get("id"),
+                "title": chat.get("title", "") or "",
+                "username": chat.get("username", "") or "",
+                "name": "",
+            }
+        if kind == "chat":
+            chat = fo.get("sender_chat") or {}
+            return {
+                "kind": chat.get("type", "chat"),
+                "chat_id": chat.get("id"),
+                "title": chat.get("title", "") or "",
+                "username": chat.get("username", "") or "",
+                "name": "",
+            }
+        if kind == "user":
+            user = fo.get("sender_user") or {}
+            full = (
+                f"{user.get('first_name', '')} {user.get('last_name', '')}"
+            ).strip()
+            return {
+                "kind": "user",
+                "chat_id": user.get("id"),
+                "title": "",
+                "username": user.get("username", "") or "",
+                "name": full,
+            }
+        if kind == "hidden_user":
+            return {
+                "kind": "hidden_user",
+                "chat_id": None,
+                "title": "",
+                "username": "",
+                "name": fo.get("sender_user_name", "") or "",
+            }
+    # Legacy fallback.
+    ffc = msg.get("forward_from_chat")
+    if isinstance(ffc, dict):
+        kind = ffc.get("type", "channel")
+        return {
+            "kind": kind,
+            "chat_id": ffc.get("id"),
+            "title": ffc.get("title", "") or "",
+            "username": ffc.get("username", "") or "",
+            "name": "",
+        }
+    ff = msg.get("forward_from")
+    if isinstance(ff, dict):
+        full = (
+            f"{ff.get('first_name', '')} {ff.get('last_name', '')}"
+        ).strip()
+        return {
+            "kind": "user",
+            "chat_id": ff.get("id"),
+            "title": "",
+            "username": ff.get("username", "") or "",
+            "name": full,
+        }
+    return None
+
+
+# Maps Telegram-forward.kind → telegram_store chat_type (only stash-able
+# kinds appear here; user/hidden_user are explicitly out of scope v1).
+_STASHABLE_FORWARD_KINDS = {
+    "channel": "channel",
+    "supergroup": "supergroup",
+    "group": "group",
+    # ``forward_origin.type == "chat"`` collapses to its sender_chat.type;
+    # we already map that branch above to the underlying chat_type.
+}
+
+
+async def _handle_forward_extract(
+    adapter: "TelegramAdapter",
+    msg: dict,
+    chat_id: int | str,
+    chat_type: str,
+    session_id: str,
+) -> bool:
+    """If this DM contains a forwarded message, reply with chat_id +
+    metadata, stash group/channel/supergroup forwards into
+    ``telegram_store.last_forward_cache`` (5-min TTL), and consume the
+    update. Return False on no-forward or non-DM (no stashing for
+    group-routed forwards in v1)."""
+    if chat_type != "private":
+        return False
+    origin = _extract_forward_origin(msg)
+    if origin is None:
+        return False
+
+    kind = origin["kind"]
+    if kind == "user":
+        await adapter.send_message(
+            chat_id,
+            "Forwarded DM from a user. v1 does not support DM aliases — "
+            "send a regular DM to the bot to enter the roster, then use "
+            "`telegram_send_dm` to reach them.",
+        )
+        return True
+    if kind == "hidden_user":
+        sender = origin.get("name") or "an anonymous user"
+        await adapter.send_message(
+            chat_id,
+            (
+                f"Forwarded DM from {sender}, who has restricted "
+                "forward attribution. Cannot capture chat_id."
+            ),
+        )
+        return True
+
+    chat_type_store = _STASHABLE_FORWARD_KINDS.get(kind)
+    chat_id_int = origin.get("chat_id")
+    if chat_type_store is None or not isinstance(chat_id_int, int):
+        # Unknown / partial origin — surface what we can but don't stash.
+        await adapter.send_message(
+            chat_id,
+            (
+                f"Forwarded from {kind!r}; could not capture a usable "
+                "chat_id. Telegram payload was partial."
+            ),
+        )
+        return True
+
+    telegram_store.stash_forward(
+        session_id=session_id,
+        chat_id=chat_id_int,
+        chat_type=chat_type_store,
+        title=origin.get("title") or None,
+        username=origin.get("username") or None,
+    )
+
+    title = origin.get("title") or "(no title)"
+    username = origin.get("username") or "(none)"
+    await adapter.send_message(
+        chat_id,
+        (
+            f"Forwarded from {kind}:\n"
+            f"  chat_id: `tg_{chat_id_int}`\n"
+            f"  title: {title}\n"
+            f"  username: @{username}\n\n"
+            "Reply with `/alias save <name>` (within 5 minutes) to save "
+            "this as an alias."
+        ),
+    )
+    return True
+
+
+_FILE_KIND_TO_TYPE = {
+    "photo": "photo",
+    "document": "document",
+    "audio": "audio",
+    "video": "video",
+    "voice": "voice",
+    "video_note": "video_note",
+}
+
+
+def _extract_inbound_file(msg: dict) -> dict | None:
+    """Return the first recognized inbound file payload normalized to::
+
+        {"file_type", "file_id", "filename", "mime_type"}
+
+    or None if no supported file part is present.
+    """
+    if "photo" in msg and isinstance(msg["photo"], list) and msg["photo"]:
+        largest = msg["photo"][-1] or {}
+        fid = largest.get("file_id")
+        if fid:
+            return {
+                "file_type": "photo",
+                "file_id": fid,
+                "filename": None,
+                "mime_type": "image/jpeg",
+            }
+    for key in ("document", "audio", "video", "voice", "video_note"):
+        obj = msg.get(key)
+        if isinstance(obj, dict) and obj.get("file_id"):
+            return {
+                "file_type": _FILE_KIND_TO_TYPE[key],
+                "file_id": obj["file_id"],
+                "filename": obj.get("file_name"),
+                "mime_type": obj.get("mime_type"),
+            }
+    return None
+
+
+async def _handle_savefile_command(
+    adapter: "TelegramAdapter",
+    msg: dict,
+    text_or_caption: str,
+    chat_id: int | str,
+    chat_type: str,
+    caller_user_id: str,
+) -> bool:
+    """Inbound `/savefile <name>` caption + an attached file → stash
+    the inbound ``file_id`` in ``outbound_files`` keyed by ``<name>``.
+
+    DM-only: a group chat capturing arbitrary uploads under each
+    sender's namespace is both noisy and a leak vector. Group messages
+    that happen to use the command are silently passed through.
+
+    Triggers ONLY on the EXACT token ``/savefile`` — ``/savefilex`` and
+    similar are not consumed. Plain captions (including ``save as
+    <name>``) are NOT a trigger per proposal §4.
+    """
+    token, rest = _command_token(text_or_caption)
+    if token != "/savefile":
+        return False
+    if chat_type != "private":
+        return False  # silent DM-only enforcement
+
+    if not rest or rest.lower() == "help":
+        await adapter.send_message(
+            chat_id,
+            (
+                "Usage: attach a file with the caption `/savefile <name>` "
+                "(in this DM). The bot stores the file_id under "
+                "`<name>` so you can later `/forward <name> to <alias>`."
+            ),
+        )
+        return True
+
+    name = rest.split()[0]
+    file_info = _extract_inbound_file(msg)
+    if file_info is None:
+        await adapter.send_message(
+            chat_id,
+            (
+                "`/savefile` needs an attached file in the same message. "
+                "Attach a photo/document/audio/video/voice/video_note and "
+                "set the caption to `/savefile <name>`."
+            ),
+        )
+        return True
+
+    try:
+        row = await telegram_store.put_file(
+            owner_user_id=caller_user_id,
+            file_ref=name,
+            file_id=file_info["file_id"],
+            file_type=file_info["file_type"],
+            filename=file_info.get("filename"),
+            mime_type=file_info.get("mime_type"),
+            source_chat_id=int(chat_id) if isinstance(chat_id, (int, str)) and str(chat_id).lstrip("-").isdigit() else None,
+            source_message_id=msg.get("message_id"),
+        )
+    except ValueError as e:
+        await adapter.send_message(chat_id, f"`/savefile` rejected: {e}")
+        return True
+    except Exception as e:
+        logger.exception(
+            "telegram_store.put_file failed for /savefile owner=%s ref=%s",
+            caller_user_id,
+            name,
+        )
+        await adapter.send_message(chat_id, f"`/savefile` DB error: {e}")
+        return True
+
+    await adapter.send_message(
+        chat_id,
+        (
+            f"Saved as `{row['file_ref']}` "
+            f"(type: {row['file_type']}, expires: {row['expires_at']})"
+        ),
+    )
+    return True
+
+
+# ---- /alias command ----
+
+
+def _alias_usage() -> str:
+    return (
+        "Usage:\n"
+        "  `/alias save <name>` — save the last forwarded chat as an alias.\n"
+        "  `/alias delete <name>` — remove an alias.\n"
+        "  `/alias list` — list your aliases.\n"
+        "  `/alias resolve <name>` — look up the chat_id for an alias.\n"
+    )
+
+
+async def _handle_alias_command(
+    adapter: "TelegramAdapter",
+    text: str,
+    chat_id: int | str,
+    chat_type: str,
+    caller_user_id: str,
+    session_id: str,
+) -> bool:
+    """`/alias save|delete|list|resolve|help`.
+
+    DM-only: alias namespace is per-user and the cross-platform roster
+    handles DM-style identity already. Group invocations are silently
+    passed through so /alias does not leak across users in shared chats.
+    Triggers only on the EXACT token ``/alias`` (token-prefix match).
+    """
+    token, _rest = _command_token(text)
+    if token != "/alias":
+        return False
+    if chat_type != "private":
+        return False  # silent DM-only enforcement
+    stripped = text.strip() if text else ""
+    parts = stripped.split()
+    sub = parts[1].lower() if len(parts) > 1 else "help"
+
+    if sub == "help":
+        await adapter.send_message(chat_id, _alias_usage())
+        return True
+
+    if sub == "list":
+        try:
+            rows = await telegram_store.list_aliases(caller_user_id)
+        except Exception as e:
+            logger.exception("/alias list failed for owner=%s", caller_user_id)
+            await adapter.send_message(chat_id, f"`/alias list` DB error: {e}")
+            return True
+        if not rows:
+            await adapter.send_message(chat_id, "No aliases saved yet.")
+            return True
+        lines = ["Your aliases:"]
+        for row in rows:
+            lines.append(
+                f"  • `{row['alias']}` → `tg_{row['chat_id']}` "
+                f"({row['chat_type']}, title: {row.get('title') or '—'})"
+            )
+        await adapter.send_message(chat_id, "\n".join(lines))
+        return True
+
+    if sub in {"save", "delete", "resolve"} and len(parts) < 3:
+        await adapter.send_message(
+            chat_id, f"`/alias {sub}` needs a name. " + _alias_usage()
+        )
+        return True
+
+    if sub == "save":
+        name = parts[2]
+        try:
+            has_cap = await capabilities.has_capability(
+                caller_user_id, "manage_aliases"
+            )
+        except Exception as e:
+            logger.exception(
+                "/alias save capability check failed for %s",
+                caller_user_id,
+            )
+            await adapter.send_message(
+                chat_id, f"`/alias save` capability check failed: {e}"
+            )
+            return True
+        if not has_cap:
+            await adapter.send_message(
+                chat_id,
+                (
+                    f"User {caller_user_id} lacks capability "
+                    "'manage_aliases'. Ask an admin to grant via "
+                    f"`/cap grant {caller_user_id} manage_aliases`."
+                ),
+            )
+            return True
+        capture = telegram_store.pop_forward(session_id)
+        if capture is None:
+            await adapter.send_message(
+                chat_id,
+                (
+                    "No recent forwarded message in this session "
+                    "(5-minute TTL elapsed or no forward seen). Forward "
+                    "the message again, then retry."
+                ),
+            )
+            return True
+        try:
+            await telegram_store.save_alias(
+                owner_user_id=caller_user_id,
+                alias=name,
+                chat_id=capture.chat_id,
+                chat_type=capture.chat_type,
+                title=capture.title,
+                username=capture.username,
+            )
+        except ValueError as e:
+            await adapter.send_message(chat_id, f"`/alias save` rejected: {e}")
+            return True
+        except Exception as e:
+            logger.exception(
+                "/alias save failed for owner=%s alias=%s",
+                caller_user_id,
+                name,
+            )
+            await adapter.send_message(chat_id, f"`/alias save` DB error: {e}")
+            return True
+        await adapter.send_message(
+            chat_id,
+            (
+                f"Saved alias `{name}` → `tg_{capture.chat_id}` "
+                f"({capture.chat_type})."
+            ),
+        )
+        return True
+
+    if sub == "delete":
+        name = parts[2]
+        try:
+            has_cap = await capabilities.has_capability(
+                caller_user_id, "manage_aliases"
+            )
+        except Exception as e:
+            logger.exception(
+                "/alias delete capability check failed for %s",
+                caller_user_id,
+            )
+            await adapter.send_message(
+                chat_id, f"`/alias delete` capability check failed: {e}"
+            )
+            return True
+        if not has_cap:
+            await adapter.send_message(
+                chat_id,
+                (
+                    f"User {caller_user_id} lacks capability "
+                    "'manage_aliases'."
+                ),
+            )
+            return True
+        try:
+            removed = await telegram_store.delete_alias(caller_user_id, name)
+        except Exception as e:
+            logger.exception(
+                "/alias delete failed for owner=%s alias=%s",
+                caller_user_id,
+                name,
+            )
+            await adapter.send_message(
+                chat_id, f"`/alias delete` DB error: {e}"
+            )
+            return True
+        if removed:
+            await adapter.send_message(chat_id, f"Deleted alias `{name}`.")
+        else:
+            await adapter.send_message(
+                chat_id, f"Alias `{name}` not found."
+            )
+        return True
+
+    if sub == "resolve":
+        name = parts[2]
+        try:
+            row = await telegram_store.resolve_alias(caller_user_id, name)
+        except Exception as e:
+            logger.exception(
+                "/alias resolve failed for owner=%s alias=%s",
+                caller_user_id,
+                name,
+            )
+            await adapter.send_message(
+                chat_id, f"`/alias resolve` DB error: {e}"
+            )
+            return True
+        if row is None:
+            await adapter.send_message(
+                chat_id, f"Alias `{name}` not found."
+            )
+            return True
+        await adapter.send_message(
+            chat_id,
+            (
+                f"`{row['alias']}` → `tg_{row['chat_id']}` "
+                f"({row['chat_type']}, title: {row.get('title') or '—'})"
+            ),
+        )
+        return True
+
+    # Unknown subcommand.
+    await adapter.send_message(chat_id, _alias_usage())
+    return True
+
+
+# ---- /forward command ----
+
+
+async def _handle_forward_command(
+    adapter: "TelegramAdapter",
+    text: str,
+    chat_id: int | str,
+    caller_user_id: str,
+) -> bool:
+    """`/forward <file_ref> to <alias-or-chatid>`. Token-exact prefix."""
+    token, rest = _command_token(text)
+    if token != "/forward":
+        return False
+    if not rest or rest.lower() == "help":
+        await adapter.send_message(
+            chat_id,
+            "Usage: `/forward <file_ref> to <alias-or-chatid>`",
+        )
+        return True
+    # Split on the LAST " to " so file_refs containing " to " survive.
+    sep = " to "
+    idx = rest.lower().rfind(sep)
+    if idx == -1:
+        await adapter.send_message(
+            chat_id,
+            "Bad `/forward` syntax. Use `/forward <file_ref> to <alias>`.",
+        )
+        return True
+    file_ref = rest[:idx].strip()
+    target = rest[idx + len(sep):].strip()
+    if not file_ref or not target:
+        await adapter.send_message(
+            chat_id,
+            "Bad `/forward` syntax. Use `/forward <file_ref> to <alias>`.",
+        )
+        return True
+
+    # Lazy-import to avoid circular dependency: telegram.py imports
+    # telegram_store + capabilities (already imported in this module),
+    # but telegram_forward itself reaches into the adapter we hold.
+    from app.tools.telegram import telegram_forward  # noqa: WPS433
+
+    # Build a minimal tool_context-shaped object so the tool can read
+    # caller_user_id off state. Avoids constructing the full ADK
+    # ToolContext (which carries the session machinery).
+    class _PollerToolContext:
+        def __init__(self, user_id: str):
+            self.state = {"user_id": user_id}
+
+    result = await telegram_forward(
+        file_ref=file_ref,
+        target=target,
+        tool_context=_PollerToolContext(caller_user_id),  # type: ignore[arg-type]
+    )
+    if result.get("status") == "success":
+        await adapter.send_message(
+            chat_id,
+            (
+                f"Forwarded `{result.get('file_ref')}` "
+                f"({result.get('file_type')}) to `{target}` "
+                f"via {result.get('method')}."
+            ),
+        )
+    else:
+        await adapter.send_message(
+            chat_id, f"`/forward` failed: {result.get('message', '')}"
+        )
+    return True
+
+
+# ---- /cap command ----
+
+
+def _cap_usage() -> str:
+    return (
+        "Usage (admin-only, deterministic):\n"
+        "  `/cap grant <user_id> <capability>`\n"
+        "  `/cap revoke <user_id> <capability>`\n"
+        "  `/cap list [<user_id>]`\n"
+    )
+
+
+async def _handle_cap_command(
+    adapter: "TelegramAdapter",
+    text: str,
+    chat_id: int | str,
+    caller_user_id: str,
+) -> bool:
+    """`/cap grant|revoke|list|help`. Token-exact prefix."""
+    token, _rest = _command_token(text)
+    if token != "/cap":
+        return False
+    stripped = text.strip() if text else ""
+    parts = stripped.split()
+    sub = parts[1].lower() if len(parts) > 1 else "help"
+
+    if sub == "help":
+        await adapter.send_message(chat_id, _cap_usage())
+        return True
+
+    if sub == "list":
+        target = parts[2] if len(parts) > 2 else caller_user_id
+        if target != caller_user_id and not _is_admin_caller(caller_user_id):
+            logger.info(
+                "/cap list: cross-user read DENIED "
+                "(non-admin caller=%s target=%s)",
+                caller_user_id,
+                target,
+            )
+            await adapter.send_message(
+                chat_id,
+                f"User {caller_user_id} cannot list capabilities of {target}.",
+            )
+            return True
+        if target != caller_user_id:
+            logger.info(
+                "/cap list: cross-user read ALLOWED "
+                "(admin caller=%s target=%s)",
+                caller_user_id,
+                target,
+            )
+        try:
+            caps_list = await capabilities.list_for(target)
+        except Exception as e:
+            logger.exception("/cap list failed for target=%s", target)
+            await adapter.send_message(chat_id, f"`/cap list` DB error: {e}")
+            return True
+        if not caps_list:
+            await adapter.send_message(chat_id, f"{target}: (no capabilities)")
+            return True
+        await adapter.send_message(
+            chat_id, f"{target}: {', '.join(caps_list)}"
+        )
+        return True
+
+    # Mutations (grant/revoke) require admin.
+    if not _is_admin_caller(caller_user_id):
+        await adapter.send_message(
+            chat_id, "`/cap` mutations are admin-only."
+        )
+        return True
+
+    if sub not in {"grant", "revoke"} or len(parts) < 4:
+        await adapter.send_message(chat_id, _cap_usage())
+        return True
+
+    target_user = parts[2]
+    cap_name = parts[3]
+    try:
+        if sub == "grant":
+            await capabilities.grant(target_user, cap_name)
+            verb = "granted"
+        else:
+            await capabilities.revoke(target_user, cap_name)
+            verb = "revoked"
+    except ValueError as e:
+        await adapter.send_message(chat_id, f"`/cap {sub}` rejected: {e}")
+        return True
+    except Exception as e:
+        logger.exception(
+            "/cap %s failed for target=%s cap=%s",
+            sub,
+            target_user,
+            cap_name,
+        )
+        await adapter.send_message(chat_id, f"`/cap {sub}` DB error: {e}")
+        return True
+    logger.info(
+        "/cap %s by admin=%s: %s '%s' on %s",
+        sub,
+        caller_user_id,
+        verb,
+        cap_name,
+        target_user,
+    )
+    await adapter.send_message(
+        chat_id, f"{verb.capitalize()} `{cap_name}` on {target_user}."
+    )
+    return True
+
+
+async def _run_short_circuits(
+    adapter: "TelegramAdapter",
+    msg: dict,
+    text: str,
+    chat_id: int | str,
+    chat_type: str,
+    caller_user_id: str,
+    session_id: str,
+) -> bool:
+    """Run the slice-8 deterministic short-circuits in the documented
+    order. Returns True if any handler consumed the message.
+
+    Order is load-bearing:
+    1. ``_handle_forward_extract`` — must run before any text/empty-
+       message guards because a forwarded channel post often has no
+       text and no file (reviewer finding #1).
+    2. ``_handle_savefile_command`` — caption-driven, DM-only.
+    3. ``_handle_alias_command`` — DM-only.
+    4. ``_handle_forward_command`` — group/DM allowed (capability gate
+       handled by `telegram_forward`).
+    5. ``_handle_cap_command`` — group/DM allowed (admin gate inline).
+    """
+    if await _handle_forward_extract(
+        adapter, msg, chat_id, chat_type, session_id
+    ):
+        return True
+    if await _handle_savefile_command(
+        adapter, msg, text, chat_id, chat_type, caller_user_id
+    ):
+        return True
+    if await _handle_alias_command(
+        adapter, text, chat_id, chat_type, caller_user_id, session_id
+    ):
+        return True
+    if await _handle_forward_command(
+        adapter, text, chat_id, caller_user_id
+    ):
+        return True
+    if await _handle_cap_command(adapter, text, chat_id, caller_user_id):
+        return True
+    return False
 
 
 async def _deliver_media_items(
@@ -863,6 +1633,24 @@ async def poll_telegram(get_runner_fn, process_init_fn):
                             last_name=from_user.get("last_name", "") or "",
                             username=from_user.get("username", "") or "",
                         )
+
+                    # ── SLICE 8: TELEGRAM SKILL SHORT-CIRCUITS ───────────────
+                    # Must run BEFORE the empty-message reject below: a
+                    # forwarded channel post is often pure forward metadata
+                    # with no text and no attached file, which would
+                    # otherwise be silently dropped by the empty-message
+                    # guard. Order: forward-extract / /savefile / /alias /
+                    # /forward / /cap (see `_run_short_circuits`).
+                    if await _run_short_circuits(
+                        adapter=adapter,
+                        msg=msg,
+                        text=text,
+                        chat_id=chat_id,
+                        chat_type=chat_type,
+                        caller_user_id=user_id,
+                        session_id=session_id,
+                    ):
+                        continue
 
                     # File handling
                     file_id = None
